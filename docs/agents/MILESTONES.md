@@ -57,7 +57,7 @@ line.
 | M6  | Green suite + bootstrap committed  | 1     | ✅     | M2–M5      |
 | M7  | Companion integration (delegation) | 1     | ✅     | M6         |
 | M8  | Active Agents panel                | 1     | ✅     | M6         |
-| M9  | Activity timeline + logs           | 1     | ⬜     | M8         |
+| M9  | Activity timeline + logs           | 1     | ✅     | M8         |
 | M10 | Plan viewer + approval dialog      | 1     | ⬜     | M8         |
 | M11 | Tray entry + agent settings page   | 1     | ⬜     | M8         |
 | M12 | Open-source framework research     | 2     | ⬜     | M6         |
@@ -327,7 +327,7 @@ button and is unconnected, waiting for the timeline window.
 
 ---
 
-## M9 · Activity timeline + logs ⬜
+## M9 · Activity timeline + logs ✅
 
 **Goal** Spec §11 — every action, timestamped, per task:
 `21:40 Created project folder` / `21:42 Installed dependencies` / a file tree.
@@ -343,7 +343,32 @@ step. Render file-creating results as a small tree. Icons/colour by level.
 shows the full history from SQLite (proves persistence works), and a live
 task appends rows as they happen.
 
-**HANDOFF** _(none yet)_
+**Landed** `agents/ui/timeline.py` + 13 tests. Suite: **245 passing**.
+`test_history_survives_a_restart` is the real gate: it runs a task, throws
+the manager away, rebuilds one on the same SQLite file, and asserts the
+replayed timeline is **identical** to the live one. The Logs button from M8
+is now connected (`open_timeline`), one window per task.
+
+**Notes for whoever touches this next**
+* `describe(event) -> (headline, detail)` is the whole rendering contract,
+  and it is pure — test it directly rather than through widgets. An empty
+  headline means "skip this row".
+* Three kinds of noise were worth removing, and the reasoning generalises:
+  a `create_file` call was dumping the entire file into the row (now
+  `content=342 chars`); `STEP_DONE` repeated what its own tool rows had
+  already said (now skipped when the step ran tools, kept when it did not,
+  since an LLM-only step has nothing else); and the verifier's summary
+  already counts its checks, so the tally was printed twice.
+* 57 rows became 47 for the same task. If a new event kind makes the
+  column noisy again, fix it in `describe`, not by hiding the kind.
+* `_HIDDEN` drops `TASK_PROGRESS` and `AGENT_STATUS`: they fire per step
+  and belong on the card, not in the log.
+
+**HANDOFF** Complete. Next agent starts at **M10** (plan viewer + approval
+dialog). `AgentManager.approve(request_id, bool)` and the
+`APPROVAL_REQUIRED` event already exist and are covered by manager tests;
+`AgentEventBridge.approval_required` already re-emits the request on the
+Qt thread, so M10 is a dialog plus wiring, not new plumbing.
 
 ---
 
