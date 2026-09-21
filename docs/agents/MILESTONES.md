@@ -148,7 +148,7 @@ fixes to whichever tests are red (coordinate with the package owner if the
 sessions are still live).
 
 **Landed** `351900e` (49 files: every Phase 1 package + bootstrap) and
-`<m6-fixes>`. Suite: **202 passing, 0 failing.**
+`d61029e` (the three fixes). Suite: **202 passing, 0 failing.**
 
 **The three failures, and what they actually were**
 
