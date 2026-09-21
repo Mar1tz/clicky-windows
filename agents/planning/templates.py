@@ -28,7 +28,8 @@ from agents.core import AgentContext, Step, ToolCall
 @dataclass
 class TemplateSpec:
     """What a template needs to know about the task."""
-    goal: str                       # lower-cased goal text
+    goal: str                       # lower-cased goal text, for matching
+    goal_raw: str = ""              # goal as the user said it, for extracting names
     root: str = ""                  # subdir under the workspace, "" = workspace itself
     name: str = "my-app"            # npm / project display name
     package: str = "app"            # python package name
@@ -42,6 +43,7 @@ class TemplateSpec:
         base = root or _basename(ctx.task.workspace) or "my-app"
         return cls(
             goal=(ctx.task.goal or "").lower(),
+            goal_raw=ctx.task.goal or "",
             root=root,
             name=npm_name(meta.get("name") or base),
             package=py_package(meta.get("package") or meta.get("name") or base),
@@ -171,7 +173,9 @@ class FolderTemplate(ProjectTemplate):
     """Plain 'create a folder called X' - one step. Needs a name: either
     metadata.subdir or a `called/named X` phrase in the goal."""
     name = "folder"
-    _NAME = re.compile(r"(?:called|named)\s+[\"'`]?([^\s\"'`,.]+)")
+    # Read from the ORIGINAL goal, not the lower-cased one: a folder the
+    # user calls "Notes" must be created as Notes, not notes.
+    _NAME = re.compile(r"(?:called|named)\s+[\"'`]?([^\s\"'`,.]+)", re.IGNORECASE)
 
     def matches(self, spec: TemplateSpec) -> bool:
         if not any(w in spec.goal for w in ("folder", "directory")):
@@ -181,7 +185,7 @@ class FolderTemplate(ProjectTemplate):
     def folder_name(self, spec: TemplateSpec) -> str:
         if spec.root:
             return spec.root
-        m = self._NAME.search(spec.goal)
+        m = self._NAME.search(spec.goal_raw or spec.goal)
         return _clean_subdir(m.group(1)) if m else ""
 
     def steps(self, spec: TemplateSpec) -> list[Step]:

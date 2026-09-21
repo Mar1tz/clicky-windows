@@ -54,7 +54,7 @@ line.
 | M3  | Providers, workers, understanding  | 1     | ✅     | M1         |
 | M4  | Memory, planning, verification, persistence | 1 | ✅ | M1      |
 | M5  | Runtime, orchestrator, manager     | 1     | ✅     | M1         |
-| M6  | Green suite + bootstrap committed  | 1     | 🔵     | M2–M5      |
+| M6  | Green suite + bootstrap committed  | 1     | ✅     | M2–M5      |
 | M7  | Companion integration (delegation) | 1     | ⬜     | M6         |
 | M8  | Active Agents panel                | 1     | ⬜     | M6         |
 | M9  | Activity timeline + logs           | 1     | ⬜     | M8         |
@@ -138,7 +138,7 @@ survives the process.
 
 ---
 
-## M6 · Green suite + bootstrap committed 🔵
+## M6 · Green suite + bootstrap committed ✅
 
 **Goal** Everything four agents built in parallel is committed, green, and
 starts from one function call. This is the gate to Phase 1's UI work.
@@ -147,21 +147,31 @@ starts from one function call. This is the gate to Phase 1's UI work.
 fixes to whichever tests are red (coordinate with the package owner if the
 sessions are still live).
 
-**State right now**
-* `agents/bootstrap.py` is written but **not committed**.
-* All of M2–M4's work is **untracked** — `git status` shows eight
-  `agents/*` directories and ~10 test files with no commit behind them.
-* Suite: **192 passing, 3 failing.**
+**Landed** `351900e` (49 files: every Phase 1 package + bootstrap) and
+`<m6-fixes>`. Suite: **202 passing, 0 failing.**
 
-**The three failures** (all worker-owned, all small)
-1. `test_planning_templates.py::test_folder_plan_from_goal_or_subdir`
-2. `test_understanding_classifier.py::test_task_utterances[write a script called backup.py…]`
-3. `test_understanding_classifier.py::test_chat_utterances[is the project set up correctly?]`
+**The three failures, and what they actually were**
 
-Read each failure before changing anything: decide whether the test or the
-code states the intent correctly. (2) and (3) are classifier edge cases —
-"write a script called backup.py" should extract `backup.py` as a hint, and
-"is the project set up correctly?" is a question despite containing "set up".
+1. `test_planning_templates.py::test_folder_plan_from_goal_or_subdir` —
+   `TemplateSpec.goal` is lower-cased for matching, and `FolderTemplate`
+   extracted the folder name from that same string, so "a folder called
+   Notes" created `notes`. Fixed by carrying `goal_raw` alongside `goal`
+   and extracting names from the raw text. **Any future template that
+   pulls a user-visible name out of the goal must read `goal_raw`.**
+2. `test_chat_utterances[is the project set up correctly?]` — the real bug.
+   `_QUESTION_AUX` ended in a literal **0x08 backspace byte** instead of a
+   `\b` word boundary: invisible in an editor, in `grep`, and in a diff, but
+   it made the pattern unmatchable, so every "is/does/should …?" question
+   containing an imperative was classified as a task. Repaired byte-wise; a
+   sweep of all 60 agent/test files found this as the only occurrence.
+   The `\b` also correctly stops "issue" matching "is".
+3. `test_task_utterances[write a script called backup.py]` — `script` was
+   in the work-object list but not in the coding-signal list, so scripts
+   classified as GENERAL. Added `script` plus a code-file-extension
+   alternative (`.py`, `.js`, `.ts`, …).
+
+**Lesson for later milestones:** when a regex "obviously should match" and
+doesn't, print `repr(pattern.pattern)` before rewriting the logic around it.
 
 **Done when**
 * `python -m pytest tests/agents -q` → 0 failed.

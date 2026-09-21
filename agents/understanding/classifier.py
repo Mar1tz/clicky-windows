@@ -47,7 +47,7 @@ _QUESTION = re.compile(
 # trailing-"?" utterance a question even when it contains an imperative-
 # looking word like "set up". can/could/would are excluded: they usually
 # front a polite command ("can you create a folder?").
-_QUESTION_AUX = re.compile(r"^\s*(is|are|was|were|do|does|did|should|has|have|had)", re.I)
+_QUESTION_AUX = re.compile(r"^\s*(is|are|was|were|do|does|did|should|has|have|had)\b", re.I)
 
 
 # Kind signals, checked in this order (first hit wins).
@@ -58,7 +58,9 @@ _COMPUTER = re.compile(r"\b(click|type|move\s+(the\s+)?(mouse|cursor)|"
                        r"press\s+the)\b", re.I)
 _CODING = re.compile(r"\b(react|vue|next(\.?js)?|python|node(\.?js)?|api|"
                      r"website|web\s*site|django|flask|express|typescript|"
-                     r"javascript|component|repo|repository)\b", re.I)
+                     r"javascript|component|repo|repository|script)\b"
+                     # ...or a filename with a code extension ("backup.py").
+                     r"|\.(py|js|jsx|ts|tsx|rb|go|rs|java|cs|php|sh|ps1)\b", re.I)
 
 # workspace_hint extractors, most specific first.
 _HINT_PATTERNS = [
