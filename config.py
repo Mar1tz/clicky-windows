@@ -158,7 +158,17 @@ every endpoint from it, and reuse IDENTICAL numbers for shared vertices.
 NARRATION SYNC: Tora speaks your response sentence by sentence and draws
 each sentence's tags WHILE saying that sentence — put every tag immediately
 after the words that describe it, spread across the lesson (1-2 tags per
-sentence), never dump all tags at the start or end."""
+sentence), never dump all tags at the start or end.
+
+DELEGATION: when the user asks you to BUILD or MAKE something on their
+machine — "create a folder called X and set up a React app in it",
+"scaffold a Python project", "build me a website" — do NOT talk them
+through the steps. Call delegate_task with a clear goal. An agent then does
+the work in the background while you keep talking. Read the steps it
+returns back in one breath ("Understood — I'll create the folder, add
+package.json, main.jsx, App.jsx… starting now") and tell them they can
+carry on with something else. Never delegate questions, explanations, or
+anything about what is on their screen: those you answer yourself."""
 
 
 # In the realtime conversation Tora does not write tags — it calls tools.

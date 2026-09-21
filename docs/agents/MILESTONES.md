@@ -55,7 +55,7 @@ line.
 | M4  | Memory, planning, verification, persistence | 1 | ✅ | M1      |
 | M5  | Runtime, orchestrator, manager     | 1     | ✅     | M1         |
 | M6  | Green suite + bootstrap committed  | 1     | ✅     | M2–M5      |
-| M7  | Companion integration (delegation) | 1     | ⬜     | M6         |
+| M7  | Companion integration (delegation) | 1     | ✅     | M6         |
 | M8  | Active Agents panel                | 1     | ⬜     | M6         |
 | M9  | Activity timeline + logs           | 1     | ⬜     | M8         |
 | M10 | Plan viewer + approval dialog      | 1     | ⬜     | M8         |
@@ -189,7 +189,7 @@ doesn't, print `repr(pattern.pattern)` before rewriting the logic around it.
 
 ---
 
-## M7 · Companion integration — the app can delegate ⬜
+## M7 · Companion integration — the app can delegate ✅
 
 **Goal** A user talking to Tora can say "create a folder called MyApp and
 build a React foundation in it" and an agent starts. Both routes: the live
@@ -241,7 +241,27 @@ voice model (tool call) and the cascade route (classifier).
   and a `Task` for the MyApp request, using a manager built with
   `in_memory=True`.
 
-**HANDOFF** _(none yet)_
+**Landed** All four edits plus 16 integration tests. Suite: **218 passing**.
+Verified against the real app, not just tests — `python main.py` logged
+`agent workforce ready — workspace C:\Users\torbe\Documents\Tora Projects`,
+ran 40 s, zero errors.
+
+**Notes for whoever touches this next**
+* `_wait_for_plan` is a `@staticmethod`. Copying it onto a test stub with
+  `X = CompanionManager._wait_for_plan` silently rebinds `self` as the first
+  argument; wrap it in `staticmethod(...)`. Cost 20 minutes once already.
+* The delegation check sits **after** voice commands and skills (cheaper and
+  more specific) and **before** the screenshot, so a build request never pays
+  for a screen capture. `test_companion_exposes_the_handler_and_the_signal`
+  asserts that ordering against the source — if you move it, that test fails
+  on purpose.
+* `_start_agents()` swallows everything. A broken `agents/` package leaves
+  `self._agents = None` and every other feature untouched; both delegation
+  paths return cleanly in that state (two tests cover it).
+
+**HANDOFF** Complete. Next agent starts at **M8** (Active Agents panel) —
+`sig_agent_event(object)` is already emitting `agents.core.Event` on the Qt
+thread, so the panel has a live feed to bind to on day one.
 
 ---
 
@@ -588,6 +608,16 @@ counter, a global "stop all agents" control. Safety review: no tool can
 escape the workspace, no auto-approved HIGH risk, keys never logged, agent
 events scrubbed of file contents over N bytes. Add an agent section to
 `TESTING.md` with a manual QA script.
+
+**⚠ Known issue, found during M7 — fix before shipping (or sooner)**
+`httpx` logs every request URL at INFO, and the Gemini key travels as a
+query parameter, so **the API key is written in plaintext to `tora.log`** —
+166 occurrences in one local log already. `main.py` calls that log "the #1
+debugging tool", i.e. exactly the file a user would paste into a bug
+report. One-line fix in `main.py`'s `_setup_logging`:
+`logging.getLogger("httpx").setLevel(logging.WARNING)`. Then rotate the
+existing logs, and audit `ai/*.py` for any other place a key reaches a log
+line. Not caused by the agent system; it predates it.
 
 **Done when** A built `.exe` on a clean Windows VM completes the MyApp task
 from voice, and the safety checklist in the PR description is ticked with

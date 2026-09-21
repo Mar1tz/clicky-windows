@@ -236,6 +236,7 @@ class CompanionManager(QObject):
     sig_recording_state     = pyqtSignal(bool, str)       # (is_recording, output_dir)
     sig_guide_progress      = pyqtSignal(int, int, str)   # (current, total, instruction)
     sig_activity            = pyqtSignal(str, str)        # (state_key, human message)
+    sig_agent_event         = pyqtSignal(object)          # agents.core.Event → Active Agents UI
 
     def __init__(self):
         super().__init__()
@@ -370,6 +371,10 @@ class CompanionManager(QObject):
             wake_transcriber=self._transcribe_blocking,
         )
 
+        # Autonomous agent workforce (agents/). Built in start(), never here:
+        # a broken agent package must not stop the companion from running.
+        self._agents = None
+
         # Background asyncio loop
         self._loop_ready = threading.Event()
         self._thread = threading.Thread(target=self._run_loop, daemon=True)
@@ -382,6 +387,7 @@ class CompanionManager(QObject):
             self._listener.start()
         except Exception as e:
             self.sig_error.emit(f"Mic error: {e}")
+        self._start_agents()
         # Sleep/wake watchdog — restarts mic + loop after system resume
         self._start_sleep_watchdog()
         # Open everything now, while the user is still reading the startup
@@ -425,6 +431,27 @@ class CompanionManager(QObject):
         except Exception:
             return ""
 
+    def _start_agents(self):
+        """Bring up the agent workforce on its own thread and forward its
+        events to Qt.
+
+        Entirely optional: if the package is missing or throws, delegation
+        is simply off and every other feature behaves exactly as before.
+        """
+        try:
+            from agents.bootstrap import build_agent_manager
+            self._agents = build_agent_manager().start()
+            self._agents.events.subscribe(self.sig_agent_event.emit)
+            _log.info("agent workforce ready — workspace %s", self._agents.workspace_root)
+        except Exception:
+            _log.exception("agent workforce failed to start — delegation disabled")
+            self._agents = None
+
+    @property
+    def agents(self):
+        """The AgentManager, or None when the agent system is unavailable."""
+        return self._agents
+
     def shutdown(self):
         # Kill any audio that was playing when the user clicked Quit
         try:
@@ -432,6 +459,14 @@ class CompanionManager(QObject):
             stop_audio()
         except Exception:
             pass
+        # Stop agents before the loop dies, bounded so a busy tool cannot
+        # delay quitting. Their work is already on disk and in SQLite.
+        if self._agents is not None:
+            try:
+                self._agents.stop(timeout=3)
+            except Exception:
+                _log.debug("agent shutdown failed", exc_info=True)
+            self._agents = None
         self._listener.stop()
         self._rt_streaming = False
         # Close the websocket and the HTTP pool while the loop is still
@@ -842,7 +877,86 @@ class CompanionManager(QObject):
             "guide_step":      self._tool_guide_step,
             "search_web":      self._tool_search,
             "recall":          self._tool_recall,
+            "delegate_task":   self._tool_delegate_task,
         }
+
+    # ── Agent delegation ──────────────────────────────────────────────────────
+    #
+    # Two routes reach the workforce. The live model calls delegate_task
+    # itself (it can hear the whole request and judge intent); the cascade
+    # route has only a transcript, so the classifier decides. Either way the
+    # work happens on the agent runtime's thread, never on this one.
+
+    _WORKER_FOR_KIND = {"coding": "coding", "file": "file", "terminal": "terminal",
+                        "research": "research", "browser": "browser", "computer": "computer"}
+
+    async def _tool_delegate_task(self, args: dict) -> dict:
+        """Hand a build request to the agent workforce.
+
+        Returns the plan rather than waiting for the work: the model reads
+        the steps back while the agent is already running them.
+        """
+        if self._agents is None:
+            return {"error": "the agent workforce is not available"}
+        from agents.core import Task, TaskKind
+        goal = str(args.get("goal") or "").strip()
+        if not goal:
+            return {"error": "goal is required"}
+        title = str(args.get("title") or goal[:60]).strip()
+        try:
+            kind = TaskKind(str(args.get("kind") or "coding").lower())
+        except ValueError:
+            kind = TaskKind.CODING
+        meta = {"request": goal, "reply": f"Understood. Starting on {title} now."}
+        hint = str(args.get("workspace_hint") or "").strip().strip("'\"")
+        if hint:
+            meta["subdir"] = hint
+        task = Task(title=title, goal=goal, workspace=self._agents.workspace_root,
+                    kind=kind, worker_type=self._WORKER_FOR_KIND.get(kind.value, "coding"),
+                    metadata=meta)
+        try:
+            task = self._agents.submit_task(task)
+        except Exception as e:
+            _log.exception("delegate_task failed")
+            return {"error": f"could not start the task: {e}"}
+        await self._wait_for_plan(task)
+        agent = self._agents.get_agent(task.agent_id)
+        return {
+            "ok": True,
+            "task_id": task.id,
+            "agent": agent.spec.name if agent else "Agent",
+            "workspace": task.workspace,
+            "steps": [s.title for s in task.steps][:10],
+            "note": ("The agent is working in the background. Read the steps back "
+                     "briefly and tell the user they can carry on with other things."),
+        }
+
+    async def _delegate_if_task(self, text: str):
+        """Cascade route: start a background task if the transcript is one.
+
+        None means ordinary chat — the caller carries on to the model. The
+        classifier may become provider-backed (M17), so it runs off this
+        loop to keep a slow call from stalling the companion.
+        """
+        if self._agents is None:
+            return None
+        try:
+            loop = asyncio.get_running_loop()
+            task = await loop.run_in_executor(None, self._agents.submit, text)
+        except Exception:
+            _log.exception("agent delegation failed")
+            return None
+        if task is not None:
+            await self._wait_for_plan(task)
+        return task
+
+    @staticmethod
+    async def _wait_for_plan(task, timeout: float = 1.5):
+        """Template planning is near-instant; give it a beat so the spoken
+        acknowledgement can list the real steps instead of promising them."""
+        deadline = time.monotonic() + timeout
+        while not task.steps and time.monotonic() < deadline:
+            await asyncio.sleep(0.05)
 
     async def _tool_guide_step(self, args: dict) -> dict:
         action = str(args.get("action") or "").strip().lower()
@@ -1753,6 +1867,16 @@ class CompanionManager(QObject):
                     return
             except Exception as e:
                 self.sig_error.emit(f"Skill error: {e}")
+
+            # Autonomous tasks — "create a folder called X and build…" is
+            # work for the agent workforce, not an answer for the model.
+            # Checked after the voice commands and skills (they are cheaper
+            # and more specific) but before we pay for a screenshot.
+            task = await self._delegate_if_task(transcript)
+            if task is not None:
+                from agents.bootstrap import describe_plan
+                await self._reply_local(describe_plan(task))
+                return
 
             # 2. Screen capture — skipped if sensitive window (password manager etc.)
             #

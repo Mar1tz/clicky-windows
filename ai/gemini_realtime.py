@@ -236,6 +236,46 @@ def tool_declarations() -> list[dict]:
                 "required": ["query"],
             },
         },
+        {
+            "name": "delegate_task",
+            "description": (
+                "Hand real work to a background agent: creating folders and "
+                "projects, scaffolding apps, writing files, running installs. "
+                "Use when the user asks you to BUILD or MAKE something on "
+                "their machine — never for questions, explanations, or "
+                "anything about what is on their screen. The agent works "
+                "while you keep talking: read the returned steps back "
+                "briefly, say it has started, and that they can carry on."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "goal": {
+                        "type": "string",
+                        "description": (
+                            "What to build, in one or two sentences, keeping "
+                            "every detail the user gave."
+                        ),
+                    },
+                    "title": {
+                        "type": "string",
+                        "description": "Short label, e.g. 'Create React app MyApp'.",
+                    },
+                    "workspace_hint": {
+                        "type": "string",
+                        "description": (
+                            "The folder name the user asked for, e.g. 'MyApp', "
+                            "exactly as they said it. Omit if they gave none."
+                        ),
+                    },
+                    "kind": {
+                        "type": "string",
+                        "enum": ["coding", "file", "terminal", "research"],
+                    },
+                },
+                "required": ["goal"],
+            },
+        },
     ]}]
 
 
