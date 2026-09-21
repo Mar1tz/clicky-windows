@@ -57,6 +57,8 @@ class TrayManager(QObject):
     on_set_response_language = pyqtSignal(str)  # "" = auto-detect, else ISO code
     on_set_stt_language      = pyqtSignal(str)  # "" = auto-detect, else ISO code
     on_set_custom_instructions = pyqtSignal(str)
+    on_open_agents        = pyqtSignal()        # Active Agents panel
+    on_agent_settings     = pyqtSignal()        # agent rails
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -75,6 +77,8 @@ class TrayManager(QObject):
             f"Tora - AI Companion\nPress {cfg.hotkey} and just talk"
         )
         self._search_enabled = True
+        # How many agents are working, shown next to the Agents… item.
+        self._agents_running = 0
         # Mirrors the persisted mic mode — off by default, so Tora only
         # listens while you're actually asking it something.
         self._wake_enabled = cfg.ambient_mic()
@@ -126,6 +130,20 @@ class TrayManager(QObject):
 
         stop_action = menu.addAction("Stop (Esc)")
         stop_action.triggered.connect(self.on_stop)
+
+        menu.addSeparator()
+
+        # ── Autonomous agents ───────────────────────────────────────────
+        # The count is the point: "Agents… (2 running)" is how you notice
+        # work is happening while the panel is closed.
+        agents_label = "Agents…"
+        if self._agents_running:
+            agents_label = f"Agents… ({self._agents_running} running)"
+        agents_action = menu.addAction(agents_label)
+        agents_action.triggered.connect(self.on_open_agents)
+
+        agent_settings = menu.addAction("Agent settings…")
+        agent_settings.triggered.connect(self.on_agent_settings)
 
         menu.addSeparator()
 
@@ -497,6 +515,19 @@ class TrayManager(QObject):
 
     def set_state_icon(self, state: str):
         self._tray.setIcon(self._icons.get(state, self._icons["idle"]))
+
+    def set_agents_running(self, count: int) -> None:
+        """Update the running-agent count shown in the menu.
+
+        Rebuilds only when the number actually changes: agent events fire
+        several times a second, and rebuilding the whole menu under an
+        open cursor would make it flicker.
+        """
+        count = max(0, int(count))
+        if count == self._agents_running:
+            return
+        self._agents_running = count
+        self._build_menu()
 
     def rebuild_menu(self):
         """Rebuild so the Model submenu reflects the newly-active provider."""

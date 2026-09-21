@@ -59,7 +59,7 @@ line.
 | M8  | Active Agents panel                | 1     | ✅     | M6         |
 | M9  | Activity timeline + logs           | 1     | ✅     | M8         |
 | M10 | Plan viewer + approval dialog      | 1     | ✅     | M8         |
-| M11 | Tray entry + agent settings page   | 1     | ⬜     | M8         |
+| M11 | Tray entry + agent settings page   | 1     | ✅     | M8         |
 | M12 | Open-source framework research     | 2     | ⬜     | M6         |
 | M13 | Gemini agent provider              | 2     | ⬜     | M6         |
 | M14 | Claude agent provider              | 2     | ⬜     | M13        |
@@ -428,7 +428,7 @@ are all exported from `agents.ui` and ready for the tray menu to call.
 
 ---
 
-## M11 · Tray entry + agent settings page ⬜
+## M11 · Tray entry + agent settings page ✅
 
 **Goal** The workforce is reachable without voice, and its safety rails are
 user-visible.
@@ -444,7 +444,44 @@ the existing `config.py` mechanism.
 **Done when** Settings survive a restart and actually change behaviour —
 setting auto-approve to `Safe` makes a `create_file` step raise an approval.
 
-**HANDOFF** _(none yet)_
+**Landed** `agents/ui/settings.py`, four `TORA_AGENT_*` settings in
+`config.py`, the tray entries, `main._wire_agents`, and concurrency
+enforcement in `AgentManager`. 13 tests. Suite: **273 passing**. Verified
+against the running app: it starts clean and logs `agent workforce ready`.
+
+**Scope call — concurrency was implemented, not just displayed**
+The block listed "max concurrent agents" as a settings field, but nothing
+enforced it, and a setting that silently does nothing is worse than no
+setting. `AgentManager` now queues past the limit (`_active` / `_queue`,
+0 = unlimited) and starts the next task when a slot frees. This overlaps
+the limits work in M23; what remains there is per-task wall clock, token
+and cost budgets.
+
+Two things queueing broke that were fixed with it:
+* `wait()` watched only `run.future`, which a queued task does not have
+  yet — it returned instantly with PENDING. It now watches the status and
+  uses the future as the fast path.
+* `cancel()` set a flag nothing would read until a slot freed, so a
+  cancelled queue entry sat at PENDING forever. It is now retired
+  immediately.
+
+**Notes for whoever touches this next**
+* Settings apply to the **default** policy only. Agents already running
+  keep the rails they were created with — tightening the ceiling must not
+  retroactively unapprove work the user already allowed. There is a test.
+* `build_agent_manager()` takes `None` for its policy arguments and fills
+  them from `config.py`, so the page is not decorative. Pass explicit
+  values in tests.
+* `main._wire_agents` calls `attach_approvals` — without it, a task that
+  needs a human parks in `WAITING_APPROVAL` forever and looks like a hang.
+  A test asserts that call is still there.
+* The tray rebuilds its menu only when the running count actually changes;
+  agent events fire several times a second and a menu rebuilt under an
+  open cursor flickers.
+
+**HANDOFF** Complete. **Phase 1 is finished** — M0–M11 all ✅. Next agent
+starts at **M12** (open-source framework research), the last cheap
+milestone before real providers land in M13.
 
 ---
 

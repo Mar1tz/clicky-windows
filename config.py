@@ -84,6 +84,14 @@ def _env(name: str, default: str = "") -> str:
     return default if value is None else value
 
 
+def _int(value: str, default: int) -> int:
+    """A malformed number in .env must not stop the app from starting."""
+    try:
+        return int(str(value).strip())
+    except (TypeError, ValueError):
+        return default
+
+
 DEFAULT_SYSTEM_PROMPT = """You are Tora, a VISUAL AI tutor running on Windows. You live
 next to the user's cursor. Your job is to *show*, not just tell.
 
@@ -315,6 +323,54 @@ class Config:
     tap_max_seconds: float = field(default_factory=lambda: float(
         _env("TORA_TAP_MAX_SECONDS", "0.6") or 0.6
     ))
+
+    # ── Autonomous agents ────────────────────────────────────────────────
+    #
+    # Where the workforce is allowed to build, how much it may do without
+    # asking, and how many of them may run at once. Deliberately NOT under
+    # the app's own folder: a runaway task must never be able to edit Tora.
+    agent_workspace: str = field(default_factory=lambda: (
+        _env("TORA_AGENT_WORKSPACE", "").strip()
+    ))
+    # safe | low | medium | high — the highest RiskLevel an agent may run
+    # without a human clicking Approve. See agents/core RiskLevel.
+    agent_auto_risk: str = field(default_factory=lambda: (
+        _env("TORA_AGENT_AUTO_RISK", "medium").strip().lower() or "medium"
+    ))
+    # Show the plan and wait for Approve before any step runs.
+    agent_plan_approval: bool = field(default_factory=lambda: (
+        _env("TORA_AGENT_PLAN_APPROVAL", "0").strip() in ("1", "true", "yes", "on")
+    ))
+    # 0 = unlimited. Above this, tasks queue instead of starting.
+    agent_max_concurrent: int = field(default_factory=lambda: _int(
+        _env("TORA_AGENT_MAX_CONCURRENT", "3"), 3
+    ))
+
+    def set_agent_workspace(self, path: str) -> None:
+        path = (path or "").strip()
+        self.agent_workspace = path
+        os.environ["TORA_AGENT_WORKSPACE"] = path
+        self._write_env("TORA_AGENT_WORKSPACE", path)
+
+    def set_agent_auto_risk(self, level: str) -> None:
+        level = (level or "medium").strip().lower()
+        if level not in ("safe", "low", "medium", "high"):
+            level = "medium"
+        self.agent_auto_risk = level
+        os.environ["TORA_AGENT_AUTO_RISK"] = level
+        self._write_env("TORA_AGENT_AUTO_RISK", level)
+
+    def set_agent_plan_approval(self, on: bool) -> None:
+        self.agent_plan_approval = bool(on)
+        value = "1" if on else "0"
+        os.environ["TORA_AGENT_PLAN_APPROVAL"] = value
+        self._write_env("TORA_AGENT_PLAN_APPROVAL", value)
+
+    def set_agent_max_concurrent(self, count: int) -> None:
+        count = max(0, int(count))
+        self.agent_max_concurrent = count
+        os.environ["TORA_AGENT_MAX_CONCURRENT"] = str(count)
+        self._write_env("TORA_AGENT_MAX_CONCURRENT", str(count))
 
     # ── Microphone mode ──────────────────────────────────────────────────
 

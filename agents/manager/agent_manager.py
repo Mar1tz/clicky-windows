@@ -18,6 +18,7 @@ import asyncio
 import logging
 import os
 import threading
+import time
 from typing import Any, Callable, Optional, Protocol, Union
 
 from agents.core import (
@@ -79,6 +80,7 @@ class AgentManager:
         default_policy: Optional[PermissionPolicy] = None,
         require_plan_approval: bool = False,
         max_replans: int = 1,
+        max_concurrent: int = 0,
     ):
         self.tools = tools
         self.router = router
@@ -96,7 +98,10 @@ class AgentManager:
             planner=planner, verifier=verifier, store=store, memory=memory,
             require_plan_approval=require_plan_approval, max_replans=max_replans,
         )
+        self.max_concurrent = max(0, int(max_concurrent))   # 0 = unlimited
         self._lock = threading.RLock()
+        self._active: set[str] = set()                  # task ids actually running
+        self._queue: list[tuple] = []                   # (ctx, worker, run) waiting
         self._runs: dict[str, _Run] = {}                # task_id -> run
         self._agents: dict[str, AgentState] = {}        # agent_id -> state
         self._tasks: dict[str, Task] = {}               # task_id -> task (incl. finished)
@@ -213,8 +218,58 @@ class AgentManager:
         ctx = AgentContext(task=task, agent=spec, tools=self.tools, provider=provider,
                            events=self.events, control=control, memory=self.memory,
                            approver=self._approver_for(task))
-        run.future = self.runtime.submit(self._run(ctx, worker))
+        self._start_or_queue(ctx, worker, run)
         return task
+
+    # -- concurrency ---------------------------------------------------------
+
+    def _start_or_queue(self, ctx: AgentContext, worker: BaseWorker, run: _Run) -> None:
+        """Run it now, or hold it at PENDING until a slot frees.
+
+        Ten agents unpacking npm at once is worse than three doing it in
+        turn, so `max_concurrent` is a real limit rather than a label. A
+        queued task keeps its place in `list_tasks` and can be cancelled
+        before it ever starts.
+        """
+        with self._lock:
+            at_capacity = (self.max_concurrent > 0
+                           and len(self._active) >= self.max_concurrent)
+            if at_capacity:
+                self._queue.append((ctx, worker, run))
+                queued = len(self._queue)
+            else:
+                self._active.add(ctx.task.id)
+        if at_capacity:
+            self.events.emit(EventKind.LOG,
+                             f"Queued — {queued} task(s) waiting for a free slot",
+                             task_id=ctx.task.id, agent_id=ctx.agent.id,
+                             data={"queued": queued, "max_concurrent": self.max_concurrent})
+            return
+        run.future = self.runtime.submit(self._run(ctx, worker))
+
+    def _start_next(self) -> None:
+        with self._lock:
+            if not self._queue:
+                return
+            if self.max_concurrent > 0 and len(self._active) >= self.max_concurrent:
+                return
+            ctx, worker, run = self._queue.pop(0)
+            self._active.add(ctx.task.id)
+        if run.control.cancelled:          # cancelled while it waited
+            self._finish_queued_as_cancelled(ctx)
+            return
+        run.future = self.runtime.submit(self._run(ctx, worker))
+
+    def _finish_queued_as_cancelled(self, ctx: AgentContext) -> None:
+        ctx.task.status = TaskStatus.CANCELLED
+        ctx.task.updated_at = now()
+        self.events.emit(EventKind.TASK_STATUS, TaskStatus.CANCELLED.value,
+                         task_id=ctx.task.id, agent_id=ctx.agent.id,
+                         data={"status": TaskStatus.CANCELLED.value})
+        with self._lock:
+            self._active.discard(ctx.task.id)
+            self._runs.pop(ctx.task.id, None)
+        self._start_next()
 
     async def _run(self, ctx: AgentContext, worker: BaseWorker) -> Task:
         try:
@@ -222,6 +277,8 @@ class AgentManager:
         finally:
             with self._lock:
                 self._runs.pop(ctx.task.id, None)
+                self._active.discard(ctx.task.id)
+            self._start_next()
 
     def get_task(self, task_id: str) -> Optional[Task]:
         t = self._tasks.get(task_id)
@@ -237,17 +294,31 @@ class AgentManager:
         return sorted(tasks, key=lambda t: t.created_at, reverse=True)
 
     def wait(self, task_id: str, timeout: Optional[float] = 60) -> Task:
-        """Block until the task reaches a terminal state (tests, CLI)."""
-        run = self._runs.get(task_id)
-        if run is not None and run.future is not None:
-            try:
-                run.future.result(timeout)
-            except Exception:  # noqa: BLE001 - the task object carries the outcome
-                pass
-        task = self.get_task(task_id)
-        if task is None:
-            raise KeyError(task_id)
-        return task
+        """Block until the task reaches a terminal state (tests, CLI).
+
+        A queued task has no future yet, so waiting on the future alone
+        would return the instant it was submitted, still PENDING. Watch
+        the status instead, and use the future as the fast path once the
+        task is actually running.
+        """
+        deadline = None if timeout is None else time.monotonic() + timeout
+        while True:
+            task = self.get_task(task_id)
+            if task is None:
+                raise KeyError(task_id)
+            if task.status.is_terminal:
+                return task
+            run = self._runs.get(task_id)
+            remaining = None if deadline is None else max(0.0, deadline - time.monotonic())
+            if run is not None and run.future is not None:
+                try:
+                    run.future.result(remaining)
+                except Exception:  # noqa: BLE001 - the task object carries the outcome
+                    pass
+            else:
+                time.sleep(0.02)           # still queued; nothing to wait on yet
+            if deadline is not None and time.monotonic() >= deadline:
+                return self.get_task(task_id) or task
 
     # -- control -------------------------------------------------------------
 
@@ -271,6 +342,17 @@ class AgentManager:
         run = self._runs.get(task_id)
         if run is None:
             return False
+        # A task still in the queue has no coroutine to interrupt: nothing
+        # would ever look at its cancel flag until a slot freed up, so
+        # retire it here instead of leaving it parked at PENDING.
+        with self._lock:
+            queued = next((q for q in self._queue if q[0].task.id == task_id), None)
+            if queued is not None:
+                self._queue.remove(queued)
+        if queued is not None:
+            run.control.cancel()
+            self._finish_queued_as_cancelled(queued[0])
+            return True
         self.runtime.call_soon(run.control.cancel)
         # a task parked on an approval must be released too
         for rid, (req, fut) in list(self._approvals.items()):

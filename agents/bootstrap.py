@@ -23,6 +23,9 @@ log = logging.getLogger("agents.bootstrap")
 
 APP_DIR_NAME = "Tora"
 
+# The settings page stores a name; the policy needs the enum.
+RISK_BY_NAME = {r.value: r for r in RiskLevel}
+
 
 def data_dir() -> str:
     base = os.environ.get("LOCALAPPDATA") or os.path.expanduser("~")
@@ -32,12 +35,35 @@ def data_dir() -> str:
 
 
 def default_workspace_root() -> str:
-    """Where agents build things unless told otherwise. Kept out of the
-    app's own folder so a runaway task can never touch Tora's code."""
-    docs = os.path.join(os.path.expanduser("~"), "Documents")
-    path = os.path.join(docs if os.path.isdir(docs) else os.path.expanduser("~"), "Tora Projects")
+    """Where agents build things unless told otherwise.
+
+    The user's setting wins; otherwise ~/Documents/Tora Projects. Kept out
+    of the app's own folder either way, so a runaway task can never touch
+    Tora's code.
+    """
+    chosen = ""
+    try:
+        from config import cfg
+        chosen = (cfg.agent_workspace or "").strip()
+    except Exception:       # config is optional for library use
+        pass
+    if chosen:
+        path = os.path.abspath(os.path.expanduser(chosen))
+    else:
+        docs = os.path.join(os.path.expanduser("~"), "Documents")
+        base = docs if os.path.isdir(docs) else os.path.expanduser("~")
+        path = os.path.join(base, "Tora Projects")
     os.makedirs(path, exist_ok=True)
     return path
+
+
+def _configured(name: str, fallback):
+    """One agent setting from config.py, tolerating config being absent."""
+    try:
+        from config import cfg
+        return getattr(cfg, name, fallback)
+    except Exception:
+        return fallback
 
 
 def build_agent_manager(
@@ -45,9 +71,12 @@ def build_agent_manager(
     workspace_root: Optional[str] = None,
     db_path: Optional[str] = None,
     in_memory: bool = False,
-    max_auto_risk: RiskLevel = RiskLevel.MEDIUM,
-    require_plan_approval: bool = False,
+    max_auto_risk: Optional[RiskLevel] = None,
+    require_plan_approval: Optional[bool] = None,
+    max_concurrent: Optional[int] = None,
 ) -> AgentManager:
+    """Build the workforce. Anything left as None comes from the user's
+    settings in config.py, so the settings page is not decorative."""
     from agents.memory import SQLiteMemoryStore
     from agents.persistence import SQLiteTaskStore
     from agents.planning import TemplatePlanner
@@ -63,6 +92,14 @@ def build_agent_manager(
         task_db = db_path or os.path.join(data_dir(), "agents.db")
         mem_db = os.path.join(os.path.dirname(task_db), "agent_memory.db")
 
+    if max_auto_risk is None:
+        max_auto_risk = RISK_BY_NAME.get(
+            str(_configured("agent_auto_risk", "medium")).lower(), RiskLevel.MEDIUM)
+    if require_plan_approval is None:
+        require_plan_approval = bool(_configured("agent_plan_approval", False))
+    if max_concurrent is None:
+        max_concurrent = int(_configured("agent_max_concurrent", 3))
+
     return AgentManager(
         tools=default_registry(),
         router=build_router(fallback=MockProvider()),
@@ -75,6 +112,7 @@ def build_agent_manager(
         classifier=HeuristicIntentClassifier(),
         default_policy=PermissionPolicy(max_auto_risk=max_auto_risk),
         require_plan_approval=require_plan_approval,
+        max_concurrent=max_concurrent,
     )
 
 

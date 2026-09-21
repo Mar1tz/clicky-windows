@@ -87,6 +87,59 @@ def _setup_logging():
         pass  # logging must never block startup
 
 
+def _wire_agents(manager, tray):
+    """Connect the agent workforce to the tray, once it is running.
+
+    Everything here is optional by design: if `agents/` failed to import
+    or start, `manager.agents` is None and Tora simply has no workforce —
+    the tray items say so rather than throwing.
+
+    The approval controller matters most. Without something listening for
+    APPROVAL_REQUIRED, a task that needs a human parks in WAITING_APPROVAL
+    forever, looking like a hang.
+    """
+    workforce = getattr(manager, "agents", None)
+    if workforce is None:
+        def _unavailable():
+            tray.show_notification(
+                "Agents unavailable",
+                "The agent workforce did not start. See tora.log for why.")
+        tray.on_open_agents.connect(_unavailable)
+        tray.on_agent_settings.connect(_unavailable)
+        return
+
+    from agents.ui import attach_approvals, open_agents_window
+    from agents.ui.settings import AgentSettingsDialog
+
+    attach_approvals(workforce)
+
+    windows: dict[str, object] = {}
+
+    def _open_panel():
+        windows["panel"] = open_agents_window(workforce)
+
+    def _open_settings():
+        dialog = windows.get("settings")
+        if dialog is None or not dialog.isVisible():
+            dialog = AgentSettingsDialog(workforce)
+            windows["settings"] = dialog
+        dialog.show()
+        dialog.raise_()
+        dialog.activateWindow()
+
+    tray.on_open_agents.connect(_open_panel)
+    tray.on_agent_settings.connect(_open_settings)
+
+    def _refresh_count(_event=None):
+        try:
+            tray.set_agents_running(len(workforce.list_agents(active_only=True)))
+        except Exception:
+            pass
+
+    manager.sig_agent_event.connect(_refresh_count)
+    _refresh_count()
+
+
 def main():
     _setup_logging()
     QApplication.setHighDpiScaleFactorRoundingPolicy(
@@ -365,7 +418,9 @@ def main():
     # ── Show UI + start listener ──────────────────────────────────────────────
     overlay.show()        # persistent overlay (cursor follow)
     # Panel is hidden by default — user can open it from the tray menu if needed
-    manager.start()        # begin ambient mic + wake-word scanning
+    manager.start()        # begin ambient mic + wake-word scanning; brings up agents
+
+    _wire_agents(manager, tray)
 
     providers = cfg.describe()
     _hk = "+".join(p.strip().capitalize() for p in cfg.hotkey.split("+"))
