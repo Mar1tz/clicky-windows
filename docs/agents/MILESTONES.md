@@ -56,7 +56,7 @@ line.
 | M5  | Runtime, orchestrator, manager     | 1     | ✅     | M1         |
 | M6  | Green suite + bootstrap committed  | 1     | ✅     | M2–M5      |
 | M7  | Companion integration (delegation) | 1     | ✅     | M6         |
-| M8  | Active Agents panel                | 1     | ⬜     | M6         |
+| M8  | Active Agents panel                | 1     | ✅     | M6         |
 | M9  | Activity timeline + logs           | 1     | ⬜     | M8         |
 | M10 | Plan viewer + approval dialog      | 1     | ⬜     | M8         |
 | M11 | Tray entry + agent settings page   | 1     | ⬜     | M8         |
@@ -265,7 +265,7 @@ thread, so the panel has a live feed to bind to on day one.
 
 ---
 
-## M8 · Active Agents panel ⬜
+## M8 · Active Agents panel ✅
 
 **Goal** Spec §10 — the window that makes it feel like a workforce:
 🟢 Application Builder · Step 4/10 · ███████░░░ 70% · Creating Navbar.tsx ·
@@ -293,7 +293,37 @@ thread, so the panel has a live feed to bind to on day one.
 * Tests use `QApplication` from a fixture with `QT_QPA_PLATFORM=offscreen`
   and assert the card's label text after feeding events through the bridge.
 
-**HANDOFF** _(none yet)_
+**Landed** `agents/ui/{bridge,agents_panel,demo}.py` + 14 tests. Suite:
+**232 passing**. Verified by screenshotting the real panel driven by a real
+workforce: a live frame caught mid-run reads
+`Application Builder · Running · Step 3/10 · coding: create_file · 30%`
+with a green dot and enabled buttons, and the finished cards grey out.
+
+**Notes for whoever touches this next**
+* `AgentEventBridge` is the only PyQt6 import point under `agents/` (the
+  `grep` for it should return `agents/ui` plus the rule's own docstring in
+  `agents/__init__.py`). Keep it that way — widgets stay single-threaded
+  because the bridge's queued signals do the hand-off.
+* `_on_event` runs on the **runtime** thread. Anything slow added there
+  stalls the agent that published the event. It catches `RuntimeError` on
+  purpose: that is a closed window's deleted C++ object, not a bug.
+* The scroll viewport and its inner holder both default to the window
+  colour and show through as a white band between cards. Fixed with
+  `QScrollArea > QWidget > QWidget { background: transparent; }` plus
+  `viewport().setAutoFillBackground(False)`; if cards ever get a white
+  gutter again, that is what regressed.
+* Cards are keyed by `AgentState.spec.id`. A new `AgentSpec` means a new
+  card, which is correct — it cost one confused test to learn.
+
+**Follow-up (small, not blocking):** the action line reads
+`coding: create_file` where the spec's mock-up says `Creating Navbar.tsx`.
+That string comes from the worker's `ctx.progress(...)` call in
+`agents/workers/base.py`, not from the panel. Worth making human-readable
+when M9 touches the timeline.
+
+**HANDOFF** Complete. Next agent starts at **M9** (activity timeline) —
+`ActiveAgentsPanel.view_logs(task_id)` already fires from each card's Logs
+button and is unconnected, waiting for the timeline window.
 
 ---
 
