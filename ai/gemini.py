@@ -1,0 +1,458 @@
+"""
+The one place Tora talks to Google.
+
+Everything else in ai/ is a thin job-specific wrapper over this module: the
+realtime conversation, the guide planner, the two vision passes, dictation,
+the fallback voice and the embedding memory all share the model table and the
+HTTP connection below.
+
+Why a shared client at all: every Gemini call used to open its own
+httpx.AsyncClient, which means a fresh TCP + TLS handshake — 200-400 ms of
+nothing before a single byte of the question leaves the machine. One pooled
+HTTP/2 client keeps the connection to generativelanguage.googleapis.com warm
+between turns, so the second question of a session starts streaming roughly a
+third of a second sooner than the first. warm_up() pays that cost once at
+startup, while the user is still reading the tray notification.
+
+Model roles (override any of them in .env):
+
+  GEMINI_REALTIME_MODEL   the conversation itself — audio in, audio out,
+                          tool calls, over a websocket
+  GEMINI_PLANNER_MODEL    breaks "show me how to..." into steps
+  GEMINI_VISION_FAST      first pass on any screen question
+  GEMINI_VISION_DEEP      the careful look — reads charts, boards, diagrams
+  GEMINI_STT_MODEL        dictation
+  GEMINI_TTS_MODEL        the cascaded fallback voice
+  GEMINI_EMBED_MODEL      memory + document recall
+"""
+
+from __future__ import annotations
+
+import asyncio
+import json
+import logging
+import os
+from typing import Any, AsyncIterator, Optional
+
+import httpx
+
+_log = logging.getLogger("tora.gemini")
+
+API_ROOT = "https://generativelanguage.googleapis.com/v1beta"
+LIVE_WS = (
+    "wss://generativelanguage.googleapis.com/ws/"
+    "google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent"
+)
+
+
+def _m(env_key: str, default: str) -> str:
+    return (os.getenv(env_key, "").strip() or default)
+
+
+class Models:
+    """The model behind each job. Read once at import; override via .env."""
+
+    REALTIME    = _m("GEMINI_REALTIME_MODEL", "gemini-3.8-live")
+    PLANNER     = _m("GEMINI_PLANNER_MODEL",  "gemini-3.1-pro-preview")
+    VISION_FAST = _m("GEMINI_VISION_FAST",    "gemini-3.8-flash")
+    VISION_DEEP = _m("GEMINI_VISION_DEEP",    "gemini-3.1-pro-preview")
+    STT         = _m("GEMINI_STT_MODEL",      "gemini-3.5-transcribe-live")
+    TTS         = _m("GEMINI_TTS_MODEL",      "gemini-3.1-flash-tts-preview")
+    EMBED       = _m("GEMINI_EMBED_MODEL",    "gemini-embedding-001")
+
+    # Models that refuse thinkingBudget=0 — asking anyway is a hard 400
+    # ("This model only works in thinking mode"), so the fast path has to
+    # know which models it may actually rush.
+    THINKING_ONLY = ("-pro", "pro-preview")
+
+    @classmethod
+    def can_skip_thinking(cls, model: str) -> bool:
+        return not any(marker in model for marker in cls.THINKING_ONLY)
+
+    @classmethod
+    def all_roles(cls) -> dict[str, str]:
+        return {
+            "realtime":    cls.REALTIME,
+            "planner":     cls.PLANNER,
+            "vision_fast": cls.VISION_FAST,
+            "vision_deep": cls.VISION_DEEP,
+            "stt":         cls.STT,
+            "tts":         cls.TTS,
+            "embed":       cls.EMBED,
+        }
+
+
+def api_key() -> str:
+    """The key every call uses. Read live so the API-keys dialog takes effect
+    without a restart."""
+    from config import cfg
+    return cfg.google_api_key or ""
+
+
+class GeminiError(RuntimeError):
+    """An API error with the message Google actually sent, not just a status.
+
+    httpx's raise_for_status() gives "Client error '400 Bad Request'", which
+    tells a user nothing. Google puts the real reason — bad key, quota, model
+    not found, unsupported argument — in the response body, so that is what
+    gets raised and shown in the error toast.
+    """
+
+    def __init__(self, status: int, body: str, model: str = ""):
+        self.status = status
+        self.body = body
+        self.model = model
+        detail = body
+        try:
+            detail = json.loads(body)["error"]["message"]
+        except Exception:
+            detail = (body or "")[:300]
+        where = f" [{model}]" if model else ""
+        super().__init__(f"Gemini {status}{where}: {detail}")
+
+
+# ── Shared connection ────────────────────────────────────────────────────────
+
+_client: Optional[httpx.AsyncClient] = None
+_client_loop: Optional[asyncio.AbstractEventLoop] = None
+
+
+def client() -> httpx.AsyncClient:
+    """The process-wide pooled client, created on first use.
+
+    Bound to the loop that first asked for it. The manager runs everything on
+    one background loop, but the setup wizard and diagnostics spin up their
+    own throwaway loops — a client built on a dead loop raises on its next
+    request, so it is rebuilt whenever the loop underneath it changed.
+    """
+    global _client, _client_loop
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        loop = None
+
+    if _client is not None and _client_loop is not loop:
+        # Different loop: abandon the old pool rather than awaiting it here
+        # (closing needs the loop it was made on, which may already be gone).
+        _client = None
+
+    if _client is None:
+        _client = httpx.AsyncClient(
+            http2=True,
+            timeout=httpx.Timeout(connect=10.0, read=120.0, write=30.0, pool=10.0),
+            limits=httpx.Limits(
+                max_connections=8,
+                max_keepalive_connections=8,
+                keepalive_expiry=300.0,
+            ),
+            headers={"user-agent": "Tora/2.0 (+gemini)"},
+        )
+        _client_loop = loop
+    return _client
+
+
+async def aclose() -> None:
+    """Close the shared pool. Called on shutdown."""
+    global _client, _client_loop
+    c, _client, _client_loop = _client, None, None
+    if c is not None:
+        try:
+            await c.aclose()
+        except Exception:
+            _log.debug("closing shared gemini client failed", exc_info=True)
+
+
+async def warm_up() -> bool:
+    """Open the TLS connection before the user's first question needs it.
+
+    Fired at startup. A cheap GET is enough — what matters is that the socket
+    and TLS session are established and pooled by the time someone speaks.
+    """
+    if not api_key():
+        return False
+    try:
+        r = await client().get(
+            f"{API_ROOT}/models/{Models.VISION_FAST}",
+            params={"key": api_key()},
+            timeout=8.0,
+        )
+        return r.status_code == 200
+    except Exception:
+        _log.debug("warm-up failed (harmless)", exc_info=True)
+        return False
+
+
+# ── REST ─────────────────────────────────────────────────────────────────────
+
+def _url(model: str, method: str) -> str:
+    return f"{API_ROOT}/models/{model}:{method}"
+
+
+def thinking(budget: Optional[int], model: str) -> dict:
+    """generationConfig fragment that caps deliberation.
+
+    budget=0 on a flash model is the single biggest latency win available:
+    it removes a whole silent reasoning pass (~240 tokens, roughly half a
+    second) from an answer that never needed one. Pro models reject it, so
+    for them this is a no-op and they think as much as they want to.
+    """
+    if budget is None:
+        return {}
+    if budget == 0 and not Models.can_skip_thinking(model):
+        return {}
+    return {"thinkingConfig": {"thinkingBudget": budget}}
+
+
+async def generate(
+    model: str,
+    contents: list,
+    *,
+    system: str = "",
+    max_tokens: int = 1024,
+    temperature: float = 0.7,
+    think: Optional[int] = None,
+    schema: Optional[dict] = None,
+    tools: Optional[list] = None,
+    audio_voice: Optional[str] = None,
+    timeout: float = 120.0,
+) -> dict:
+    """One non-streaming generateContent call. Returns the raw response.
+
+    audio_voice switches the response from text to speech — that is how the
+    TTS model is addressed, since it shares this same endpoint.
+    """
+    gen: dict[str, Any] = {
+        "maxOutputTokens": max_tokens,
+        "temperature": temperature,
+    }
+    gen.update(thinking(think, model))
+    if schema is not None:
+        gen["responseMimeType"] = "application/json"
+        gen["responseSchema"] = schema
+    if audio_voice:
+        gen["responseModalities"] = ["AUDIO"]
+        gen["speechConfig"] = {
+            "voiceConfig": {"prebuiltVoiceConfig": {"voiceName": audio_voice}}
+        }
+
+    body: dict[str, Any] = {"contents": contents, "generationConfig": gen}
+    if system:
+        body["systemInstruction"] = {"parts": [{"text": system}]}
+    if tools:
+        body["tools"] = tools
+
+    r = await client().post(
+        _url(model, "generateContent"),
+        params={"key": api_key()},
+        json=body,
+        timeout=timeout,
+    )
+    if r.status_code != 200:
+        raise GeminiError(r.status_code, r.text, model)
+    return r.json()
+
+
+async def generate_json(
+    model: str,
+    contents: list,
+    schema: dict,
+    *,
+    system: str = "",
+    max_tokens: int = 2048,
+    think: Optional[int] = None,
+    timeout: float = 120.0,
+) -> Optional[dict]:
+    """generateContent constrained to a JSON schema. None if it came back
+    unparseable — every caller has a sane path for 'no structured answer'."""
+    resp = await generate(
+        model, contents,
+        system=system, max_tokens=max_tokens, temperature=0.2,
+        think=think, schema=schema, timeout=timeout,
+    )
+    text = first_text(resp)
+    if not text:
+        return None
+    data = parse_json_lenient(text)
+    if data is None:
+        # Say what came back, once, instead of a bare "Expecting value" —
+        # this was how the guide's vision judge failed silently.
+        fin = ""
+        try:
+            fin = resp.get("candidates", [{}])[0].get("finishReason", "")
+        except Exception:
+            pass
+        _log.warning("generate_json: unparseable reply (finish=%s): %.160r",
+                     fin, text)
+    return data
+
+
+def parse_json_lenient(text: str) -> Optional[dict]:
+    """json.loads that survives what models actually emit: a ```json fence,
+    prose before or after the object, a trailing comma, or a reply cut off
+    at max_tokens (in which case the outermost object is still recovered
+    when it closed)."""
+    t = text.strip()
+    try:
+        out = json.loads(t)
+        return out if isinstance(out, dict) else None
+    except Exception:
+        pass
+    if t.startswith("```"):
+        t = t.split("\n", 1)[1] if "\n" in t else t[3:]
+        if t.rstrip().endswith("```"):
+            t = t.rstrip()[:-3]
+    i, j = t.find("{"), t.rfind("}")
+    if i == -1 or j <= i:
+        return None
+    body = t[i:j + 1]
+    for cand in (body, body.replace(",}", "}").replace(",]", "]")):
+        try:
+            out = json.loads(cand)
+            return out if isinstance(out, dict) else None
+        except Exception:
+            continue
+    return None
+
+
+async def stream(
+    model: str,
+    contents: list,
+    *,
+    system: str = "",
+    max_tokens: int = 1024,
+    temperature: float = 0.7,
+    think: Optional[int] = None,
+    timeout: float = 120.0,
+) -> AsyncIterator[str]:
+    """Server-sent-events streaming. Yields text as it arrives."""
+    gen: dict[str, Any] = {
+        "maxOutputTokens": max_tokens,
+        "temperature": temperature,
+    }
+    gen.update(thinking(think, model))
+    body: dict[str, Any] = {"contents": contents, "generationConfig": gen}
+    if system:
+        body["systemInstruction"] = {"parts": [{"text": system}]}
+
+    async with client().stream(
+        "POST",
+        _url(model, "streamGenerateContent"),
+        params={"key": api_key(), "alt": "sse"},
+        json=body,
+        timeout=timeout,
+    ) as resp:
+        if resp.status_code != 200:
+            raise GeminiError(resp.status_code, (await resp.aread()).decode(), model)
+        async for line in resp.aiter_lines():
+            if not line.startswith("data: "):
+                continue
+            data = line[6:].strip()
+            if not data or data == "[DONE]":
+                continue
+            try:
+                obj = json.loads(data)
+            except json.JSONDecodeError:
+                continue
+            for cand in obj.get("candidates", []):
+                for part in cand.get("content", {}).get("parts", []):
+                    # Gemini 3 streams its reasoning as parts flagged
+                    # "thought". Those are not the answer and must never be
+                    # spoken or shown — only the real text is yielded.
+                    if part.get("thought"):
+                        continue
+                    text = part.get("text", "")
+                    if text:
+                        yield text
+
+
+async def embed(
+    texts: list[str],
+    *,
+    task: str = "RETRIEVAL_DOCUMENT",
+    dims: int = 768,
+    timeout: float = 30.0,
+) -> list[list[float]]:
+    """Embed a batch of strings in one round trip.
+
+    768 dimensions rather than the 3072 default: the quality difference is
+    invisible for "which of these twenty notes is relevant", and it keeps the
+    on-disk memory index a quarter of the size.
+    """
+    if not texts:
+        return []
+    body = {
+        "requests": [
+            {
+                "model": f"models/{Models.EMBED}",
+                "content": {"parts": [{"text": t}]},
+                "taskType": task,
+                "outputDimensionality": dims,
+            }
+            for t in texts
+        ]
+    }
+    r = await client().post(
+        _url(Models.EMBED, "batchEmbedContents"),
+        params={"key": api_key()},
+        json=body,
+        timeout=timeout,
+    )
+    if r.status_code != 200:
+        raise GeminiError(r.status_code, r.text, Models.EMBED)
+    return [e.get("values", []) for e in r.json().get("embeddings", [])]
+
+
+# ── Response helpers ─────────────────────────────────────────────────────────
+
+def first_text(resp: dict) -> str:
+    """Concatenate the answer text of a generateContent response."""
+    out = []
+    for cand in resp.get("candidates", []):
+        for part in cand.get("content", {}).get("parts", []):
+            if part.get("thought"):
+                continue
+            if "text" in part:
+                out.append(part["text"])
+    return "".join(out).strip()
+
+
+def first_audio(resp: dict) -> tuple[bytes, int]:
+    """(pcm16_bytes, sample_rate) from a TTS response. (b"", 0) if none.
+
+    The mime type comes back as "audio/l16; rate=24000; channels=1" — raw
+    signed 16-bit PCM, no container, so the rate has to be read out of the
+    header rather than assumed.
+    """
+    import base64
+    import re as _re
+
+    for cand in resp.get("candidates", []):
+        for part in cand.get("content", {}).get("parts", []):
+            blob = part.get("inlineData") or part.get("inline_data")
+            if not blob:
+                continue
+            mime = blob.get("mimeType") or blob.get("mime_type") or ""
+            m = _re.search(r"rate=(\d+)", mime)
+            rate = int(m.group(1)) if m else 24000
+            return base64.b64decode(blob.get("data", "")), rate
+    return b"", 0
+
+
+def image_part(jpeg_b64: str) -> dict:
+    return {"inlineData": {"mimeType": "image/jpeg", "data": jpeg_b64}}
+
+
+def text_part(text: str) -> dict:
+    return {"text": text}
+
+
+async def health_check() -> bool:
+    if not api_key():
+        return False
+    try:
+        r = await client().get(
+            f"{API_ROOT}/models", params={"key": api_key()}, timeout=8.0
+        )
+        return r.status_code == 200
+    except Exception:
+        return False

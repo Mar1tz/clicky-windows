@@ -1,0 +1,301 @@
+"""
+Transport for Gemini's Live API — the bidirectional websocket that carries
+audio both ways.
+
+Two things ride on this: the conversation itself (gemini_realtime.py) and
+dictation (audio/stt/gemini_stt.py). Neither of them should have to know
+about frame shapes, base64 or turn bookkeeping, so all of that lives here and
+the callers just push audio in and read LiveEvents out.
+
+Wire notes worth keeping, all confirmed against the live endpoint:
+
+  • The first frame must be {"setup": ...} and the server answers
+    {"setupComplete": {}} before it will accept anything else.
+
+  • Push-to-talk wants MANUAL turn control. With
+    realtimeInputConfig.automaticActivityDetection.disabled the hotkey
+    defines the turn: activityStart on press, activityEnd on release. Left on
+    automatic, the server's own VAD decides, which fights the hotkey and — on
+    a short clip with no leading silence — can sit there and never answer at
+    all.
+
+  • A tool call ends the turn immediately: the server sends toolCall and then
+    turnComplete with no audio at all. The answer only arrives in the NEXT
+    turn, after toolResponse goes back. A reader that stops at the first
+    turnComplete hangs up on the model mid-sentence, every time it uses a
+    tool. LiveEvent.produced_output exists so callers can tell the two kinds
+    of turnComplete apart.
+
+  • Audio in is 16 kHz PCM16 mono; audio out is 24 kHz PCM16 mono.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import base64
+import json
+import logging
+from dataclasses import dataclass, field
+from typing import Any, AsyncIterator, Optional
+
+import websockets
+from websockets.exceptions import ConnectionClosed
+
+from ai.gemini import LIVE_WS, api_key
+
+_log = logging.getLogger("tora.live")
+
+INPUT_RATE = 16000
+OUTPUT_RATE = 24000
+
+# 100 ms of 16 kHz mono PCM16. Small enough that the server's VAD and
+# transcriber see speech as it happens, big enough that we are not paying
+# websocket framing overhead on every 20 ms.
+CHUNK_BYTES = INPUT_RATE * 2 // 10
+
+
+@dataclass
+class ToolCall:
+    id: str
+    name: str
+    args: dict
+
+
+@dataclass
+class LiveEvent:
+    kind: str                    # see below
+    text: str = ""
+    audio: bytes = b""
+    sample_rate: int = OUTPUT_RATE
+    calls: list[ToolCall] = field(default_factory=list)
+    produced_output: bool = False
+    raw: dict = field(default_factory=dict)
+
+    # kinds:
+    #   ready             setup accepted
+    #   input_transcript  what the server heard us say
+    #   output_transcript what the model is saying, as text
+    #   audio             spoken audio, PCM16 @ sample_rate
+    #   text              text response (TEXT-modality sessions)
+    #   tool_call         model wants a tool run; answer with send_tool_response
+    #   turn_complete     model finished a turn
+    #   interrupted       the user talked over the model; drop queued audio
+    #   voice_activity    server VAD: text is ACTIVITY_START or ACTIVITY_END
+    #   go_away           server is about to close this session
+    #   closed            socket is gone
+
+
+class LiveSession:
+    """One websocket to one Live model. Use as an async context manager."""
+
+    def __init__(self, model: str, setup: dict):
+        self._model = model
+        self._setup = dict(setup)
+        self._setup["model"] = f"models/{model}"
+        self._ws = None
+        self._resume_handle: Optional[str] = None
+        self._closed = False
+
+    # ── Lifecycle ────────────────────────────────────────────────────────────
+
+    async def connect(self, timeout: float = 20.0) -> None:
+        key = api_key()
+        if not key:
+            raise RuntimeError(
+                "No Google API key. Add GOOGLE_API_KEY in Tray → API Key."
+            )
+        self._ws = await asyncio.wait_for(
+            websockets.connect(f"{LIVE_WS}?key={key}", max_size=None),
+            timeout=timeout,
+        )
+        await self._send({"setup": self._setup})
+        raw = await asyncio.wait_for(self._ws.recv(), timeout=timeout)
+        msg = json.loads(raw if isinstance(raw, str) else raw.decode())
+        if "setupComplete" not in msg:
+            raise RuntimeError(f"Live setup refused: {json.dumps(msg)[:300]}")
+
+    async def close(self) -> None:
+        self._closed = True
+        ws, self._ws = self._ws, None
+        if ws is not None:
+            try:
+                await ws.close()
+            except Exception:
+                _log.debug("live close failed", exc_info=True)
+
+    async def __aenter__(self) -> "LiveSession":
+        await self.connect()
+        return self
+
+    async def __aexit__(self, *exc) -> None:
+        await self.close()
+
+    @property
+    def is_open(self) -> bool:
+        return self._ws is not None and not self._closed
+
+    # ── Sending ──────────────────────────────────────────────────────────────
+
+    async def _send(self, payload: dict) -> None:
+        if self._ws is None:
+            raise RuntimeError("Live session is not connected")
+        await self._ws.send(json.dumps(payload))
+
+    async def activity_start(self) -> None:
+        """Hotkey pressed — the user is about to talk."""
+        await self._send({"realtimeInput": {"activityStart": {}}})
+
+    async def activity_end(self) -> None:
+        """Hotkey released — answer now."""
+        await self._send({"realtimeInput": {"activityEnd": {}}})
+
+    async def send_audio(self, pcm16: bytes) -> None:
+        """Stream mic audio, split into 100 ms frames."""
+        for i in range(0, len(pcm16), CHUNK_BYTES):
+            await self._send({
+                "realtimeInput": {
+                    "audio": {
+                        "data": base64.b64encode(pcm16[i:i + CHUNK_BYTES]).decode(),
+                        "mimeType": f"audio/pcm;rate={INPUT_RATE}",
+                    }
+                }
+            })
+
+    async def send_image(self, jpeg_b64: str) -> None:
+        """Put a screenshot in front of the model without ending the turn.
+
+        turnComplete stays false on purpose: this is context for the question
+        that is about to be asked, not a question in itself. Sent before the
+        mic opens, so the image is already uploaded and encoded by the time
+        the user stops speaking.
+        """
+        await self._send({
+            "clientContent": {
+                "turns": [{
+                    "role": "user",
+                    "parts": [{"inlineData": {
+                        "mimeType": "image/jpeg", "data": jpeg_b64,
+                    }}],
+                }],
+                "turnComplete": False,
+            }
+        })
+
+    async def send_text(self, text: str, *, turn_complete: bool = True) -> None:
+        await self._send({
+            "clientContent": {
+                "turns": [{"role": "user", "parts": [{"text": text}]}],
+                "turnComplete": turn_complete,
+            }
+        })
+
+    async def send_tool_response(self, results: list[tuple[ToolCall, dict]]) -> None:
+        await self._send({
+            "toolResponse": {
+                "functionResponses": [
+                    {"id": call.id, "name": call.name, "response": result}
+                    for call, result in results
+                ]
+            }
+        })
+
+    async def audio_stream_end(self) -> None:
+        """Only for automatic-VAD sessions — tells the server the clip is over."""
+        await self._send({"realtimeInput": {"audioStreamEnd": True}})
+
+    # ── Receiving ────────────────────────────────────────────────────────────
+
+    async def events(self) -> AsyncIterator[LiveEvent]:
+        """Yield LiveEvents until the socket closes."""
+        if self._ws is None:
+            return
+        produced = False
+        try:
+            async for raw in self._ws:
+                msg: dict[str, Any] = json.loads(
+                    raw if isinstance(raw, str) else raw.decode()
+                )
+
+                if "sessionResumptionUpdate" in msg:
+                    self._resume_handle = (
+                        msg["sessionResumptionUpdate"].get("newHandle")
+                    )
+                    continue
+
+                if "goAway" in msg:
+                    yield LiveEvent(kind="go_away", raw=msg)
+                    continue
+
+                if "toolCall" in msg:
+                    calls = [
+                        ToolCall(
+                            id=c.get("id", ""),
+                            name=c.get("name", ""),
+                            args=c.get("args") or {},
+                        )
+                        for c in msg["toolCall"].get("functionCalls", [])
+                    ]
+                    if calls:
+                        yield LiveEvent(kind="tool_call", calls=calls, raw=msg)
+                    continue
+
+                # Server-side VAD verdict. The transcribe model reports
+                # ACTIVITY_END as soon as it hears the utterance finish,
+                # which beats waiting out a local silence timer.
+                va = msg.get("voiceActivity")
+                if va:
+                    yield LiveEvent(
+                        kind="voice_activity", text=va.get("type", ""), raw=msg
+                    )
+
+                sc = msg.get("serverContent")
+                if sc is None:
+                    continue
+
+                if sc.get("interrupted"):
+                    produced = False
+                    yield LiveEvent(kind="interrupted", raw=msg)
+
+                it = sc.get("inputTranscription")
+                if it and it.get("text"):
+                    yield LiveEvent(kind="input_transcript", text=it["text"])
+
+                ot = sc.get("outputTranscription")
+                if ot and ot.get("text"):
+                    produced = True
+                    yield LiveEvent(kind="output_transcript", text=ot["text"])
+
+                for part in sc.get("modelTurn", {}).get("parts", []):
+                    blob = part.get("inlineData") or part.get("inline_data")
+                    if blob and blob.get("data"):
+                        produced = True
+                        mime = blob.get("mimeType") or blob.get("mime_type") or ""
+                        rate = OUTPUT_RATE
+                        if "rate=" in mime:
+                            try:
+                                rate = int(mime.split("rate=")[1].split(";")[0])
+                            except (ValueError, IndexError):
+                                pass
+                        yield LiveEvent(
+                            kind="audio",
+                            audio=base64.b64decode(blob["data"]),
+                            sample_rate=rate,
+                        )
+                    elif part.get("text"):
+                        produced = True
+                        yield LiveEvent(kind="text", text=part["text"])
+
+                if sc.get("turnComplete"):
+                    yield LiveEvent(kind="turn_complete", produced_output=produced)
+                    produced = False
+
+        except ConnectionClosed:
+            pass
+        except Exception as e:
+            _log.debug("live receive loop ended: %s", e, exc_info=True)
+        # NOT in a finally. When the pump task is cancelled, GeneratorExit
+        # is thrown in at the suspended yield; yielding again from a finally
+        # is the textbook 'async generator ignored GeneratorExit' and was
+        # logged on every reconnect. A cancelled consumer does not need to
+        # be told the stream closed.
+        yield LiveEvent(kind="closed")

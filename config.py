@@ -1,0 +1,455 @@
+import os
+import shutil
+import sys
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Optional
+from dotenv import load_dotenv
+
+# Where the user-editable .env lives. In the PyInstaller build, __file__ is
+# inside the bundle's _internal\ directory but users (and the installer) put
+# .env next to Tora.exe at the install root — reading _HERE from __file__
+# there meant .env edits were silently ignored (GitHub issue #3).
+if getattr(sys, "frozen", False):
+    _HERE = Path(sys.executable).parent
+else:
+    _HERE = Path(__file__).parent
+
+# Load env files in priority order. .env.local overrides .env (Next.js convention,
+# which is how many users — including this one — keep their real keys).
+for _name in (".env", ".env.local"):
+    _p = _HERE / _name
+    if _p.exists():
+        load_dotenv(_p, override=True)
+
+
+_LEGACY_MIGRATED = False
+
+
+def _migrate_legacy_data(target: Path) -> None:
+    """Move anything left in the old Clicky folder into the Tora one.
+
+    File-by-file rather than renaming the whole directory, because the new
+    folder usually already exists by the time this runs (a log file is created
+    early in startup), and a plain rename would then silently do nothing —
+    leaving the user's journal, memory and setup flag stranded under the old
+    name. Existing files in the new folder always win; nothing is overwritten.
+    """
+    global _LEGACY_MIGRATED
+    if _LEGACY_MIGRATED:
+        return
+    _LEGACY_MIGRATED = True
+    legacy = target.parent / "Clicky"
+    if not legacy.is_dir() or legacy == target:
+        return
+    for src in legacy.iterdir():
+        if not src.is_file():
+            continue
+        name = "tora.log" if src.name == "clicky.log" else src.name
+        dst = target / name
+        if dst.exists():
+            continue
+        try:
+            shutil.move(str(src), str(dst))
+        except Exception:
+            pass
+
+
+def data_dir() -> Path:
+    r"""%LOCALAPPDATA%\Tora — journal, memory, model cache, logs, flags.
+
+    Carries the old Clicky folder's contents across on first use. Without
+    this the rename would silently orphan everything the user had built up:
+    their knowledge journal, what Tora remembers about them, and the setup
+    flag (so they would be shown the first-run wizard all over again).
+    """
+    base = os.environ.get("LOCALAPPDATA") or os.path.expanduser("~")
+    d = Path(base) / "Tora"
+    d.mkdir(parents=True, exist_ok=True)
+    _migrate_legacy_data(d)
+    return d
+
+
+def _env(name: str, default: str = "") -> str:
+    """Read a TORA_* setting, honouring the old CLICKY_* name as a fallback.
+
+    The app was renamed from Clicky to Tora. Anyone with an existing .env
+    would otherwise silently lose their hotkey and mic settings on upgrade —
+    the values would still be sitting in the file under names nothing reads
+    any more. New name wins; old name still works.
+    """
+    value = os.getenv(name)
+    if value is None and name.startswith("TORA_"):
+        value = os.getenv("CLICKY_" + name[len("TORA_"):])
+    return default if value is None else value
+
+
+DEFAULT_SYSTEM_PROMPT = """You are Tora, a VISUAL AI tutor running on Windows. You live
+next to the user's cursor. Your job is to *show*, not just tell.
+
+{{CONTEXT}}
+
+HARD RULES (never break):
+  1. LOCATE QUESTIONS ("where is X", "how do I click Y", "show me X", "find X"):
+     Point at it and explain in ONE sentence. If it's not visible, say so
+     plainly instead of guessing.
+
+  2. MULTI-STEP TASKS (export, install, configure, setup, etc.):
+     Describe ONLY the next single step, then end with "Say 'next' when
+     ready." Never dump a numbered list of 5 steps in one response.
+
+  3. VISION: describe only what is ACTUALLY in the screenshot. Trust your
+     eyes over the user's words.
+
+  4. WEB SEARCH: when search results appear, use them as your primary
+     source and give a direct answer — never say "I don't know" if the
+     results contain real facts. Today is {{TODAY}}.
+
+  5. PUBLIC figures, celebrities, companies, products — answer freely.
+     Never refuse with "I can't identify people" — these are public figures
+     with public information available.
+
+LANGUAGE: always reply in English, whatever language you are spoken to in.
+
+STYLE: warm, concise, teacher-y. 1-2 sentences per step. No markdown bullets
+unless genuinely listing options."""
+
+
+# Technical rules Tora needs to actually draw on screen and point at
+# elements correctly. Always appended after the user-editable prompt above
+# — kept separate because breaking this syntax breaks pointing/drawing, and
+# most users have no reason to touch it.
+_TECHNICAL_RULES = """
+
+COORDINATE SYSTEM (applies to every tag below): coordinates are NORMALIZED
+0-1000 relative to the screenshot. x=0 is the LEFT edge, x=1000 the RIGHT
+edge; y=0 is the TOP, y=1000 the BOTTOM. The exact centre of the screen is
+500,500. Sizes/radii use the same scale (100 = 10% of screen width).
+
+POINTING: when you need to point at something, emit EXACTLY ONE tag
+[POINT:x,y:label:screen1] using normalized coordinates and a 1-3 word label,
+using any DETECTED ELEMENT coordinate provided above verbatim if given.
+
+DRAWING TAGS (coords normalized 0-1000, trailing :color always optional):
+  [LINE:x1,y1->x2,y2:color]         straight line
+  [ARROW:x1,y1->x2,y2:color]        line with arrowhead (points at x2,y2)
+  [CIRCLE:x,y,r:label:color]        ring; label optional
+  [RECT:x1,y1,x2,y2:color]          rectangle by opposite corners
+  [POLY:x1,y1 x2,y2 x3,y3:color]    closed shape, 3+ points (triangles!)
+  [TEXT:x,y:content:color:size]     text; size s|m|l (default m)
+  [ANGLE:x,y,s,rot:color]           right-angle marker at corner (x,y)
+  [CLEAR]                           wipe all drawings
+Colors: blue red green yellow orange purple white cyan (default blue).
+For real UI elements use anchors instead of guessing coordinates:
+  [CIRCLE:@Save button]  [UNDERLINE:@File menu]  — resolved pixel-perfectly.
+
+TEACHING WITH DRAWINGS: when explaining something visible on screen (a
+figure, chart, diagram, equation, code), draw ON it — trace edges, label
+parts, add helper lines — interleaving tags with your spoken words in the
+order a teacher draws on a whiteboard. Place TEXT next to what it names,
+never covering it. Use up to ~10 shapes for a full lesson, 1-2 for a quick
+highlight.
+
+ACCURACY DISCIPLINE: if DETECTED FIGURES are listed above, copy those
+vertex numbers into your tags EXACTLY. Only estimate coordinates for things
+not listed. When estimating: fix the figure's bounding box first, derive
+every endpoint from it, and reuse IDENTICAL numbers for shared vertices.
+
+NARRATION SYNC: Tora speaks your response sentence by sentence and draws
+each sentence's tags WHILE saying that sentence — put every tag immediately
+after the words that describe it, spread across the lesson (1-2 tags per
+sentence), never dump all tags at the start or end."""
+
+
+# In the realtime conversation Tora does not write tags — it calls tools.
+# Same teaching behaviour, different mechanism, so the drawing syntax above
+# would only confuse it. This replaces _TECHNICAL_RULES on that path.
+_REALTIME_RULES = """
+
+YOU LIVE ON THE USER'S WINDOWS PC AND YOU HAVE HANDS. Use them — never
+describe what you would do, do it.
+
+  point_at(name)      Put the pointer on a control, BY NAME. Prefer a name
+                      from the "Controls you can point at" list, but if the
+                      thing the user means is not on that list, still call
+                      point_at with your best short name for it — Tora will
+                      find it. Instant. This is the right answer to almost
+                      every "where is…" question.
+  look_at_screen      LOOK at the pixels. Costs a second or two, so use it
+                      only when the answer genuinely needs eyes: a game, a
+                      picture, a chart, a chessboard, a diagram, handwriting,
+                      an unlabelled error, or any "what's the best…"
+                      question. Pass careful:true when it needs real reading
+                      or judgement. It highlights what it finds, so say where
+                      the highlight is ("it's here, on the left").
+  draw                Arrows, circles, boxes, labels, text drawn ON the
+                      screen. Works any time — you do NOT need a screenshot
+                      first. Coordinates are 0-1000 across the screen, so you
+                      can always mark a region you can describe ("the left
+                      sidebar" is roughly x 0-200). Use it constantly.
+  clear_drawings      Wipe the screen before starting something new.
+  show_me_how(goal)   ALWAYS call this for any "how do I…" question that takes
+                      more than one step (export, install, set up, change a
+                      setting, navigate somewhere). Do NOT list the steps
+                      yourself — call show_me_how and Tora walks the user
+                      through them, pointing and advancing automatically. Say
+                      one short "sure, let me walk you through it" first, then
+                      call it.
+  search_web          ONLY when the user explicitly says search / look up,
+                      or asks about news, prices or releases. Never for
+                      the screen, an app, a game, or a how-do-I. Slow.
+  recall              What you remember about this user, and their documents.
+
+DO NOT LOOK AT THE SCREEN BY DEFAULT. Each turn you are told the app, the
+window title, what has focus and every control you can point at by name. That
+answers most questions on its own, instantly. Reach for look_at_screen only
+when the words in front of you genuinely are not enough.
+
+ALWAYS TAKE THEM THERE. For any "where is…", "how do I get to…", "show me…"
+or "take me to…" question you MUST put the pointer on it — call point_at (or
+look_at_screen if it has no name). Never answer where something is with words
+alone. If it is genuinely not on screen, say so plainly and say where to find
+it.
+
+NEVER say you cannot see the screen without having called look_at_screen this
+turn.
+
+DRAW WHENEVER IT HELPS — this is the whole point of you. You are a visual
+assistant: anything you explain about the screen should be shown, not just
+said. Reach for draw when you:
+  • compare or relate two things   → an arrow between them
+  • mean a region, not a control   → a box around it
+  • count or list things on screen → number them with text labels
+  • warn about something           → ring it in red
+  • explain a layout or a diagram  → trace it as you talk
+point_at already rings what it lands on, so a plain "where is X" needs no
+extra drawing — but the moment you are EXPLAINING rather than locating, draw.
+Interleave shapes with your words the way a teacher draws while talking, one
+or two per sentence, never a pile at the end.
+
+POINT AND TALK AT THE SAME TIME. point_at returns instantly and the arrow
+flies while you speak — so call it and keep talking in the same breath. NEVER
+describe a location in words instead of pointing ("it's on the left, looks
+like four boxes"): point first, then describe what you pointed at.
+
+Say something IMMEDIATELY. If a tool will take a moment, speak first — "let
+me look", "one second" — then call it. Silence reads as broken.
+
+COORDINATES, where you need them, are normalized 0-1000 on the screenshot:
+x=0 left, x=1000 right, y=0 top, y=1000 bottom. Centre is 500,500.
+
+YOU ARE BEING SPOKEN TO, NOT READ. No markdown, no bullet lists, no
+"firstly". One or two short sentences, then stop and let the user answer."""
+
+
+@dataclass
+class Config:
+    # ── Google ───────────────────────────────────────────────────────────
+    # The only provider. GEMINI_API_KEY is accepted as an alias because
+    # that is what Google AI Studio calls it on the copy button.
+    google_api_key: Optional[str] = field(default_factory=lambda: (
+        os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_API_KEY") or None
+    ))
+
+    # ── Conversation route ───────────────────────────────────────────────
+    # realtime  (default) one websocket to gemini-3.8-live: audio in, audio
+    #           out, tools. First word in about a second and a half.
+    # cascade   transcribe → text model → synthesise. Several seconds
+    #           slower, and what Tora falls back to automatically when the
+    #           websocket cannot be opened. Force it here to compare, or if
+    #           the network blocks websockets.
+    conversation_mode: str = field(default_factory=lambda: (
+        _env("TORA_CONVERSATION", "realtime").strip().lower() or "realtime"
+    ))
+
+    # Prebuilt Gemini voice. Each one speaks every language, so this does not
+    # change when the reply language does.
+    voice: str = field(default_factory=lambda: (
+        os.getenv("GEMINI_TTS_VOICE", "").strip() or "Zephyr"
+    ))
+
+    # ── Speech ───────────────────────────────────────────────────────────
+    # Tora is English-only. Pinning the transcription language (rather than
+    # leaving it to auto-detect) also makes transcription steadier: auto-detect
+    # re-decides every utterance and drifts on accented or code-mixed speech.
+    stt_language: str = field(default="en")
+    # sounddevice input device index. Empty/unset = system default mic.
+    mic_device_index: Optional[int] = field(default_factory=lambda: (
+        int(v) if (v := os.getenv("MIC_DEVICE_INDEX", "").strip()) else None
+    ))
+    # Fixed reply language (ISO 639-1). Empty = match the user per message.
+    response_language: str = field(default="en")   # English-only
+    # User-defined scope/rules appended to every system prompt (e.g. "only
+    # help with Excel, refuse anything else").
+    custom_instructions: str = field(default_factory=lambda: os.getenv(
+        "CUSTOM_INSTRUCTIONS", DEFAULT_SYSTEM_PROMPT
+    ).replace("\\n", "\n"))
+
+    # ── Search ───────────────────────────────────────────────────────────
+    tavily_api_key: Optional[str] = field(default_factory=lambda: os.getenv("TAVILY_API_KEY") or None)
+
+    # ── App ──────────────────────────────────────────────────────────────
+    # Push-to-talk. Two-key modifier combo — no clash with app shortcuts and
+    # easier to hold than a 3-key chord. Override with TORA_HOTKEY in .env.
+    hotkey: str = field(default_factory=lambda: _env("TORA_HOTKEY", "ctrl+win"))
+
+    # Microphone mode:
+    #   "hotkey"  (default) — mic opens only while you're asking something.
+    #   "ambient" — mic stays open, scanning for the "Tora" wake word.
+    mic_mode: str = field(default_factory=lambda: (
+        _env("TORA_MIC_MODE", "hotkey").strip().lower() or "hotkey"
+    ))
+
+    # How long a tap may last before it counts as a hold. Under this,
+    # releasing the key does NOT stop the recording — silence detection does.
+    tap_max_seconds: float = field(default_factory=lambda: float(
+        _env("TORA_TAP_MAX_SECONDS", "0.6") or 0.6
+    ))
+
+    # ── Microphone mode ──────────────────────────────────────────────────
+
+    def ambient_mic(self) -> bool:
+        """True when the mic should stay open and scan for the wake word."""
+        return self.mic_mode == "ambient"
+
+    def set_mic_mode(self, mode: str) -> None:
+        """Persisted switch between hotkey-only and always-listening."""
+        mode = "ambient" if mode == "ambient" else "hotkey"
+        self.mic_mode = mode
+        os.environ["TORA_MIC_MODE"] = mode
+        self._write_env("TORA_MIC_MODE", mode)
+
+    # ── Providers ────────────────────────────────────────────────────────
+    #
+    # There is one. These remain as methods because the panel, tray, journal
+    # and diagnostics all ask which provider is active, and a constant is a
+    # smaller change than rewriting every caller to stop asking.
+
+    def llm_provider(self) -> str:
+        return "gemini"
+
+    def available_llm_providers(self) -> list[str]:
+        return ["gemini"]
+
+    def stt_provider(self) -> str:
+        return "gemini"
+
+    def tts_provider(self) -> str:
+        return "gemini"
+
+    def search_provider(self) -> str:
+        return "tavily" if self.tavily_api_key else "duckduckgo"
+
+    def has_key(self) -> bool:
+        """Tora cannot do anything at all without this."""
+        return bool(self.google_api_key)
+
+    def realtime(self) -> bool:
+        return self.conversation_mode != "cascade"
+
+    def set_conversation_mode(self, mode: str) -> None:
+        mode = "cascade" if mode == "cascade" else "realtime"
+        self.conversation_mode = mode
+        os.environ["TORA_CONVERSATION"] = mode
+        self._write_env("TORA_CONVERSATION", mode)
+
+    def set_voice(self, name: str) -> None:
+        name = (name or "").strip()
+        if not name:
+            return
+        self.voice = name
+        os.environ["GEMINI_TTS_VOICE"] = name
+        self._write_env("GEMINI_TTS_VOICE", name)
+
+    # ── API key management ───────────────────────────────────────────────
+    #
+    # Keys used to be .env-only, which meant a packaged install had no way to
+    # enter one short of hand-editing a file next to Tora.exe. These back
+    # the Settings → API Keys dialog.
+
+    # env var name → (dataclass attribute, human label)
+    API_KEY_FIELDS = {
+        "GOOGLE_API_KEY": ("google_api_key", "Google (Gemini)"),
+        "TAVILY_API_KEY": ("tavily_api_key", "Tavily (web search)"),
+    }
+
+    @staticmethod
+    def env_path() -> Path:
+        """The .env Tora reads and writes — next to Tora.exe when frozen."""
+        return _HERE / ".env"
+
+    def get_api_key(self, env_var: str) -> str:
+        attr = self.API_KEY_FIELDS.get(env_var, (None, None))[0]
+        return (getattr(self, attr, None) or "") if attr else ""
+
+    def set_api_key(self, env_var: str, value: str) -> None:
+        """Set (or clear) one key: live in this process + persisted to .env."""
+        if env_var not in self.API_KEY_FIELDS:
+            return
+        value = (value or "").strip()
+        attr = self.API_KEY_FIELDS[env_var][0]
+
+        setattr(self, attr, value or None)
+        if value:
+            os.environ[env_var] = value
+        else:
+            os.environ.pop(env_var, None)
+            # GEMINI_API_KEY is read as an alias at startup; leaving it set
+            # would silently resurrect a key the user just cleared.
+            if env_var == "GOOGLE_API_KEY":
+                os.environ.pop("GEMINI_API_KEY", None)
+
+        self._write_env(env_var, value)
+
+    def _write_env(self, key: str, value: str) -> None:
+        """Upsert KEY=value in .env, removing the line entirely when cleared."""
+        path = self.env_path()
+        try:
+            lines = (
+                path.read_text(encoding="utf-8").splitlines(keepends=True)
+                if path.exists() else []
+            )
+            out, found = [], False
+            for line in lines:
+                stripped = line.lstrip()
+                if stripped.startswith(f"{key}=") or stripped.startswith(f"{key} ="):
+                    found = True
+                    if value:
+                        out.append(f"{key}={value}\n")
+                    # cleared → drop the line
+                    continue
+                out.append(line)
+
+            if value and not found:
+                if out and not out[-1].endswith("\n"):
+                    out.append("\n")
+                out.append(f"{key}={value}\n")
+
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text("".join(out), encoding="utf-8")
+        except Exception:
+            pass  # runtime value still applied; persistence is best-effort
+
+    # ── Summary ──────────────────────────────────────────────────────────
+
+    def describe(self) -> dict:
+        """Human-readable summary of what's active, for the setup panel."""
+        from ai.gemini import Models
+        return {
+            "llm": "gemini",
+            "stt": Models.STT,
+            "tts": Models.TTS,
+            "search": self.search_provider(),
+            "conversation": "realtime" if self.realtime() else "cascade",
+            "realtime_model": Models.REALTIME,
+            "planner_model": Models.PLANNER,
+            "vision_fast": Models.VISION_FAST,
+            "vision_deep": Models.VISION_DEEP,
+            "embed_model": Models.EMBED,
+            "voice": self.voice,
+            "key": "set" if self.has_key() else "MISSING",
+        }
+
+
+# Singleton
+cfg = Config()

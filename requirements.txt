@@ -1,0 +1,63 @@
+# Core UI
+PyQt6>=6.6.0
+
+# Screen capture
+mss>=9.0.1
+Pillow>=10.0.0
+
+# Global hotkeys
+keyboard>=0.13.5
+
+# Google Gemini — the only provider. Talked to over plain REST and
+# websockets, so there is no vendor SDK here on purpose: httpx is already
+# needed for search, and the Live API is a websocket either way.
+httpx[http2]>=0.27.0
+websockets>=12.0
+
+# Audio capture + playback (no PyAudio — fails to build on Py 3.14)
+sounddevice>=0.4.6
+soundfile>=0.12.1
+numpy>=1.26.0
+av>=12.0.0
+
+# Pointing — Windows UI Automation tier. This is what makes "where is the
+# Save button?" resolve in milliseconds instead of a vision call, and what
+# supplies the control names the model is told about each turn.
+uiautomation>=2.0.18
+
+# Web search
+tavily-python>=0.3.0
+ddgs>=9.0.0
+
+# Utilities
+python-dotenv>=1.0.0
+aiohttp>=3.9.0
+
+# ── Optional tutor enhancements (install only what you need) ─────────────────
+# Document context (drag-drop PDFs onto the panel)
+pypdf>=4.0.0
+python-docx>=1.1.0
+
+# OCR — the pointing fallback for canvas apps (Figma, games) where UIA
+# exposes no tree.
+rapidocr-onnxruntime>=1.3.0
+
+# OCR fallback for fine print (also needs Tesseract binary):
+#   https://github.com/UB-Mannheim/tesseract/wiki
+pytesseract>=0.3.10
+
+# Multilingual auto-detect
+langdetect>=1.0.9
+
+# Figure detection — exact vertices for drawing on shapes
+opencv-python-headless>=4.9.0
+
+# Lesson recording (MP4 capture of the screen + Tora's annotations)
+imageio>=2.34.0
+imageio-ffmpeg>=0.5.0
+
+# Workflow capture (record clicks + keystrokes)
+pynput>=1.7.7
+
+# Live collaboration (WebRTC) — install when collab signalling server exists
+# aiortc>=1.9.0

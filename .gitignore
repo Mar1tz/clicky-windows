@@ -1,0 +1,31 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+.venv/
+venv/
+
+# Environment / secrets. The catch-all matters: a stray .env.bak or
+# .env.old holds a real API key just as much as .env does.
+.env
+.env.*
+!.env.example
+
+# PyInstaller build artefacts
+build/
+dist/
+*.spec.bak
+
+# Generated icon (rebuildable from assets/make_icon.py)
+assets/icon.ico
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# OS
+Thumbs.db
+Desktop.ini
+.DS_Store
