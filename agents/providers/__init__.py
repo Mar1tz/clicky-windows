@@ -14,13 +14,14 @@ from typing import Optional
 from agents.core import AgentProvider, TaskKind
 
 from .accounts import AccountStore
+from .gemini import GeminiAgentProvider, api_key_from_env as gemini_key
 from .mock import MockCall, MockProvider
 from .openai_compatible import OpenAICompatibleProvider, ProviderError
 from .router import Router
 
-__all__ = ["AccountStore", "GATEWAY_MODELS", "MockCall", "MockProvider",
-           "OpenAICompatibleProvider", "ProviderError", "Router", "build_router",
-           "provider_from_account", "provider_from_env"]
+__all__ = ["AccountStore", "GATEWAY_MODELS", "GeminiAgentProvider", "MockCall",
+           "MockProvider", "OpenAICompatibleProvider", "ProviderError", "Router",
+           "build_router", "provider_from_account", "provider_from_env"]
 
 # Defaults for a gateway that fronts many vendors, ordered best-first.
 # The provider falls through the chain when a route is benched, which on
@@ -152,6 +153,15 @@ def build_router(
                         cost_tier=0 if kind_name == "fast" else 2,
                     ),
                     kinds=[kind], priority=30)
+
+    # ── Direct Gemini: the zero-setup provider ──────────────────────────────
+    # The app already requires a Google key, so with nothing else
+    # configured the agents still think. A gateway (priority 20-50)
+    # outranks it; the mock (0) sits below it.
+    if gateway is not False and gemini_key():
+        router.register(GeminiAgentProvider(), kinds=None, priority=10)
+        router.register(GeminiAgentProvider(model="gemini-3.8-flash"),
+                        kinds=[TaskKind.FAST], priority=12)
 
     # ── Phase 2 hooks — register real adapters above the fallback ────────────
     # Each reads its key via accounts.api_key_for(...) and is skipped when the

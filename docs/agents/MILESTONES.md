@@ -63,7 +63,7 @@ line.
 | M12 | Open-source framework research     | 2     | ✅     | M6         |
 | M13 | **OpenAI-compatible provider (gateway)** | 2 | ✅ | M12    |
 | M14 | ~~Claude provider~~ → folded into M13 | 2  | ➖     | —          |
-| M15 | Direct Gemini provider (Live API)  | 2     | ⬜     | M13        |
+| M15 | Direct Gemini provider             | 2     | ✅     | M13        |
 | M16 | Connected accounts UI + routing    | 2     | ✅     | M11, M13   |
 | M17 | LLM planning + verification default| 2     | ✅     | M13        |
 | M18 | Durable tasks, resume after restart| 3     | ✅     | M7         |
@@ -602,13 +602,46 @@ defaults now that a real provider exists). M17 is the higher-value one:
 the planner still falls back to templates for anything it does not
 recognise, so "build me a CRM" cannot be planned yet.
 
-## M15 · Direct Gemini provider (Live API) ⬜
+## M15 · Direct Gemini provider ✅
 
-**Goal** The Gemini **Live websocket** the voice path needs, which no
-OpenAI-shaped gateway exposes. Ordinary Gemini text/vision calls already
-work through M13's provider, so this is only about the live session.
+**Goal (revised)** The **zero-setup** provider. Tora already requires a
+Google key for the voice path, so with nothing else configured the agents
+must still think — planning, verification and the coding loop against
+Gemini's `generateContent` with function calling. A gateway account, when
+the user adds one, outranks it. (The Live websocket needs no agent
+provider: it is the voice path's transport, and agents are background
+text workers.)
 
 **Owns** `agents/providers/gemini.py`, `tests/agents/test_providers_gemini.py`
+
+**Landed** `GeminiAgentProvider`, registered by `build_router` at priority
+10 (below any gateway, above the mock) whenever a Google key exists. 16
+offline tests + 1 live; suite **421 passing**.
+
+**Verified as far as the account allows.** The live test reached Google
+and got **HTTP 402 Payment Required** — a correctly formed request
+stopped only by the depleted credits (see the log diagnosis after M8).
+It skips on 402/429/403 and will pass unchanged once the account is
+topped up.
+
+**Design notes**
+* **The key is a header, not a query string.** The app's own client
+  sends `?key=…`, which is what `httpx` logs at INFO and how the key
+  reached `tora.log` 166 times. This provider sends `x-goog-api-key`;
+  a test asserts `key=` never appears in the URL.
+* **Ids for an API that has none.** Gemini's `functionCall` parts carry
+  no id and its `functionResponse` wants the *name*. We mint an id per
+  call and, when encoding a tool turn, recover the name from the
+  assistant turn that issued it — so the registry's id-based contract
+  holds unchanged.
+* Tool schemas are scrubbed of keywords Gemini's OpenAPI subset rejects
+  (`additionalProperties`, `pattern`, `title`, …) rather than translated.
+* A blocked prompt (`promptFeedback.blockReason`) is a `ProviderError`,
+  not an empty success.
+* `conftest.py` now also blanks `GOOGLE_API_KEY` and `cfg.google_api_key`,
+  or every test would have gone online the moment this landed.
+
+**HANDOFF** Complete. One milestone left: **M23**.
 
 **Build** `GeminiAgentProvider(AgentProvider)`: map `ProviderMessage[]` →
 `contents[]` (roles user/model, `functionCall`/`functionResponse` parts),

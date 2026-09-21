@@ -10,7 +10,8 @@ from __future__ import annotations
 
 import pytest
 
-GATEWAY_VARS = ("TORA_OMNIROUTE_BASE_URL", "TORA_OMNIROUTE_API_KEY")
+GATEWAY_VARS = ("TORA_OMNIROUTE_BASE_URL", "TORA_OMNIROUTE_API_KEY",
+                "TORA_GEMINI_API_KEY", "GOOGLE_API_KEY", "GEMINI_API_KEY")
 
 
 @pytest.fixture(autouse=True)
@@ -24,6 +25,13 @@ def _offline_by_default(monkeypatch, request):
         return
     for name in GATEWAY_VARS:
         monkeypatch.delenv(name, raising=False)
+    # config.cfg caches the Google key at import; blank it too, or the
+    # Gemini provider registers itself from there and tests go online.
+    try:
+        import config
+        monkeypatch.setattr(config.cfg, "google_api_key", None, raising=False)
+    except Exception:  # noqa: BLE001
+        pass
 
 
 def pytest_configure(config):
