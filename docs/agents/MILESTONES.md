@@ -58,7 +58,7 @@ line.
 | M7  | Companion integration (delegation) | 1     | ✅     | M6         |
 | M8  | Active Agents panel                | 1     | ✅     | M6         |
 | M9  | Activity timeline + logs           | 1     | ✅     | M8         |
-| M10 | Plan viewer + approval dialog      | 1     | ⬜     | M8         |
+| M10 | Plan viewer + approval dialog      | 1     | ✅     | M8         |
 | M11 | Tray entry + agent settings page   | 1     | ⬜     | M8         |
 | M12 | Open-source framework research     | 2     | ⬜     | M6         |
 | M13 | Gemini agent provider              | 2     | ⬜     | M6         |
@@ -372,7 +372,7 @@ Qt thread, so M10 is a dialog plus wiring, not new plumbing.
 
 ---
 
-## M10 · Plan viewer + approval dialog ⬜
+## M10 · Plan viewer + approval dialog ✅
 
 **Goal** Spec §9 — the user sees the plan before/while it runs, and
 `APPROVAL_REQUIRED` gets a real dialog instead of a silent park.
@@ -389,7 +389,42 @@ tool, its arguments, the risk level and the workspace, with Approve / Deny /
 dialog, Deny cancels the task, Approve runs it; a HIGH-risk tool call
 (`delete_path`) raises the dialog mid-run.
 
-**HANDOFF** _(none yet)_
+**Landed** `agents/ui/{plan_view,approval}.py` + 13 tests, and one
+**`agents/core` change** (below). Suite: **260 passing**. All four gate
+cases are covered against real tasks: plan approve → COMPLETED, plan deny
+→ CANCELLED with nothing written, mid-run tool approval (ceiling set to
+SAFE so real file writes need a human), and deny mid-run → FAILED with
+"permission denied".
+
+**Core change — `PermissionPolicy.always_allow`**
+The dialog's "Always allow &lt;tool&gt;" could not be built on the existing
+fields. `allowed_tools` is a whitelist **filter**: adding a tool to it only
+narrows what may run, so the risk ceiling would still block the call and
+the user would be asked again on the very next step. Added
+`always_allow: list[str]` plus `allow_always(name)`, checked after
+`denied_tools` and before the risk gate, so a standing yes lifts one tool
+over the ceiling but never over an explicit veto. Documented in
+`ARCHITECTURE.md` §4 and covered by two tests in `test_core.py`.
+
+**Notes for whoever touches this next**
+* Approvals are two-threaded: the task parks on the runtime thread while
+  the dialog lives on the GUI thread. In a test, `manager.wait()` therefore
+  **deadlocks** — nothing pumps Qt, so the dialog never appears and the
+  approval never resolves. Use `_pump_until(app, predicate)` from
+  `test_ui_approval.py`.
+* `ApprovalController` shows one dialog at a time and denies on any
+  exception. A request raised with no controller attached leaves the task
+  parked in `WAITING_APPROVAL` forever — call `attach_approvals(manager)`
+  once, early.
+* A widget that skips its stylesheet because it is "embedded" renders
+  **white-on-white**: the embedded `PlanView` inside the approval dialog
+  did exactly that, and every test still passed because `lines` was
+  correct. Only the screenshot caught it. Style always; skip only the
+  window chrome.
+
+**HANDOFF** Complete. Next agent starts at **M11** (tray entry + settings).
+`open_agents_window`, `open_timeline`, `open_plan` and `attach_approvals`
+are all exported from `agents.ui` and ready for the tray menu to call.
 
 ---
 

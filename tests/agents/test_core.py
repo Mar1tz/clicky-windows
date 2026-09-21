@@ -49,6 +49,32 @@ def test_permission_policy():
     assert not strict.allows(ToolSpec("create_file", "w", risk=RiskLevel.SAFE))
 
 
+def test_always_allow_lifts_one_tool_over_the_risk_ceiling():
+    pol = PermissionPolicy(max_auto_risk=RiskLevel.LOW)
+    danger = ToolSpec("delete_path", "rm", risk=RiskLevel.HIGH)
+    assert not pol.allows(danger)
+
+    pol.allow_always("delete_path")
+    assert pol.allows(danger)
+    assert pol.allows(ToolSpec("create_file", "w", risk=RiskLevel.LOW))
+    # everything else is still judged against the ceiling
+    assert not pol.allows(ToolSpec("run_command", "x", risk=RiskLevel.MEDIUM))
+
+    pol.allow_always("delete_path")          # idempotent
+    assert pol.always_allow == ["delete_path"]
+
+    # a standing yes never beats an explicit veto, nor the whitelist filter
+    assert not PermissionPolicy(denied_tools=["delete_path"],
+                                always_allow=["delete_path"]).allows(danger)
+    assert not PermissionPolicy(allowed_tools=["read_file"],
+                                always_allow=["delete_path"]).allows(danger)
+
+
+def test_always_allow_survives_serialisation():
+    pol = PermissionPolicy(always_allow=["delete_path"])
+    assert PermissionPolicy.from_dict(pol.to_dict()).always_allow == ["delete_path"]
+
+
 def test_tool_result_helpers():
     call = ToolCall("create_folder", {"path": "MyApp"})
     ok = ToolResult.success(call, "created", path="C:/x/MyApp")

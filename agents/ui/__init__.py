@@ -12,14 +12,20 @@ from __future__ import annotations
 from typing import Optional
 
 from .agents_panel import ActiveAgentsPanel, AgentCard, StatusDot
+from .approval import ApprovalController, ApprovalDialog
 from .bridge import AgentEventBridge
+from .plan_view import PlanStepRow, PlanView
 from .timeline import ActivityTimeline, TimelineRow
 
 __all__ = ["ActiveAgentsPanel", "ActivityTimeline", "AgentCard", "AgentEventBridge",
-           "StatusDot", "TimelineRow", "open_agents_window", "open_timeline"]
+           "ApprovalController", "ApprovalDialog", "PlanStepRow", "PlanView",
+           "StatusDot", "TimelineRow", "attach_approvals", "open_agents_window",
+           "open_plan", "open_timeline"]
 
 _window: Optional[ActiveAgentsPanel] = None
 _timelines: dict[str, ActivityTimeline] = {}
+_plans: dict[str, PlanView] = {}
+_approvals: Optional[ApprovalController] = None
 
 
 def open_agents_window(manager, parent=None) -> ActiveAgentsPanel:
@@ -49,3 +55,30 @@ def open_timeline(manager, task_id: str, parent=None) -> ActivityTimeline:
     window.raise_()
     window.activateWindow()
     return window
+
+
+def open_plan(manager, task_id: str, parent=None) -> PlanView:
+    """Show the plan for one task, one window per task."""
+    window = _plans.get(task_id)
+    if window is None or not window.isVisible():
+        if window is not None:
+            window.close()
+        window = PlanView(manager, task_id, parent=parent)
+        _plans[task_id] = window
+    window.show()
+    window.raise_()
+    window.activateWindow()
+    return window
+
+
+def attach_approvals(manager, parent=None) -> ApprovalController:
+    """Start answering approval requests with a dialog.
+
+    Call once per manager, early: a request raised while nothing is
+    listening leaves the task parked in WAITING_APPROVAL until something
+    resolves it.
+    """
+    global _approvals
+    if _approvals is None:
+        _approvals = ApprovalController(manager, parent=parent)
+    return _approvals

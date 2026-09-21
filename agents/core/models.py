@@ -210,18 +210,40 @@ class PermissionPolicy(_Serialisable):
     tool is not in denied_tools, and (if allowed_tools is set) it is in
     allowed_tools. Anything else raises an ApprovalRequest. File tools must
     additionally keep paths under workspace_roots.
+
+    The four fields answer four different questions, and the order they
+    are checked in is the order of authority:
+
+      denied_tools    never, whatever else says - a hard veto
+      allowed_tools   a whitelist FILTER: when set, nothing outside it runs
+      always_allow    a user's standing "yes" for one tool, which lifts it
+                      over max_auto_risk (but never over denied_tools)
+      max_auto_risk   the ceiling everything else is judged against
+
+    always_allow exists because "Always allow delete_path for this agent"
+    cannot be expressed by adding the tool to allowed_tools: that list
+    only narrows, so the risk ceiling would still block the call and the
+    user would be asked again on the very next step.
     """
     max_auto_risk: RiskLevel = RiskLevel.MEDIUM
     allowed_tools: Optional[list[str]] = None       # None = all registered
     denied_tools: list[str] = field(default_factory=list)
     workspace_roots: list[str] = field(default_factory=list)
+    always_allow: list[str] = field(default_factory=list)
 
     def allows(self, spec: "ToolSpec") -> bool:
         if spec.name in self.denied_tools:
             return False
         if self.allowed_tools is not None and spec.name not in self.allowed_tools:
             return False
+        if spec.name in self.always_allow:
+            return True
         return spec.risk.rank <= self.max_auto_risk.rank
+
+    def allow_always(self, tool_name: str) -> None:
+        """Record the user's standing approval for one tool."""
+        if tool_name and tool_name not in self.always_allow:
+            self.always_allow.append(tool_name)
 
 
 @dataclass

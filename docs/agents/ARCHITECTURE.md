@@ -74,6 +74,14 @@ it checks the policy, and when a call exceeds it, awaits
 `APPROVAL_REQUIRED`, parks the task in `WAITING_APPROVAL`, and resolves
 when the UI calls `AgentManager.approve(request_id, ok)`.
 
+`PermissionPolicy` has four fields, checked in order of authority:
+`denied_tools` (a hard veto) → `allowed_tools` (a whitelist *filter*, when
+set) → `always_allow` (a user's standing yes for one tool, which lifts it
+over the ceiling) → `max_auto_risk` (the ceiling). `always_allow` exists
+because "Always allow delete_path" cannot be expressed by adding the tool
+to `allowed_tools`: that list only narrows, so the risk ceiling would still
+stop the call and the user would be asked again on the next step.
+
 File tools additionally refuse paths outside `ToolContext.workspace`
 (`ctx.is_inside_workspace`). Nothing an agent does should touch the rest
 of the disk unless the policy's `workspace_roots` says so.
