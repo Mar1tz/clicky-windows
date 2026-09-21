@@ -1144,10 +1144,16 @@ for both limits.
 * both real providers send keys as headers, not query strings ✓
 * agents default outside the app folder ✓
 
-**What is NOT verified, honestly:** the built `.exe` on a **clean VM**. A
-local PyInstaller build was run to prove the spec bundles `agents/**` and
-the frozen exe starts its workforce — see the build note below. The
-clean-VM voice test is yours to run; TESTING.md §26 is the script.
+**Build verified locally.** `python -m PyInstaller tora.spec` produced
+`dist/Tora/Tora.exe` (78 MB exe, 1.3 GB bundle). Run for 45 s, the
+**frozen** app logged `agent workforce ready — workspace …\Tora Projects`
+with no errors, and — with `logsafe` active — wrote **zero** httpx request
+lines and zero key-shaped strings. So the spec bundles `agents/**`
+correctly and the workforce starts inside the exe.
+
+**What is NOT verified, honestly:** the exe on a **clean VM** (a machine
+with no Python), and the MyApp task *from voice* in the frozen build —
+voice needs Gemini credits. TESTING.md §26 is the script for both.
 
 **HANDOFF** Everything but the clean-VM run is done. To finish: install
 `dist/Tora` on a machine without Python, say the MyApp request, tick §26.
