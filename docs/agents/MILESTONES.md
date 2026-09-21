@@ -61,7 +61,7 @@ line.
 | M10 | Plan viewer + approval dialog      | 1     | ✅     | M8         |
 | M11 | Tray entry + agent settings page   | 1     | ✅     | M8         |
 | M12 | Open-source framework research     | 2     | ✅     | M6         |
-| M13 | **OpenAI-compatible provider (gateway)** | 2 | ⬜ | M12    |
+| M13 | **OpenAI-compatible provider (gateway)** | 2 | ✅ | M12    |
 | M14 | ~~Claude provider~~ → folded into M13 | 2  | ➖     | —          |
 | M15 | Direct Gemini provider (Live API)  | 2     | ⬜     | M13        |
 | M16 | Connected accounts UI + routing    | 2     | ⬜     | M11, M15   |
@@ -552,10 +552,61 @@ before writing the client; they were learned the slow way.
 
 ---
 
-## M13 · Gemini agent provider ⬜
+## M13 · OpenAI-compatible provider ✅
 
-**Goal** The first real AI behind `AgentProvider`. Gemini first because the
-app already speaks it (`ai/gemini.py`, REST, no vendor SDK).
+**Goal** One adapter that reaches Claude, Gemini, GPT and open weights
+through any `/chat/completions` endpoint — a gateway, api.openai.com, or
+a local server. Replaces the three adapters M13/M14/M15 originally were.
+
+**Owns** `agents/providers/openai_compatible.py`, `agents/providers/__init__.py`,
+`tests/agents/test_providers_openai.py`, `tests/agents/conftest.py`
+
+**Landed** 27 offline tests (via `httpx.MockTransport`) + 2 live tests.
+Suite: **299 passing, 2 skipped**. Verified live end to end: a real model
+planned, called `create_file`, and wrote a real haiku to disk through the
+full orchestrator.
+
+**What the live gateway forced into the design**
+* **SSE always.** Replies are `text/event-stream` even unasked, so we now
+  always request the stream and reassemble — one code path instead of two.
+* **Tool arguments arrive fragmented.** The name lands in one chunk, the
+  JSON arguments dribble across later ones, keyed by `index`. Both are
+  concatenated, never replaced. Parallel calls occupy separate slots.
+* **Malformed argument JSON is kept as `{"_raw": …}`**, not dropped: the
+  registry then rejects it with a message the model can act on, whereas a
+  silent drop looks like a no-op.
+* **Health is per model, not per endpoint.** Three strikes benches a route
+  for 120 s and the provider falls through its chain. If every candidate
+  is benched it tries anyway — a stale health record must never make the
+  provider refuse to work.
+* **`response.model` reports the route we called**, not the upstream's
+  self-reported name: a gateway answers "claude-sonnet-4-6" for several
+  route ids, and the route is what health, routing and reproduction need.
+
+**The bug worth remembering**
+`build_agent_manager` always passed `fallback=MockProvider()`, and the
+gateway was registered only `if fallback is None`. So the app ran on the
+mock while looking fully configured — an agent "completed" a task having
+written nothing, and the tests all passed. Only running it for real
+caught it. `gateway` is now an explicit argument that is never inferred
+from `fallback`, and there is a regression test.
+
+**`tests/agents/conftest.py` keeps the suite offline.** With real
+credentials in `.env`, every test would otherwise make paid network
+calls. Gateway variables are cleared per test; live tests are marked
+`@pytest.mark.live` and skipped unless you run `pytest tests/agents -m live`.
+
+**HANDOFF** Complete. Next is **M15** (direct Gemini provider for the Live
+websocket) or **M17** (make `ProviderPlanner`/`ProviderVerifier` the
+defaults now that a real provider exists). M17 is the higher-value one:
+the planner still falls back to templates for anything it does not
+recognise, so "build me a CRM" cannot be planned yet.
+
+## M15 · Direct Gemini provider (Live API) ⬜
+
+**Goal** The Gemini **Live websocket** the voice path needs, which no
+OpenAI-shaped gateway exposes. Ordinary Gemini text/vision calls already
+work through M13's provider, so this is only about the live session.
 
 **Owns** `agents/providers/gemini.py`, `tests/agents/test_providers_gemini.py`
 

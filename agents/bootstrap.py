@@ -74,9 +74,14 @@ def build_agent_manager(
     max_auto_risk: Optional[RiskLevel] = None,
     require_plan_approval: Optional[bool] = None,
     max_concurrent: Optional[int] = None,
+    offline: bool = False,
 ) -> AgentManager:
     """Build the workforce. Anything left as None comes from the user's
-    settings in config.py, so the settings page is not decorative."""
+    settings in config.py, so the settings page is not decorative.
+
+    `offline=True` forces the MockProvider and refuses the network — for
+    tests, and for proving the whole runtime works with no credentials.
+    """
     from agents.memory import SQLiteMemoryStore
     from agents.persistence import SQLiteTaskStore
     from agents.planning import TemplatePlanner
@@ -100,9 +105,13 @@ def build_agent_manager(
     if max_concurrent is None:
         max_concurrent = int(_configured("agent_max_concurrent", 3))
 
+    # Let build_router decide: it registers the configured gateway above
+    # the mock catch-all. Passing a fallback here used to suppress the
+    # gateway entirely, so the app ran on the mock while looking wired up.
     return AgentManager(
         tools=default_registry(),
-        router=build_router(fallback=MockProvider()),
+        router=build_router(fallback=MockProvider() if offline else None,
+                            gateway=False if offline else None),
         workers=default_workers(),
         planner=TemplatePlanner(),
         verifier=RuleVerifier(),

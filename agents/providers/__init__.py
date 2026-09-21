@@ -15,26 +15,91 @@ from agents.core import AgentProvider, TaskKind
 
 from .accounts import AccountStore
 from .mock import MockCall, MockProvider
+from .openai_compatible import OpenAICompatibleProvider, ProviderError
 from .router import Router
 
-__all__ = ["AccountStore", "MockCall", "MockProvider", "Router", "build_router"]
+__all__ = ["AccountStore", "MockCall", "MockProvider", "OpenAICompatibleProvider",
+           "ProviderError", "Router", "build_router", "provider_from_env"]
+
+# Sensible defaults for a gateway that fronts many vendors. Ordered
+# best-first per kind; the provider falls through the chain when a route
+# is benched, which on a real gateway is a matter of when, not if.
+GATEWAY_MODELS: dict[str, list[str]] = {
+    "coding": ["claude/claude-sonnet-4-6", "cc/claude-sonnet-4-6",
+               "agy/claude-sonnet-4-6"],
+    "general": ["claude/claude-sonnet-4-6", "cc/claude-sonnet-4-6",
+                "agy/claude-sonnet-4-6"],
+    "fast": ["agy/gemini-3.6-flash-low", "agy/gemini-3.6-flash-medium",
+             "claude/claude-sonnet-4-6"],
+    "vision": ["agy/gemini-3.6-flash-medium", "claude/claude-sonnet-4-6"],
+}
+
+
+def provider_from_env(prefix: str = "OMNIROUTE") -> Optional[OpenAICompatibleProvider]:
+    """Build the gateway provider from `TORA_<PREFIX>_{API_KEY,BASE_URL}`.
+
+    Returns None when no base URL is configured, so the caller falls back
+    to the mock and the app keeps working with no credentials at all.
+    """
+    import os
+
+    base = os.environ.get(f"TORA_{prefix}_BASE_URL", "").strip()
+    if not base:
+        return None
+    chain = GATEWAY_MODELS["general"]
+    return OpenAICompatibleProvider(
+        base_url=base,
+        api_key=os.environ.get(f"TORA_{prefix}_API_KEY", "").strip(),
+        model=chain[0],
+        fallback_models=chain[1:],
+        name=prefix.lower(),
+    )
 
 
 def build_router(
     accounts: Optional[AccountStore] = None,
     *,
     fallback: Optional[AgentProvider] = None,
+    gateway: Optional[bool] = None,
 ) -> Router:
     """Assemble the provider router.
 
     `fallback` (default MockProvider) is registered as a catch-all at the
-    lowest priority, so there is always something to answer any kind. Real
-    providers register above it in Phase 2.
+    lowest priority, so there is always something to answer any kind.
+
+    `gateway` controls the OpenAI-compatible provider: None auto-detects
+    from the environment, False never registers it. It is deliberately
+    NOT inferred from `fallback` — passing a fallback used to suppress the
+    gateway, which meant the app silently ran on the mock while looking
+    like it was configured. Say what you mean instead.
     """
     router = Router(accounts=accounts)
 
     fb = fallback if fallback is not None else MockProvider()
     router.register(fb, kinds=None, priority=0)          # catch-all, lowest
+
+    # ── OpenAI-compatible gateway ───────────────────────────────────────────
+    # One adapter reaches Claude, Gemini, GPT and open weights, so this is
+    # registered for every kind when a base URL is configured. Kinds differ
+    # only in which model chain they prefer.
+    if gateway is not False:
+        remote = provider_from_env()
+        if remote is not None:
+            router.register(remote, kinds=None, priority=20)
+            for kind_name, chain in GATEWAY_MODELS.items():
+                try:
+                    kind = TaskKind(kind_name)
+                except ValueError:
+                    continue
+                router.register(
+                    OpenAICompatibleProvider(
+                        base_url=remote.base_url, api_key=remote.api_key,
+                        model=chain[0], fallback_models=chain[1:],
+                        name=f"{remote.name}:{kind_name}",
+                        vision=(kind_name == "vision"),
+                        cost_tier=0 if kind_name == "fast" else 2,
+                    ),
+                    kinds=[kind], priority=30)
 
     # ── Phase 2 hooks — register real adapters above the fallback ────────────
     # Each reads its key via accounts.api_key_for(...) and is skipped when the
