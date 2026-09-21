@@ -69,7 +69,7 @@ line.
 | M18 | Durable tasks, resume after restart| 3     | ✅     | M7         |
 | M19 | Browser worker                     | 3     | ✅     | M12, M13   |
 | M20 | Computer-control worker            | 3     | ✅     | M13        |
-| M21 | Multi-agent collaboration          | 3     | ⬜     | M17, M18   |
+| M21 | Multi-agent collaboration          | 3     | ✅     | M17, M18   |
 | M22 | Autonomous coding loop             | 3     | ⬜     | M17        |
 | M23 | Ship: packaging, limits, safety    | 3     | ⬜     | M16, M18   |
 
@@ -939,7 +939,7 @@ because it types into whichever window has focus.
 
 ---
 
-## M21 · Multi-agent collaboration ⬜
+## M21 · Multi-agent collaboration ✅
 
 **Goal** Spec §13 — "build me a complete website" spawns Frontend, Backend,
 Testing agents that work together.
@@ -956,7 +956,41 @@ groups children under the parent.
 **Done when** One request produces ≥3 agents, two of which run at the same
 time, with the dependent one starting only after its dependency completes.
 
-**HANDOFF** _(none yet)_
+**Landed** `agents/manager/graph.py` (`TaskGraph`, `TaskNode`,
+`TemplateDecomposer`, `ProviderDecomposer`), `AgentManager.submit_project`
++ `_run_project`, panel grouping. 23 tests; suite **396 passing**. The
+gate test records each child's run window and asserts backend and
+frontend overlapped while tests started only after both ended.
+
+**Shape**
+* "Build me a complete website" → a **parent task** whose Steps are the
+  nodes and whose agent is a *Project Lead*, plus one child task and agent
+  per node (Backend Agent, Frontend Agent, Testing Agent). The panel shows
+  the children indented under the lead; the plan view and timeline show a
+  project exactly as they show any task.
+* The DAG is **declared and validated before anything runs** — cycles,
+  self-edges, unknown and duplicate keys are `GraphError`s at planning
+  time, not deadlocks discovered later. Borrowed from LangGraph, per M12.
+* Children are ordinary tasks: they queue under `max_concurrent`, pause,
+  cancel and resume like any other. Cancelling the parent cancels them.
+* A failed child fails the project and **skips** its dependants with
+  `blocked: <key> failed`; independent siblings still finish.
+* **Coordination is shared memory, not messages.** When a child completes,
+  its title and result are written to `project:<workspace>` memory — which
+  is what the next child's planner already reads. No agent-to-agent chat;
+  cheaper, inspectable in the timeline, and it survives restarts.
+* Recursion guard: a child is never decomposed, however its goal reads.
+
+**Two things found by testing, not by design**
+* Cancelling a project only took effect after the *next child finished*,
+  because the runner blocked on the wake event and checked cancellation
+  only at the top of the loop — by then the child's work was done. It
+  now wakes every 250 ms as well.
+* The first `AGENT_STATUS` for any agent fires from `create_agent()`,
+  before its task is linked, so a project member's card was born without
+  a parent and never indented. Cards now re-home when the link appears.
+
+**HANDOFF** Complete. Next: **M22** (autonomous coding loop).
 
 ---
 

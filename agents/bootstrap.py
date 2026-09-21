@@ -17,7 +17,7 @@ import os
 from typing import Optional
 
 from agents.core import PermissionPolicy, RiskLevel, TaskKind
-from agents.manager import AgentManager
+from agents.manager import AgentManager, ProviderDecomposer, TemplateDecomposer
 
 log = logging.getLogger("agents.bootstrap")
 
@@ -140,6 +140,10 @@ def build_agent_manager(
     planner = ProviderPlanner(fallback=TemplatePlanner(), prefer_templates=True) if live \
         else TemplatePlanner()
     verifier = CompositeVerifier(rules=RuleVerifier()) if live else RuleVerifier()
+    # Multi-agent projects: the template recognises "a complete website"
+    # and the like with no model call; the model decides the rest.
+    decomposer = ProviderDecomposer(fallback=TemplateDecomposer()) if live \
+        else TemplateDecomposer()
     # Tiered, not provider-only: the classifier runs on EVERY voice turn,
     # and a provider call costs seconds. Rules answer the clear cases
     # instantly; the model is consulted only where they are unsure.
@@ -159,6 +163,7 @@ def build_agent_manager(
         default_policy=PermissionPolicy(max_auto_risk=max_auto_risk),
         require_plan_approval=require_plan_approval,
         max_concurrent=max_concurrent,
+        decomposer=decomposer,
     )
 
 

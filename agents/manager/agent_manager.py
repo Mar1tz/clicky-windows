@@ -82,6 +82,7 @@ class AgentManager:
         max_replans: int = 1,
         max_concurrent: int = 0,
         classify_timeout: float = 15.0,
+        decomposer: Optional["Decomposer"] = None,
     ):
         self.tools = tools
         self.router = router
@@ -101,6 +102,7 @@ class AgentManager:
         )
         self.max_concurrent = max(0, int(max_concurrent))   # 0 = unlimited
         self.classify_timeout = classify_timeout
+        self.decomposer = decomposer                         # None = never split
         self._lock = threading.RLock()
         self._active: set[str] = set()                  # task ids actually running
         self._queue: list[tuple] = []                   # (ctx, worker, run) waiting
@@ -303,7 +305,28 @@ class AgentManager:
             task = self.task_from_intent(intent, request, workspace=workspace)
         if metadata:
             task.metadata.update(metadata)
+        graph = self.decompose(task) if agent is None else None
+        if graph is not None:
+            return self.submit_project(task, graph)
         return self.submit_task(task, agent=agent)
+
+    def decompose(self, task: Task) -> Optional["TaskGraph"]:
+        """Ask the decomposer whether this is several agents' work.
+
+        Never raises: a decomposer failure means "one agent", which is
+        always a valid way to run the task.
+        """
+        if self.decomposer is None or task.metadata.get("parent_id"):
+            return None
+        try:
+            spec = self._default_spec(task)
+            provider = self._pick_provider(task, spec)
+            ctx = AgentContext(task=task, agent=spec, tools=self.tools, provider=provider,
+                               events=self.events, control=RunControl(), memory=self.memory)
+            return self.runtime.call(self.decomposer.decompose(ctx), timeout=60)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("decomposition failed (%s); running as one task", type(exc).__name__)
+            return None
 
     def task_from_intent(self, intent: Intent, text: str, *, workspace: Optional[str] = None) -> Task:
         meta: dict[str, Any] = {"request": text, "reply": intent.reply}
@@ -343,6 +366,183 @@ class AgentManager:
                            approver=self._approver_for(task))
         self._start_or_queue(ctx, worker, run)
         return task
+
+    # -- projects (multi-agent) ----------------------------------------------
+
+    def submit_project(self, task: Task, graph: "TaskGraph") -> Task:
+        """Run a task as a project: one child task and agent per graph
+        node, started as their dependencies complete.
+
+        The parent is a real Task with one Step per node, so the panel,
+        plan view and timeline show a project the same way they show any
+        task - the steps just happen to be other agents' whole jobs.
+        """
+        from agents.core import Step
+
+        task.workspace = os.path.abspath(task.workspace)
+        os.makedirs(task.workspace, exist_ok=True)
+        task.metadata["project"] = graph.to_dict()
+        task.metadata["children"] = {}
+        task.steps = [Step(n.title, description=n.goal) for n in graph.nodes]
+        task.status = TaskStatus.RUNNING
+
+        spec = AgentSpec(name="Project Lead", goal=task.goal, worker_type="supervisor",
+                         permissions=self._default_spec(task).permissions)
+        state = self.create_agent(spec)
+        task.agent_id = spec.id
+        control = RunControl()
+        run = _Run(task, state, control)
+        with self._lock:
+            self._runs[task.id] = run
+            self._tasks[task.id] = task
+        self.events.emit(EventKind.TASK_CREATED, task.title, task_id=task.id, agent_id=spec.id,
+                         data={"task": task.to_dict(), "project": True})
+        self.events.emit(EventKind.PLAN_CREATED, f"Project: {len(graph.nodes)} agents",
+                         task_id=task.id, agent_id=spec.id,
+                         data={"plan": {"task_id": task.id, "steps": [s.to_dict() for s in task.steps],
+                                        "rationale": graph.rationale}, "revised": False})
+        self.events.emit(EventKind.TASK_STATUS, task.status.value, task_id=task.id,
+                         agent_id=spec.id, data={"status": task.status.value})
+        if self.store:
+            self.store.save_task(task)
+        run.future = self.runtime.submit(self._run_project(run, graph))
+        return task
+
+    async def _run_project(self, run: _Run, graph: "TaskGraph") -> Task:
+        """Schedule children by the DAG; finish when they all have."""
+        from agents.core import StepStatus
+
+        parent = run.task
+        key_to_task: dict[str, Task] = {}
+        task_to_key: dict[str, str] = {}
+        done: set[str] = set()
+        failed: set[str] = set()
+        loop = asyncio.get_running_loop()
+        wake = asyncio.Event()
+
+        def _on_child_status(ev: Event) -> None:
+            if ev.task_id in task_to_key and TaskStatus(ev.data.get("status", "running")).is_terminal:
+                loop.call_soon_threadsafe(wake.set)
+
+        unsub = self.events.subscribe(_on_child_status, kinds=[EventKind.TASK_STATUS])
+        try:
+            while len(done) + len(failed) < len(graph.nodes):
+                await run.control.checkpoint()
+                for node in graph.ready(done, key_to_task):
+                    child = self._start_child(parent, node)
+                    key_to_task[node.key] = child
+                    task_to_key[child.id] = node.key
+                    self._mirror(parent, graph, node.key, StepStatus.RUNNING)
+                if len(done) + len(failed) + sum(1 for k in key_to_task if k not in done | failed) == 0:
+                    break                                 # nothing runnable: blocked by failures
+                wake.clear()
+                # Wake on a child finishing OR every 250 ms, so a cancel of
+                # the project is seen promptly rather than after the next
+                # child completes (by which point that child's work is done).
+                try:
+                    await asyncio.wait_for(wake.wait(), timeout=0.25)
+                except asyncio.TimeoutError:
+                    continue
+                for key, child in list(key_to_task.items()):
+                    if key in done or key in failed:
+                        continue
+                    status = (self.get_task(child.id) or child).status
+                    if status is TaskStatus.COMPLETED:
+                        done.add(key)
+                        self._mirror(parent, graph, key, StepStatus.DONE)
+                        self._remember_child(parent, child)
+                    elif status.is_terminal:
+                        failed.add(key)
+                        self._mirror(parent, graph, key, StepStatus.FAILED,
+                                     error=(self.get_task(child.id) or child).error)
+                        for dep in graph.dependants_of(key):
+                            if dep.key not in key_to_task:
+                                failed.add(dep.key)
+                                self._mirror(parent, graph, dep.key, StepStatus.SKIPPED,
+                                             error=f"blocked: {key} failed")
+                parent.progress = len(done) / len(graph.nodes)
+                self.events.emit(EventKind.TASK_PROGRESS, f"{len(done)}/{len(graph.nodes)} agents done",
+                                 task_id=parent.id, agent_id=parent.agent_id,
+                                 data={"progress": parent.progress,
+                                       "current_action": f"{len(done)}/{len(graph.nodes)} agents done"})
+            if failed:
+                names = ", ".join(sorted(failed))
+                self._finish_project(run, TaskStatus.FAILED, f"sub-task(s) failed: {names}")
+            else:
+                parent.result = "\n".join(f"✓ {n.title}" for n in graph.nodes)
+                self._finish_project(run, TaskStatus.COMPLETED)
+        except asyncio.CancelledError:
+            for child in key_to_task.values():
+                self.cancel(child.id)
+            self._finish_project(run, TaskStatus.CANCELLED, "cancelled")
+        except Exception as exc:  # noqa: BLE001
+            log.exception("project %s crashed", parent.id)
+            self._finish_project(run, TaskStatus.FAILED, f"{type(exc).__name__}: {exc}")
+        finally:
+            unsub()
+            with self._lock:
+                self._runs.pop(parent.id, None)
+        return parent
+
+    def _start_child(self, parent: Task, node: "TaskNode") -> Task:
+        child = Task(title=node.title, goal=node.goal, workspace=parent.workspace,
+                     kind=node.kind, worker_type=node.worker_type,
+                     metadata={"parent_id": parent.id, "node": node.key,
+                               "depends_on": list(node.depends_on)})
+        spec = self._default_spec(child)
+        if node.agent_name:
+            spec.name = node.agent_name
+        parent.metadata["children"][node.key] = child.id
+        if self.store:
+            self.store.save_task(parent)
+        return self.submit_task(child, agent=spec)
+
+    def _mirror(self, parent: Task, graph: "TaskGraph", key: str, status, *, error: str = "") -> None:
+        """Keep the parent's Step for `key` in line with the child."""
+        from agents.core import StepStatus
+        idx = next((i for i, n in enumerate(graph.nodes) if n.key == key), None)
+        if idx is None:
+            return
+        step = parent.steps[idx]
+        step.status = status
+        if error:
+            step.error = error
+        if status is StepStatus.RUNNING:
+            step.started_at = now()
+        elif status in (StepStatus.DONE, StepStatus.FAILED, StepStatus.SKIPPED):
+            step.finished_at = now()
+        kind = {StepStatus.RUNNING: EventKind.STEP_STARTED, StepStatus.DONE: EventKind.STEP_DONE,
+                StepStatus.FAILED: EventKind.STEP_FAILED}.get(status)
+        if kind:
+            self.events.emit(kind, step.title, task_id=parent.id, agent_id=parent.agent_id,
+                             data={"step": step.to_dict(), "index": idx, "total": len(parent.steps)},
+                             level="warn" if status is StepStatus.FAILED else "info")
+        if self.store:
+            self.store.save_task(parent)
+
+    def _remember_child(self, parent: Task, child: Task) -> None:
+        """What one agent built is the next agent's context: write it to
+        the shared project memory the planner reads."""
+        if self.memory is None:
+            return
+        try:
+            from agents.core import MemoryEntry, MemoryStore
+            done = (self.get_task(child.id) or child)
+            self.memory.add(MemoryEntry(
+                scope=MemoryStore.project_scope(parent.workspace), kind="context",
+                content=f"{done.title} is done. {done.result or ''}".strip()[:800],
+                tags=["project", done.kind.value],
+                data={"task_id": done.id, "parent_id": parent.id}))
+        except Exception:  # noqa: BLE001
+            log.exception("project memory write failed")
+
+    def _finish_project(self, run: _Run, status: TaskStatus, error: str = "") -> None:
+        task = run.task
+        if error:
+            task.error = error
+        if status is TaskStatus.COMPLETED:
+            task.progress = 1.0
+        self._status(run, status)
 
     # -- concurrency ---------------------------------------------------------
 

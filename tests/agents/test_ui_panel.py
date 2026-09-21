@@ -228,3 +228,40 @@ def test_logs_button_emits_the_task_id(qapp, manager):
     panel.on_agent_changed(_state(status=AgentStatus.RUNNING, current_task_id="t42"))
     next(iter(panel.cards.values()))._logs.click()
     assert got == ["t42"]
+
+
+# -- M21: projects group under their lead ------------------------------------
+
+def test_project_children_sit_under_their_lead(qapp, tmp_path):
+    from agents.manager import TemplateDecomposer
+    from agents.core import Plan, Step, ToolCall
+
+    class _Quick:
+        async def plan(self, ctx):
+            key = ctx.task.metadata.get("node", "x")
+            return Plan(task_id=ctx.task.id,
+                        steps=[Step(f"make {key}", tool_calls=[ToolCall("create_folder", {"path": key})])])
+        async def replan(self, ctx, plan, failure): return plan
+
+    mgr = build_agent_manager(workspace_root=str(tmp_path), in_memory=True, offline=True)
+    mgr.planner = mgr.orchestrator.planner = _Quick()
+    mgr.decomposer = TemplateDecomposer()
+    mgr.start()
+    try:
+        panel = ActiveAgentsPanel(mgr)
+        parent = mgr.wait(mgr.submit("Build me a complete website").id, 60)
+        assert parent.status is TaskStatus.COMPLETED, parent.error
+        _pump(qapp, 10)
+
+        order = []
+        for i in range(panel._list.count() - 1):
+            w = panel._list.itemAt(i).widget()
+            if isinstance(w, AgentCard):
+                order.append((w._name.text(), w.child_of))
+        names = [n for n, _ in order]
+        assert names[0] == "Project Lead"
+        assert set(names[1:]) == {"Backend Agent", "Frontend Agent", "Testing Agent"}
+        assert all(c == parent.id for _, c in order[1:]), "children must carry the parent id"
+        assert order[0][1] is None
+    finally:
+        mgr.stop()

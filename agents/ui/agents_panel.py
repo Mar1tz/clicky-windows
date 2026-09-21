@@ -110,14 +110,18 @@ class AgentCard(QFrame):
     stop_clicked = pyqtSignal(str)
     logs_clicked = pyqtSignal(str)
 
-    def __init__(self, state: AgentState, parent: Optional[QWidget] = None):
+    def __init__(self, state: AgentState, parent: Optional[QWidget] = None,
+                 *, child_of: Optional[str] = None):
         super().__init__(parent)
         self.setObjectName("agentCard")
         self.agent_id = state.id
         self._task_id: Optional[str] = state.current_task_id
+        self.child_of = child_of              # parent task id for a project member
 
         root = QVBoxLayout(self)
-        root.setContentsMargins(14, 12, 14, 12)
+        # A project's agents sit under their Project Lead, indented, so the
+        # panel reads as one job with three hands rather than four jobs.
+        root.setContentsMargins(14 + (18 if child_of else 0), 12, 14, 12)
         root.setSpacing(6)
 
         header = QHBoxLayout()
@@ -171,6 +175,10 @@ class AgentCard(QFrame):
         self.update_state(state)
 
     # -- rendering -----------------------------------------------------------
+
+    def set_child_of(self, parent_task: Optional[str]) -> None:
+        self.child_of = parent_task
+        self.layout().setContentsMargins(14 + (18 if parent_task else 0), 12, 14, 12)
 
     def update_state(self, state: AgentState) -> None:
         self._task_id = state.current_task_id
@@ -281,16 +289,50 @@ class ActiveAgentsPanel(QWidget):
     def on_agent_changed(self, state: AgentState) -> None:
         card = self._cards.get(state.id)
         if card is None:
-            card = AgentCard(state)
+            parent_task = self._parent_task_of(state)
+            card = AgentCard(state, child_of=parent_task)
             card.pause_clicked.connect(self._manager.pause)
             card.resume_clicked.connect(self._manager.resume)
             card.stop_clicked.connect(self._manager.cancel)
             card.logs_clicked.connect(self.view_logs)
             self._cards[state.id] = card
-            self._list.insertWidget(self._list.count() - 1, card)
+            self._list.insertWidget(self._slot_for(parent_task), card)
         else:
             card.update_state(state)
+            # The first AGENT_STATUS for an agent fires from create_agent(),
+            # before its task is linked - so a project member's card is born
+            # without a parent. Re-home it the moment the link appears.
+            if card.child_of is None:
+                parent_task = self._parent_task_of(state)
+                if parent_task:
+                    self._rehome(card, parent_task)
         self._refresh_empty_state()
+
+    def _rehome(self, card: "AgentCard", parent_task: str) -> None:
+        card.set_child_of(parent_task)
+        self._list.removeWidget(card)
+        self._list.insertWidget(self._slot_for(parent_task), card)
+
+    def _parent_task_of(self, state: AgentState) -> Optional[str]:
+        """The project this agent belongs to, if any."""
+        try:
+            task = self._manager.get_task(state.current_task_id or "")
+            return (task.metadata or {}).get("parent_id") if task else None
+        except Exception:  # noqa: BLE001
+            return None
+
+    def _slot_for(self, parent_task: Optional[str]) -> int:
+        """Where a new card goes: after the last card of its project, or
+        at the end."""
+        end = self._list.count() - 1                      # before the stretch
+        if not parent_task:
+            return end
+        slot = end
+        for i in range(self._list.count() - 1):
+            w = self._list.itemAt(i).widget()
+            if isinstance(w, AgentCard) and (w._task_id == parent_task or w.child_of == parent_task):
+                slot = i + 1
+        return slot
 
     def on_task_progress(self, task_id: str, fraction: float, action: str) -> None:
         for card in self._cards.values():
