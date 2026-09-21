@@ -18,8 +18,9 @@ from .mock import MockCall, MockProvider
 from .openai_compatible import OpenAICompatibleProvider, ProviderError
 from .router import Router
 
-__all__ = ["AccountStore", "MockCall", "MockProvider", "OpenAICompatibleProvider",
-           "ProviderError", "Router", "build_router", "provider_from_env"]
+__all__ = ["AccountStore", "GATEWAY_MODELS", "MockCall", "MockProvider",
+           "OpenAICompatibleProvider", "ProviderError", "Router", "build_router",
+           "provider_from_account", "provider_from_env"]
 
 # Defaults for a gateway that fronts many vendors, ordered best-first.
 # The provider falls through the chain when a route is benched, which on
@@ -42,6 +43,28 @@ GATEWAY_MODELS: dict[str, list[str]] = {
     "vision": ["agy/gemini-3.6-flash-medium", "claude/claude-sonnet-4-6",
                "cc/claude-sonnet-4-6"],
 }
+
+
+def provider_from_account(account, key: Optional[str] = None) -> Optional[OpenAICompatibleProvider]:
+    """Build a provider from a saved ConnectedAccount.
+
+    Returns None when the account has no endpoint or is disabled, so a
+    half-filled row in the settings UI is simply ignored rather than
+    registering a provider that cannot work.
+    """
+    import os
+
+    if not account.enabled or not (account.base_url or "").strip():
+        return None
+    chain = [m for m in (account.models or []) if m] or \
+        ([account.default_model] if account.default_model else GATEWAY_MODELS["general"])
+    return OpenAICompatibleProvider(
+        base_url=account.base_url,
+        api_key=key if key is not None else os.environ.get(account.env_key_name, ""),
+        model=chain[0],
+        fallback_models=chain[1:],
+        name=account.provider or "custom",
+    )
 
 
 def provider_from_env(prefix: str = "OMNIROUTE") -> Optional[OpenAICompatibleProvider]:
@@ -92,7 +115,27 @@ def build_router(
     # registered for every kind when a base URL is configured. Kinds differ
     # only in which model chain they prefer.
     if gateway is not False:
-        remote = provider_from_env()
+        # Saved accounts win over the bare environment: the settings page
+        # is where a user expects to change this, and an account can pin
+        # its own model chain and task kinds.
+        registered_any = False
+        for account in (accounts.list(enabled_only=True) if accounts else []):
+            built = provider_from_account(account)
+            if built is None:
+                continue
+            kinds = []
+            for name in account.kinds or []:
+                try:
+                    kinds.append(TaskKind(name))
+                except ValueError:
+                    continue
+            # A kind-scoped account is a routing rule ("coding goes here")
+            # and must outrank the catch-all endpoint it refines; at equal
+            # priority the router happily picks the general one.
+            router.register(built, kinds=kinds or None, priority=50 if kinds else 40)
+            registered_any = True
+
+        remote = None if registered_any else provider_from_env()
         if remote is not None:
             router.register(remote, kinds=None, priority=20)
             for kind_name, chain in GATEWAY_MODELS.items():

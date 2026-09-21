@@ -64,7 +64,7 @@ line.
 | M13 | **OpenAI-compatible provider (gateway)** | 2 | ✅ | M12    |
 | M14 | ~~Claude provider~~ → folded into M13 | 2  | ➖     | —          |
 | M15 | Direct Gemini provider (Live API)  | 2     | ⬜     | M13        |
-| M16 | Connected accounts UI + routing    | 2     | ⬜     | M11, M15   |
+| M16 | Connected accounts UI + routing    | 2     | ✅     | M11, M13   |
 | M17 | LLM planning + verification default| 2     | ✅     | M13        |
 | M18 | Durable tasks, resume after restart| 3     | ⬜     | M7         |
 | M19 | Browser worker                     | 3     | ⬜     | M12, M15   |
@@ -665,7 +665,7 @@ vision→Gemini, fast→local).
 
 ---
 
-## M16 · Connected accounts UI + routing settings ⬜
+## M16 · Connected accounts UI + routing settings ✅
 
 **Goal** Spec §6–7 — the user picks providers and connects their own accounts.
 
@@ -679,7 +679,38 @@ to the OS credential store or env vars — **never** into the JSON file.
 **Done when** Adding a key in the UI makes that provider available to the
 router without an app restart, and removing it falls back cleanly.
 
-**HANDOFF** _(none yet)_
+**Landed** `agents/ui/accounts.py`, `ConnectedAccount.{base_url,models,kinds}`
+in core, `config.set_agent_env`, `provider_from_account`, and bootstrap
+now reads the saved `AccountStore`. 18 tests; suite **340 passing**.
+Screenshot-verified with a live Test click: `OK — 1282 models`.
+
+**Shape:** two sections, because they are two different questions.
+*Endpoints* — name, URL, key, on/off, and a Test button that makes a real
+request (a green tick that never called anything would be worse than no
+button). *Routing* — an ordered model chain per task kind, editable as
+comma-separated text, seeded from the measured `GATEWAY_MODELS`.
+
+**Where things live, and why**
+* Keys → environment + `.env` via `config.set_agent_env`, whose `TORA_`
+  prefix check is the guard against writing arbitrary variables. There is
+  a test that reads the accounts JSON off disk and asserts the secret is
+  absent — that file gets synced, backed up and pasted into bug reports.
+* Endpoints and chains → `AccountStore` JSON. A chain is stored as a
+  kind-scoped account row (`kinds=["coding"]`), which `build_router`
+  registers at **priority 50, above the catch-all endpoint's 40**. At
+  equal priority the router picked the general one for coding — a bug the
+  tests caught on the first run.
+* Saved accounts outrank the bare environment, and the dialog seeds one
+  card from `TORA_OMNIROUTE_*` so an existing `.env` setup is visible
+  rather than presenting an empty page to someone already wired.
+* `apply_to` rebuilds `manager.router` in place — no restart.
+* Bootstrap passes no `AccountStore` for `in_memory`/`offline` runs, so a
+  test never reads or writes the real profile.
+
+**HANDOFF** Complete. **Phase 2 is done** except M15 (direct Gemini Live
+provider, voice only). Phase 3 starts at **M18** (resume after restart) —
+it depends only on M7 and makes long tasks survive the app closing, which
+is the spec's §3 promise — or **M19** (Playwright browser worker).
 
 ---
 

@@ -366,6 +366,25 @@ class Config:
         os.environ["TORA_AGENT_PLAN_APPROVAL"] = value
         self._write_env("TORA_AGENT_PLAN_APPROVAL", value)
 
+    def set_agent_env(self, name: str, value: str) -> None:
+        """Set one `TORA_*` agent variable live and persist it to .env.
+
+        The agent layer names its own variables per provider
+        (`TORA_OMNIROUTE_API_KEY`, `TORA_OMNIROUTE_BASE_URL`, …), so they
+        cannot be enumerated in API_KEY_FIELDS the way the app's own two
+        keys are. The prefix check is the guard: this writes agent
+        settings, never arbitrary environment entries.
+        """
+        name = (name or "").strip().upper()
+        if not name.startswith("TORA_") or not name.replace("_", "").isalnum():
+            return
+        value = (value or "").strip()
+        if value:
+            os.environ[name] = value
+        else:
+            os.environ.pop(name, None)
+        self._write_env(name, value)
+
     def set_agent_max_concurrent(self, count: int) -> None:
         count = max(0, int(count))
         self.agent_max_concurrent = count

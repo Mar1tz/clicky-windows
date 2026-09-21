@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from typing import Optional
 
+from .accounts import ConnectedAccountsDialog, EndpointCard
 from .agents_panel import ActiveAgentsPanel, AgentCard, StatusDot
 from .approval import ApprovalController, ApprovalDialog
 from .bridge import AgentEventBridge
@@ -18,8 +19,9 @@ from .plan_view import PlanStepRow, PlanView
 from .timeline import ActivityTimeline, TimelineRow
 
 __all__ = ["ActiveAgentsPanel", "ActivityTimeline", "AgentCard", "AgentEventBridge",
-           "ApprovalController", "ApprovalDialog", "PlanStepRow", "PlanView",
-           "StatusDot", "TimelineRow", "attach_approvals", "open_agents_window",
+           "ApprovalController", "ApprovalDialog", "ConnectedAccountsDialog",
+           "EndpointCard", "PlanStepRow", "PlanView", "StatusDot", "TimelineRow",
+           "attach_approvals", "open_accounts", "open_agents_window",
            "open_plan", "open_timeline"]
 
 _window: Optional[ActiveAgentsPanel] = None
@@ -82,3 +84,17 @@ def attach_approvals(manager, parent=None) -> ApprovalController:
     if _approvals is None:
         _approvals = ApprovalController(manager, parent=parent)
     return _approvals
+
+
+_accounts_dialog: Optional[ConnectedAccountsDialog] = None
+
+
+def open_accounts(manager=None, parent=None) -> ConnectedAccountsDialog:
+    """Show the connected-accounts page, reusing the open one."""
+    global _accounts_dialog
+    if _accounts_dialog is None or not _accounts_dialog.isVisible():
+        _accounts_dialog = ConnectedAccountsDialog(manager, parent=parent)
+    _accounts_dialog.show()
+    _accounts_dialog.raise_()
+    _accounts_dialog.activateWindow()
+    return _accounts_dialog

@@ -99,7 +99,7 @@ def build_agent_manager(
     from agents.memory import SQLiteMemoryStore
     from agents.persistence import SQLiteTaskStore
     from agents.planning import ProviderPlanner, TemplatePlanner
-    from agents.providers import MockProvider, build_router
+    from agents.providers import AccountStore, MockProvider, build_router
     from agents.tools import default_registry
     from agents.understanding import HeuristicIntentClassifier, TieredIntentClassifier
     from agents.verification import CompositeVerifier, RuleVerifier
@@ -122,7 +122,13 @@ def build_agent_manager(
     # Let build_router decide: it registers the configured gateway above
     # the mock catch-all. Passing a fallback here used to suppress the
     # gateway entirely, so the app ran on the mock while looking wired up.
-    router = build_router(fallback=MockProvider() if offline else None,
+    # Accounts the user connected in Settings outrank the bare environment.
+    # Skipped for in-memory and offline runs: a test must neither read nor
+    # write the real profile, and the environment alone is enough there.
+    accounts = None if (offline or in_memory) else AccountStore(
+        os.path.join(data_dir(), "agent_accounts.json"))
+    router = build_router(accounts,
+                          fallback=MockProvider() if offline else None,
                           gateway=False if offline else None)
 
     # With a real provider connected, the model plans and judges; without

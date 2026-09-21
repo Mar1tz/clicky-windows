@@ -125,6 +125,9 @@ class AgentSettingsDialog(QWidget):
 
         buttons = QHBoxLayout()
         buttons.setSpacing(8)
+        accounts = QPushButton("Connected accounts…")
+        accounts.clicked.connect(self._open_accounts)
+        buttons.addWidget(accounts)
         clear = QPushButton("Clear agent history")
         clear.clicked.connect(self._clear_history)
         buttons.addWidget(clear)
@@ -214,6 +217,10 @@ class AgentSettingsDialog(QWidget):
             manager.max_concurrent = max(0, int(limit))
         except Exception:
             log.exception("applying agent settings to the live manager failed")
+
+    def _open_accounts(self) -> None:
+        from . import open_accounts
+        self._accounts_window = open_accounts(self._manager, parent=None)
 
     def _clear_history(self) -> None:
         if self._manager is None or getattr(self._manager, "store", None) is None:

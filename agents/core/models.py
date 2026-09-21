@@ -417,13 +417,34 @@ class ProviderCapabilities(_Serialisable):
 
 @dataclass
 class ConnectedAccount(_Serialisable):
-    """A user-connected AI account (settings -> Connected Accounts)."""
+    """A user-connected AI account (settings -> Connected Accounts).
+
+    `base_url` and `models` describe an OpenAI-compatible endpoint, which
+    in practice is what a connected account is: a gateway fronting many
+    vendors, a local server, or api.openai.com. `models` is an ordered
+    preference chain, not a single choice, because any real endpoint has
+    routes that go down and the provider falls through to the next one.
+
+    No secret is ever stored here. The key is read at call time from
+    `TORA_<PROVIDER>_API_KEY`.
+    """
     provider: str                          # claude | gemini | openai | local | custom
     label: str = ""
     auth_kind: str = "api_key"             # api_key | oauth | subscription | none
     enabled: bool = True
     default_model: str = ""
+    base_url: str = ""                     # OpenAI-compatible endpoint
+    models: list[str] = field(default_factory=list)   # preference chain
+    kinds: list[str] = field(default_factory=list)    # TaskKind values, [] = all
     id: str = field(default_factory=new_id)
+
+    @property
+    def env_key_name(self) -> str:
+        return f"TORA_{self.provider.upper()}_API_KEY"
+
+    @property
+    def env_url_name(self) -> str:
+        return f"TORA_{self.provider.upper()}_BASE_URL"
 
 
 # -- Memory ------------------------------------------------------------------
