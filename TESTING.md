@@ -339,6 +339,57 @@ python main.py
 
 ---
 
+## 26. Agent Workforce
+
+Autonomous agents that do work in the background while you keep talking.
+Automated coverage: `python -m pytest tests/agents -q` (440+ tests, offline).
+This section is the manual pass.
+
+**Setup:** any one of these makes the agents think:
+- your existing Google key (nothing to do), or
+- Tray → Agent settings… → Connected accounts… → add an OpenAI-compatible
+  endpoint, click **Test** (must say `OK — N models`), Save.
+
+1. Say *"Create a new folder called MyApp and build the foundation of a React application inside it"*
+
+✅ Tora replies "Understood… I will: 1. Create project folder …" and keeps talking
+✅ Tray menu shows **Agents… (1 running)**
+✅ Tray → Agents… opens a card: green dot, *Application Builder*, a filling bar, `Step 4/10`
+✅ Within ~10 s the card says **Done**; `Documents\Tora Projects\MyApp\src\App.jsx` exists
+
+2. Click **Logs** on the card
+
+✅ Timeline shows `Task started` → `Plan: 10 steps` → per step: `create_file(...)`, `Created App.jsx`, `Verified step`
+✅ Quit Tora, restart, open the timeline again → identical history (from SQLite)
+
+3. Tray → Agent settings… → *Run without asking, up to* **Safe** → Save. Repeat step 1.
+
+✅ An approval dialog appears for the first file write, showing the tool, path, risk and workspace
+✅ **Deny** → task fails with "permission denied"; **Approve** → continues; **Always allow** → no more prompts for that tool
+
+4. Say *"Build me a complete website for my bakery"*
+
+✅ Panel shows *Project Lead* with three indented cards: Backend Agent, Frontend Agent, Testing Agent
+✅ Backend and Frontend run at the same time; Testing starts only after both finish
+
+5. While an agent is running, press **Esc** (or Tray → Stop all agents)
+
+✅ The task is cancelled; the card shows **Stopped**
+
+6. Start a task, then Quit Tora mid-run. Restart.
+
+✅ The card comes back **Paused** with "interrupted by restart"; **Resume** finishes only the remaining steps
+
+7. Say *"Build me a CRM application"* (needs a connected provider)
+
+✅ A plan of ~10 real steps (backend, pages, routing, git) — not a template
+
+8. Open `%LOCALAPPDATA%\Tora	ora.log`
+
+✅ No `key=AIza…` anywhere (search for `AIza`); credentials read `REDACTED`
+
+---
+
 ## Quick Smoke Test (5 minutes)
 
 Run this sequence to verify core features fast:

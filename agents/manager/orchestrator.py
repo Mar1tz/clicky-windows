@@ -22,7 +22,14 @@ from agents.core import (
     Planner, Step, StepStatus, TaskStatus, TaskStore, ToolCall, Verifier, new_id, now,
 )
 
+from .limits import LimitExceeded
+
 log = logging.getLogger("agents.orchestrator")
+
+
+def _started(ctx: AgentContext) -> float:
+    """When the clock started: the metered provider knows, else creation."""
+    return float(getattr(ctx.provider, "started_at", None) or ctx.task.created_at)
 
 
 class Orchestrator:
@@ -35,7 +42,10 @@ class Orchestrator:
         memory: Optional[MemoryStore] = None,
         require_plan_approval: bool = False,
         max_replans: int = 1,
+        limits: Optional["TaskLimits"] = None,
     ):
+        from .limits import TaskLimits
+        self.limits = limits or TaskLimits()
         self.planner = planner
         self.verifier = verifier
         self.store = store
@@ -89,6 +99,10 @@ class Orchestrator:
                 self._finish(ctx, TaskStatus.FAILED, f"final verification failed: {vr.summary}")
         except asyncio.CancelledError:
             self._finish(ctx, TaskStatus.CANCELLED, "cancelled")
+        except LimitExceeded as exc:
+            ctx.events.emit(EventKind.ERROR, str(exc), task_id=task.id, agent_id=ctx.agent.id,
+                            level="warn", data={"limit": exc.which})
+            self._finish(ctx, TaskStatus.FAILED, str(exc))
         except Exception as exc:  # noqa: BLE001 - a task must always reach a terminal state
             log.exception("task %s crashed", task.id)
             ctx.events.emit(EventKind.ERROR, f"{type(exc).__name__}: {exc}", task_id=task.id,
@@ -126,6 +140,7 @@ class Orchestrator:
         i = 0
         while i < len(task.steps):
             await ctx.control.checkpoint()
+            self.limits.check(task, started_at=_started(ctx))    # never start a step over budget
             step = task.steps[i]
             if step.status in (StepStatus.DONE, StepStatus.SKIPPED):
                 i += 1

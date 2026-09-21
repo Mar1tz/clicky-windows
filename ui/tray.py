@@ -59,6 +59,7 @@ class TrayManager(QObject):
     on_set_custom_instructions = pyqtSignal(str)
     on_open_agents        = pyqtSignal()        # Active Agents panel
     on_agent_settings     = pyqtSignal()        # agent rails
+    on_stop_agents        = pyqtSignal()        # cancel every running agent
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -144,6 +145,10 @@ class TrayManager(QObject):
 
         agent_settings = menu.addAction("Agent settings…")
         agent_settings.triggered.connect(self.on_agent_settings)
+
+        stop_agents = menu.addAction("Stop all agents")
+        stop_agents.setEnabled(self._agents_running > 0)
+        stop_agents.triggered.connect(self.on_stop_agents)
 
         menu.addSeparator()
 

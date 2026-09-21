@@ -109,6 +109,7 @@ class EventKind(str, Enum):
     APPROVAL_REQUIRED = "approval.required"  # data: {"request": ApprovalRequest.to_dict()}
     APPROVAL_RESOLVED = "approval.resolved"
     AGENT_STATUS = "agent.status"            # data: {"state": AgentState.to_dict()}
+    USAGE = "usage"                          # data: {"tokens": int, "delta": int, "budget": int|None}
     LOG = "log"
     ERROR = "error"
 
@@ -345,6 +346,7 @@ class AgentState(_Serialisable):
     step_total: int = 0
     started_at: Optional[float] = None
     last_error: str = ""
+    tokens_used: int = 0                   # running total across the current task
 
     @property
     def id(self) -> str:

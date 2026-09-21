@@ -80,9 +80,17 @@ def _setup_logging():
         root = logging.getLogger()
         root.setLevel(logging.INFO)
         root.addHandler(handler)
+        # Secrets stay out of this file: see logsafe.py. Scrubbing the
+        # existing logs first closes the leak that already happened.
+        import logsafe
+        scrubbed = logsafe.scrub_logs(log_dir)
+        logsafe.install(root)
         logging.getLogger("tora").info(
             "=== Tora starting (python %s) ===", sys.version.split()[0]
         )
+        if scrubbed:
+            logging.getLogger("tora").info(
+                "redacted %d line(s) of earlier logs that contained credentials", scrubbed)
     except Exception:
         pass  # logging must never block startup
 
@@ -129,6 +137,13 @@ def _wire_agents(manager, tray):
 
     tray.on_open_agents.connect(_open_panel)
     tray.on_agent_settings.connect(_open_settings)
+
+    def _stop_all():
+        n = workforce.cancel_all()
+        tray.show_notification("Agents stopped",
+                               f"Cancelled {n} running task(s)." if n else "No agents were running.")
+
+    tray.on_stop_agents.connect(_stop_all)
 
     def _refresh_count(_event=None):
         try:

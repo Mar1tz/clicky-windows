@@ -134,3 +134,19 @@ tora-windows/
     â”‚   â””â”€â”€ README.md
     â””â”€â”€ Setup-Tora.exe â† single-file installer (if you built with installer flag)
 ```
+
+## Agent workforce notes
+
+* `tora.spec` collects `agents/**` via `collect_submodules("agents")` — every
+  package under `agents/` is imported lazily, so without this the built exe
+  logs "agent workforce failed to start" and runs without agents.
+* The SQLite databases (`agents.db`, `agent_memory.db`) and the accounts file
+  live under `%LOCALAPPDATA%\Tora`, next to `tora.log`. The workspace defaults
+  to `%USERPROFILE%\Documents\Tora Projects` and is created on first run.
+* Playwright (browser worker) is **optional** and not bundled: `pip install
+  playwright && playwright install chromium` on the target machine enables
+  it. Without it the browser tools fail with that exact instruction and
+  everything else keeps working.
+* Computer control needs `pynput` (already a requirement) and asks the user
+  before every action regardless of settings — that floor is in code, not
+  configuration.

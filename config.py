@@ -345,6 +345,14 @@ class Config:
     agent_max_concurrent: int = field(default_factory=lambda: _int(
         _env("TORA_AGENT_MAX_CONCURRENT", "3"), 3
     ))
+    # Per-task limits, 0 = unlimited. An agent that cannot finish should
+    # stop, not run until the credit card does.
+    agent_wall_clock_s: int = field(default_factory=lambda: _int(
+        _env("TORA_AGENT_WALL_CLOCK_S", "1800"), 1800
+    ))
+    agent_max_tokens: int = field(default_factory=lambda: _int(
+        _env("TORA_AGENT_MAX_TOKENS", "300000"), 300000
+    ))
 
     def set_agent_workspace(self, path: str) -> None:
         path = (path or "").strip()
@@ -365,6 +373,18 @@ class Config:
         value = "1" if on else "0"
         os.environ["TORA_AGENT_PLAN_APPROVAL"] = value
         self._write_env("TORA_AGENT_PLAN_APPROVAL", value)
+
+    def set_agent_wall_clock_s(self, seconds: int) -> None:
+        seconds = max(0, int(seconds))
+        self.agent_wall_clock_s = seconds
+        os.environ["TORA_AGENT_WALL_CLOCK_S"] = str(seconds)
+        self._write_env("TORA_AGENT_WALL_CLOCK_S", str(seconds))
+
+    def set_agent_max_tokens(self, tokens: int) -> None:
+        tokens = max(0, int(tokens))
+        self.agent_max_tokens = tokens
+        os.environ["TORA_AGENT_MAX_TOKENS"] = str(tokens)
+        self._write_env("TORA_AGENT_MAX_TOKENS", str(tokens))
 
     def set_agent_env(self, name: str, value: str) -> None:
         """Set one `TORA_*` agent variable live and persist it to .env.

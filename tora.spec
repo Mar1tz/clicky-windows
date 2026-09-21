@@ -44,7 +44,18 @@ hidden = [
     # Speech, both directions
     "audio.stt.gemini_stt",
     "audio.tts.gemini_tts",
+
+    # Log hygiene, imported inside _setup_logging
+    "logsafe",
 ]
+
+# ── The agent workforce. CompanionManager imports agents.bootstrap lazily
+#    inside _start_agents(), and bootstrap imports every package lazily in
+#    turn, so static analysis sees none of it. collect_submodules walks the
+#    whole tree; a missing sub-package would surface as "agent workforce
+#    failed to start" in tora.log with the app otherwise fine — which is
+#    the designed failure mode, but not one to ship.
+hidden += collect_submodules("agents")
 
 # ── Heavy packages that ship non-Python assets (DLLs, JSON, voices).
 #    collect_all grabs submodules + data files + binaries + metadata.

@@ -121,6 +121,29 @@ class AgentSettingsDialog(QWidget):
         root.addWidget(self.max_concurrent)
         root.addWidget(self._hint("Extra tasks queue and start as slots free up. 0 = unlimited."))
 
+        # per-task limits
+        limits_row = QHBoxLayout()
+        limits_row.setSpacing(12)
+        wall_col = QVBoxLayout()
+        wall_col.addWidget(self._label("Time limit per task (minutes)"))
+        self.wall_clock = QSpinBox()
+        self.wall_clock.setRange(0, 24 * 60)
+        self.wall_clock.setValue(int(getattr(self._cfg, "agent_wall_clock_s", 1800)) // 60)
+        self.wall_clock.setSpecialValueText("Unlimited")
+        wall_col.addWidget(self.wall_clock)
+        tok_col = QVBoxLayout()
+        tok_col.addWidget(self._label("Token budget per task (thousands)"))
+        self.max_tokens = QSpinBox()
+        self.max_tokens.setRange(0, 100_000)
+        self.max_tokens.setValue(int(getattr(self._cfg, "agent_max_tokens", 300000)) // 1000)
+        self.max_tokens.setSpecialValueText("Unlimited")
+        tok_col.addWidget(self.max_tokens)
+        limits_row.addLayout(wall_col, 1)
+        limits_row.addLayout(tok_col, 1)
+        root.addLayout(limits_row)
+        root.addWidget(self._hint("A task over either limit is stopped and marked failed, "
+                                  "with what it used shown on its card."))
+
         root.addStretch(1)
 
         buttons = QHBoxLayout()
@@ -191,12 +214,18 @@ class AgentSettingsDialog(QWidget):
         self._cfg.set_agent_auto_risk(risk)
         self._cfg.set_agent_plan_approval(plan)
         self._cfg.set_agent_max_concurrent(limit)
+        wall_s = self.wall_clock.value() * 60
+        tokens = self.max_tokens.value() * 1000
+        self._cfg.set_agent_wall_clock_s(wall_s)
+        self._cfg.set_agent_max_tokens(tokens)
 
-        self.apply_to(self._manager, workspace=workspace, risk=risk, plan=plan, limit=limit)
+        self.apply_to(self._manager, workspace=workspace, risk=risk, plan=plan, limit=limit,
+                      wall_clock_s=wall_s, max_tokens=tokens)
         self.saved.emit()
 
     @staticmethod
-    def apply_to(manager, *, workspace: str, risk: str, plan: bool, limit: int) -> None:
+    def apply_to(manager, *, workspace: str, risk: str, plan: bool, limit: int,
+                 wall_clock_s: Optional[int] = None, max_tokens: Optional[int] = None) -> None:
         """Push the saved values onto a live manager.
 
         Only the *default* policy is changed: agents already running keep
@@ -215,6 +244,10 @@ class AgentSettingsDialog(QWidget):
             manager.default_policy.max_auto_risk = RISK_BY_NAME.get(risk, RiskLevel.MEDIUM)
             manager.orchestrator.require_plan_approval = bool(plan)
             manager.max_concurrent = max(0, int(limit))
+            if wall_clock_s is not None:
+                manager.limits.wall_clock_s = float(max(0, wall_clock_s))
+            if max_tokens is not None:
+                manager.limits.max_tokens = max(0, int(max_tokens))
         except Exception:
             log.exception("applying agent settings to the live manager failed")
 

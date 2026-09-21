@@ -71,7 +71,7 @@ line.
 | M20 | Computer-control worker            | 3     | ✅     | M13        |
 | M21 | Multi-agent collaboration          | 3     | ✅     | M17, M18   |
 | M22 | Autonomous coding loop             | 3     | ✅     | M17        |
-| M23 | Ship: packaging, limits, safety    | 3     | ⬜     | M16, M18   |
+| M23 | Ship: packaging, limits, safety    | 3     | 🟡     | M16, M18   |
 
 Phase 1 = the framework with no real AI. Phase 2 = plug the AI in.
 Phase 3 = the capabilities that need both.
@@ -1083,7 +1083,7 @@ voice only) and **M23** (ship: packaging, limits, safety — including the
 
 ---
 
-## M23 · Ship: packaging, limits, safety ⬜
+## M23 · Ship: packaging, limits, safety 🟡
 
 **Goal** The workforce survives being installed on someone else's machine.
 
@@ -1111,6 +1111,46 @@ line. Not caused by the agent system; it predates it.
 **Done when** A built `.exe` on a clean Windows VM completes the MyApp task
 from voice, and the safety checklist in the PR description is ticked with
 evidence.
+
+**Landed** `logsafe.py`, `agents/manager/limits.py`, `MeteredProvider`,
+two limit settings, "Stop all agents", event scrubbing, `collect_submodules("agents")`
+in `tora.spec`, TESTING.md §26, BUILD.md notes. 22 new tests; suite
+**443 passing**.
+
+**The key leak, closed both ways.** `logsafe.py` holds httpx/httpcore at
+WARNING (no request lines), puts a `RedactingFilter` on every handler
+(`?key=`, `AIza…`, `sk-…`, `Bearer …`, GitHub tokens), and **scrubs the
+existing logs on startup**. Run against the real log directory:
+**168 lines redacted, 0 remaining.** The app's own client still sends
+`?key=` on six httpx calls in `ai/gemini.py` and `ai/model_registry.py`;
+moving those to the `x-goog-api-key` header is the right follow-up, but
+it could not be verified while Gemini credits are depleted, and the
+filter makes it unnecessary for the leak.
+
+**Limits, not labels.** `TaskLimits(wall_clock_s, max_tokens)` from config
+(defaults 30 min / 300k). `MeteredProvider` wraps whatever the router
+chose, counts every call, publishes `USAGE` events (the card shows
+`Step 4/10 · 12.3k tokens`), and refuses a call past either limit; the
+orchestrator also checks before each step. A task over a limit is
+FAILED with which limit and by how much. Tested through the orchestrator
+for both limits.
+
+**Safety checklist — each item is a test in `test_ship.py`:**
+* no tool escapes the workspace (7 tools tried, none did) ✓
+* no HIGH-risk tool runs unasked under the default ceiling ✓
+* computer control asks even at a HIGH ceiling (`always_ask`) ✓
+* events carry `<50000 chars>`, not file contents; the real call is untouched ✓
+* keys never reach the log (`logsafe`) ✓
+* both real providers send keys as headers, not query strings ✓
+* agents default outside the app folder ✓
+
+**What is NOT verified, honestly:** the built `.exe` on a **clean VM**. A
+local PyInstaller build was run to prove the spec bundles `agents/**` and
+the frozen exe starts its workforce — see the build note below. The
+clean-VM voice test is yours to run; TESTING.md §26 is the script.
+
+**HANDOFF** Everything but the clean-VM run is done. To finish: install
+`dist/Tora` on a machine without Python, say the MyApp request, tick §26.
 
 **HANDOFF** _(none yet)_
 

@@ -81,6 +81,15 @@ QWidget#cardHolder { background: transparent; }
 """
 
 
+def _tokens(n: int) -> str:
+    """1234 -> "1.2k tokens", 1500000 -> "1.5M tokens"."""
+    if n >= 1_000_000:
+        return f"{n / 1_000_000:.1f}M tokens"
+    if n >= 1_000:
+        return f"{n / 1_000:.1f}k tokens"
+    return f"{n} tokens"
+
+
 class StatusDot(QWidget):
     """The 🟢 - a filled circle whose colour tracks the agent's status."""
 
@@ -187,12 +196,13 @@ class AgentCard(QFrame):
         self._verb.setText(_VERB.get(state.status, ""))
         self._task.setText(state.current_task_title or state.spec.goal or "")
 
+        bits = []
         if state.step_total:
-            done = min(state.step_index, state.step_total)
-            self._step.setText(f"Step {done}/{state.step_total}")
-            self._step.setVisible(True)
-        else:
-            self._step.setVisible(False)
+            bits.append(f"Step {min(state.step_index, state.step_total)}/{state.step_total}")
+        if state.tokens_used:
+            bits.append(_tokens(state.tokens_used))
+        self._step.setText(" · ".join(bits))
+        self._step.setVisible(bool(bits))
 
         self._bar.setValue(int(round(max(0.0, min(1.0, state.progress)) * 100)))
         self._action.setText(state.last_error if state.status is AgentStatus.ERROR

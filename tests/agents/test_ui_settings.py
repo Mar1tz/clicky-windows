@@ -40,12 +40,16 @@ class FakeConfig:
         self.agent_auto_risk = kw.get("agent_auto_risk", "medium")
         self.agent_plan_approval = kw.get("agent_plan_approval", False)
         self.agent_max_concurrent = kw.get("agent_max_concurrent", 3)
+        self.agent_wall_clock_s = kw.get("agent_wall_clock_s", 1800)
+        self.agent_max_tokens = kw.get("agent_max_tokens", 300000)
         self.written: dict[str, object] = {}
 
     def set_agent_workspace(self, v): self.agent_workspace = v; self.written["workspace"] = v
     def set_agent_auto_risk(self, v): self.agent_auto_risk = v; self.written["risk"] = v
     def set_agent_plan_approval(self, v): self.agent_plan_approval = v; self.written["plan"] = v
     def set_agent_max_concurrent(self, v): self.agent_max_concurrent = v; self.written["max"] = v
+    def set_agent_wall_clock_s(self, v): self.agent_wall_clock_s = v; self.written["wall"] = v
+    def set_agent_max_tokens(self, v): self.agent_max_tokens = v; self.written["tokens"] = v
 
 
 @pytest.fixture
@@ -83,13 +87,17 @@ def test_save_persists_and_applies_live(qapp, manager, tmp_path):
     dlg.risk.setCurrentIndex(0)                 # safe
     dlg.plan_approval.setChecked(True)
     dlg.max_concurrent.setValue(2)
+    dlg.wall_clock.setValue(45)             # minutes
+    dlg.max_tokens.setValue(120)            # thousands
 
     saved = []
     dlg.saved.connect(lambda: saved.append(True))
     dlg.save()
 
     assert saved, "saved signal not emitted"
-    assert cfg.written == {"workspace": new_ws, "risk": "safe", "plan": True, "max": 2}
+    assert cfg.written == {"workspace": new_ws, "risk": "safe", "plan": True, "max": 2,
+                           "wall": 45 * 60, "tokens": 120_000}
+    assert manager.limits.wall_clock_s == 45 * 60 and manager.limits.max_tokens == 120_000
     # and the running manager changed, with no restart
     assert manager.default_policy.max_auto_risk is RiskLevel.SAFE
     assert manager.orchestrator.require_plan_approval is True

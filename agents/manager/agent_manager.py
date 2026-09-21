@@ -83,6 +83,7 @@ class AgentManager:
         max_concurrent: int = 0,
         classify_timeout: float = 15.0,
         decomposer: Optional["Decomposer"] = None,
+        limits: Optional["TaskLimits"] = None,
     ):
         self.tools = tools
         self.router = router
@@ -96,9 +97,12 @@ class AgentManager:
         self.events = events or EventBus()
         self.runtime = runtime or AgentRuntime()
         self.default_policy = default_policy or PermissionPolicy()
+        from .limits import TaskLimits
+        self.limits = limits or TaskLimits()
         self.orchestrator = Orchestrator(
             planner=planner, verifier=verifier, store=store, memory=memory,
             require_plan_approval=require_plan_approval, max_replans=max_replans,
+            limits=self.limits,
         )
         self.max_concurrent = max(0, int(max_concurrent))   # 0 = unlimited
         self.classify_timeout = classify_timeout
@@ -202,7 +206,8 @@ class AgentManager:
         self._status(run, TaskStatus.RUNNING)
         state.status = AgentStatus.RUNNING
         self._emit_agent(state)
-        ctx = AgentContext(task=task, agent=spec, tools=self.tools, provider=provider,
+        ctx = AgentContext(task=task, agent=spec, tools=self.tools,
+                           provider=self._metered(provider, task),
                            events=self.events, control=control, memory=self.memory,
                            approver=self._approver_for(task))
         with self._lock:
@@ -361,11 +366,17 @@ class AgentManager:
         if self.store:
             self.store.save_task(task)
 
-        ctx = AgentContext(task=task, agent=spec, tools=self.tools, provider=provider,
+        ctx = AgentContext(task=task, agent=spec, tools=self.tools,
+                           provider=self._metered(provider, task),
                            events=self.events, control=control, memory=self.memory,
                            approver=self._approver_for(task))
         self._start_or_queue(ctx, worker, run)
         return task
+
+    def _metered(self, provider: AgentProvider, task: Task) -> AgentProvider:
+        """Every model call the task makes is counted against its limits."""
+        from .limits import MeteredProvider
+        return MeteredProvider(provider, task, self.events, self.limits)
 
     # -- projects (multi-agent) ----------------------------------------------
 
@@ -797,6 +808,7 @@ class AgentManager:
         if ev.kind is EventKind.TASK_CREATED and task is not None:
             state.current_task_id, state.current_task_title = task.id, task.title
             state.started_at, state.progress, state.last_error = now(), 0.0, ""
+            state.tokens_used = 0
             state.status = AgentStatus.RUNNING
             changed = True
         elif ev.kind is EventKind.TASK_STATUS:
@@ -813,6 +825,9 @@ class AgentManager:
         elif ev.kind is EventKind.TASK_PROGRESS:
             state.progress = float(ev.data.get("progress", state.progress))
             state.current_action = ev.data.get("current_action", ev.message)
+            changed = True
+        elif ev.kind is EventKind.USAGE:
+            state.tokens_used = int(ev.data.get("tokens", state.tokens_used))
             changed = True
         elif ev.kind in (EventKind.STEP_STARTED, EventKind.STEP_DONE, EventKind.PLAN_CREATED):
             if task is not None:

@@ -118,6 +118,9 @@ def build_agent_manager(
         require_plan_approval = bool(_configured("agent_plan_approval", False))
     if max_concurrent is None:
         max_concurrent = int(_configured("agent_max_concurrent", 3))
+    from agents.manager.limits import TaskLimits
+    limits = TaskLimits(wall_clock_s=float(_configured("agent_wall_clock_s", 1800)),
+                        max_tokens=int(_configured("agent_max_tokens", 300000)))
 
     # Let build_router decide: it registers the configured gateway above
     # the mock catch-all. Passing a fallback here used to suppress the
@@ -164,6 +167,7 @@ def build_agent_manager(
         require_plan_approval=require_plan_approval,
         max_concurrent=max_concurrent,
         decomposer=decomposer,
+        limits=limits,
     )
 
 

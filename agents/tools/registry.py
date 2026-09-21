@@ -30,6 +30,22 @@ from .schema import validate
 
 log = logging.getLogger("agents.tools")
 
+# Arguments larger than this are replaced in EVENTS (never in the call
+# itself) by their size. A create_file with a 40 KB payload is one tool
+# call; it must not become 40 KB in the event log, the SQLite history,
+# and every timeline that replays it.
+EVENT_ARG_LIMIT = 2000
+
+
+def _event_view(call) -> dict:
+    view = call.to_dict()
+    args = view.get("arguments") or {}
+    view["arguments"] = {
+        k: (f"<{len(v)} chars>" if isinstance(v, str) and len(v) > EVENT_ARG_LIMIT else v)
+        for k, v in args.items()
+    }
+    return view
+
 _PREVIEW_CHARS = 160
 
 
@@ -72,7 +88,7 @@ class Registry(ToolRegistry):
         if ctx.control is not None:
             await ctx.control.checkpoint()
 
-        self._emit(ctx, EventKind.TOOL_CALL, _describe(call), {"call": call.to_dict()})
+        self._emit(ctx, EventKind.TOOL_CALL, _describe(call), {"call": _event_view(call)})
 
         result = await self._execute(call, ctx)
         # Tools build results without knowing the call (see base.Tool);
