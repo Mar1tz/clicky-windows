@@ -16,7 +16,7 @@ import logging
 import os
 from typing import Optional
 
-from agents.core import PermissionPolicy, RiskLevel
+from agents.core import PermissionPolicy, RiskLevel, TaskKind
 from agents.manager import AgentManager
 
 log = logging.getLogger("agents.bootstrap")
@@ -66,6 +66,20 @@ def _configured(name: str, fallback):
         return fallback
 
 
+def has_live_provider(router) -> bool:
+    """True when something other than the mock is registered.
+
+    The whole system runs on the deterministic planner/verifier without a
+    provider, so this decides between "free and predictable" and "can
+    think about goals nobody wrote a template for".
+    """
+    from agents.providers import MockProvider
+    try:
+        return any(not isinstance(p, MockProvider) for p in router.providers())
+    except Exception:  # noqa: BLE001 - a stub router in tests
+        return False
+
+
 def build_agent_manager(
     *,
     workspace_root: Optional[str] = None,
@@ -84,11 +98,11 @@ def build_agent_manager(
     """
     from agents.memory import SQLiteMemoryStore
     from agents.persistence import SQLiteTaskStore
-    from agents.planning import TemplatePlanner
+    from agents.planning import ProviderPlanner, TemplatePlanner
     from agents.providers import MockProvider, build_router
     from agents.tools import default_registry
-    from agents.understanding import HeuristicIntentClassifier
-    from agents.verification import RuleVerifier
+    from agents.understanding import HeuristicIntentClassifier, TieredIntentClassifier
+    from agents.verification import CompositeVerifier, RuleVerifier
     from agents.workers import default_workers
 
     if in_memory:
@@ -108,17 +122,34 @@ def build_agent_manager(
     # Let build_router decide: it registers the configured gateway above
     # the mock catch-all. Passing a fallback here used to suppress the
     # gateway entirely, so the app ran on the mock while looking wired up.
+    router = build_router(fallback=MockProvider() if offline else None,
+                          gateway=False if offline else None)
+
+    # With a real provider connected, the model plans and judges; without
+    # one, the deterministic pair still runs the whole system end to end.
+    # ProviderPlanner keeps the templates as its fallback AND prefers them
+    # when one matches, so "a React app" stays instant and free while
+    # "build me a CRM" gets thought about.
+    live = has_live_provider(router)
+    planner = ProviderPlanner(fallback=TemplatePlanner(), prefer_templates=True) if live \
+        else TemplatePlanner()
+    verifier = CompositeVerifier(rules=RuleVerifier()) if live else RuleVerifier()
+    # Tiered, not provider-only: the classifier runs on EVERY voice turn,
+    # and a provider call costs seconds. Rules answer the clear cases
+    # instantly; the model is consulted only where they are unsure.
+    classifier = TieredIntentClassifier(router.pick(TaskKind.FAST)) if live \
+        else HeuristicIntentClassifier()
+
     return AgentManager(
         tools=default_registry(),
-        router=build_router(fallback=MockProvider() if offline else None,
-                            gateway=False if offline else None),
+        router=router,
         workers=default_workers(),
-        planner=TemplatePlanner(),
-        verifier=RuleVerifier(),
+        planner=planner,
+        verifier=verifier,
         workspace_root=workspace_root or default_workspace_root(),
         store=SQLiteTaskStore(task_db),
         memory=SQLiteMemoryStore(mem_db),
-        classifier=HeuristicIntentClassifier(),
+        classifier=classifier,
         default_policy=PermissionPolicy(max_auto_risk=max_auto_risk),
         require_plan_approval=require_plan_approval,
         max_concurrent=max_concurrent,

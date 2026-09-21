@@ -81,6 +81,7 @@ class AgentManager:
         require_plan_approval: bool = False,
         max_replans: int = 1,
         max_concurrent: int = 0,
+        classify_timeout: float = 15.0,
     ):
         self.tools = tools
         self.router = router
@@ -99,6 +100,7 @@ class AgentManager:
             require_plan_approval=require_plan_approval, max_replans=max_replans,
         )
         self.max_concurrent = max(0, int(max_concurrent))   # 0 = unlimited
+        self.classify_timeout = classify_timeout
         self._lock = threading.RLock()
         self._active: set[str] = set()                  # task ids actually running
         self._queue: list[tuple] = []                   # (ctx, worker, run) waiting
@@ -123,6 +125,7 @@ class AgentManager:
         if self.runtime.running:
             for run in list(self._runs.values()):
                 self.runtime.call_soon(run.control.cancel)
+            self._close_providers(timeout=min(timeout, 3.0))
         self.runtime.stop(timeout)
         for unsub in (self._store_unsub, self._events_unsub):
             if unsub:
@@ -130,6 +133,28 @@ class AgentManager:
         self._store_unsub = self._events_unsub = None
         if self.store is not None:
             self.store.close()
+
+    def _close_providers(self, *, timeout: float = 3.0) -> None:
+        """Shut a provider's HTTP pool down on the loop that opened it.
+
+        An httpx.AsyncClient left open leaks its connection pool, and
+        Python reports it as an unawaited coroutine on the way out —
+        confusing noise that looks like a bug in the agent code. It must
+        happen before `runtime.stop()`, because closing is itself async.
+        """
+        try:
+            providers = list(self.router.providers())
+        except Exception:  # noqa: BLE001 - a stub router in tests
+            return
+        for provider in providers:
+            closer = getattr(provider, "aclose", None)
+            if closer is None:
+                continue
+            try:
+                self.runtime.call(closer(), timeout=timeout)
+            except Exception:  # noqa: BLE001 - shutdown must not raise
+                log.debug("closing provider %s failed", getattr(provider, "name", provider),
+                          exc_info=True)
 
     # -- agents --------------------------------------------------------------
 
@@ -154,10 +179,21 @@ class AgentManager:
 
     def understand(self, text: str, *, context: Optional[dict[str, Any]] = None) -> Intent:
         """Classify text without submitting. Chat callers use this to decide
-        what to say; submit() does it for them."""
+        what to say; submit() does it for them.
+
+        Never raises. A provider-backed classifier that hangs would
+        otherwise take a voice turn down with it, so a timeout or any
+        other failure falls back to "this is chat" — the safe answer,
+        because it loses a delegation rather than inventing one.
+        """
         if self.classifier is None:
             return Intent(is_task=False, reply="")
-        return self.runtime.call(self.classifier.classify(text, context=context), timeout=30)
+        try:
+            return self.runtime.call(self.classifier.classify(text, context=context),
+                                     timeout=self.classify_timeout)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("classification failed (%s); treating as chat", type(exc).__name__)
+            return Intent(is_task=False, reply="")
 
     def submit(
         self,

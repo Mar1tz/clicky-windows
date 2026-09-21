@@ -8,21 +8,30 @@ nothing — so the heuristic is deliberately conservative: a task needs BOTH an
 imperative verb AND a concrete work object, and any question shape short-
 circuits to chat.
 
-Two classifiers:
+Three classifiers:
   * HeuristicIntentClassifier — rules only, no network, always available.
   * ProviderIntentClassifier — asks an AgentProvider for strict JSON and
     falls back to the heuristic on any hiccup, so it is never worse than the
     rules alone.
+  * TieredIntentClassifier — the one to use when a provider exists: rules
+    when they are confident, the model only for the ambiguous middle. A
+    provider call costs seconds, and this sits on the voice path in front
+    of every single utterance, so paying it on "what is a React component?"
+    would slow down the thing Tora is supposed to be fastest at.
 """
 from __future__ import annotations
 
+import asyncio
 import json
+import logging
 import re
 from typing import Any, Optional
 
 from agents.core import (
     AgentProvider, Intent, IntentClassifier, ProviderMessage, TaskKind,
 )
+
+log = logging.getLogger("agents.understanding")
 
 # An action word...
 _IMPERATIVE = re.compile(
@@ -175,22 +184,34 @@ class ProviderIntentClassifier(IntentClassifier):
         "concrete (create/build/install/run), not answer a question."
     )
 
+    # Classification sits on the voice path: the user is waiting mid-turn,
+    # so a slow route must be abandoned rather than waited out. The rules
+    # are always there and answer in microseconds.
+    DEFAULT_TIMEOUT_S = 8.0
+
     def __init__(self, provider: AgentProvider,
-                 fallback: Optional[IntentClassifier] = None) -> None:
+                 fallback: Optional[IntentClassifier] = None,
+                 *, timeout: float = DEFAULT_TIMEOUT_S) -> None:
         self._provider = provider
         self._fallback = fallback or HeuristicIntentClassifier()
+        self._timeout = timeout
 
     async def classify(self, text: str, *, context: Optional[dict[str, Any]] = None) -> Intent:
         try:
-            resp = await self._provider.complete(
-                [ProviderMessage(role="user", content=(text or "").strip())],
-                tools=None, system=self._SYSTEM, max_tokens=400,
+            resp = await asyncio.wait_for(
+                self._provider.complete(
+                    [ProviderMessage(role="user", content=(text or "").strip())],
+                    tools=None, system=self._SYSTEM, max_tokens=400,
+                ),
+                timeout=self._timeout,
             )
             data = _parse_json(resp.text)
             if data is None:
                 raise ValueError("no JSON object in reply")
             return self._to_intent(data, text)
-        except Exception:
+        except (Exception, asyncio.TimeoutError) as exc:  # noqa: BLE001
+            log.info("provider classification unavailable (%s); using rules",
+                     type(exc).__name__)
             return await self._fallback.classify(text, context=context)
 
     def _to_intent(self, data: dict[str, Any], text: str) -> Intent:
@@ -256,3 +277,37 @@ def _parse_json(text: str) -> Optional[dict[str, Any]]:
         return out if isinstance(out, dict) else None
     except ValueError:
         return None
+
+
+class TieredIntentClassifier(IntentClassifier):
+    """Rules first; the model only for the cases rules are unsure about.
+
+    Classification sits on the voice path. Sending every utterance to a
+    provider costs ~4 s on a gateway, which would be paid on *every*
+    question the user asks, including plain chat that was never going to
+    be a task. That is the wrong trade for an assistant whose whole point
+    is answering before you finish the sentence.
+
+    The heuristic reports how sure it is: 0.9 when an imperative verb
+    meets a work object ("create a folder called MyApp"), 0.75 for a
+    clear question, 0.5 when it is merely guessing. So take the rules'
+    answer when it is confident, and spend a provider call only in the
+    0.5 band — the utterances where a wrong call is actually likely.
+
+    Net effect: no added latency on clear chat or clear commands, and a
+    real model on "sort out my project" and the like.
+    """
+
+    def __init__(self, provider: AgentProvider,
+                 *, threshold: float = 0.7, timeout: float = 8.0,
+                 heuristic: Optional[IntentClassifier] = None) -> None:
+        self._heuristic = heuristic or HeuristicIntentClassifier()
+        self._provider_classifier = ProviderIntentClassifier(
+            provider, fallback=self._heuristic, timeout=timeout)
+        self.threshold = threshold
+
+    async def classify(self, text: str, *, context: Optional[dict[str, Any]] = None) -> Intent:
+        quick = await self._heuristic.classify(text, context=context)
+        if quick.confidence >= self.threshold:
+            return quick
+        return await self._provider_classifier.classify(text, context=context)

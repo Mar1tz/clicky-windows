@@ -21,17 +21,26 @@ from .router import Router
 __all__ = ["AccountStore", "MockCall", "MockProvider", "OpenAICompatibleProvider",
            "ProviderError", "Router", "build_router", "provider_from_env"]
 
-# Sensible defaults for a gateway that fronts many vendors. Ordered
-# best-first per kind; the provider falls through the chain when a route
-# is benched, which on a real gateway is a matter of when, not if.
+# Defaults for a gateway that fronts many vendors, ordered best-first.
+# The provider falls through the chain when a route is benched, which on
+# a real gateway is a matter of when rather than if.
+#
+# These were MEASURED, not assumed (2026-09-22): the obvious-looking
+# "flash" routes were the worst picks. agy/gemini-3.6-flash-low timed out
+# entirely, and agy/gemini-3.5-flash-low answers HTTP 200 with the text
+# "Gemini 3.5 Flash is no longer available" — healthy-looking and
+# useless. cc/claude-sonnet-4-6 answered in 0.5 s, so it leads the fast
+# chain despite not being a small model. Re-measure before reordering.
 GATEWAY_MODELS: dict[str, list[str]] = {
     "coding": ["claude/claude-sonnet-4-6", "cc/claude-sonnet-4-6",
                "agy/claude-sonnet-4-6"],
     "general": ["claude/claude-sonnet-4-6", "cc/claude-sonnet-4-6",
                 "agy/claude-sonnet-4-6"],
-    "fast": ["agy/gemini-3.6-flash-low", "agy/gemini-3.6-flash-medium",
+    # Classification sits on the voice path: latency is the whole point.
+    "fast": ["cc/claude-sonnet-4-6", "agy/gemini-3.1-flash-lite",
              "claude/claude-sonnet-4-6"],
-    "vision": ["agy/gemini-3.6-flash-medium", "claude/claude-sonnet-4-6"],
+    "vision": ["agy/gemini-3.6-flash-medium", "claude/claude-sonnet-4-6",
+               "cc/claude-sonnet-4-6"],
 }
 
 

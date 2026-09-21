@@ -65,7 +65,7 @@ line.
 | M14 | ~~Claude provider~~ → folded into M13 | 2  | ➖     | —          |
 | M15 | Direct Gemini provider (Live API)  | 2     | ⬜     | M13        |
 | M16 | Connected accounts UI + routing    | 2     | ⬜     | M11, M15   |
-| M17 | LLM planning + verification default| 2     | ⬜     | M13        |
+| M17 | LLM planning + verification default| 2     | ✅     | M13        |
 | M18 | Durable tasks, resume after restart| 3     | ⬜     | M7         |
 | M19 | Browser worker                     | 3     | ⬜     | M12, M15   |
 | M20 | Computer-control worker            | 3     | ⬜     | M15        |
@@ -683,7 +683,7 @@ router without an app restart, and removing it falls back cleanly.
 
 ---
 
-## M17 · LLM planning and verification by default ⬜
+## M17 · LLM planning and verification by default ✅
 
 **Goal** Spec §9/§12 with a real model: plans for arbitrary goals
 ("build me a CRM"), and verification that judges rather than pattern-matches.
@@ -703,7 +703,59 @@ asks for a pass/fail judgement with reasons; combine with `RuleVerifier`
 plan, and a deliberately broken step (file written empty) is caught by the
 verifier and triggers a replan.
 
-**HANDOFF** _(none yet)_
+**Landed** `agents/verification/provider_verifier.py`,
+`TieredIntentClassifier`, and bootstrap defaults that switch on whether a
+real provider is connected. 24 new tests; suite **322 passing, 2 live**.
+
+**Both halves of the gate, verified live:**
+* "Build me a CRM application" → an 11–12 step plan: project structure and
+  git, dependencies, an Express backend with CRUD for Contacts/Deals/Tasks,
+  Tailwind config, reusable components, four pages, React Router wiring,
+  npm scripts, commit. Nothing template-shaped about it.
+* An empty `App.jsx` passes `RuleVerifier` (the file exists) and is failed
+  by the model, which is shown the real bytes on disk. Orchestrator already
+  turns a failed step verification into a replan.
+
+**Design: rules first, model only where rules are silent**
+`CompositeVerifier` fails fast when rules fail (a missing file is not a
+judgement call and paying a model to discuss it invites an argument), asks
+the model when every check said "no rule" (nobody actually checked — the
+real gap), and always asks on the final task verdict, because that is the
+one the user sees. Evidence is the filesystem — sizes and opening bytes —
+not the agent's own account of what it did. A broken judge degrades to the
+rules' verdict, never to a bare pass: a verifier that rubber-stamps when
+it fails is worse than none.
+
+**The latency problem this milestone created, and fixed**
+Making `ProviderIntentClassifier` the default put a ~4 s provider call in
+front of **every voice turn**, including plain chat — on the one path
+where Tora's whole value is answering immediately. `TieredIntentClassifier`
+takes the heuristic's answer when it is confident (0.9 for an
+imperative + object, 0.75 for a clear question) and spends a model call
+only in the 0.5 "unsure" band. Measured after: classification is **0.0 s**
+for both "Build me a CRM application" and "What is a React component?",
+while "sort out my project" still reaches the model.
+
+**Model routes are measured, not assumed.** The `fast` chain originally led
+with `agy/gemini-3.6-flash-low`, which **times out**, and
+`agy/gemini-3.5-flash-low` returns HTTP 200 with the body "Gemini 3.5 Flash
+is no longer available" — healthy-looking and useless. `cc/claude-sonnet-4-6`
+answered in **0.5 s** and now leads the chain despite not being a small
+model. Re-measure before reordering `GATEWAY_MODELS`.
+
+**Two robustness fixes found by running it:**
+* `AgentManager.understand()` raised `TimeoutError` out of `submit()` when
+  the classifier hung, taking the voice turn with it. It now degrades to
+  "this is chat" — losing a delegation beats inventing one or crashing.
+* Providers' `httpx.AsyncClient` was never closed, leaking a connection
+  pool per shutdown and surfacing as an unawaited-coroutine warning that
+  looked like an agent bug. `stop()` now closes them on the runtime loop
+  before the loop ends.
+
+**HANDOFF** Complete. Phase 2 is effectively done bar **M16** (connected
+accounts UI, now mostly "let the user edit the gateway URL, key and model
+chains from the settings page"). Phase 3 starts at **M18** (resume after
+restart) or **M19** (Playwright browser worker, per M12's one adopt).
 
 ---
 

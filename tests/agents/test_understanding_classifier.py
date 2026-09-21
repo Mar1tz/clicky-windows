@@ -125,3 +125,99 @@ def test_provider_classifier_bad_kind_defaults_general():
     p = MockProvider(script=[ProviderResponse(text=payload)])
     i = asyncio.run(ProviderIntentClassifier(p).classify("do x"))
     assert i.kind is TaskKind.GENERAL and i.worker_type == "coding"
+
+
+# -- TieredIntentClassifier (M17) --------------------------------------------
+
+class _CountingProvider:
+    """Records whether it was consulted at all - the whole point of the
+    tiered classifier is that clear utterances never reach a provider."""
+    name = "counting"
+
+    def __init__(self, text='{"is_task": true, "title": "T", "goal": "g", '
+                            '"kind": "coding", "worker_type": "coding", '
+                            '"workspace_hint": null, "reply": "ok"}'):
+        self.text = text
+        self.calls = 0
+
+    async def complete(self, messages, tools=None, *, system="", model=None,
+                       temperature=0.2, max_tokens=4096):
+        self.calls += 1
+        from agents.core import ProviderResponse
+        return ProviderResponse(text=self.text)
+
+    def capabilities(self):
+        from agents.core import ProviderCapabilities
+        return ProviderCapabilities(local=True, cost_tier=0)
+
+
+def tiered(provider=None, **kw):
+    from agents.understanding import TieredIntentClassifier
+    return TieredIntentClassifier(provider or _CountingProvider(), **kw)
+
+
+@pytest.mark.parametrize("text", [
+    "Create a new folder called MyApp and build a React app inside it",
+    "build a python project named scraper",
+])
+def test_tiered_answers_clear_commands_without_a_provider_call(text):
+    p = _CountingProvider()
+    i = asyncio.run(tiered(p).classify(text))
+    assert i.is_task
+    assert p.calls == 0, "a confident rule match must not pay for a model call"
+
+
+@pytest.mark.parametrize("text", [
+    "what is a React component?",
+    "how do I create a folder?",
+    "is the project set up correctly?",
+])
+def test_tiered_answers_clear_questions_without_a_provider_call(text):
+    p = _CountingProvider()
+    i = asyncio.run(tiered(p).classify(text))
+    assert not i.is_task
+    assert p.calls == 0, "chat on the voice path must stay instant"
+
+
+def test_tiered_consults_the_provider_when_rules_are_unsure():
+    """'sort out my project' has no imperative+object pair the rules
+    recognise, so they report low confidence - exactly the band worth
+    spending a model call on."""
+    p = _CountingProvider()
+    i = asyncio.run(tiered(p).classify("sort out my project"))
+    assert p.calls == 1
+    assert i.is_task, "the provider's verdict should win in the unsure band"
+
+
+def test_tiered_falls_back_to_rules_when_the_provider_fails():
+    class Broken(_CountingProvider):
+        async def complete(self, *a, **k):
+            self.calls += 1
+            raise RuntimeError("gateway down")
+
+    p = Broken()
+    i = asyncio.run(tiered(p).classify("sort out my project"))
+    assert p.calls == 1
+    assert not i.is_task, "degrade to the rules' answer, never to an exception"
+
+
+def test_tiered_threshold_is_adjustable():
+    p = _CountingProvider()
+    # A threshold above every heuristic confidence sends everything to the model.
+    asyncio.run(tiered(p, threshold=1.0).classify("what is a React component?"))
+    assert p.calls == 1
+
+
+def test_provider_classifier_times_out_to_the_rules():
+    """A hung route must not hold a voice turn open."""
+    import asyncio as aio
+
+    class Hanging(_CountingProvider):
+        async def complete(self, *a, **k):
+            self.calls += 1
+            await aio.sleep(30)
+
+    from agents.understanding import ProviderIntentClassifier
+    c = ProviderIntentClassifier(Hanging(), timeout=0.05)
+    i = asyncio.run(c.classify("Create a folder called Foo"))
+    assert i.is_task and i.workspace_hint == "Foo"      # the heuristic's answer

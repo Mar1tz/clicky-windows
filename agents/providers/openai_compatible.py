@@ -228,31 +228,38 @@ class OpenAICompatibleProvider(AgentProvider):
         usage: dict[str, int] = {}
         slots: dict[int, dict[str, str]] = {}
 
-        async for line in response.aiter_lines():
-            line = line.strip()
-            if not line or not line.startswith("data:"):
-                continue
-            chunk = line[5:].strip()
-            if chunk == "[DONE]":
-                break
-            try:
-                event = json.loads(chunk)
-            except json.JSONDecodeError:
-                continue                       # keep-alive or comment frame
-            model = event.get("model") or model
-            if isinstance(event.get("usage"), dict):
-                usage = {k: v for k, v in event["usage"].items() if isinstance(v, int)}
-            for choice in event.get("choices") or []:
-                delta = choice.get("delta") or choice.get("message") or {}
-                text += delta.get("content") or ""
-                for fragment in delta.get("tool_calls") or []:
-                    slot = slots.setdefault(fragment.get("index", len(slots)),
-                                            {"id": "", "name": "", "args": ""})
-                    slot["id"] = fragment.get("id") or slot["id"]
-                    fn = fragment.get("function") or {}
-                    slot["name"] += fn.get("name") or ""
-                    slot["args"] += fn.get("arguments") or ""
-                finish = choice.get("finish_reason") or finish
+        # Breaking out of `async for` leaves the generator suspended, and
+        # Python complains that its aclose() was never awaited. Hold the
+        # iterator so it can be closed deterministically on the way out.
+        lines = response.aiter_lines()
+        try:
+            async for line in lines:
+                line = line.strip()
+                if not line or not line.startswith("data:"):
+                    continue
+                chunk = line[5:].strip()
+                if chunk == "[DONE]":
+                    break
+                try:
+                    event = json.loads(chunk)
+                except json.JSONDecodeError:
+                    continue                   # keep-alive or comment frame
+                model = event.get("model") or model
+                if isinstance(event.get("usage"), dict):
+                    usage = {k: v for k, v in event["usage"].items() if isinstance(v, int)}
+                for choice in event.get("choices") or []:
+                    delta = choice.get("delta") or choice.get("message") or {}
+                    text += delta.get("content") or ""
+                    for fragment in delta.get("tool_calls") or []:
+                        slot = slots.setdefault(fragment.get("index", len(slots)),
+                                                {"id": "", "name": "", "args": ""})
+                        slot["id"] = fragment.get("id") or slot["id"]
+                        fn = fragment.get("function") or {}
+                        slot["name"] += fn.get("name") or ""
+                        slot["args"] += fn.get("arguments") or ""
+                    finish = choice.get("finish_reason") or finish
+        finally:
+            await lines.aclose()
 
         calls = [_to_call(s) for _i, s in sorted(slots.items()) if s["name"]]
         return ProviderResponse(
