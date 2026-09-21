@@ -60,10 +60,10 @@ line.
 | M9  | Activity timeline + logs           | 1     | ✅     | M8         |
 | M10 | Plan viewer + approval dialog      | 1     | ✅     | M8         |
 | M11 | Tray entry + agent settings page   | 1     | ✅     | M8         |
-| M12 | Open-source framework research     | 2     | ⬜     | M6         |
-| M13 | Gemini agent provider              | 2     | ⬜     | M6         |
-| M14 | Claude agent provider              | 2     | ⬜     | M13        |
-| M15 | OpenAI + local + custom providers  | 2     | ⬜     | M13        |
+| M12 | Open-source framework research     | 2     | ✅     | M6         |
+| M13 | **OpenAI-compatible provider (gateway)** | 2 | ⬜ | M12    |
+| M14 | ~~Claude provider~~ → folded into M13 | 2  | ➖     | —          |
+| M15 | Direct Gemini provider (Live API)  | 2     | ⬜     | M13        |
 | M16 | Connected accounts UI + routing    | 2     | ⬜     | M11, M15   |
 | M17 | LLM planning + verification default| 2     | ⬜     | M13        |
 | M18 | Durable tasks, resume after restart| 3     | ⬜     | M7         |
@@ -487,7 +487,7 @@ milestone before real providers land in M13.
 
 # Phase 2 — Plug the AI in
 
-## M12 · Open-source framework research ⬜
+## M12 · Open-source framework research ✅
 
 **Goal** Spec §14 — decide what to reuse before writing more from scratch.
 
@@ -505,7 +505,50 @@ genuine adopt.
 **Done when** The doc names a decision per framework with a reason, not a
 summary of their READMEs.
 
-**HANDOFF** _(none yet)_
+**Landed** `docs/agents/FRAMEWORK_RESEARCH.md`, decided against live PyPI
+metadata rather than recollection.
+
+**Result: one adopt, two borrowed ideas, no new required dependency.**
+* **Playwright → adopt in M19.** 2 declared deps, a Python 3.14
+  classifier, browsers downloaded on first use rather than bundled.
+  Optional: without it the browser tools fail exactly as the stubs do now.
+* **CrewAI and OpenHands are blocked outright** — both declare
+  `requires_python <3.14`, so they cannot install into this app at all.
+  OpenHands also pulls **85** dependencies.
+* **LangGraph and the OpenAI Agents SDK lose on fit, not weight**: both
+  would replace a working, tested orchestrator that has pause/resume/
+  cancel, approval gating and a durable event log, with a control flow
+  that does not.
+* **Borrowed:** LangGraph's declared-DAG edges for M21; SWE-agent's
+  finding that tool *ergonomics* beat model choice, for M22.
+
+**The finding that changes Phase 2 — the OmniRoute gateway**
+`https://ai.tmaritz.xyz/v1` is OpenAI-compatible and fronts **1295
+models** (Claude, Gemini, GPT, open weights) behind one surface. Verified
+live: `claude/claude-sonnet-4-6` returned `finish_reason=tool_calls` with
+`create_folder({"path": "MyApp"})` in ~2 s.
+
+* **It always streams.** Every `/chat/completions` reply is
+  `text/event-stream` even with no `stream` parameter, so `json.loads` on
+  the body raises `JSONDecodeError`. Reassemble SSE deltas; tool-call
+  arguments arrive fragmented across chunks, indexed by position.
+* **Reliability is per route**: `aug/*` → 502, `agy/gemini-2.5-flash` →
+  90 s timeout, `zm/*` → 403 (separate entitlement). `claude/`, `agy/`
+  and `cc/` Claude routes all worked. `Router.pick()` will need health
+  tracking so a dead route is not handed to a running agent.
+* Credentials live in `.env` (git-ignored) as `TORA_OMNIROUTE_API_KEY`
+  and `TORA_OMNIROUTE_BASE_URL`, matching `AccountStore`'s
+  `TORA_<PROVIDER>_API_KEY` convention. **Never commit them.**
+
+**Board changed as a result:** M13/M14/M15 were a Gemini adapter, then a
+Claude adapter, then OpenAI + local. One `OpenAICompatibleProvider`
+reaches all of them, so M13 absorbs M14, and M15 becomes the *direct*
+Gemini provider that is still needed later for the **Live websocket** the
+voice path uses — no OpenAI-shaped gateway exposes that.
+
+**HANDOFF** Complete. Next agent starts at **M13**, which is now the
+single provider milestone. Read the SSE and per-route-health notes above
+before writing the client; they were learned the slow way.
 
 ---
 
