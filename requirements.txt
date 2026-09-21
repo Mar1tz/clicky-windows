@@ -61,3 +61,9 @@ pynput>=1.7.7
 
 # Live collaboration (WebRTC) — install when collab signalling server exists
 # aiortc>=1.9.0
+
+# ── Agent workforce: browser worker (optional) ──────────────────────────────
+# A real Chromium behind the agent's browser tools. Without it those tools
+# fail with an install hint and everything else keeps working. Browsers are
+# downloaded on first use, not bundled:  playwright install chromium
+playwright>=1.63.0

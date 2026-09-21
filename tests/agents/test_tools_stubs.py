@@ -1,4 +1,7 @@
-"""default_registry() contents and the Phase-1 browser / computer stubs."""
+"""default_registry() contents and the Phase-1 computer stubs.
+
+Browser tools became real in M19 (see test_tools_browser.py); close_browser
+is SAFE because closing a browser cannot reach the internet."""
 import pytest
 
 from agents.core import PermissionPolicy, RiskLevel, ToolCall, ToolContext, auto_deny
@@ -10,7 +13,8 @@ EXPECTED = {
     "terminal": {"run_command", "install_package", "execute_script"},
     "git": {"git_init", "git_status", "git_diff", "git_log", "git_add", "git_commit",
             "git_branch", "git_push"},
-    "browser": {"open_page", "extract_information"},
+    "browser": {"open_page", "extract_information", "click_element", "fill_field",
+                "screenshot_page", "close_browser"},
     "computer": {"move_cursor", "click", "type_text"},
 }
 
@@ -45,13 +49,12 @@ def test_risk_levels():
     assert risk["create_file"] is RiskLevel.LOW and risk["move_path"] is RiskLevel.LOW
     assert risk["run_command"] is RiskLevel.MEDIUM and risk["git_commit"] is RiskLevel.MEDIUM
     assert risk["delete_path"] is RiskLevel.HIGH and risk["git_push"] is RiskLevel.HIGH
-    for name in EXPECTED["browser"] | EXPECTED["computer"]:
+    for name in (EXPECTED["browser"] - {"close_browser"}) | EXPECTED["computer"]:
         assert risk[name] is RiskLevel.HIGH, name
+    assert risk["close_browser"] is RiskLevel.SAFE
 
 
 @pytest.mark.parametrize("name,args", [
-    ("open_page", {"url": "https://example.com"}),
-    ("extract_information", {"query": "the title"}),
     ("move_cursor", {"x": 10, "y": 20}),
     ("click", {}),
     ("type_text", {"text": "hello"}),

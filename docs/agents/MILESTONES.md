@@ -67,7 +67,7 @@ line.
 | M16 | Connected accounts UI + routing    | 2     | ✅     | M11, M13   |
 | M17 | LLM planning + verification default| 2     | ✅     | M13        |
 | M18 | Durable tasks, resume after restart| 3     | ✅     | M7         |
-| M19 | Browser worker                     | 3     | ⬜     | M12, M15   |
+| M19 | Browser worker                     | 3     | ✅     | M12, M13   |
 | M20 | Computer-control worker            | 3     | ⬜     | M15        |
 | M21 | Multi-agent collaboration          | 3     | ⬜     | M17, M18   |
 | M22 | Autonomous coding loop             | 3     | ⬜     | M17        |
@@ -841,7 +841,7 @@ produces the same state, which is what idempotent should mean.
 
 ---
 
-## M19 · Browser worker ⬜
+## M19 · Browser worker ✅
 
 **Goal** Spec §5 browser tools for real: open a page, extract information,
 fill a form.
@@ -860,7 +860,32 @@ password field.
 report it, with the browser dependency optional — absent, the tools fail
 cleanly exactly as the stubs do today.
 
-**HANDOFF** _(none yet)_
+**Landed** `agents/tools/browser_tools.py` (real), `playwright` as an
+optional requirement, 17 tests. Suite **363 passing**. The gate runs the
+browser worker through the full orchestrator against a local `file://`
+page and reads `$42` back. Playwright 1.63 installs on 3.14 as M12 said.
+
+**Tools:** `open_page`, `extract_information` (whole page + links, or one
+selector), `click_element` (selector or visible text), `fill_field`,
+`screenshot_page` (workspace-guarded), `close_browser` (SAFE). All others
+HIGH. `open_page` accepts only `http(s)://` and `file://`.
+
+**The password rule is enforced in the tool, not the policy.** `fill_field`
+on a page with a password field calls `ctx.approver` itself, so a standing
+"always allow fill_field" cannot extend to credentials — that setting is
+for repetition of the same risk, not escalation into secrets. The approval
+request carries `value="•••"`, never the text. Two tests.
+
+**Lifecycle:** one `BrowserSession` per task, keyed by `task_id`, launched
+lazily. `get_session` subscribes to that task's `TASK_STATUS` and closes
+the browser on any terminal state, so a crashed agent leaves no Chromium
+behind. The bus publishes on the runtime loop — the loop Playwright lives
+on — which is what makes scheduling the close from the callback correct.
+A test that emitted from a different loop produced "Task was destroyed
+but it is pending"; that is the symptom if this ever regresses.
+
+**HANDOFF** Complete. Next: **M20** (computer-control worker, bridging
+`ai/hybrid_pointer.py`).
 
 ---
 

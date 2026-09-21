@@ -14,7 +14,8 @@ from .base import Worker
 class BrowserWorker(Worker):
     worker_type = "browser"
     default_tools = [
-        "open_page", "extract_information", "click", "type_text",
+        "open_page", "extract_information", "click_element", "fill_field",
+        "screenshot_page", "close_browser",
     ]
 
     def system_prompt(self, ctx: AgentContext) -> str:
