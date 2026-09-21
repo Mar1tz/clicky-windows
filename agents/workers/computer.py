@@ -14,7 +14,7 @@ from .base import Worker
 class ComputerWorker(Worker):
     worker_type = "computer"
     default_tools = [
-        "move_cursor", "click", "type_text",
+        "find_on_screen", "screenshot", "move_cursor", "click", "type_text", "key_press",
     ]
 
     def system_prompt(self, ctx: AgentContext) -> str:

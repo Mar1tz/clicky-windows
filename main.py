@@ -139,6 +139,25 @@ def _wire_agents(manager, tray):
     manager.sig_agent_event.connect(_refresh_count)
     _refresh_count()
 
+    # Esc is the kill switch for computer control. The same "Stop" that
+    # silences Tora must also stop an agent that has the user's mouse:
+    # trip the switch (every further move/click/type fails) and cancel
+    # the tasks behind it. The switch resets the next time a task starts.
+    try:
+        from agents.core import EventKind, TaskKind
+        from agents.tools.computer_tools import kill_switch
+
+        def _stop_agents():
+            kill_switch.trip()
+            workforce.cancel_all(kinds=[TaskKind.COMPUTER])
+
+        tray.on_stop.connect(_stop_agents)
+        workforce.events.subscribe(lambda ev: kill_switch.reset(),
+                                   kinds=[EventKind.TASK_CREATED])
+    except Exception:
+        import logging
+        logging.getLogger("tora").debug("kill switch wiring failed", exc_info=True)
+
 
 def main():
     _setup_logging()
@@ -411,8 +430,12 @@ def main():
     )
     hotkey.start()
 
-    # Esc = cancel the answer in progress (stops speech instantly)
-    stop_key = StopHotkey(on_stop=manager.stop, key="esc")
+    # Esc = cancel the answer in progress (stops speech instantly), and the
+    # kill switch for any agent that has the mouse - see _wire_agents.
+    def _esc():
+        manager.stop()
+        tray.on_stop.emit()
+    stop_key = StopHotkey(on_stop=_esc, key="esc")
     stop_key.start()
 
     # ── Show UI + start listener ──────────────────────────────────────────────

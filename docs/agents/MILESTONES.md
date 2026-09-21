@@ -68,7 +68,7 @@ line.
 | M17 | LLM planning + verification default| 2     | ✅     | M13        |
 | M18 | Durable tasks, resume after restart| 3     | ✅     | M7         |
 | M19 | Browser worker                     | 3     | ✅     | M12, M13   |
-| M20 | Computer-control worker            | 3     | ⬜     | M15        |
+| M20 | Computer-control worker            | 3     | ✅     | M13        |
 | M21 | Multi-agent collaboration          | 3     | ⬜     | M17, M18   |
 | M22 | Autonomous coding loop             | 3     | ⬜     | M17        |
 | M23 | Ship: packaging, limits, safety    | 3     | ⬜     | M16, M18   |
@@ -889,7 +889,7 @@ but it is pending"; that is the symptom if this ever regresses.
 
 ---
 
-## M20 · Computer-control worker ⬜
+## M20 · Computer-control worker ✅
 
 **Goal** Spec §5 computer tools: move, click, type — bridged to the pointing
 stack this app already has.
@@ -906,7 +906,36 @@ global kill switch (Esc) that cancels every computer-control task.
 **Done when** An agent opens Notepad, types a line and saves it, entirely
 through approved tool calls, and Esc aborts mid-run.
 
-**HANDOFF** _(none yet)_
+**Landed** `agents/tools/computer_tools.py` (real), `always_ask` in
+`Registry.execute`, `AgentManager.cancel_all(kinds=)`, Esc wiring in
+`main.py`. 13 offline tests + 1 live; suite **373 passing**.
+
+**Tools:** `find_on_screen` (SAFE — look without touching), `screenshot`
+(SAFE, JPEG into the workspace), `move_cursor`, `click`, `type_text`,
+`key_press`. Targets are **names**, resolved through
+`ai/hybrid_pointer.find_target` (UIA, then OCR); coordinates are accepted
+only as a fallback, and an unknown name fails with "use find_on_screen"
+rather than guessing.
+
+**The floor lives in the choke point.** Every acting tool declares
+`always_ask = True`, and `Registry.execute` honours it above any policy,
+ceiling or `always_allow`: a human is asked every single time. Tests
+cover a HIGH ceiling, a standing "always allow click", and — importantly
+— that `delete_path` at a HIGH ceiling still does *not* ask, so the floor
+is opt-in per tool rather than a change to HIGH risk in general.
+
+**Kill switch.** `computer_tools.kill_switch` trips every action into a
+failure; `main.py` routes both Esc and the tray's Stop through it and
+calls `cancel_all(kinds=[COMPUTER])`, so a coding task is not caught by
+Esc. The switch resets on the next `TASK_CREATED`.
+
+**Input goes through an injectable `Backend`** (pynput for real); tests
+inject a recorder, so the suite never moves the mouse. The live gate
+(`test_live_notepad_type_and_save`, `-m live`) opens Notepad and types on
+the real desktop — run it hands-off. It was not run during the build
+because it types into whichever window has focus.
+
+**HANDOFF** Complete. Next: **M21** (multi-agent collaboration).
 
 ---
 

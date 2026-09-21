@@ -97,8 +97,14 @@ class Registry(ToolRegistry):
         if problems:
             return ToolResult.failure(call, "invalid arguments: " + "; ".join(problems))
 
-        if not ctx.policy.allows(spec):
-            reason = _deny_reason(spec, ctx.policy)
+        # `always_ask` is a hard floor a tool can declare for itself: no
+        # policy, ceiling or standing approval ever lets it run unasked.
+        # Computer control uses it - moving the user's own mouse is not a
+        # risk you get to pre-approve.
+        always_ask = bool(getattr(tool, "always_ask", False))
+        if always_ask or not ctx.policy.allows(spec):
+            reason = (f"{spec.name} always needs a human: it controls your mouse and keyboard"
+                      if always_ask else _deny_reason(spec, ctx.policy))
             request = ApprovalRequest(task_id=ctx.task_id or "", agent_id=ctx.agent_id or "",
                                       call=call, reason=reason)
             try:

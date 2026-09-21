@@ -1,7 +1,8 @@
-"""default_registry() contents and the Phase-1 computer stubs.
+"""default_registry() contents, risk levels, and the default-policy gate.
 
-Browser tools became real in M19 (see test_tools_browser.py); close_browser
-is SAFE because closing a browser cannot reach the internet."""
+Every tool is real now: browser in M19 (test_tools_browser.py), computer
+control in M20 (test_tools_computer.py). SAFE exceptions: close_browser
+closes rather than reaches; find_on_screen and screenshot only look."""
 import pytest
 
 from agents.core import PermissionPolicy, RiskLevel, ToolCall, ToolContext, auto_deny
@@ -15,7 +16,8 @@ EXPECTED = {
             "git_branch", "git_push"},
     "browser": {"open_page", "extract_information", "click_element", "fill_field",
                 "screenshot_page", "close_browser"},
-    "computer": {"move_cursor", "click", "type_text"},
+    "computer": {"find_on_screen", "screenshot", "move_cursor", "click", "type_text",
+                 "key_press"},
 }
 
 
@@ -49,23 +51,14 @@ def test_risk_levels():
     assert risk["create_file"] is RiskLevel.LOW and risk["move_path"] is RiskLevel.LOW
     assert risk["run_command"] is RiskLevel.MEDIUM and risk["git_commit"] is RiskLevel.MEDIUM
     assert risk["delete_path"] is RiskLevel.HIGH and risk["git_push"] is RiskLevel.HIGH
-    for name in (EXPECTED["browser"] - {"close_browser"}) | EXPECTED["computer"]:
+    looking_only = {"close_browser", "find_on_screen", "screenshot"}
+    for name in (EXPECTED["browser"] | EXPECTED["computer"]) - looking_only:
         assert risk[name] is RiskLevel.HIGH, name
-    assert risk["close_browser"] is RiskLevel.SAFE
+    for name in looking_only:
+        assert risk[name] is RiskLevel.SAFE, name
 
 
-@pytest.mark.parametrize("name,args", [
-    ("move_cursor", {"x": 10, "y": 20}),
-    ("click", {}),
-    ("type_text", {"text": "hello"}),
-])
-async def test_stubs_report_not_available(tmp_path, name, args):
-    ctx = ToolContext(workspace=str(tmp_path), policy=PermissionPolicy(max_auto_risk=RiskLevel.HIGH))
-    res = await default_registry().execute(ToolCall(name, args), ctx)
-    assert not res.ok and res.error == "not available in Phase 1" and res.data["phase"] == 1
-
-
-async def test_stubs_need_approval_under_default_policy(tmp_path):
+async def test_high_risk_tools_need_approval_under_default_policy(tmp_path):
     ctx = ToolContext(workspace=str(tmp_path), approver=auto_deny)   # default max MEDIUM
     res = await default_registry().execute(ToolCall("click", {}), ctx)
     assert not res.ok and res.error.startswith("permission denied")

@@ -469,6 +469,21 @@ class AgentManager:
         self.runtime.call_soon(run.control.resume)   # asyncio.Event must be set on its loop
         return True
 
+    def cancel_all(self, *, kinds: Optional[list[TaskKind]] = None) -> int:
+        """Cancel every live task, or only those of the given kinds.
+
+        This is what the computer-control kill switch calls: Esc must stop
+        an agent that is moving the user's mouse, immediately, and a
+        cancelled RunControl is checked before every tool call.
+        """
+        cancelled = 0
+        for run in list(self._runs.values()):
+            if kinds is not None and run.task.kind not in kinds:
+                continue
+            if self.cancel(run.task.id):
+                cancelled += 1
+        return cancelled
+
     def cancel(self, task_id: str) -> bool:
         run = self._runs.get(task_id)
         if run is None:
