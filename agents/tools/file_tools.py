@@ -98,10 +98,23 @@ class CreateFile(Tool):
             return err
         if os.path.isdir(target):
             return self.fail(f"a folder exists at {target}")
+        content = args.get("content", "") or ""
         if os.path.exists(target) and not args.get("overwrite", False):
+            # Idempotent on identical content: a step interrupted after it
+            # wrote the file (app closed, machine slept) re-runs on resume,
+            # and "already exists" would fail work that is actually done.
+            # Different content is still a real conflict.
+            try:
+                with open(target, encoding="utf-8", errors="replace") as fh:
+                    if fh.read() == content:
+                        return self.ok(f"already has this content: {target}",
+                                       path=target, bytes=len(content.encode("utf-8")),
+                                       created=False)
+            except OSError:
+                pass
             return self.fail(f"file already exists: {target} (pass overwrite=true or use edit_file)")
         try:
-            n = _write_text(target, args.get("content", "") or "")
+            n = _write_text(target, content)
         except OSError as exc:
             return self.fail(f"cannot write {target}: {exc}")
         return self.ok(f"wrote {n} bytes to {target}", path=target, bytes=n)

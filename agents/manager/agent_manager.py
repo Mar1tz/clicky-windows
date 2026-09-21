@@ -113,13 +113,100 @@ class AgentManager:
 
     # -- lifecycle -----------------------------------------------------------
 
-    def start(self) -> "AgentManager":
+    def start(self, *, recover: bool = True) -> "AgentManager":
         self.runtime.start()
         if self.store is not None and hasattr(self.store, "attach") and self._store_unsub is None:
             self._store_unsub = self.store.attach(self.events)  # type: ignore[attr-defined]
         if self._events_unsub is None:
             self._events_unsub = self.events.subscribe(self._track)
+        if recover and self.store is not None:
+            self.recover()
         return self
+
+    # -- recovery ------------------------------------------------------------
+
+    INTERRUPTED_NOTE = "interrupted by restart"
+
+    def recover(self) -> list[Task]:
+        """Bring back tasks the previous process left unfinished.
+
+        Anything that was in flight — planning, running, verifying, or
+        parked on an approval — is set to PAUSED with a note, so the user
+        sees it in the panel with a Resume button instead of it silently
+        vanishing. Tasks are not restarted automatically: the process may
+        have died *because* of that task, and re-running it unasked would
+        loop. PENDING tasks (queued, never started) are recovered the same
+        way; resuming one starts it from the top.
+        """
+        if self.store is None:
+            return []
+        recovered: list[Task] = []
+        in_flight = {TaskStatus.PENDING, TaskStatus.PLANNING, TaskStatus.RUNNING,
+                     TaskStatus.VERIFYING, TaskStatus.WAITING_APPROVAL, TaskStatus.PAUSED}
+        stored_agents = {a.id: a for a in self._safe_list_agents()}
+        for task in self.store.list_tasks(limit=500):
+            if task.status not in in_flight or task.id in self._tasks:
+                continue
+            if task.status is not TaskStatus.PAUSED:
+                task.status = TaskStatus.PAUSED
+                task.updated_at = now()
+                task.metadata["interrupted"] = self.INTERRUPTED_NOTE
+                task.current_action = "Paused — " + self.INTERRUPTED_NOTE
+                self.store.save_task(task)
+            with self._lock:
+                self._tasks[task.id] = task
+            state = stored_agents.get(task.agent_id or "")
+            if state is None:
+                state = AgentState(spec=self._default_spec(task))
+                state.spec.id = task.agent_id or state.spec.id
+                task.agent_id = state.spec.id
+            state.status = AgentStatus.PAUSED
+            state.current_task_id, state.current_task_title = task.id, task.title
+            state.current_action = task.current_action
+            state.step_index, state.step_total = task.step_index, len(task.steps)
+            state.progress = task.progress
+            with self._lock:
+                self._agents[state.id] = state
+            self._emit_agent(state)
+            self.events.emit(EventKind.TASK_STATUS, TaskStatus.PAUSED.value, task_id=task.id,
+                             agent_id=task.agent_id,
+                             data={"status": TaskStatus.PAUSED.value, "recovered": True})
+            recovered.append(task)
+        if recovered:
+            log.info("recovered %d unfinished task(s) from a previous run", len(recovered))
+        return recovered
+
+    def _safe_list_agents(self) -> list[AgentState]:
+        try:
+            return self.store.list_agents() if self.store else []
+        except Exception:  # noqa: BLE001 - a corrupt row must not block startup
+            log.exception("could not read stored agents")
+            return []
+
+    def _resume_recovered(self, task: Task) -> bool:
+        """Re-enter the orchestrator for a task that has no live run."""
+        state = self.get_agent(task.agent_id or "")
+        spec = state.spec if state else self._default_spec(task)
+        if state is None:
+            state = self.create_agent(spec)
+        task.metadata.pop("interrupted", None)
+        task.current_action = ""
+        worker = self.workers.get(task.worker_type)
+        provider = self._pick_provider(task, spec)
+        control = RunControl()
+        run = _Run(task, state, control)
+        with self._lock:
+            self._runs[task.id] = run
+        self._status(run, TaskStatus.RUNNING)
+        state.status = AgentStatus.RUNNING
+        self._emit_agent(state)
+        ctx = AgentContext(task=task, agent=spec, tools=self.tools, provider=provider,
+                           events=self.events, control=control, memory=self.memory,
+                           approver=self._approver_for(task))
+        with self._lock:
+            self._active.add(task.id)
+        run.future = self.runtime.submit(self._run(ctx, worker, resume=bool(task.steps)))
+        return True
 
     def stop(self, timeout: float = 5.0) -> None:
         if self.runtime.running:
@@ -307,9 +394,9 @@ class AgentManager:
             self._runs.pop(ctx.task.id, None)
         self._start_next()
 
-    async def _run(self, ctx: AgentContext, worker: BaseWorker) -> Task:
+    async def _run(self, ctx: AgentContext, worker: BaseWorker, *, resume: bool = False) -> Task:
         try:
-            return await self.orchestrator.run_task(ctx, worker)
+            return await self.orchestrator.run_task(ctx, worker, resume=resume)
         finally:
             with self._lock:
                 self._runs.pop(ctx.task.id, None)
@@ -368,7 +455,15 @@ class AgentManager:
 
     def resume(self, task_id: str) -> bool:
         run = self._runs.get(task_id)
-        if run is None or not run.control.paused:
+        if run is None:
+            # No live run: a task recovered from a previous process. It is
+            # paused in the store, not in a RunControl, so it re-enters the
+            # orchestrator instead of flipping an event.
+            task = self._tasks.get(task_id)
+            if task is not None and task.status is TaskStatus.PAUSED:
+                return self._resume_recovered(task)
+            return False
+        if not run.control.paused:
             return False
         self._status(run, TaskStatus.RUNNING)
         self.runtime.call_soon(run.control.resume)   # asyncio.Event must be set on its loop

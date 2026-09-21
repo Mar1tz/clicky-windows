@@ -19,7 +19,7 @@ from typing import Optional
 
 from agents.core import (
     AgentContext, ApprovalRequest, BaseWorker, EventKind, MemoryStore, Plan,
-    Planner, Step, StepStatus, TaskStatus, TaskStore, ToolCall, Verifier, now,
+    Planner, Step, StepStatus, TaskStatus, TaskStore, ToolCall, Verifier, new_id, now,
 )
 
 log = logging.getLogger("agents.orchestrator")
@@ -45,13 +45,31 @@ class Orchestrator:
 
     # -- public --------------------------------------------------------------
 
-    async def run_task(self, ctx: AgentContext, worker: BaseWorker):
+    async def run_task(self, ctx: AgentContext, worker: BaseWorker, *, resume: bool = False):
+        """Run a task from the start, or pick a recovered one up where it
+        stopped.
+
+        On resume the plan is already adopted (it lives in `task.steps`),
+        so planning is skipped and execution re-enters at the first
+        unfinished step. A step that was RUNNING when the process died is
+        reset to PENDING and re-run — which is why tools are idempotent.
+        """
         task = ctx.task
         try:
-            plan = await self._plan(ctx)
-            if plan is None:                       # plan rejected by the user
-                self._finish(ctx, TaskStatus.CANCELLED, "plan rejected")
-                return task
+            if resume and task.steps:
+                for step in task.steps:
+                    if step.status is StepStatus.RUNNING:
+                        step.status = StepStatus.PENDING
+                        step.results.clear()
+                        step.error = ""
+                plan = Plan(task_id=task.id, steps=task.steps, id=task.plan_id or new_id(),
+                            approved=True)
+                ctx.log(f"Resuming at step {task.step_index + 1}/{len(task.steps)}")
+            else:
+                plan = await self._plan(ctx)
+                if plan is None:                   # plan rejected by the user
+                    self._finish(ctx, TaskStatus.CANCELLED, "plan rejected")
+                    return task
 
             self._set_status(ctx, TaskStatus.RUNNING)
             await self._execute(ctx, worker, plan)

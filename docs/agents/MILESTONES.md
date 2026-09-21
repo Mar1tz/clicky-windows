@@ -66,7 +66,7 @@ line.
 | M15 | Direct Gemini provider (Live API)  | 2     | ⬜     | M13        |
 | M16 | Connected accounts UI + routing    | 2     | ✅     | M11, M13   |
 | M17 | LLM planning + verification default| 2     | ✅     | M13        |
-| M18 | Durable tasks, resume after restart| 3     | ⬜     | M7         |
+| M18 | Durable tasks, resume after restart| 3     | ✅     | M7         |
 | M19 | Browser worker                     | 3     | ⬜     | M12, M15   |
 | M20 | Computer-control worker            | 3     | ⬜     | M15        |
 | M21 | Multi-agent collaboration          | 3     | ⬜     | M17, M18   |
@@ -792,7 +792,7 @@ restart) or **M19** (Playwright browser worker, per M12's one adopt).
 
 # Phase 3 — Advanced capabilities
 
-## M18 · Durable tasks, resume after restart ⬜
+## M18 · Durable tasks, resume after restart ✅
 
 **Goal** Spec §3 taken seriously: close the app, reopen it, the job is still
 there — running or resumable.
@@ -809,7 +809,35 @@ idempotency as part of this milestone.
 **Done when** A test kills and rebuilds the manager mid-task and the resumed
 run completes the remaining steps without redoing finished ones.
 
-**HANDOFF** _(none yet)_
+**Landed** `AgentManager.recover()` / `_resume_recovered()`,
+`Orchestrator.run_task(resume=True)`, and an idempotency fix to
+`create_file`. 8 tests; suite **348 passing**.
+
+**How it works**
+* `start()` calls `recover()`: every stored task that was PENDING,
+  PLANNING, RUNNING, VERIFYING or WAITING_APPROVAL comes back **PAUSED**
+  with `metadata["interrupted"]` and shows in the panel with a Resume
+  button. Its agent card is rebuilt from `store.list_agents()`.
+* **Nothing restarts on its own.** The process may have died *because* of
+  that task; re-running it unasked would loop. There is a test asserting
+  no `STEP_STARTED` fires after recovery until a human resumes.
+* `resume()` on a task with no live run re-enters the orchestrator with
+  `resume=True`: planning is skipped (the plan is in `task.steps`), any
+  step that was RUNNING is reset to PENDING, and execution continues from
+  `task.step_index`. A PENDING task with no plan is planned from the top.
+* The gate test stages an interruption (3 done, 1 running, rest pending,
+  later files deleted) and asserts the resumed run fires **exactly**
+  `total − 3` step starts and completes.
+
+**The idempotency audit**
+Resume re-runs the step that was RUNNING at the crash, and that step may
+have already finished its write. `create_folder` was fine (`exist_ok`).
+`create_file` refused with "already exists", which would have failed work
+that was actually done. It now succeeds on **identical** content
+(`created=False`) and still refuses on different content — re-running
+produces the same state, which is what idempotent should mean.
+
+**HANDOFF** Complete. Next: **M19** (Playwright browser worker).
 
 ---
 
