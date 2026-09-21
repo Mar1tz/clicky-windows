@@ -84,7 +84,13 @@ class RuleVerifier(Verifier):
                       else f"{len(step.tool_calls)} scripted call(s) but no results recorded")
             checks.append(Check("executed", False, detail))
         calls = {c.id: c for c in step.tool_calls}
+        # A red test run inside a fix loop is information, not a failure:
+        # the step's claim is "tests pass NOW", so only the last run_tests
+        # result counts. Every other tool's failure still fails the step.
+        last_test_run = next((r for r in reversed(step.results) if r.tool_name == "run_tests"), None)
         for res in step.results:
+            if res.tool_name == "run_tests" and res is not last_test_run:
+                continue
             call = calls.get(res.call_id)
             args = dict(call.arguments) if call else {}
             # Tools echo the path they acted on in data; useful when the

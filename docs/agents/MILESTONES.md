@@ -70,7 +70,7 @@ line.
 | M19 | Browser worker                     | 3     | ✅     | M12, M13   |
 | M20 | Computer-control worker            | 3     | ✅     | M13        |
 | M21 | Multi-agent collaboration          | 3     | ✅     | M17, M18   |
-| M22 | Autonomous coding loop             | 3     | ⬜     | M17        |
+| M22 | Autonomous coding loop             | 3     | ✅     | M17        |
 | M23 | Ship: packaging, limits, safety    | 3     | ⬜     | M16, M18   |
 
 Phase 1 = the framework with no real AI. Phase 2 = plug the AI in.
@@ -994,7 +994,7 @@ frontend overlapped while tests started only after both ended.
 
 ---
 
-## M22 · Autonomous coding loop ⬜
+## M22 · Autonomous coding loop ✅
 
 **Goal** The agent writes code, runs the tests, reads the failure, fixes it,
 repeats — the thing that makes it an employee rather than a scaffolder.
@@ -1010,7 +1010,43 @@ clock. Every attempt is an event so the timeline shows the struggle.
 fixes it within three attempts, and the loop gives up cleanly (FAILED, with
 the last output) when the bug is unfixable.
 
-**HANDOFF** _(none yet)_
+**Landed** `agents/tools/test_tools.py` (`run_tests`), a tool-result hook
+in `Worker._run_react`, attempt accounting in `CodingWorker`, and a
+verifier rule for test runs. 9 tests; suite **405 passing**. Both gate
+cases pass with a scripted model: a red run is fixed and goes green on
+attempt 2, and three consecutive reds fail the step carrying the last
+report — at 3 test runs, not the 20-iteration budget.
+
+**Tool ergonomics are the deliverable (SWE-agent's finding, per M12).**
+`run_tests` does the reading for the model: it names the failing tests,
+extracts each assertion and its `file:line`, and says what to do next.
+Green is one line; red is under a screen. A test asserts the red report
+is under 1,200 characters. Runner detection is by evidence — pytest
+markers, `package.json`'s test script (vitest when it says so) — and
+npm's placeholder "no test specified" script is not mistaken for one.
+
+**The discipline around the loop.** Every red `run_tests` is an *attempt*
+announced in the timeline (`Test attempt 2/3: 1 failed — test_add`); the
+third consecutive red fails the step with the last report. A green run
+resets the count, so a step that fixes one bug and uncovers another gets
+a fresh budget — tested with four reds that never make three in a row.
+
+**Two things the loop changed elsewhere**
+* `RuleVerifier` failed any step containing an `ok=False` result. For
+  `run_tests` a red run is information, not an error: the step's claim
+  is "tests pass *now*", so only the **last** test run counts. Every other
+  tool's failure still fails the step.
+* pytest's `-q` prints a bare `2 passed in 0.02s`, not the banner the
+  parser expected, so counts read as 0. It now reads the last few lines
+  regardless of shape.
+
+**Also closed:** the M8 follow-up. The panel's action line now reads
+`Creating Navbar.tsx` / `Running tests` rather than `coding: create_file`
+(`describe_call` in `agents/workers/base.py`).
+
+**HANDOFF** Complete. Remaining: **M15** (direct Gemini Live provider,
+voice only) and **M23** (ship: packaging, limits, safety — including the
+`tora.log` key leak).
 
 ---
 

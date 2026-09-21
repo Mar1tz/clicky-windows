@@ -6,16 +6,18 @@
 
 Modules: registry (the choke point), base (Tool helpers), schema
 (argument validation), process (subprocess plumbing), and one module per
-category - file_tools, terminal_tools, git_tools, browser_tools,
+category - file_tools, terminal_tools, test_tools, git_tools, browser_tools,
 computer_tools - each exposing tools() -> list[Tool].
 """
 from __future__ import annotations
 
-from . import browser_tools, computer_tools, file_tools, git_tools, terminal_tools
+from . import (
+    browser_tools, computer_tools, file_tools, git_tools, terminal_tools, test_tools,
+)
 from .base import Tool, make_spec
 from .registry import Registry
 
-_MODULES = (file_tools, terminal_tools, git_tools, browser_tools, computer_tools)
+_MODULES = (file_tools, terminal_tools, test_tools, git_tools, browser_tools, computer_tools)
 
 
 def all_tools() -> list[Tool]:

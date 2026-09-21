@@ -11,7 +11,7 @@ from agents.tools import Registry, all_tools, default_registry
 EXPECTED = {
     "file": {"create_folder", "create_file", "write_file", "edit_file", "read_file", "list_dir",
              "move_path", "delete_path"},
-    "terminal": {"run_command", "install_package", "execute_script"},
+    "terminal": {"run_command", "install_package", "execute_script", "run_tests"},
     "git": {"git_init", "git_status", "git_diff", "git_log", "git_add", "git_commit",
             "git_branch", "git_push"},
     "browser": {"open_page", "extract_information", "click_element", "fill_field",

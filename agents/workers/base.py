@@ -27,6 +27,31 @@ from agents.core import (
 )
 
 
+def describe_call(call) -> str:
+    """The panel's "current action" line: what the agent is doing, in the
+    words a person would use - "Creating package.json", not
+    "coding: create_file"."""
+    import os
+    a = call.arguments or {}
+    leaf = os.path.basename(str(a.get("path") or "").rstrip("/\\")) or a.get("path", "")
+    verbs = {
+        "create_folder": f"Creating folder {leaf}", "create_file": f"Creating {leaf}",
+        "write_file": f"Writing {leaf}", "edit_file": f"Editing {leaf}",
+        "read_file": f"Reading {leaf}", "list_dir": "Looking at the project",
+        "move_path": f"Moving {leaf}", "delete_path": f"Deleting {leaf}",
+        "run_command": f"Running {str(a.get('command') or '')[:40]}",
+        "install_package": "Installing dependencies", "execute_script": "Running a script",
+        "run_tests": "Running tests",
+        "git_init": "Initialising git", "git_commit": "Committing", "git_push": "Pushing",
+        "open_page": f"Opening {str(a.get('url') or '')[:40]}",
+        "extract_information": "Reading the page", "click_element": "Clicking",
+        "fill_field": "Filling a field", "screenshot_page": "Taking a screenshot",
+        "find_on_screen": f"Looking for {a.get('name', '')}", "click": f"Clicking {a.get('name', '')}",
+        "type_text": "Typing", "key_press": "Pressing keys", "move_cursor": "Moving the mouse",
+    }
+    return verbs.get(call.tool_name, call.tool_name.replace("_", " ").capitalize()).strip()
+
+
 class Worker(BaseWorker):
     """Concrete BaseWorker. Subclasses set worker_type / default_tools /
     system_prompt; the execution logic here is shared by all of them."""
@@ -101,7 +126,7 @@ class Worker(BaseWorker):
             ))
             for call in resp.tool_calls:
                 await ctx.control.checkpoint()
-                ctx.progress(f"{self.worker_type}: {call.tool_name}")
+                ctx.progress(describe_call(call))
                 result = await ctx.tools.execute(call, tctx)
                 step.tool_calls.append(call)
                 step.results.append(result)
@@ -109,9 +134,21 @@ class Worker(BaseWorker):
                     role="tool", tool_call_id=call.id,
                     content=result.output or result.error or "(no output)",
                 ))
+                # Subclasses may stop the step here - the coding worker's
+                # test-fix loop gives up after N red runs, for example.
+                stop_reason = await self.on_tool_result(step, call, result, ctx)
+                if stop_reason:
+                    step.status = StepStatus.FAILED
+                    step.error = stop_reason
+                    return
 
         step.status = StepStatus.FAILED
         step.error = f"max iterations ({self.max_iterations}) reached without completing"
+
+    async def on_tool_result(self, step: Step, call, result, ctx: AgentContext):
+        """Hook after every tool call in the ReAct loop. Return a string to
+        stop the step and fail it with that message; None to carry on."""
+        return None
 
     # -- prompt assembly ------------------------------------------------------
 
