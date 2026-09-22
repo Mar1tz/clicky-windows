@@ -1734,3 +1734,51 @@ step one is about to be spoken aloud and that saying it too means the user
 hears it twice.
 
 2 more tests in `test_e2e_guide.py`; 576 passing.
+
+## M29 — one window, not nine (design draft)
+
+Every surface Tora has grew as its own floating window reached through the
+tray: Agents, Agent settings, Extensions, Dashboard, API Keys, the setup
+wizard, plus a dozen switches buried three menus deep. Each was easy to add
+and, together, there was no one place that shows what the product is.
+
+`ui/app_window.py` is that place — a navigation rail and one page at a time,
+opened from the tray with **Open Tora app**. Nine pages, each the future
+home of something that is a pop-up today:
+
+    Home         status, what is running, what to try
+    Agents       agents_panel · plan_view · timeline, side by side
+    Extensions   the pack switches
+    Accounting   the pack's dashboard module
+    Journal      Journal · Lesson Recording · Workflow Capture
+    Tutor        the Tutor Mode menu
+    Voice        Conversation · Voice · Models · endpoints
+    Settings     agent rails · microphone · appearance
+    Setup        API keys · diagnostics · the wizard
+
+**This is layout only.** Nothing in it reads or writes live state; every
+number is a placeholder and every control is inert. The existing windows are
+untouched and still open from the tray, so nothing is lost while it is being
+finished. `ui/app_theme.py` holds the palette and the stylesheet,
+`ui/app_widgets.py` the shared card / row / metric / switch / select, and
+`ui/app_pages.py` the pages. ui/design.py is deliberately not touched: it
+dresses the overlay and the floating panel, which have to stay translucent.
+
+Four things worth knowing, all found by rendering the window and looking at
+it rather than by reading the code:
+
+  * **A QWidget SUBCLASS does not paint its stylesheet background** unless
+    `WA_StyledBackground` is set. A plain `QWidget()` does, which is why the
+    sidebar looked right while the page header sat on the translucent window
+    with its title half-transparent and clipped.
+  * **A drop shadow on the root window eats text.** The effect renders the
+    window through a cached pixmap and anything without its own background
+    came out ghosted. Removed; the 1px border carries the edge instead.
+  * **QPushButton reads "&" as a mnemonic** — "Voice & models" rendered as
+    "Voice  models".
+  * **Unicode glyphs are not an icon set.** "▣", "◍" and "⛭" fell back to
+    three different fonts at three sizes, one in colour. The rail icons are
+    drawn with QPainter (`nav_icon`), as is the combo-box chevron, which Qt
+    stops drawing entirely once a stylesheet touches the widget.
+
+10 tests in `test_ui_app_window.py`; 586 passing.

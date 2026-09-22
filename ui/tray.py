@@ -62,6 +62,7 @@ class TrayManager(QObject):
     on_stop_agents        = pyqtSignal()        # cancel every running agent
     on_open_extensions    = pyqtSignal()        # industry packs on/off
     on_open_dashboard     = pyqtSignal()        # the enabled packs' dashboards
+    on_open_app           = pyqtSignal()        # the one-window app (ui/app_window)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -123,6 +124,12 @@ class TrayManager(QObject):
             f"Gemini · {providers['conversation']}  |  voice: {providers['voice']}"
         )
         info.setEnabled(False)
+        menu.addSeparator()
+
+        # The single-window app. First in the list because it is meant to
+        # become the way in; the individual windows below still work.
+        app_action = menu.addAction("Open Tora app")
+        app_action.triggered.connect(self.on_open_app)
         menu.addSeparator()
 
         show_action = menu.addAction("Show Panel")

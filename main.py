@@ -283,6 +283,28 @@ def main():
         )
     panel.on_document_dropped.connect(_on_doc_dropped)
 
+    # The one-window app (ui/app_window). Built the first time it is asked
+    # for — nine pages of widgets is a visible pause, and most sessions never
+    # open it. It is a design draft: nothing in it drives the companion yet,
+    # so every existing window below still works exactly as before.
+    app_window = {}
+
+    def _open_app():
+        try:
+            if "w" not in app_window:
+                from ui.app_window import ToraApp
+                w = ToraApp()
+                manager.sig_state_changed.connect(
+                    lambda s: w.set_state(s.name))
+                app_window["w"] = w
+            app_window["w"].open_at()
+        except Exception as exc:          # noqa: BLE001 - never kill the tray
+            import logging as _lg
+            _lg.getLogger("tora").exception("could not open the app window")
+            tray.show_notification("Tora", f"Couldn't open the app: {exc}")
+
+    tray.on_open_app.connect(_open_app)
+
     # Tray → UI / Manager
     tray.on_show_panel.connect(panel.show)
     tray.on_hide_panel.connect(panel.hide)
