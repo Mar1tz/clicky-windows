@@ -20,6 +20,7 @@ EXPECTED = {
                  "key_press", "open_app", "list_windows", "focus_window"},
     "spreadsheet": {"read_workbook", "write_workbook", "clean_data", "reconcile_sheets", "check_formulas",
                     "compare_periods"},
+    "desktop": {"list_app_actions", "app_action", "ui_control", "open_link"},
 }
 
 

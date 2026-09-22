@@ -14,6 +14,8 @@ from .base import Worker
 class ComputerWorker(Worker):
     worker_type = "computer"
     default_tools = [
+        # quietest first - this order is the ladder the prompt describes
+        "list_app_actions", "app_action", "open_link", "ui_control",
         "open_app", "list_windows", "focus_window",
         "find_on_screen", "screenshot", "move_cursor", "click", "type_text", "key_press",
         "read_file", "list_dir",
@@ -26,6 +28,13 @@ class ComputerWorker(Worker):
             "Every mouse or keyboard action (click, type_text, key_press, "
             "move_cursor) stops and asks the user for permission, so use the "
             "cheap tools first and the expensive ones last:\n"
+            "  - ALWAYS start with list_app_actions: this machine can drive Spotify, VS Code, "
+            "Cursor, browsers and Windows itself through their own APIs, links and media keys - "
+            "no window focused, no mouse moved, works while the app is minimised. app_action is "
+            "the right tool for 'next song', 'open this project', 'put this in the chat', "
+            "'open bluetooth settings'.\n"
+            "  - next best is ui_control: press/toggle/read a window's own controls in the "
+            "background. Only if all of that fails do you click or type on the real screen.\n"
             "  - if the goal names an application, your FIRST call is "
             "open_app(name): it launches it, or brings it to the front if it is "
             "already open, and tells you the window title to use from then on. "

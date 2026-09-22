@@ -36,13 +36,15 @@ log = logging.getLogger("agents.understanding")
 # An action word...
 _IMPERATIVE = re.compile(
     r"\b(create|build|make|set\s*up|setup|scaffold|generate|install|write|"
-    r"refactor|initiali[sz]e|init)\b",
+    r"refactor|initiali[sz]e|init|clean|tidy|reconcile|compare|organi[sz]e|sort|check|"
+    r"analy[sz]e|summari[sz]e|update|fix|open|launch|play|skip|pause)\b",
     re.I,
 )
 # ...applied to a work object.
 _OBJECT = re.compile(
-    r"\b(folder|directory|dir|project|app|application|file|repo|repository|"
-    r"script|website|web\s*site|api|component)\b",
+    r"\b(folder|directory|dir|project|app|application|file|files|repo|repository|"
+    r"script|website|web\s*site|api|component|spreadsheet|workbook|sheets?|csv|xlsx|"
+    r"formulas?|export)\b|\.(xlsx|xlsm|csv)\b",
     re.I,
 )
 # Utterances that are questions, not commands.
@@ -72,6 +74,27 @@ _COMPUTER = re.compile(r"\b(click|type|move\s+(the\s+)?(mouse|cursor)|press\s+th
                        r"open\s+\w+\s+app)\b", re.I)
 # "open" + an app name is a work object too, so "open notepad" is a task.
 _OBJECT_APP = re.compile(r"\bopen\s+(?:the\s+)?(?:" + _APPS + r"|\w+\s+app)\b", re.I)
+# Desktop requests that are a whole task in four words: "spotify next song",
+# "pause the music", "turn the volume down", "open bluetooth settings". They
+# have no imperative+object pair - "next song" is not "create a project" -
+# but they are unmistakably jobs, and the computer worker can do each of
+# them through an app's own API in one call.
+_DESKTOP = re.compile(
+    r"\b(?:next|previous|skip|pause|resume|stop|play)\b[^.?!]{0,24}\b(?:song|track|music|playlist|spotify)\b|"
+    r"\bspotify\b[^.?!]{0,24}\b(?:next|previous|skip|pause|resume|play|stop|playlist|volume|song|track)\b|"
+    r"\b(?:turn|put)\s+(?:the\s+)?(?:volume|sound|music)\s+(?:up|down|off)\b|"
+    r"\b(?:mute|unmute)\b|"
+    r"\bwhat(?:'s| is)\s+playing\b|"
+    r"\b(?:minimi[sz]e|maximi[sz]e|restore|close)\s+(?:the\s+)?(?:window|[\w ]{0,20}window)\b|"
+    r"\bopen\s+(?:the\s+)?(?:bluetooth|wi-?fi|display|sound|notification|power|battery|storage|privacy|"
+    r"windows update|printer)\s*(?:settings|page)?\b|"
+    r"\bopen\s+(?:my\s+)?(?:downloads|documents|desktop|pictures|music|videos)\s*(?:folder)?\b|"
+    r"\bcopy\s+(?:this|that|it)\s+to\s+the\s+clipboard\b",
+    re.I)
+
+# Spreadsheet work goes to the file worker, which carries the spreadsheet tools.
+_SHEET = re.compile(r"\b(spreadsheet|workbook|excel\s+(?:file|sheet|document|workbook)|sheets?|csv|xlsx|"
+                    r"formulas?)\b|\.(xlsx|xlsm|csv)\b", re.I)
 _CODING = re.compile(r"\b(react|vue|next(\.?js)?|python|node(\.?js)?|api|"
                      r"website|web\s*site|django|flask|express|typescript|"
                      r"javascript|component|repo|repository|script)\b"
@@ -102,7 +125,8 @@ class HeuristicIntentClassifier(IntentClassifier):
         has_obj = bool(_OBJECT.search(low)) or bool(_OBJECT_APP.search(low))
         is_question = bool(_QUESTION.match(low)) or (
             raw.endswith("?") and (bool(_QUESTION_AUX.match(low)) or not has_imp))
-        is_task = has_imp and has_obj and not is_question
+        desktop = bool(_DESKTOP.search(low))
+        is_task = (has_imp and has_obj or desktop) and not is_question
 
         if not is_task:
             return Intent(
@@ -124,10 +148,14 @@ class HeuristicIntentClassifier(IntentClassifier):
 
     @staticmethod
     def _kind(low: str) -> TaskKind:
+        if _DESKTOP.search(low):           # "next song" is the app's own API, not research
+            return TaskKind.COMPUTER
         if _RESEARCH.search(low):
             return TaskKind.RESEARCH
         if _COMPUTER.search(low):          # before BROWSER: "open opera" is an app, not a URL
             return TaskKind.COMPUTER
+        if _SHEET.search(low):             # after COMPUTER: "open budget.xlsx in excel" is the app
+            return TaskKind.FILE
         if _BROWSER.search(low):
             return TaskKind.BROWSER
         if _CODING.search(low):
@@ -140,6 +168,7 @@ class HeuristicIntentClassifier(IntentClassifier):
             TaskKind.RESEARCH: "research",
             TaskKind.BROWSER: "browser",
             TaskKind.COMPUTER: "computer",
+            TaskKind.FILE: "file",
         }.get(kind, "coding")            # CODING and GENERAL both -> coding
 
     @staticmethod
@@ -170,6 +199,7 @@ class HeuristicIntentClassifier(IntentClassifier):
             TaskKind.RESEARCH: "look into this",
             TaskKind.BROWSER: "drive the browser for this",
             TaskKind.COMPUTER: "take this on",
+            TaskKind.FILE: "work through the files",
         }.get(kind, f"create{where} and set up the foundation")
         return f"Understood. I'll {verb}. Starting now."
 

@@ -264,6 +264,11 @@ class ApprovalRequest(_Serialisable):
     # `confirm_word` in the dialog. Set by the registry from the tool.
     sensitive: bool = False
     confirm_word: str = ""
+    # What "always allow" means for THIS call: a tool may scope it to one
+    # action ("app_action:spotify.next") instead of the whole tool, so a
+    # person can wave through skipping a track without waving through
+    # everything the tool can do.
+    grant_key: str = ""
 
 
 @dataclass

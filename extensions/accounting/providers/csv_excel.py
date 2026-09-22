@@ -219,10 +219,20 @@ class CSVExcelProvider(IAccountingProvider):
         return sorted(periods)
 
     async def balance(self, account: str, *, start=None, as_of=None) -> float:
-        for r in (await self.trial_balance(as_of))["rows"]:
-            if account in (r["code"], r["name"]):
-                return r["balance"]
-        return 0.0
+        """A trial balance is one point in time, so "wages for August" cannot
+        come from it - the TB would answer with the year to date. With a
+        start date and a ledger export, sum the ledger for the period."""
+        rows = (await self.trial_balance(as_of))["rows"]
+        row = next((r for r in rows if account in (r["code"], r["name"])), None)
+        if start and self._find("general_ledger", "general ledger", "gl", "ledger"):
+            code = row["code"] if row else account
+            lines = [l for l in await self.general_ledger(start, as_of, None, 100000)
+                     if l.account == code or l.account_name == account]
+            dr = to_minor(sum(l.debit for l in lines))
+            cr = to_minor(sum(l.credit for l in lines))
+            kind = row["type"] if row else _type_for(code)
+            return to_major(dr - cr if kind in ("asset", "expense") else cr - dr)
+        return row["balance"] if row else 0.0
 
     # -- "post": write import files ------------------------------------------------------------
     async def post_journal(self, date, description, lines, *, reference="", attachments=None) -> str:

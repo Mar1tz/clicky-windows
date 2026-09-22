@@ -32,6 +32,7 @@ class CodingWorker(Worker):
         "run_command", "install_package", "execute_script", "run_tests",
         "git_init", "git_status", "git_diff", "git_log", "git_add",
         "git_commit", "git_branch",
+        "read_workbook", "write_workbook", "clean_data", "reconcile_sheets", "check_formulas", "compare_periods",
     ]
     max_iterations = 20              # a fix loop needs room: test, read, edit, test…
     max_fix_attempts = 3

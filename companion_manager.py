@@ -999,6 +999,7 @@ class CompanionManager(QObject):
             "search_web":      self._tool_search,
             "recall":          self._tool_recall,
             "delegate_task":   self._tool_delegate_task,
+            "desktop_action":  self._tool_desktop_action,
             "manage_agents":   self._tool_manage_agents,
         }
 
@@ -1052,6 +1053,67 @@ class CompanionManager(QObject):
             "note": ("The agent is working in the background. Read the steps back "
                      "briefly and tell the user they can carry on with other things."),
         }
+
+    async def _tool_desktop_action(self, args: dict) -> dict:
+        """One app action, now: "Spotify, next song", "open this project in
+        VS Code", "put this in Cursor's chat", "open Bluetooth settings".
+
+        This is the fast path - no task, no agent, no plan - because a
+        person asking for the next song is not asking for a project. It
+        still confirms: anything that acts shows the approval dialog, and
+        the user can wave through that one action for good.
+        """
+        import json as _json
+        from agents.control import control
+
+        app = str(args.get("app") or "").strip()
+        action = str(args.get("action") or "").strip()
+        arguments = args.get("arguments")
+        if not isinstance(arguments, dict):
+            raw = args.get("arguments_json") or args.get("value") or ""
+            arguments = {}
+            if isinstance(raw, str) and raw.strip():
+                try:
+                    parsed = _json.loads(raw)
+                    arguments = parsed if isinstance(parsed, dict) else {}
+                except ValueError:
+                    arguments = {}
+        c = control()
+        if not action or action in ("list", "list_actions", "what_can_you_do"):
+            apps = c.apps()
+            if app:
+                found = c.actions(app=app)
+                return {"ok": True, "app": c.resolve_app(app),
+                        "actions": [a.describe() for a in found]} if found else {"error": c.suggestions(app)}
+            return {"ok": True, "apps": [{"app": a["app"], "actions": a["actions"]} for a in apps],
+                    "note": "Say the app and the action; I confirm before anything that acts."}
+        found = c.find(app, action)
+        if found is None:
+            return {"error": c.suggestions(app, action)}
+        if found.risk.needs_confirmation:
+            mgr = self._agents
+            if mgr is None or not hasattr(mgr, "request_confirmation"):
+                return {"error": "I cannot ask for confirmation right now, so I will not do it"}
+            reason = (f"{found.key} - {found.description} "
+                      f"({found.tier.label}"
+                      + (", ON YOUR SCREEN" if found.tier.disturbs_the_user else ", in the background")
+                      + ")")
+            future = mgr.request_confirmation(reason, tool_name="desktop_action",
+                                              arguments={"app": found.app, "action": found.name,
+                                                         **arguments},
+                                              grant_key=f"app_action:{found.key}")
+            try:
+                approved = await asyncio.wrap_future(future)
+            except Exception:  # noqa: BLE001
+                approved = False
+            if not approved:
+                return {"ok": False, "action": found.key,
+                        "note": "The user did not approve it. Say so plainly and do not try another way."}
+        out = await c.run(app, action, arguments)
+        return {"ok": out.ok, "action": out.action, "app": out.app,
+                "how": out.tier.label if out.tier else "", "result": out.message,
+                "note": ("Read the result back in a few words." if out.ok
+                         else "Tell the user what stopped it; do not pretend it worked.")}
 
     async def _tool_manage_agents(self, args: dict) -> dict:
         """Voice control of the workforce: status, pause, resume, cancel,

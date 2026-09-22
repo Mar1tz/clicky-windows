@@ -1282,6 +1282,58 @@ a draft/authorised document, and no token appears in any log.
 
 ---
 
+## M27 · Desktop control: ask the app, don't click at it ✅
+
+**Goal** Any app on this PC, driven by voice or by an agent, in the
+background, with the user confirming anything that acts. Design and the
+research behind it: `docs/agents/DESKTOP_CONTROL.md`.
+
+**Owns** `agents/control/**`, `agents/tools/control_tools.py`, the
+per-call approval hooks in `agents/tools/registry.py`, the voice fast
+path in `companion_manager.py`.
+
+**Built**
+* A tier ladder every action declares itself on - App Action, app API/CLI,
+  deep link, system key, background UI, on-screen input, vision - and the
+  registry reports which rung did the work.
+* Machine discovery: Start Menu apps, every registered URI scheme (254 on
+  the dev machine), which CLIs exist. Cached, ~0.7 s cold.
+* System layer with no focus stealing: media keys (so "next song" works
+  while Spotify is minimised), volume, now-playing from the media app's
+  window title, window focus/minimise/maximise/close, clipboard.
+* Background UI Automation: list a window's controls and invoke / toggle /
+  select / expand / set_value / read them where they stand, with the
+  legacy DoDefaultAction fallback. Tora's own windows stay invisible.
+* Adapters: Windows itself, Spotify, VS Code / Cursor / Windsurf /
+  Antigravity (open_project resolves a NAME from the editor's own recent
+  list; `code chat` and Cursor's prompt deep link cover "put this in the
+  chat"), and six browsers.
+* Tools: `list_app_actions`, `app_action`, `ui_control`, `open_link`;
+  the computer worker leads with them and falls back to clicking.
+* Asking is per action: PASSIVE never asks, REVERSIBLE/CHANGES ask once
+  with a grant key for that action alone ("always allow spotify.next"),
+  SENSITIVE asks every time. `asks_for_call` / `grant_key` /
+  `ask_reason_for` are generic tool hooks; `ApprovalRequest.grant_key`
+  carries it; the dialog says whether the screen will move.
+* Voice fast path: `desktop_action` runs one action with no task or plan,
+  confirmed through the same dialog (`AgentManager.request_confirmation`,
+  plus standing grants).
+* Classifier: "spotify next song", "turn the volume down", "open
+  bluetooth settings", "minimise the Chrome window" are tasks for the
+  computer worker; questions still stay questions.
+
+**Landed** `test_control_desktop.py` (14 tests: catalogue, per-action
+asking, denial, per-action grants, tier reporting, unavailable routes,
+kill switch, no-task confirmation, the voice path, and read-only checks
+against the real machine). Suite **547 passing**.
+
+**Next (Phase 2, in order)** picture-in-picture desktop (UFO2's RDP
+loopback) so even on-screen actions never touch the user's screen;
+Windows App Actions + MCP as tier 1; Spotify Web API as a connected
+account; WinRT media session; learn-by-watching workflows; more adapters.
+
+---
+
 ## Appendix — the acceptance test that defines "done" for Phase 1
 
 `tests/agents/test_e2e.py` already encodes it. Any milestone that breaks it

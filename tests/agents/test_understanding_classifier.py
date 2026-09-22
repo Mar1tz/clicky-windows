@@ -180,11 +180,11 @@ def test_tiered_answers_clear_questions_without_a_provider_call(text):
 
 
 def test_tiered_consults_the_provider_when_rules_are_unsure():
-    """'sort out my project' has no imperative+object pair the rules
+    """'deal with the thing for me' has no imperative+object pair the rules
     recognise, so they report low confidence - exactly the band worth
     spending a model call on."""
     p = _CountingProvider()
-    i = asyncio.run(tiered(p).classify("sort out my project"))
+    i = asyncio.run(tiered(p).classify("deal with the thing for me"))
     assert p.calls == 1
     assert i.is_task, "the provider's verdict should win in the unsure band"
 
@@ -196,7 +196,7 @@ def test_tiered_falls_back_to_rules_when_the_provider_fails():
             raise RuntimeError("gateway down")
 
     p = Broken()
-    i = asyncio.run(tiered(p).classify("sort out my project"))
+    i = asyncio.run(tiered(p).classify("deal with the thing for me"))
     assert p.calls == 1
     assert not i.is_task, "degrade to the rules' answer, never to an exception"
 

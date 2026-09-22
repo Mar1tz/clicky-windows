@@ -277,6 +277,33 @@ def tool_declarations() -> list[dict]:
             },
         },
         {
+            "name": "desktop_action",
+            "description": (
+                "Do one thing in an app on this PC, straight away: Spotify (next, previous, "
+                "play_pause, now_playing, play_playlist), VS Code / Cursor (open_project, "
+                "open_file, chat, recent_projects), browsers (open_url, search), Windows "
+                "(media, volume, window, clipboard_copy, open_folder, open_settings, open_app, "
+                "open_url). Uses the app's own API, link or media key - nothing on screen moves. "
+                "Use action='list' to see what an app can do. The user confirms anything that acts."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "app": {"type": "string",
+                            "description": "spotify, vscode, cursor, edge, brave, opera, windows"},
+                    "action": {"type": "string",
+                               "description": "The action name, or 'list' to see what exists."},
+                    "arguments_json": {
+                        "type": "string",
+                        "description": "The action's arguments as JSON, e.g. "
+                                       "{\"project\": \"clicky-windows-main\"} or "
+                                       "{\"prompt\": \"explain this repo\"}.",
+                    },
+                },
+                "required": ["app", "action"],
+            },
+        },
+        {
             "name": "manage_agents",
             "description": (
                 "Check on or control background agents. Use when the user "

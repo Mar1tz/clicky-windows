@@ -16,6 +16,7 @@ class FileWorker(Worker):
     default_tools = [
         "create_folder", "create_file", "write_file", "edit_file", "read_file",
         "list_dir", "move_path", "delete_path",
+        "read_workbook", "write_workbook", "clean_data", "reconcile_sheets", "check_formulas", "compare_periods",
     ]
 
     def system_prompt(self, ctx: AgentContext) -> str:

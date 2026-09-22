@@ -179,8 +179,11 @@ class ApprovalDialog(QDialog):
             # by any setting - that is the floor - but a person can allow
             # it for the rest of THIS job. Offering "Always allow" there was
             # a button that silently did nothing, which is worse than none.
-            label = (f"Allow {request.call.tool_name} for this task" if self._task_scoped
-                     else f"Always allow {request.call.tool_name}")
+            what = request.grant_key or request.call.tool_name
+            if ":" in what:
+                what = what.split(":", 1)[1]
+            label = (f"Allow {what} for this task" if self._task_scoped
+                     else f"Always allow {what}")
             self._always_btn = QPushButton(label)
             self._always_btn.clicked.connect(self._on_always)
             buttons.addWidget(self._always_btn)
@@ -209,12 +212,18 @@ class ApprovalDialog(QDialog):
         by the same agent never reaches a dialog. It cannot override a
         denied tool - see PermissionPolicy.allows.
         """
+        key = self.request.grant_key or self.request.call.tool_name
+        if not self.request.task_id and hasattr(self._manager, "allow_desktop_action"):
+            self._manager.allow_desktop_action(key)          # a voice action: no task to scope it to
+            self.always = True
+            self._finish(True)
+            return
         if self._task_scoped:
-            self._manager.grant_for_task(self.request.task_id, self.request.call.tool_name)
+            self._manager.grant_for_task(self.request.task_id, key)
         else:
             agent = self._manager.get_agent(self.request.agent_id)
             if agent is not None:
-                agent.spec.permissions.allow_always(self.request.call.tool_name)
+                agent.spec.permissions.allow_always(key)
         self.always = True
         self._finish(True)
 

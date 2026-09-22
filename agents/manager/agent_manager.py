@@ -21,11 +21,13 @@ import threading
 import time
 from typing import Any, Callable, Optional, Protocol, Union
 
+from concurrent.futures import Future
+
 from agents.core import (
     AgentContext, AgentProvider, AgentSpec, AgentState, AgentStatus, ApprovalRequest,
     BaseWorker, Event, EventBus, EventKind, Intent, IntentClassifier, MemoryStore,
     PermissionPolicy, Planner, ProviderRouter, RunControl, Task, TaskKind, TaskStatus,
-    TaskStore, ToolRegistry, Unsubscribe, Verifier, now,
+    TaskStore, ToolCall, ToolRegistry, Unsubscribe, Verifier, now,
 )
 
 from .orchestrator import Orchestrator
@@ -117,7 +119,11 @@ class AgentManager:
         self._runs: dict[str, _Run] = {}                # task_id -> run
         self._agents: dict[str, AgentState] = {}        # agent_id -> state
         self._tasks: dict[str, Task] = {}               # task_id -> task (incl. finished)
-        self._approvals: dict[str, tuple[ApprovalRequest, asyncio.Future]] = {}
+        self._approvals: dict[str, tuple[ApprovalRequest, Any]] = {}
+        # Desktop actions a person has waved through for good ("always allow
+        # spotify.next"). In memory: a standing yes should not outlive the
+        # session that gave it without the user saying so in settings.
+        self._desktop_grants: set[str] = set()
         self._grants: dict[str, set[str]] = {}          # task_id -> tools a human allowed for it
         self._store_unsub: Optional[Unsubscribe] = None
         self._events_unsub: Optional[Unsubscribe] = None
@@ -837,12 +843,67 @@ class AgentManager:
                              data={"request_id": req.id, "needs_confirmation": True})
             return False
         req.approved = approved
-        self.runtime.call_soon(_resolve, fut, approved)
+        if isinstance(fut, asyncio.Future):
+            self.runtime.call_soon(_resolve, fut, approved)
+        else:                                   # a plain Future: the voice path
+            if not fut.done():
+                fut.set_result(approved)
+        if not isinstance(fut, asyncio.Future):
+            with self._lock:
+                self._approvals.pop(request_id, None)
         return True
+
+    # -- confirming one desktop action, with no task behind it ---------------------
+
+    def desktop_granted(self, key: str) -> bool:
+        return bool(key) and key in self._desktop_grants
+
+    def allow_desktop_action(self, key: str) -> None:
+        """A standing yes for one action ("app_action:spotify.next")."""
+        if not key:
+            return
+        with self._lock:
+            self._desktop_grants.add(key)
+        self.events.emit(EventKind.LOG, f"{key} allowed from now on", data={"granted": key})
+
+    def request_confirmation(self, reason: str, *, tool_name: str = "desktop_action",
+                             arguments: Optional[dict[str, Any]] = None, grant_key: str = "",
+                             timeout: float = 180.0) -> "Future[bool]":
+        """Ask the person about ONE action, through the same dialog agents
+        use, without inventing a task for it. This is what lets voice say
+        "next song" and have it confirmed in half a second.
+
+        Returns a Future: True approved, False denied or timed out. An
+        action the user has already waved through resolves immediately.
+        """
+        from concurrent.futures import Future
+        fut: "Future[bool]" = Future()
+        if self.desktop_granted(grant_key):
+            fut.set_result(True)
+            return fut
+        req = ApprovalRequest(task_id="", agent_id="", call=ToolCall(tool_name, dict(arguments or {})),
+                              reason=reason, grant_key=grant_key)
+        with self._lock:
+            self._approvals[req.id] = (req, fut)
+        self.events.emit(EventKind.APPROVAL_REQUIRED, reason, level="warn",
+                         data={"request": req.to_dict()})
+
+        def _expire() -> None:
+            if not fut.done():
+                fut.set_result(False)
+                with self._lock:
+                    self._approvals.pop(req.id, None)
+        timer = threading.Timer(timeout, _expire)
+        timer.daemon = True
+        timer.start()
+        fut.add_done_callback(lambda _f: timer.cancel())
+        return fut
 
     def _approver_for(self, task: Task) -> Callable[[ApprovalRequest], Any]:
         async def _ask(req: ApprovalRequest) -> bool:
-            if not req.sensitive and req.call.tool_name in self.granted_for_task(task.id):
+            granted = self.granted_for_task(task.id)
+            if not req.sensitive and (req.call.tool_name in granted
+                                      or (req.grant_key and req.grant_key in granted)):
                 self.events.emit(EventKind.APPROVAL_RESOLVED, "approved (granted for this task)",
                                  task_id=task.id, agent_id=task.agent_id,
                                  data={"request_id": req.id, "approved": True, "granted": True})

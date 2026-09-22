@@ -138,12 +138,36 @@ class Registry(ToolRegistry):
         # risk you get to pre-approve.
         always_ask = bool(getattr(tool, "always_ask", False))
         sensitive = bool(getattr(tool, "sensitive", False))
-        if always_ask or sensitive or not ctx.policy.allows(spec):
+        # A tool may decide per call: reading what is playing does not need a
+        # human, skipping a track does. Only ever used to ask MORE precisely -
+        # a tool that says "no" for one call still cannot exceed the policy.
+        asks = getattr(tool, "asks_for_call", None)
+        if callable(asks) and always_ask:
+            try:
+                always_ask = bool(asks(call))
+            except Exception:  # noqa: BLE001 - a broken hook asks, it never waves through
+                always_ask = True
+        grant_key = ""
+        key_of = getattr(tool, "grant_key", None)
+        if callable(key_of):
+            try:
+                grant_key = str(key_of(call) or "")
+            except Exception:  # noqa: BLE001
+                grant_key = ""
+        granted = bool(grant_key) and grant_key in ctx.policy.always_allow
+        if (always_ask and not granted) or sensitive or not (ctx.policy.allows(spec) or granted):
             default_reason = f"{spec.name} always needs a human: it controls your mouse and keyboard"
-            reason = (getattr(tool, "ask_reason", "") or default_reason
-                      if (always_ask or sensitive) else _deny_reason(spec, ctx.policy))
+            per_call = getattr(tool, "ask_reason_for", None)
+            reason = ""
+            if callable(per_call):
+                try:
+                    reason = str(per_call(call) or "")
+                except Exception:  # noqa: BLE001
+                    reason = ""
+            reason = reason or ((getattr(tool, "ask_reason", "") or default_reason)
+                                if (always_ask or sensitive) else _deny_reason(spec, ctx.policy))
             request = ApprovalRequest(task_id=ctx.task_id or "", agent_id=ctx.agent_id or "",
-                                      call=call, reason=reason, sensitive=sensitive,
+                                      call=call, reason=reason, sensitive=sensitive, grant_key=grant_key,
                                       confirm_word=(getattr(tool, "confirm_word", "") or "CONFIRM")
                                       if sensitive else "")
             try:
