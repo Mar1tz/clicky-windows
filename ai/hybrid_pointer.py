@@ -90,6 +90,21 @@ _STOPWORDS = frozenset({
 })
 
 
+# Control types a user can actually act on. A name that matches exactly is
+# still the wrong answer when it belongs to a label or a status readout and
+# the real button is three nodes further on.
+_ACTIONABLE = (
+    "Button", "Hyperlink", "MenuItem", "TabItem", "ListItem", "CheckBox",
+    "RadioButton", "Edit", "ComboBox", "TreeItem", "SplitButton", "Slider",
+    "Spinner", "Thumb", "DataItem", "HeaderItem", "ToolBar", "Menu",
+)
+
+
+def _is_actionable(ctrl_type: str) -> bool:
+    t = (ctrl_type or "").replace("Control", "")
+    return t in _ACTIONABLE
+
+
 def _score_match(query: str, element_name: str, element_type: str) -> float:
     """Fuzzy match score 0..1, matched on WHOLE WORDS, not raw substrings.
 
@@ -403,11 +418,18 @@ def _find_via_uia(
             # trip on nearly every node for a signal that almost never decided
             # the match — pure latency.
             score = _score_match(query, name, ctrl_type)
-            if score >= 0.92:
+            if score >= 0.92 and _is_actionable(ctrl_type):
                 # A clear winner: stop walking. There is nothing better to
                 # find, and every further node is another COM call.
                 best = (score, node)
                 break
+            if score >= 0.92:
+                # An exact name on something you cannot click — a status-bar
+                # readout, a label, a tooltip. The field log has the arrow
+                # landing on a "google.com" TextControl in the corner of the
+                # screen while the real link sat in the middle. Keep it as the
+                # answer if nothing better turns up, but keep looking.
+                score -= 0.06
             if score >= min_score:
                 if best is None or score > best[0]:
                     second = best[0] if best is not None else second
@@ -510,9 +532,22 @@ def _find_via_ocr(query: str, screenshot_path: Optional[str] = None,
                 box, text, conf = det
             except Exception:
                 continue
+            # RapidOCR 1.2.x hands the score back as a STRING ('0.848…'), so
+            # `conf < 0.4` raised TypeError on the first detection, the outer
+            # handler logged "OCR tier failed" and this entire tier has never
+            # once returned a result — every accessibility-tree miss went
+            # straight to the vision model, slower and paid for.
+            try:
+                conf = float(conf)
+            except (TypeError, ValueError):
+                conf = 1.0
             if conf < 0.4:
                 continue
-            score = _score_match(query, text, "")
+            # OCR splits words at random ("Exte nsions"), which no amount of
+            # fuzzy word matching recovers. Compare on a space-free form too.
+            score = max(_score_match(query, text, ""),
+                        _score_match(query.replace(" ", ""),
+                                     "".join(str(text).split()), ""))
             if score >= min_score and (best is None or score > best[0]):
                 # Compute bbox from 4 corners
                 xs = [int(p[0]) for p in box]

@@ -1320,8 +1320,17 @@ class CompanionManager(QObject):
             return {"error": "no guide is running"}
         if action not in ("next", "back", "repeat", "stop"):
             return {"error": "action must be next, back, repeat, stop or resume"}
-        runner.request(action)
-        return {"ok": True, "action": action}
+        accepted = runner.request(action)
+        # Say where the walkthrough now is. Returning a bare "ok" told the
+        # model nothing, so when it was unsure it called again — three times
+        # in 1.4s in the field log, which walked the user off the end of a
+        # two-step guide.
+        out = {"ok": True, "action": action,
+               "step": runner.index + 1, "of": runner.total}
+        if not accepted:
+            out["note"] = ("Already done a moment ago — the guide has moved "
+                           "once, not again. Do not call this again.")
+        return out
 
     async def _tool_point_at(self, args: dict) -> dict:
         """Put the pointer on something the user asked about.
@@ -2713,7 +2722,9 @@ class CompanionManager(QObject):
         # Watch for the user DOING the step: a click on the pointed control,
         # or a real change on screen judged against a before-shot. Started
         # before the sentence is spoken so clicking mid-sentence counts.
-        step._watcher = self._make_step_watcher(step)
+        nxt = plan.steps[idx + 1] if idx + 1 < len(plan.steps) else None
+        step._watcher = self._make_step_watcher(
+            step, next_target=getattr(nxt, "target", "") or "")
         self._submit(step._watcher.begin())
 
         # Get the step AFTER this one ready while this one is being spoken.
@@ -3480,14 +3491,27 @@ class CompanionManager(QObject):
         self._guide_auto_advance = bool(enabled)
         _log.info("guide auto-advance %s", "on" if enabled else "off")
 
-    def _make_step_watcher(self, step):
+    def _make_step_watcher(self, step, next_target: str = ""):
+        import dataclasses
+
         from tutor_features.step_watch import StepWatcher
         from ai import gemini_vision, verification
 
         expected = getattr(step, "expected", None)
+        # The strongest signal a step can have is usually one the planner
+        # never thinks to write down: the thing the NEXT step points at
+        # appearing. "Open the File menu" is done the moment "Save As" is on
+        # screen. It costs nothing, it is instant, and if that control is
+        # already visible the arming pass mutes it — so adding it is free.
+        if expected is not None and next_target and not expected.control_appears:
+            expected = dataclasses.replace(expected, control_appears=next_target)
         local = None
         if expected and getattr(expected, "has_local_signal", False):
-            local = lambda: verification.verify_local(expected)   # noqa: E731
+            # ArmedExpectation, not verify_local: it mutes the signals that
+            # are already true when the step is spoken and keeps watching the
+            # rest. A plain check returns "done" on step one of every guide
+            # that names the app the user is already sitting in.
+            local = verification.ArmedExpectation(expected)
         return StepWatcher(
             step.instruction,
             judge=gemini_vision.judge_step,

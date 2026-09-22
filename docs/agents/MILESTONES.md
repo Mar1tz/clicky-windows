@@ -1652,3 +1652,62 @@ question is unchanged, because half of it is the audio Tora speaks and the
 other half is the instructions that make her behave the way she does.
 
 11 tests in `test_cost_footprint.py`; 564 passing.
+
+### Field report 6: "the steps suck now"
+
+`tora.log` said it on nearly every step of every walkthrough, fifteen times
+across two evenings:
+
+    step expectation already satisfied at step start — ignoring it;
+    watching clicks and screen changes instead
+
+That line is the walkthrough giving up on its own completion signal. Four
+separate bugs stacked up behind it.
+
+**1. A step's finish line was true before the step began.** The planner is
+asked for the observable OUTCOME of a step and answered with the app the
+user was already in — "process: chrome.exe" on every step of a guide that
+happens inside Chrome. `verify_local` accepted a process that was merely
+RUNNING, not frontmost, so the signal was true before the user moved.
+Running is now a weak signal (0.5, below the 0.85 advance threshold): it can
+support a verdict, never carry one.
+
+**2. One stale signal threw away all the others.** An expectation is several
+independent signals — any one means success. The watcher discarded the
+*whole* expectation if *any* signal was already true, so "process:
+chrome.exe (already true) + url_contains: youtube (the real outcome)" left
+nothing to watch. `ArmedExpectation` now mutes the already-true signals
+individually and keeps the rest, and un-mutes one the moment it goes false
+(which is what makes "close the panel, now reopen it" detectable).
+`verify_local` also scans every signal and keeps the strongest instead of
+returning on the first hit, so a weak reading can no longer hide a strong
+one behind it.
+
+**3. Three "next"s in 1.4 seconds.** `guide_step` returned a bare `ok`, so
+when the live model was unsure whether the call landed it called again —
+three times in the log, which walked the user off the end of a two-step
+guide before they had done anything. The runner now ignores an identical
+command inside 1.5s and the tool answers with where the walkthrough actually
+is ("step 2 of 5").
+
+**4. The OCR pointer tier had never run.** RapidOCR 1.2.x returns its
+confidence as a *string*; `conf < 0.4` raised TypeError on the first
+detection every time, the outer handler logged "OCR tier failed" and every
+accessibility-tree miss fell through to the vision model — seconds of delay
+and a paid call where 200ms of local OCR would have done. Fixed, along with
+the spurious spaces OCR inserts ("Exte nsions" now matches "Extensions").
+Also: an exact name match on something you cannot click (the `google.com`
+readout in Chrome's status corner, which is where the arrow actually landed)
+no longer beats the real link.
+
+And one addition, not a fix: **the next step's target is now this step's
+finish line**. "Open the File menu" is done the moment "Save As" is on
+screen. The guide has the whole plan, so it no longer needs the planner to
+think of that — and if the control is already visible, the arming pass mutes
+it, so it costs nothing when it does not apply.
+
+The planner prompt was also rewritten to demand signals that are false NOW
+and true after, and is told the foreground process so it stops describing
+the starting state back as an outcome.
+
+10 tests in `test_e2e_guide.py`; 573 passing.

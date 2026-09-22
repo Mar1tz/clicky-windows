@@ -168,60 +168,135 @@ def process_running(exe_name: str) -> bool:
         return False
 
 
-def _process_signal(value: str) -> tuple[bool, str]:
-    """Satisfied if the named app is frontmost (best) or at least running."""
+def _process_signal(value: str) -> tuple[float, str]:
+    """How strongly the named app's state says the step was performed.
+
+    Frontmost is real evidence. Merely RUNNING is not, and treating it as
+    proof was the single worst bug in the guide: a walkthrough inside Chrome
+    has `process: chrome.exe` on most of its steps, chrome.exe is running
+    before the user lifts a finger, and so every one of those steps looked
+    finished the instant it was spoken. It stays as a weak contributor —
+    below ADVANCE, so it can never finish a step on its own.
+    """
     want = (value or "").strip().lower()
     if not want:
-        return False, ""
+        return 0.0, ""
     if not want.endswith(".exe"):
         want += ".exe"
     front = (active_process_name() or "").lower()
     if front == want:
-        return True, f"{want} is the active window"
+        return WEIGHT["process"], f"{want} is the active window"
     if process_running(want):
-        return True, f"{want} is running"
-    return False, ""
+        return 0.5, f"{want} is running (but not in front)"
+    return 0.0, ""
 
 
 # ── The engine ───────────────────────────────────────────────────────────────
 
-def verify_local(expectation: Expectation) -> Verdict:
-    """Check every non-vision signal. Blocking — call in a thread.
+def check_signal(kind: str, value: str) -> tuple[float, str]:
+    """One signal's confidence right now, and how it reads. Blocking."""
+    from ai import guide_state
+    from ai.gemini_planner import StepCondition
 
-    OR semantics, strongest first: the moment one signal is satisfied we are
-    done, and we never care which route the user took to satisfy it.
+    try:
+        if kind == "process":
+            return _process_signal(value)
+        if kind == "window_title":
+            ok = value.lower() in (active_window_title() or "").lower()
+            return (WEIGHT["window_title"] if ok else 0.0,
+                    f'window title contains "{value}"')
+        # The remaining kinds are exactly guide_state's vocabulary.
+        ok = guide_state.check(StepCondition(kind=kind, value=value)) is True
+        return (WEIGHT.get(kind, 0.8) if ok else 0.0, f"{kind}: {value}")
+    except Exception:
+        _log.debug("signal %s failed", kind, exc_info=True)
+        return 0.0, ""
+
+
+def verify_local(expectation: Expectation) -> Verdict:
+    """Check every non-vision signal and keep the strongest. Blocking.
+
+    OR semantics: any signal can carry the step, so the user reaches the
+    outcome their own way. It scans them all rather than returning on the
+    first hit, because a weak signal (an app that is merely running) must not
+    hide a strong one behind it.
     """
     if not expectation:
         return Verdict(confidence=0.0, method="none", detail="nothing to check")
 
-    from ai import guide_state
-    from ai.gemini_planner import StepCondition
-
+    best = Verdict(confidence=0.0, method="none", detail="no signal satisfied")
     for kind, value in expectation.signals():
         if kind == "visual":
             continue
-        try:
-            if kind == "process":
-                ok, detail = _process_signal(value)
-            elif kind == "window_title":
-                ok = value.lower() in (active_window_title() or "").lower()
-                detail = f'window title contains "{value}"'
-            else:
-                # The remaining kinds are exactly guide_state's vocabulary.
-                ok = guide_state.check(
-                    StepCondition(kind=kind, value=value)
-                ) is True
-                detail = f"{kind}: {value}"
-        except Exception:
-            _log.debug("signal %s failed", kind, exc_info=True)
-            continue
-        if ok:
-            return Verdict(confidence=WEIGHT.get(kind, 0.8),
-                           method=kind, detail=detail)
+        conf, detail = check_signal(kind, value)
+        if conf > best.confidence:
+            best = Verdict(confidence=conf, method=kind, detail=detail)
+        if best.confidence >= ADVANCE:
+            return best
 
-    needs_vision = bool(expectation.visual)
-    return Verdict(confidence=0.0, method="none",
-                   detail="no signal satisfied", needs_vision=needs_vision)
+    best.needs_vision = bool(expectation.visual) and not best.done
+    return best
+
+
+def satisfied_now(expectation: Expectation) -> set[str]:
+    """The signals that are ALREADY true, before the user has done anything.
+
+    A signal that is true at step start cannot tell "the user did it" from
+    "it already looked like that", so the guide mutes exactly those and keeps
+    the rest. Muting the whole expectation instead — which is what the guide
+    used to do — threw away a free, instant answer on four steps out of five.
+    """
+    out: set[str] = set()
+    for kind, value in expectation.signals():
+        if kind == "visual":
+            continue
+        conf, _detail = check_signal(kind, value)
+        if conf > 0.0:
+            out.add(kind)
+    return out
+
+
+class ArmedExpectation:
+    """A step's expectation with the already-true signals muted.
+
+    Call arm() once when the step is shown; call the instance from then on,
+    exactly like verify_local. Muted signals are re-armed the moment they go
+    false, because that is a real transition the user can then complete.
+    """
+
+    def __init__(self, expectation: Expectation) -> None:
+        self.expectation = expectation
+        self.muted: set[str] = set()
+
+    def arm(self) -> list[str]:
+        """Mute what is already true. Returns the signals still worth watching."""
+        self.muted = satisfied_now(self.expectation)
+        return [k for k, _ in self.expectation.signals()
+                if k not in self.muted and k != "visual"]
+
+    @property
+    def armed_any(self) -> bool:
+        return any(k not in self.muted
+                   for k, _ in self.expectation.signals() if k != "visual")
+
+    def __call__(self) -> Verdict:
+        best = Verdict(confidence=0.0, method="none", detail="no signal satisfied")
+        for kind, value in self.expectation.signals():
+            if kind == "visual":
+                continue
+            conf, detail = check_signal(kind, value)
+            if kind in self.muted:
+                # Still watching it: once it goes false the user can make it
+                # true again, and that transition is exactly what we want.
+                if conf == 0.0:
+                    self.muted.discard(kind)
+                continue
+            if conf > best.confidence:
+                best = Verdict(confidence=conf, method=kind, detail=detail)
+            if best.confidence >= ADVANCE:
+                return best
+        best.needs_vision = bool(self.expectation.visual) and not best.done
+        return best
 
 
 # ── Is anything happening at all? ────────────────────────────────────────────

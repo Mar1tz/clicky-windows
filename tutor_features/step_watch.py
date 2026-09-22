@@ -27,9 +27,15 @@ module watches for the two things that only happen when the user acts:
      AFTER, did the user do it? This covers typing, scrolling, drag, menus —
      anything a click test cannot name.
 
-The planner's own expectation is kept as a third signal, but ONLY if it was
-false when the step was shown. If it is already satisfied it is discarded,
-out loud in the log, instead of silently jamming the step forever.
+The planner's own expectation is kept as a third signal, but only the parts
+of it that were FALSE when the step was shown. An expectation is several
+independent signals and they do not all go stale together: a plan written
+inside Chrome says "process: chrome.exe" (true before the user moves) AND
+"url_contains: youtube" (the actual outcome). Discarding the whole thing
+because of the first one threw away a free, instant answer on four steps out
+of five and left every step polling the vision model — see
+ai.verification.ArmedExpectation, which mutes the already-true signals and
+keeps watching the rest.
 
 Nothing here touches Qt. The watcher runs on the manager's asyncio loop; the
 click poller is a daemon thread that does read-only Win32 queries.
@@ -311,7 +317,26 @@ class StepWatcher:
         self._cheap_at = self._thumb_at = now
 
         # The planner's expectation is only useful if it can go false -> true.
+        # An ArmedExpectation mutes the individual signals that are already
+        # true and keeps the rest; anything else is all-or-nothing.
         if self._local_check is not None:
+            arm = getattr(self._local_check, "arm", None)
+            if callable(arm):
+                try:
+                    kept = await asyncio.to_thread(arm)
+                except Exception:
+                    kept = []
+                muted = getattr(self._local_check, "muted", set())
+                if kept:
+                    _log.info("watching %s (%s already true at step start)",
+                              ", ".join(kept), ", ".join(sorted(muted)) or "nothing")
+                    self._local_armed = True
+                else:
+                    _log.info("every expectation signal (%s) was already true at "
+                              "step start — watching clicks and the screen instead",
+                              ", ".join(sorted(muted)) or "none given")
+                    self._local_check = None
+                return
             try:
                 v = await asyncio.to_thread(self._local_check)
                 already = bool(getattr(v, "done", False))

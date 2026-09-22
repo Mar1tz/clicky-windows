@@ -163,11 +163,20 @@ Rules:
     those apply, and `none` only for a final "you're done" step. The value
     must be text that will really be observable — a distinctive word from the
     resulting title, not a whole sentence.
-  • expected_state is the heart of it: describe the OUTCOME, not the click.
-    Fill in every signal that will be true once the step is done, because any
-    one of them is accepted — that is what lets someone press Ctrl+S instead
-    of clicking Save and still be counted as successful. Always give process
-    and/or window_title when the step opens, closes or switches an app.
+  • expected_state is the heart of it: describe the CHANGE, not the click and
+    not the room the user is already standing in. Every signal you give must
+    be FALSE at the moment the step is spoken and TRUE once it is done. The
+    tutor watches these signals to advance on its own, and a signal that is
+    already true tells it nothing — it cannot separate "the user did it" from
+    "it always looked like that", so that step will sit there.
+    So: do NOT name the app the user is already in, the window they are
+    already looking at, or a control already on screen. If the user is in
+    Chrome, "process: chrome.exe" is worthless on every step; name the NEW
+    thing — the dialog that opens, the field that takes focus, the url the
+    address bar navigates to, the panel that disappears.
+    Fill in every signal that will newly become true, because any one of them
+    is accepted — that is what lets someone press Ctrl+S instead of clicking
+    Save and still be counted as successful.
   • possible_actions lists two or three genuinely different routes to the
     same outcome, so the tutor can offer another way if someone gets stuck.
   • Between three and seven steps. If it truly needs more, group them.
@@ -311,6 +320,18 @@ async def plan(
     ask = f"Goal: {goal}"
     if window_title:
         ask += f'\nThe user is currently in: "{window_title}"'
+    # Naming the starting state is what stops the planner describing it back
+    # as the "outcome" of step one — the defect that made every first step
+    # look finished before the user had touched anything.
+    try:
+        from tutor import active_process_name
+        proc = active_process_name() or ""
+        if proc:
+            ask += (f"\nThe foreground process is already {proc} and that "
+                    f"window is already open — those facts are NOT outcomes "
+                    f"of any step, so do not use them as signals.")
+    except Exception:
+        _log.debug("could not read the foreground process", exc_info=True)
     parts.append(gemini.text_part(ask))
 
     try:

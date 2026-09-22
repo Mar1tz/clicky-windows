@@ -70,6 +70,7 @@ class GuideRunner:
         step_timeout_s: float = 35.0,
         stuck_after_s: float = 15.0,
         present_delay_s: float = 0.8,
+        repeat_guard_s: float = 1.5,
     ):
         self._guide = guide
         self._speak_step = speak_step
@@ -96,6 +97,11 @@ class GuideRunner:
         # Look-ahead is a little expensive (it reads screen state), so it runs
         # once every few polls, not every one.
         self._lookahead_every = 6
+
+        # Repeat guard for request(); see the note there.
+        self._repeat_guard_s = repeat_guard_s
+        self._last_command: Optional[Command] = None
+        self._last_command_at = 0.0
 
         self._start_index = max(0, start_index)
         self._idx = -1
@@ -130,7 +136,7 @@ class GuideRunner:
         self._loop = asyncio.get_running_loop()
         self._task = asyncio.ensure_future(self._run())
 
-    def request(self, command: Command) -> None:
+    def request(self, command: Command) -> bool:
         """Manual override from the user — next / back / repeat / stop.
 
         Safe to call from ANY thread, and it is: Esc arrives on the keyboard
@@ -138,16 +144,30 @@ class GuideRunner:
         manager's asyncio loop. asyncio.Event.set() is not thread-safe, so the
         wake is marshalled onto the loop; the plain _pending attribute is what
         the loop actually reads, so the command is never lost either way.
+
+        Returns False when the command was swallowed as a repeat. The live
+        model fires a tool three times in a second when it is unsure whether
+        the first one landed — the log has three guide_step calls inside 1.4
+        seconds — and three "next"es on a two-step guide end the walkthrough
+        before the user has done anything. One "next" is one step.
         """
+        now = time.monotonic()
+        if (command == self._last_command
+                and now - self._last_command_at < self._repeat_guard_s):
+            _log.info("ignoring a repeated '%s' %.1fs after the last one",
+                      command, now - self._last_command_at)
+            return False
+        self._last_command, self._last_command_at = command, now
         self._pending = command
         loop = self._loop
         if loop is not None and loop.is_running():
             try:
                 loop.call_soon_threadsafe(self._wake.set)
-                return
+                return True
             except RuntimeError:
                 pass          # loop already closing — fall through
         self._wake.set()
+        return True
 
     def stop(self) -> None:
         self.request("stop")
