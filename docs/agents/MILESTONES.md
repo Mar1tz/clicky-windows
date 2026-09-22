@@ -1711,3 +1711,26 @@ and true after, and is told the foreground process so it stops describing
 the starting state back as an outcome.
 
 10 tests in `test_e2e_guide.py`; 573 passing.
+
+### Field report 7: "when it's doing steps it says things twice"
+
+Two voices, saying nearly the same thing, a second apart.
+
+**1. `speaking` meant "the server is still generating", not "her voice is
+still coming out".** Gemini streams audio far faster than real time — a
+seven-second answer arrives in about two — and `turn_complete` cleared the
+flag the moment the last packet landed, while five seconds of that answer
+was still queued in `PcmStreamPlayer`. The walkthrough asks `_guide_busy()`
+before it speaks a step precisely so it does not talk over her; it got False
+and spoke anyway. `RealtimeConversation.speaking` now also reports the
+audio still queued in the player, so `_wait_idle` waits for the speakers,
+not for the socket.
+
+**2. The live model was saying step one itself.** `show_me_how` told it to
+say one short sentence and not to list steps — but "Sure, first click the
+address bar" is one short sentence, and Tora then speaks "Step 1 of 2:
+click the address bar" a beat later. The instruction now says outright that
+step one is about to be spoken aloud and that saying it too means the user
+hears it twice.
+
+2 more tests in `test_e2e_guide.py`; 576 passing.

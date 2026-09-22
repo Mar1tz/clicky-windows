@@ -219,3 +219,38 @@ def test_the_next_step_s_target_becomes_this_step_s_finish_line():
     kept = mgr._make_step_watcher(already, next_target="Save As")
     assert kept._local_check.expectation.control_appears == "Print", \
         "a signal the planner did give is never overwritten"
+
+
+# ── two voices at once ───────────────────────────────────────────────────────
+
+def test_she_is_still_speaking_while_her_voice_is_queued():
+    """Gemini streams a seven-second answer in about two, so turn_complete
+    lands while five seconds of it is still in the player. The walkthrough
+    asks "is she busy?" before speaking a step, got False, and spoke over
+    her — the user hears the same instruction from two voices."""
+    import ai.gemini_realtime as rt
+
+    conv = rt.RealtimeConversation.__new__(rt.RealtimeConversation)
+    conv._speaking = True
+    conv._player = type("P", (), {"queued_seconds": 4.5})()
+    assert conv.speaking
+
+    conv._speaking = False              # the server has finished generating
+    assert conv.speaking, "but the speakers have not finished"
+
+    conv._player = type("P", (), {"queued_seconds": 0.0})()
+    assert not conv.speaking, "and when they have, the guide may talk"
+
+
+def test_a_player_that_cannot_be_read_never_blocks_the_guide():
+    import ai.gemini_realtime as rt
+
+    class Broken:
+        @property
+        def queued_seconds(self):
+            raise RuntimeError("device gone")
+
+    conv = rt.RealtimeConversation.__new__(rt.RealtimeConversation)
+    conv._speaking = False
+    conv._player = Broken()
+    assert conv.speaking is False

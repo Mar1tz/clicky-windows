@@ -1777,11 +1777,14 @@ class CompanionManager(QObject):
         return {
             "started": True,
             "instruction": (
-                "Say ONE short sentence RIGHT NOW confirming you'll walk them "
-                "through it. Do NOT list steps and do NOT say 'say next' — "
-                "Tora speaks and points at each step and advances by itself "
-                "as they go. If they later say next/back/repeat/stop, call "
-                "guide_step."
+                "Say ONE short sentence RIGHT NOW — just that you'll walk "
+                "them through it, nothing else. Do NOT say the first step, "
+                "or any step, or what they should click: Tora speaks step "
+                "one out loud a second from now, and if you say it too they "
+                "hear the same instruction twice. 'Sure, let me walk you "
+                "through it.' and then stop talking. Do not say 'say next' "
+                "either — it advances by itself. If they later say "
+                "next/back/repeat/stop, call guide_step once."
             ),
         }
 

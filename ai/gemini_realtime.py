@@ -413,7 +413,23 @@ class RealtimeConversation:
 
     @property
     def speaking(self) -> bool:
-        return self._speaking
+        """Is Tora's voice still coming out of the speakers?
+
+        Not the same question as "is the server still generating". Gemini
+        streams audio far faster than real time — a seven-second answer
+        arrives in about two — and `turn_complete` clears `_speaking` the
+        moment the last packet lands, while five seconds of that answer is
+        still queued in the player. Anything that asks "is she busy" to
+        avoid talking over her (the walkthrough, before it speaks a step)
+        got False and spoke anyway, so the user heard two voices at once
+        saying nearly the same thing.
+        """
+        if self._speaking:
+            return True
+        try:
+            return self._player.queued_seconds > 0.05
+        except Exception:
+            return False
 
     @property
     def connecting(self) -> bool:
