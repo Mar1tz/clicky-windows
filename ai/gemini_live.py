@@ -88,13 +88,27 @@ class LiveEvent:
 class LiveSession:
     """One websocket to one Live model. Use as an async context manager."""
 
-    def __init__(self, model: str, setup: dict):
+    def __init__(self, model: str, setup: dict, resume_handle: Optional[str] = None):
         self._model = model
         self._setup = dict(setup)
         self._setup["model"] = f"models/{model}"
+        # The server hands out a handle for THIS conversation. Passing it back
+        # on the next connect is what makes a session continue instead of
+        # starting again with no memory of anything said so far.
+        self._setup["sessionResumption"] = {"handle": resume_handle} if resume_handle else {}
         self._ws = None
-        self._resume_handle: Optional[str] = None
+        self._resume_handle: Optional[str] = resume_handle
         self._closed = False
+
+    @property
+    def resume_handle(self) -> Optional[str]:
+        """The latest handle the server gave us, to resume this conversation."""
+        return self._resume_handle
+
+    @property
+    def setup_for_test(self) -> dict:
+        """The setup exactly as it will be sent. Only tests read this."""
+        return dict(self._setup)
 
     # ── Lifecycle ────────────────────────────────────────────────────────────
 

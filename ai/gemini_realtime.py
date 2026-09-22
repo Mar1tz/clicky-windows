@@ -369,6 +369,7 @@ class RealtimeConversation:
         on_speaking: Optional[Callable[[], None]] = None,
         on_turn_end: Optional[Callable[[Turn], None]] = None,
         on_lost: Optional[Callable[[str], None]] = None,
+        recap: Optional[Callable[[], str]] = None,
         voice: str = "Zephyr",
     ):
         self._tools = tools
@@ -377,6 +378,9 @@ class RealtimeConversation:
         self._on_speaking = on_speaking or (lambda: None)
         self._on_turn_end = on_turn_end or (lambda _t: None)
         self._on_lost = on_lost or (lambda _r: None)
+        # Asked for the last few turns when a session could not be resumed,
+        # so a fresh one still knows what "that" means.
+        self._recap = recap
         self._voice = voice
 
         self._session: Optional[LiveSession] = None
@@ -385,6 +389,7 @@ class RealtimeConversation:
         self._system = ""
         self._player = PcmStreamPlayer()
         self._connecting: Optional[asyncio.Task] = None
+        self._resume_handle: Optional[str] = None
 
         self._turn = Turn()
         self._speaking = False
@@ -440,6 +445,7 @@ class RealtimeConversation:
                     "endOfSpeechSensitivity": "END_SENSITIVITY_HIGH",
                 }
             },
+            # Filled in by _connect: a handle continues the conversation.
             "sessionResumption": {},
         }
 
@@ -474,15 +480,56 @@ class RealtimeConversation:
             self._connecting = None
 
     async def _connect(self, system_prompt: str) -> bool:
+        """Open a session, continuing the previous conversation when we can.
+
+        A Live session is closed by the server every few minutes. Before
+        this, every reconnect started a blank conversation: the tools still
+        worked, but "open that" had nothing to point at, so Tora looked like
+        it had lost the ability to do things. The resumption handle is the
+        server's own way of saying "carry on where you were".
+        """
         await self.close()
-        session = LiveSession(Models.REALTIME, self._setup(system_prompt))
-        await session.connect()
+        resume = self._resume_handle if system_prompt == self._system else None
+        session = LiveSession(Models.REALTIME, self._setup(system_prompt), resume_handle=resume)
+        try:
+            await session.connect()
+        except Exception:
+            if not resume:
+                raise
+            # A handle can expire or be refused; a fresh session is better
+            # than no session, and the recap below carries the thread.
+            _log.info("could not resume the conversation; starting a new session")
+            self._resume_handle = None
+            session = LiveSession(Models.REALTIME, self._setup(system_prompt))
+            await session.connect()
+            resume = None
         self._session = session
         self._system = system_prompt
         self._opened_at = time.monotonic()
         self._pump = asyncio.ensure_future(self._run_pump(session))
-        _log.info("realtime session open (%s)", Models.REALTIME)
+        _log.info("realtime session open (%s)%s", Models.REALTIME,
+                  " - resumed" if resume else "")
+        if not resume:
+            await self._reseed()
         return True
+
+    async def _reseed(self) -> None:
+        """Hand a new session the last few turns, so references survive.
+
+        Resumption is the good path; this is the fallback for when the
+        handle is gone (first session of the day, an expired handle, a
+        changed system prompt). It costs one short text turn.
+        """
+        recap = self._recap() if self._recap else ""
+        if not recap:
+            return
+        try:
+            await self._session.send_text(
+                "[Continuing the same conversation. What was said so far:\n"
+                + recap + "\nDo not greet the user again; carry on.]",
+                turn_complete=False)
+        except Exception:  # noqa: BLE001 - a recap is a nicety, never a blocker
+            _log.debug("could not re-seed the session", exc_info=True)
 
     async def close(self) -> None:
         pump, self._pump = self._pump, None
@@ -591,6 +638,11 @@ class RealtimeConversation:
                     return                      # superseded by a reconnect
 
                 if ev.kind == "input_transcript":
+                    if not self._turn.heard:
+                        # A new question: the tool budget starts again. Before
+                        # this, a long conversation quietly used up the six
+                        # rounds and Tora stopped being able to do anything.
+                        self._tool_rounds = 0
                     self._turn.heard += ev.text
                     self._on_heard(ev.text)
 
@@ -611,9 +663,11 @@ class RealtimeConversation:
                     self._turn.interrupted = True
 
                 elif ev.kind == "tool_call":
+                    _log.info("tool call: %s", ", ".join(c.name for c in ev.calls))
                     self._tool_rounds += 1
                     if self._tool_rounds > MAX_TOOL_ROUNDS:
-                        _log.warning("tool loop did not settle — answering anyway")
+                        _log.warning("tool loop did not settle after %d rounds in this request — "
+                                     "answering anyway", self._tool_rounds - 1)
                         await session.send_tool_response([
                             (c, {"error": "too many tool calls; just answer"})
                             for c in ev.calls
@@ -628,6 +682,9 @@ class RealtimeConversation:
                 elif ev.kind == "turn_complete":
                     # A turn that produced only tool calls is not the answer;
                     # the answer is the turn that follows the tool results.
+                    # Either way the chain for this request has ended, so the
+                    # tool budget goes back to full.
+                    self._tool_rounds = 0
                     if not ev.produced_output:
                         continue
                     self._finish_turn()
@@ -646,6 +703,8 @@ class RealtimeConversation:
             _log.warning("realtime pump ended: %s", e)
 
         if session is self._session:
+            # Keep the handle: the next connect resumes this conversation.
+            self._resume_handle = session.resume_handle or self._resume_handle
             self._session = None
             self._speaking = False
             self._on_lost(reason)
@@ -660,10 +719,16 @@ class RealtimeConversation:
     async def _run_tool(self, call: ToolCall) -> dict:
         handler = self._tools.get(call.name)
         if handler is None:
+            _log.warning("tool %s is not registered in this session", call.name)
             return {"error": f"unknown tool {call.name}"}
         try:
             out = await handler(call.args or {})
-            return out if isinstance(out, dict) else {"result": out}
+            result = out if isinstance(out, dict) else {"result": out}
         except Exception as e:
             _log.exception("tool %s failed", call.name)
             return {"error": str(e)}
+        # Logged at INFO on purpose: "it stopped doing things" is otherwise
+        # invisible in tora.log, which is the first place anyone looks.
+        _log.info("tool %s -> %s", call.name,
+                  "error: " + str(result["error"])[:120] if result.get("error") else "ok")
+        return result

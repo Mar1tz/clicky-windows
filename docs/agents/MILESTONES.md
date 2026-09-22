@@ -1562,3 +1562,35 @@ rule M20 made for SAFE tools. A failed `npm run build` still fails its step.
 Tests: PowerShell really runs in PowerShell (the field command verbatim),
 read-only classification, the verifier rule, and a full manager replay of
 the florist run with the live model's calls, which is now COMPLETED.
+
+### Field report 5: "it could open things at first, then it couldn't"
+
+Two independent bugs, both invisible in the log, both with the same
+symptom: Tora acts happily early in a conversation and later only talks.
+
+**1. The tool budget was per session, not per request.** `MAX_TOOL_ROUNDS`
+(6) guards against a tool chain that never settles. It was only reset by
+`_finish_turn`, which runs when a turn PRODUCES OUTPUT - so a turn that
+only called tools, or a turn the user barged in on, left the count where
+it was. After six such turns in one session every further tool call was
+answered with "too many tool calls; just answer", for the rest of the
+session. Now the count resets when a new question starts (first input
+transcript of a turn) and at every `turn_complete`; a runaway chain
+inside ONE request is still capped, which is what the guard was for.
+
+**2. Every reconnect started a blank conversation.** Gemini retires a
+Live session every few minutes (five times in one evening's log).
+`LiveSession` captured the server's `sessionResumptionUpdate` handle and
+never used it, so each reconnect opened a new conversation with no
+history: the tools were still there, but "open that one" had nothing to
+point at. The handle is now kept on the conversation and passed back on
+connect; if it is refused or absent, the new session is seeded with a
+recap of the last few exchanges (`CompanionManager._recent_exchanges`).
+
+Also: Esc trips the desktop kill switch and it only reset when a new
+agent TASK started - so after one Esc, voice actions stayed disarmed. A
+new spoken request now re-arms it. And every tool call is logged at INFO
+("tool call: …", "tool X -> ok"), because none of this was visible in
+`tora.log` when the user reported it.
+
+6 new tests (`test_realtime_session.py`); 553 passing.

@@ -757,9 +757,29 @@ class CompanionManager(QObject):
                 on_speaking=self._on_realtime_speaking,
                 on_turn_end=self._on_realtime_turn_end,
                 on_lost=self._on_realtime_lost,
+                recap=self._recent_exchanges,
                 voice=cfg.voice,
             )
         return self._realtime
+
+    def _recent_exchanges(self, turns: int = 6, limit: int = 1600) -> str:
+        """The last few exchanges, for a session that could not be resumed.
+
+        The live model keeps the conversation; when the server retires a
+        session and the resumption handle is gone with it, this is what
+        stops "open that one" from becoming "open what?".
+        """
+        history = self._app_memory.get(app_key(active_window_title()), [])
+        if not history:
+            for messages in self._app_memory.values():
+                history = history or messages
+        lines = []
+        for message in history[-turns * 2:]:
+            who = "User" if message.role == "user" else "You"
+            text = " ".join((message.content or "").split())
+            if text:
+                lines.append(f"{who}: {text[:240]}")
+        return chr(10).join(lines)[-limit:]
 
     async def _realtime_connect(self) -> bool:
         """Open the conversation before anyone asks anything.
@@ -779,7 +799,23 @@ class CompanionManager(QObject):
             return False
 
     def _on_realtime_heard(self, text: str) -> None:
+        if not self._heard_buf:
+            self._rearm_desktop_control()
         self._heard_buf.append(text)
+
+    @staticmethod
+    def _rearm_desktop_control() -> None:
+        """Esc trips the desktop kill switch and cancels what is running.
+        Asking for something new is consent to act again - otherwise the
+        first Esc of the day silently disarms every later request.
+        """
+        try:
+            from agents.tools.computer_tools import kill_switch
+        except Exception:  # noqa: BLE001 - the workforce is optional
+            return
+        if kill_switch.tripped:
+            kill_switch.reset()
+            _log.info("desktop control re-armed by a new request")
 
     def _on_realtime_said(self, text: str) -> None:
         # Output transcription arrives in fragments as the model speaks, so
