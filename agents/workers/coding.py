@@ -26,6 +26,7 @@ from .base import Worker
 class CodingWorker(Worker):
     worker_type = "coding"
     default_tools = [
+        "open_app", "list_windows", "focus_window",
         "create_folder", "create_file", "write_file", "edit_file", "read_file",
         "list_dir", "move_path", "delete_path",
         "run_command", "install_package", "execute_script", "run_tests",

@@ -17,7 +17,7 @@ EXPECTED = {
     "browser": {"open_page", "extract_information", "click_element", "fill_field",
                 "screenshot_page", "close_browser"},
     "computer": {"find_on_screen", "screenshot", "move_cursor", "click", "type_text",
-                 "key_press"},
+                 "key_press", "open_app", "list_windows", "focus_window"},
 }
 
 
@@ -51,8 +51,9 @@ def test_risk_levels():
     assert risk["create_file"] is RiskLevel.LOW and risk["move_path"] is RiskLevel.LOW
     assert risk["run_command"] is RiskLevel.MEDIUM and risk["git_commit"] is RiskLevel.MEDIUM
     assert risk["delete_path"] is RiskLevel.HIGH and risk["git_push"] is RiskLevel.HIGH
-    looking_only = {"close_browser", "find_on_screen", "screenshot"}
-    for name in (EXPECTED["browser"] | EXPECTED["computer"]) - looking_only:
+    looking_only = {"close_browser", "find_on_screen", "screenshot", "list_windows"}
+    assert risk["open_app"] is RiskLevel.MEDIUM and risk["focus_window"] is RiskLevel.LOW
+    for name in (EXPECTED["browser"] | EXPECTED["computer"]) - looking_only - {"open_app", "focus_window"}:
         assert risk[name] is RiskLevel.HIGH, name
     for name in looking_only:
         assert risk[name] is RiskLevel.SAFE, name

@@ -1223,3 +1223,43 @@ green with a tick and fades after 2.6 s. Hover for name, task and current
 action; click to open the panel. One 60 fps timer that stops when nothing
 moves — a test asserts a paused orb costs no frames. Window flags copy
 `ui/overlay.py`, so it behaves like the cursor overlay, not a second app.
+
+---
+
+# Field report: "open the Devin app" got stuck
+
+The first real use after the integration review. The user asked for an
+app to be opened; it went to the Computer Agent, whose only way to open
+anything was Win key → type → Enter — **three approvals** for one step —
+and the dialog's **"Always allow key_press" did nothing** (M20's floor),
+so it asked again on every keystroke. A button that silently does
+nothing is the worst kind of bug: the user did the right thing and the
+system ignored it.
+
+**Fixed with three things**
+* `open_app(name)` — MEDIUM risk, one step. Searches the Start Menu
+  (per-user, all-users, Desktop) with exact → prefix → substring
+  matching, skipping uninstallers and docs, falls back to PATH, launches
+  the way a Start Menu click does, waits for the window and brings it
+  forward. `list_windows` (SAFE) and `focus_window` (LOW) alongside. On
+  this machine `open_app("Devin")` resolves to its `.lnk` directly.
+* **Per-task grants.** `AgentManager.grant_for_task(task_id, tool)` lets a
+  person allow an `always_ask` tool for the rest of *one* job. The floor
+  still holds — no policy or setting can do this — but a human decision
+  about this task can. It dies with the task and is never persisted. The
+  dialog now offers **"Allow key_press for this task"** for those tools
+  and keeps "Always allow" only where it is true.
+* Worker prompts that reach for the right tool: open an app with
+  `open_app`, never with the Windows key; see what is open with
+  `list_windows` before touching the mouse.
+
+**Two test bugs found on the way, both worth remembering**
+* `` word boundaries became literal 0x08 backspace bytes when a regex
+  travelled through a shell heredoc — the M6 bug, again, in my own code
+  this time. Regex containing backslashes must be written with the Write
+  tool or assembled from `chr(92)`, never piped through bash.
+* A test that created a `QApplication` without holding a reference made
+  the interpreter crash at exit with code 127 and no summary line. UI
+  tests keep the app in a module-scoped fixture for exactly this reason.
+
+482 passing.

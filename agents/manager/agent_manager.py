@@ -114,6 +114,7 @@ class AgentManager:
         self._agents: dict[str, AgentState] = {}        # agent_id -> state
         self._tasks: dict[str, Task] = {}               # task_id -> task (incl. finished)
         self._approvals: dict[str, tuple[ApprovalRequest, asyncio.Future]] = {}
+        self._grants: dict[str, set[str]] = {}          # task_id -> tools a human allowed for it
         self._store_unsub: Optional[Unsubscribe] = None
         self._events_unsub: Optional[Unsubscribe] = None
 
@@ -610,6 +611,8 @@ class AgentManager:
             return await self.orchestrator.run_task(ctx, worker, resume=resume)
         finally:
             with self._lock:
+                self._grants.pop(ctx.task.id, None)
+            with self._lock:
                 self._runs.pop(ctx.task.id, None)
                 self._active.discard(ctx.task.id)
             self._start_next()
@@ -719,6 +722,23 @@ class AgentManager:
 
     # -- approvals -----------------------------------------------------------
 
+    def grant_for_task(self, task_id: str, tool_name: str) -> None:
+        """Allow `tool_name` for the rest of ONE task without asking again.
+
+        This is how "Allow for this task" on the dialog works, and it is
+        the only thing that quiets an `always_ask` tool: not a policy, not
+        a setting, but a person saying so about this job. It dies with
+        the task and is never persisted.
+        """
+        with self._lock:
+            self._grants.setdefault(task_id, set()).add(tool_name)
+        self.events.emit(EventKind.LOG, f"{tool_name} allowed for the rest of this task",
+                         task_id=task_id, data={"granted": tool_name})
+
+    def granted_for_task(self, task_id: str) -> set[str]:
+        with self._lock:
+            return set(self._grants.get(task_id, ()))
+
     def pending_approvals(self) -> list[ApprovalRequest]:
         with self._lock:
             return [req for req, _ in self._approvals.values()]
@@ -735,6 +755,11 @@ class AgentManager:
 
     def _approver_for(self, task: Task) -> Callable[[ApprovalRequest], Any]:
         async def _ask(req: ApprovalRequest) -> bool:
+            if req.call.tool_name in self.granted_for_task(task.id):
+                self.events.emit(EventKind.APPROVAL_RESOLVED, "approved (granted for this task)",
+                                 task_id=task.id, agent_id=task.agent_id,
+                                 data={"request_id": req.id, "approved": True, "granted": True})
+                return True
             loop = asyncio.get_running_loop()
             fut: asyncio.Future = loop.create_future()
             with self._lock:

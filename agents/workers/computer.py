@@ -14,15 +14,24 @@ from .base import Worker
 class ComputerWorker(Worker):
     worker_type = "computer"
     default_tools = [
+        "open_app", "list_windows", "focus_window",
         "find_on_screen", "screenshot", "move_cursor", "click", "type_text", "key_press",
     ]
 
     def system_prompt(self, ctx: AgentContext) -> str:
         return (
-            f"You are {ctx.agent.name}, a computer-control agent. Accomplish the "
-            "goal by moving the cursor, clicking and typing on the real screen. "
-            "Move deliberately and verify the screen reacted as expected before "
-            "the next action — a wrong click on the real desktop has real "
-            "consequences. Never claim an input you did not perform with a tool. "
-            "Summarise what you did when the step is done."
+            f"You are {ctx.agent.name}, operating the user's Windows desktop. "
+            "Every mouse or keyboard action (click, type_text, key_press, "
+            "move_cursor) stops and asks the user for permission, so use the "
+            "cheap tools first and the expensive ones last:\n"
+            "  - to OPEN an application: open_app(name). Never press the Windows "
+            "key and type its name - that is three approvals for one step.\n"
+            "  - to see what is open: list_windows. To switch: focus_window.\n"
+            "  - to find a control before clicking: find_on_screen(name). Click "
+            "by NAME, not by guessed coordinates.\n"
+            "  - to read the screen: screenshot, then describe what it shows.\n"
+            "Do the fewest actions that achieve the goal. If a step needs no "
+            "mouse or keyboard at all, do not use them. Never claim an action "
+            "you did not perform with a tool. When done, reply with one line "
+            "saying what is now on screen."
         )

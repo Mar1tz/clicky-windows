@@ -56,6 +56,13 @@ QPushButton#apDeny { background-color: rgba(255, 70, 70, 60);
 """
 
 
+def _always_asks(manager, tool_name: str) -> bool:
+    try:
+        return bool(getattr(manager.tools.get(tool_name), "always_ask", False))
+    except Exception:
+        return False
+
+
 def _risk_of(manager, tool_name: str) -> RiskLevel:
     try:
         return manager.tools.get(tool_name).spec.risk
@@ -146,8 +153,15 @@ class ApprovalDialog(QDialog):
         buttons = QHBoxLayout()
         buttons.setSpacing(8)
         self._always_btn: Optional[QPushButton] = None
+        self._task_scoped = _always_asks(manager, request.call.tool_name)
         if not is_plan:
-            self._always_btn = QPushButton(f"Always allow {request.call.tool_name}")
+            # An always_ask tool (mouse, keyboard) cannot be allowed forever
+            # by any setting - that is the floor - but a person can allow
+            # it for the rest of THIS job. Offering "Always allow" there was
+            # a button that silently did nothing, which is worse than none.
+            label = (f"Allow {request.call.tool_name} for this task" if self._task_scoped
+                     else f"Always allow {request.call.tool_name}")
+            self._always_btn = QPushButton(label)
             self._always_btn.clicked.connect(self._on_always)
             buttons.addWidget(self._always_btn)
         buttons.addStretch(1)
@@ -169,9 +183,12 @@ class ApprovalDialog(QDialog):
         by the same agent never reaches a dialog. It cannot override a
         denied tool - see PermissionPolicy.allows.
         """
-        agent = self._manager.get_agent(self.request.agent_id)
-        if agent is not None:
-            agent.spec.permissions.allow_always(self.request.call.tool_name)
+        if self._task_scoped:
+            self._manager.grant_for_task(self.request.task_id, self.request.call.tool_name)
+        else:
+            agent = self._manager.get_agent(self.request.agent_id)
+            if agent is not None:
+                agent.spec.permissions.allow_always(self.request.call.tool_name)
         self.always = True
         self._finish(True)
 

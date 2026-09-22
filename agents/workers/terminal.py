@@ -13,6 +13,7 @@ from .base import Worker
 class TerminalWorker(Worker):
     worker_type = "terminal"
     default_tools = [
+        "open_app", "list_windows", "focus_window",
         "run_command", "install_package", "execute_script",
         "read_file", "list_dir",
     ]
