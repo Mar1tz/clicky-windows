@@ -18,6 +18,8 @@ EXPECTED = {
                 "screenshot_page", "close_browser"},
     "computer": {"find_on_screen", "screenshot", "move_cursor", "click", "type_text",
                  "key_press", "open_app", "list_windows", "focus_window"},
+    "spreadsheet": {"read_workbook", "write_workbook", "clean_data", "reconcile_sheets", "check_formulas",
+                    "compare_periods"},
 }
 
 

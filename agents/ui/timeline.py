@@ -48,6 +48,7 @@ _STYLE: dict[EventKind, tuple[str, object, bool]] = {
     EventKind.TASK_STATUS:       ("●", design.TEXT_SECONDARY, False),
     EventKind.ERROR:             ("✕", design.ERROR, False),
     EventKind.LOG:               ("·", design.TEXT_MUTED, True),
+    EventKind.FINDING:           ("⚑", design.WARNING, True),
 }
 
 # Progress fires on every step and would drown the timeline.
@@ -122,6 +123,10 @@ def describe(ev: Event) -> tuple[str, str]:
         return f"Task {ev.message}", ""
     if kind is EventKind.ERROR:
         return ev.message, ""
+    if kind is EventKind.FINDING:
+        f = data.get("finding") or {}
+        detail = " - ".join(x for x in (f.get("detail", ""), f.get("action", "")) if x)
+        return f"Needs review: {ev.message}", detail[:300]
     return ev.message, ""
 
 

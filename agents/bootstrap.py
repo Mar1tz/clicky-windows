@@ -153,7 +153,7 @@ def build_agent_manager(
     classifier = TieredIntentClassifier(router.pick(TaskKind.FAST)) if live \
         else HeuristicIntentClassifier()
 
-    return AgentManager(
+    mgr = AgentManager(
         tools=default_registry(),
         router=router,
         workers=default_workers(),
@@ -169,6 +169,34 @@ def build_agent_manager(
         decomposer=decomposer,
         limits=limits,
     )
+    attach_extensions(mgr, in_memory=in_memory, base_dir=None if in_memory else os.path.dirname(task_db))
+    return mgr
+
+
+def attach_extensions(mgr: AgentManager, *, in_memory: bool = False,
+                      base_dir: Optional[str] = None) -> AgentManager:
+    """Give the manager its scheduler and industry-extension registry, and
+    re-enable the packs that were on last session - before start(), so a
+    recovered task from a pack finds its worker registered.
+
+    In-memory (tests): no state files, and pack data under the workspace,
+    never the user profile.
+    """
+    from agents.extensions import ExtensionRegistry
+    from agents.manager.scheduler import Scheduler
+    base = os.path.join(mgr.workspace_root, ".extensions") if in_memory else (base_dir or data_dir())
+    mgr.scheduler = Scheduler(mgr, state_path=None if in_memory else os.path.join(base, "schedules.json"))
+    mgr.extensions = ExtensionRegistry(mgr, state_path=None if in_memory else os.path.join(base, "extensions.json"),
+                                       data_root=base)
+    try:
+        mgr.extensions.discover()
+        if not in_memory:
+            restored = mgr.extensions.restore()
+            if restored:
+                log.info("extensions enabled: %s", ", ".join(restored))
+    except Exception:  # noqa: BLE001 - a broken pack must never stop the workforce
+        log.exception("extension discovery failed")
+    return mgr
 
 
 def describe_plan(task) -> str:

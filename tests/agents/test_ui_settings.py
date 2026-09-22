@@ -208,8 +208,11 @@ def test_zero_means_unlimited(tmp_path):
 
 def test_cancelling_a_queued_task_retires_it(tmp_path):
     """A queued task has no coroutine to interrupt - cancel must still work."""
+    # The first task holds the only slot by waiting for plan approval; a
+    # scripted folder task otherwise finishes in milliseconds and the
+    # "queued" one would simply run (seen as a flake under load).
     mgr = build_agent_manager(workspace_root=str(tmp_path), in_memory=True,
-                              max_concurrent=1).start()
+                              max_concurrent=1, require_plan_approval=True).start()
     try:
         first = mgr.submit_task(Task(title="first", goal="make a folder",
                                      workspace=str(tmp_path), metadata={"subdir": "one"}))
@@ -217,6 +220,11 @@ def test_cancelling_a_queued_task_retires_it(tmp_path):
                                       workspace=str(tmp_path), metadata={"subdir": "two"}))
         assert mgr.cancel(queued.id)
         assert mgr.wait(queued.id, 10).status is TaskStatus.CANCELLED
+        deadline = time.monotonic() + 10
+        while not mgr.pending_approvals() and time.monotonic() < deadline:
+            time.sleep(0.02)
+        for req in mgr.pending_approvals():
+            mgr.approve(req.id, True)
         assert mgr.wait(first.id, 30).status is TaskStatus.COMPLETED
         assert not (tmp_path / "two").exists(), "a cancelled queue entry must not run"
     finally:

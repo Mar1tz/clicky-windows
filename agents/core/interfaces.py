@@ -296,6 +296,9 @@ class Intent:
     worker_type: str = "coding"
     workspace_hint: Optional[str] = None   # "MyApp" in "create a folder called MyApp"
     reply: str = ""                        # what to say to the user right now
+    # Routing an extension attaches ({"extension", "template", "workflow",
+    # "client", "workspace", ...}); copied onto task.metadata.
+    metadata: dict[str, Any] = field(default_factory=dict)
 
 
 class IntentClassifier(ABC):

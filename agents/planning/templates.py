@@ -48,6 +48,7 @@ class TemplateSpec:
             name=npm_name(meta.get("name") or base),
             package=py_package(meta.get("package") or meta.get("name") or base),
             install=bool(meta.get("install", False)),
+            extras={"metadata": dict(meta), "workspace": ctx.task.workspace},
         )
 
     def path(self, *parts: str) -> str:

@@ -114,6 +114,8 @@ def _wire_agents(manager, tray):
                 "The agent workforce did not start. See tora.log for why.")
         tray.on_open_agents.connect(_unavailable)
         tray.on_agent_settings.connect(_unavailable)
+        tray.on_open_extensions.connect(_unavailable)
+        tray.on_open_dashboard.connect(_unavailable)
         return
 
     from agents.ui import attach_approvals, open_agents_window, show_orbs
@@ -140,6 +142,32 @@ def _wire_agents(manager, tray):
 
     tray.on_open_agents.connect(_open_panel)
     tray.on_agent_settings.connect(_open_settings)
+
+    # Industry extensions: the tray opens the switchboard and the dashboard;
+    # the voice side asks for them through sig_open_extension ("turn on the
+    # accounting tools", "create an accounts payable agent").
+    from agents.ui import open_dashboard, open_extensions
+
+    def _open_extension(ext_id: str, what: str):
+        try:
+            if what.startswith("wizard"):
+                ext = workforce.extensions.get(ext_id) if workforce.extensions else None
+                if ext is not None and ext_id == "accounting":
+                    from extensions.accounting.ui.wizard import AgentSetupWizard
+                    dlg = AgentSetupWizard(workforce, ext, template=what.partition(":")[2])
+                    windows["wizard"] = dlg
+                    dlg.show()
+                    dlg.raise_()
+                    return
+            if what in ("", "dashboard"):
+                windows["dashboard"] = open_dashboard(workforce, f"{ext_id}.dashboard")
+        except Exception:
+            import logging as _logging
+            _logging.getLogger("tora.main").exception("could not open extension %s", ext_id)
+
+    tray.on_open_extensions.connect(lambda: windows.__setitem__("extensions", open_extensions(workforce)))
+    tray.on_open_dashboard.connect(lambda: windows.__setitem__("dashboard", open_dashboard(workforce)))
+    manager.sig_open_extension.connect(_open_extension)
 
     def _stop_all():
         n = workforce.cancel_all()

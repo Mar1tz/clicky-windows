@@ -21,7 +21,7 @@ from typing import Optional
 
 from PyQt6.QtCore import QObject, Qt, pyqtSignal
 from PyQt6.QtWidgets import (
-    QDialog, QDialogButtonBox, QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget,
+    QDialog, QDialogButtonBox, QHBoxLayout, QLabel, QLineEdit, QPushButton, QVBoxLayout, QWidget,
 )
 
 from agents.core import ApprovalRequest, RiskLevel
@@ -53,6 +53,10 @@ QPushButton#apApprove { background-color: rgba(0, 120, 255, 120);
                         border-color: rgba(0, 120, 255, 200); font-weight: 600; }
 QPushButton#apDeny { background-color: rgba(255, 70, 70, 60);
                      border-color: rgba(255, 70, 70, 140); }
+QPushButton:disabled { color: rgb(120, 120, 135); background-color: rgba(60, 60, 75, 60); }
+QLineEdit#apConfirm { font-size: 13px; padding: 6px 8px; border-radius: 6px; color: rgb(240, 240, 245);
+                      background-color: rgba(30, 30, 38, 220); border: 1px solid rgba(255, 70, 70, 160); }
+QLabel#apSensitive { font-size: 12px; color: rgb(255, 170, 160); }
 """
 
 
@@ -94,6 +98,8 @@ class ApprovalDialog(QDialog):
         self.request = request
         self.decision: Optional[bool] = None
         self.always = False
+        self.confirmation = ""
+        self._sensitive = bool(getattr(request, "sensitive", False))
 
         self._manager = manager
         is_plan = request.call.tool_name == PLAN_CALL
@@ -114,7 +120,7 @@ class ApprovalDialog(QDialog):
         header.addStretch(1)
         if not is_plan:
             risk = _risk_of(manager, request.call.tool_name)
-            badge = QLabel(risk.value.upper())
+            badge = QLabel("SENSITIVE" if self._sensitive else risk.value.upper())
             badge.setObjectName("apRisk")
             c = _RISK_COLOUR.get(risk, design.WARNING)
             badge.setStyleSheet(
@@ -150,11 +156,25 @@ class ApprovalDialog(QDialog):
             where.setWordWrap(True)
             root.addWidget(where)
 
+        self._confirm: Optional[QLineEdit] = None
+        if self._sensitive:
+            # Money leaves or a filing goes out: no grant, no voice "yes",
+            # no default button - the person types the word.
+            word = request.confirm_word or "CONFIRM"
+            warn = QLabel(f"This cannot be undone from here. Type {word} to approve.")
+            warn.setObjectName("apSensitive")
+            warn.setWordWrap(True)
+            root.addWidget(warn)
+            self._confirm = QLineEdit()
+            self._confirm.setObjectName("apConfirm")
+            self._confirm.setPlaceholderText(word)
+            root.addWidget(self._confirm)
+
         buttons = QHBoxLayout()
         buttons.setSpacing(8)
         self._always_btn: Optional[QPushButton] = None
         self._task_scoped = _always_asks(manager, request.call.tool_name)
-        if not is_plan:
+        if not is_plan and not self._sensitive:
             # An always_ask tool (mouse, keyboard) cannot be allowed forever
             # by any setting - that is the floor - but a person can allow
             # it for the rest of THIS job. Offering "Always allow" there was
@@ -169,7 +189,13 @@ class ApprovalDialog(QDialog):
         self._deny_btn.setObjectName("apDeny")
         self._approve_btn = QPushButton("Approve")
         self._approve_btn.setObjectName("apApprove")
-        self._approve_btn.setDefault(True)
+        self._approve_btn.setDefault(not self._sensitive)
+        if self._confirm is not None:
+            word = (request.confirm_word or "CONFIRM").upper()
+            self._approve_btn.setEnabled(False)
+            self._confirm.textChanged.connect(
+                lambda t: self._approve_btn.setEnabled(t.strip().upper() == word))
+            self._deny_btn.setDefault(True)
         self._deny_btn.clicked.connect(lambda: self._finish(False))
         self._approve_btn.clicked.connect(lambda: self._finish(True))
         buttons.addWidget(self._deny_btn)
@@ -193,6 +219,8 @@ class ApprovalDialog(QDialog):
         self._finish(True)
 
     def _finish(self, approved: bool) -> None:
+        if self._confirm is not None:
+            self.confirmation = self._confirm.text().strip()
         self.decision = approved
         self.accept() if approved else self.reject()
 
@@ -206,8 +234,13 @@ class ApprovalDialog(QDialog):
 
     def click_always(self) -> None:
         if self._always_btn is None:
-            raise RuntimeError("plan approvals have no 'always allow' button")
+            raise RuntimeError("plan approvals and sensitive actions have no 'always allow' button")
         self._always_btn.click()
+
+    def type_confirmation(self, text: str) -> None:
+        if self._confirm is None:
+            raise RuntimeError("only sensitive actions ask for a typed confirmation")
+        self._confirm.setText(text)
 
 
 class ApprovalController(QObject):
@@ -244,7 +277,7 @@ class ApprovalController(QObject):
         try:
             dialog.exec()
             approved = bool(dialog.decision)
-            self._manager.approve(request.id, approved)
+            self._manager.approve(request.id, approved, confirmation=dialog.confirmation)
             self.resolved.emit(request.id, approved)
         except Exception:
             log.exception("approval dialog failed; denying %s", request.id)

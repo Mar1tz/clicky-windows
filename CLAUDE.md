@@ -3,6 +3,8 @@
 Windows desktop AI companion: PyQt6 UI, asyncio on daemon threads, Gemini
 Live for voice/vision, `companion_manager.py` as the hub. We are adding an
 autonomous agent system under `agents/` — see `docs/agents/ARCHITECTURE.md`.
+Industry packs (Accounting first) plug in under `extensions/` — see
+`docs/agents/EXTENSIONS.md`; no industry knowledge goes into `agents/`.
 
 ## Multi-session development protocol
 
@@ -15,10 +17,11 @@ pushes. Three worker sessions build. Conflicts are prevented by
 
 | you are   | you own (may create/edit)                                                    |
 |-----------|-------------------------------------------------------------------------------|
-| manager   | `agents/core`, `agents/manager`, `companion_manager.py`, `main.py`, `config.py`, `ui/*`, docs, `CLAUDE.md`, `TASKS.md`, `tests/agents/test_core*.py`, `tests/agents/test_e2e*.py` |
+| manager   | `agents/core`, `agents/manager`, `agents/extensions`, `companion_manager.py`, `main.py`, `config.py`, `ui/*`, docs, `CLAUDE.md`, `TASKS.md`, `tests/agents/test_core*.py`, `tests/agents/test_e2e*.py` |
 | worker 1  | `agents/tools`, `agents/ui`, `tests/agents/test_tools_*.py`, `tests/agents/test_ui_*.py` |
 | worker 2  | `agents/providers`, `agents/workers`, `agents/understanding`, `tests/agents/test_providers_*.py`, `test_workers_*.py`, `test_understanding_*.py` |
 | worker 3  | `agents/memory`, `agents/planning`, `agents/verification`, `agents/persistence`, `supabase/migrations/0002*`, `tests/agents/test_memory_*.py`, `test_planning_*.py`, `test_verification_*.py`, `test_persistence_*.py` |
+| pack owner | `extensions/<pack>/` (one pack per session), `tests/agents/test_<pack>_*.py`; the framework in `agents/extensions` is the manager's |
 
 Rules:
 1. **Never edit a file outside your ownership.** If you need a change in

@@ -75,6 +75,11 @@ class Registry(ToolRegistry):
         """Register (or replace - last one wins, so tests can stub) a tool."""
         self._tools[tool.name] = tool
 
+    def unregister(self, name: str) -> bool:
+        """Remove a tool. Extensions call this on disable, so a pack that is
+        switched off leaves nothing behind for a model to call."""
+        return self._tools.pop(name, None) is not None
+
     def get(self, name: str) -> BaseTool:
         try:
             return self._tools[name]
@@ -132,11 +137,15 @@ class Registry(ToolRegistry):
         # Computer control uses it - moving the user's own mouse is not a
         # risk you get to pre-approve.
         always_ask = bool(getattr(tool, "always_ask", False))
-        if always_ask or not ctx.policy.allows(spec):
-            reason = (f"{spec.name} always needs a human: it controls your mouse and keyboard"
-                      if always_ask else _deny_reason(spec, ctx.policy))
+        sensitive = bool(getattr(tool, "sensitive", False))
+        if always_ask or sensitive or not ctx.policy.allows(spec):
+            default_reason = f"{spec.name} always needs a human: it controls your mouse and keyboard"
+            reason = (getattr(tool, "ask_reason", "") or default_reason
+                      if (always_ask or sensitive) else _deny_reason(spec, ctx.policy))
             request = ApprovalRequest(task_id=ctx.task_id or "", agent_id=ctx.agent_id or "",
-                                      call=call, reason=reason)
+                                      call=call, reason=reason, sensitive=sensitive,
+                                      confirm_word=(getattr(tool, "confirm_word", "") or "CONFIRM")
+                                      if sensitive else "")
             try:
                 approved = bool(await ctx.approver(request))
             except asyncio.CancelledError:

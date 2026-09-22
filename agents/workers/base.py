@@ -22,9 +22,46 @@ import asyncio
 from typing import Optional
 
 from agents.core import (
-    AgentContext, BaseWorker, ProviderMessage, Step, StepStatus, ToolContext,
-    now,
+    AgentContext, BaseWorker, EventKind, Finding, ProviderMessage, Step, StepStatus,
+    ToolContext, now,
 )
+
+
+def collect_outcomes(ctx: AgentContext, result) -> None:
+    """Lift what a tool reported for the user onto the task.
+
+    `data["findings"]` - things a person must look at - accumulate on
+    `task.metadata["findings"]` (deduplicated: a re-run step or a resumed
+    task must not list the same exception twice) and are announced as
+    FINDING events. `data["checks"]` - how many checks a tool ran - adds
+    up to the "27 checks completed automatically" line.
+    """
+    data = result.data or {}
+    meta = ctx.task.metadata
+    try:
+        checks = int(data.get("checks") or 0)
+    except (TypeError, ValueError):
+        checks = 0
+    if checks:
+        meta["checks_run"] = int(meta.get("checks_run") or 0) + checks
+    raw = data.get("findings") or []
+    if not isinstance(raw, list) or not raw:
+        return
+    have = {Finding(**{k: v for k, v in f.items() if k in Finding.__dataclass_fields__}).key
+            for f in meta.get("findings", []) if isinstance(f, dict) and f.get("title")}
+    for item in raw:
+        if not isinstance(item, dict) or not item.get("title"):
+            continue
+        f = Finding(**{k: v for k, v in item.items() if k in Finding.__dataclass_fields__})
+        if not f.source:
+            f.source = result.tool_name
+        if f.key in have:
+            continue
+        have.add(f.key)
+        meta.setdefault("findings", []).append(f.to_dict())
+        ctx.events.emit(EventKind.FINDING, f.title, task_id=ctx.task.id, agent_id=ctx.agent.id,
+                        level="warn" if f.severity != "info" else "info",
+                        data={"finding": f.to_dict()})
 
 
 def describe_call(call) -> str:
@@ -86,9 +123,10 @@ class Worker(BaseWorker):
         tctx = ctx.tool_context()
         for call in list(step.tool_calls):
             await ctx.control.checkpoint()
-            ctx.progress(f"{self.worker_type}: {call.tool_name}")
+            ctx.progress(describe_call(call))
             result = await ctx.tools.execute(call, tctx)
             step.results.append(result)
+            collect_outcomes(ctx, result)
             if not result.ok:
                 step.status = StepStatus.FAILED
                 step.error = result.error or f"{call.tool_name} failed"
@@ -105,6 +143,12 @@ class Worker(BaseWorker):
 
     async def _run_react(self, step: Step, ctx: AgentContext) -> None:
         system = self.system_prompt(ctx)
+        # Domain knowledge an enabled extension contributed for this task
+        # (see agents/extensions). Appended, never substituted: the
+        # worker's own rules still come first.
+        skills = [s for s in (ctx.extras or {}).get("skills") or [] if s]
+        if skills:
+            system = system + "\n\n" + "\n\n".join(skills)
         messages = [ProviderMessage(role="user", content=self._opening_prompt(step, ctx))]
         tool_names = self.allowed_tool_names(ctx)
         specs = ctx.tools.specs(tool_names)
@@ -130,6 +174,7 @@ class Worker(BaseWorker):
                 result = await ctx.tools.execute(call, tctx)
                 step.tool_calls.append(call)
                 step.results.append(result)
+                collect_outcomes(ctx, result)
                 messages.append(ProviderMessage(
                     role="tool", tool_call_id=call.id,
                     content=result.output or result.error or "(no output)",
@@ -182,6 +227,11 @@ class Worker(BaseWorker):
                 parts.append("")
                 parts.append("Project context:")
                 parts.append(summary)
+
+        context_lines = [l for l in (ctx.extras or {}).get("context_lines") or [] if l]
+        if context_lines:
+            parts.append("")
+            parts.extend(context_lines)
 
         parts.append("")
         parts.append("Use the available tools to complete THIS step. When it is "

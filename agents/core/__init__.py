@@ -8,7 +8,7 @@ from .interfaces import (
 )
 from .models import (
     AgentSpec, AgentState, AgentStatus, ApprovalRequest, Check, ConnectedAccount,
-    Event, EventKind, MemoryEntry, PermissionPolicy, Plan, ProviderCapabilities,
+    Event, EventKind, Finding, MemoryEntry, PermissionPolicy, Plan, ProviderCapabilities,
     ProviderMessage, ProviderResponse, RiskLevel, Step, StepStatus, Task,
     TaskKind, TaskStatus, ToolCall, ToolResult, ToolSpec, VerificationResult,
     new_id, now,
@@ -24,7 +24,7 @@ __all__ = [
     "auto_approve", "auto_deny",
     # models
     "AgentSpec", "AgentState", "AgentStatus", "ApprovalRequest", "Check",
-    "ConnectedAccount", "Event", "EventKind", "MemoryEntry", "PermissionPolicy", "Plan",
+    "ConnectedAccount", "Event", "EventKind", "Finding", "MemoryEntry", "PermissionPolicy", "Plan",
     "ProviderCapabilities", "ProviderMessage", "ProviderResponse", "RiskLevel", "Step",
     "StepStatus", "Task", "TaskKind", "TaskStatus", "ToolCall", "ToolResult", "ToolSpec",
     "VerificationResult", "new_id", "now",

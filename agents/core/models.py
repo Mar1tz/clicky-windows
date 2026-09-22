@@ -110,6 +110,7 @@ class EventKind(str, Enum):
     APPROVAL_RESOLVED = "approval.resolved"
     AGENT_STATUS = "agent.status"            # data: {"state": AgentState.to_dict()}
     USAGE = "usage"                          # data: {"tokens": int, "delta": int, "budget": int|None}
+    FINDING = "finding"                      # data: {"finding": Finding.to_dict()}
     LOG = "log"
     ERROR = "error"
 
@@ -258,6 +259,38 @@ class ApprovalRequest(_Serialisable):
     id: str = field(default_factory=new_id)
     created_at: float = field(default_factory=now)
     approved: Optional[bool] = None
+    # A SENSITIVE call (release a payment, submit a return) cannot be
+    # approved by a per-task grant or a voice "yes": the person must type
+    # `confirm_word` in the dialog. Set by the registry from the tool.
+    sensitive: bool = False
+    confirm_word: str = ""
+
+
+@dataclass
+class Finding(_Serialisable):
+    """Something a person should look at. The unit of exception-driven work.
+
+    Agents that check things (a reconciliation, a duplicate scan, a
+    month-end checklist) run dozens of checks; what the user wants back
+    is the handful that need a human. A tool reports those by returning
+    `data["findings"] = [Finding(...).to_dict(), ...]`; the worker lifts
+    them onto the task (`task.metadata["findings"]`) and emits FINDING,
+    and the final result lists them under "Needs review".
+
+    Generic on purpose: an accounting check, a legal clause review and a
+    failing test all produce the same shape.
+    """
+    title: str
+    detail: str = ""
+    severity: str = "review"               # info | review | high
+    entity: str = ""                       # what it is about: "INV-0042", "Bank 1000"
+    action: str = ""                       # suggested next step
+    source: str = ""                       # tool that raised it
+    id: str = field(default_factory=new_id)
+
+    @property
+    def key(self) -> str:
+        return f"{self.title.strip().lower()}|{self.entity.strip().lower()}"
 
 
 # -- Plans & steps -----------------------------------------------------------

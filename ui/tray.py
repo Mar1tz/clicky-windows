@@ -60,6 +60,8 @@ class TrayManager(QObject):
     on_open_agents        = pyqtSignal()        # Active Agents panel
     on_agent_settings     = pyqtSignal()        # agent rails
     on_stop_agents        = pyqtSignal()        # cancel every running agent
+    on_open_extensions    = pyqtSignal()        # industry packs on/off
+    on_open_dashboard     = pyqtSignal()        # the enabled packs' dashboards
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -149,6 +151,11 @@ class TrayManager(QObject):
         stop_agents = menu.addAction("Stop all agents")
         stop_agents.setEnabled(self._agents_running > 0)
         stop_agents.triggered.connect(self.on_stop_agents)
+
+        dashboard = menu.addAction("Dashboard…")
+        dashboard.triggered.connect(self.on_open_dashboard)
+        extensions = menu.addAction("Extensions…")
+        extensions.triggered.connect(self.on_open_extensions)
 
         menu.addSeparator()
 

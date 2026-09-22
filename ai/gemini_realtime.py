@@ -282,18 +282,33 @@ def tool_declarations() -> list[dict]:
                 "Check on or control background agents. Use when the user "
                 "asks how a build is going, whether something is ready, or "
                 "says stop / pause / resume / cancel that, or approve / deny "
-                "when an agent is waiting for permission."
+                "when an agent is waiting for permission. Also turns industry "
+                "extensions on and off (e.g. id 'accounting' when the user says "
+                "they are an accountant and agrees), opens an extension's "
+                "dashboard, and opens the wizard to create a specialist agent."
             ),
             "parameters": {
                 "type": "object",
                 "properties": {
                     "action": {
                         "type": "string",
-                        "enum": ["status", "pause", "resume", "cancel", "approve", "deny"],
+                        "enum": ["status", "pause", "resume", "cancel", "approve", "deny",
+                                 "list_extensions", "enable_extension", "disable_extension",
+                                 "open_dashboard", "create_agent"],
                     },
                     "task": {
                         "type": "string",
                         "description": "A few words from the task's title, if they named one.",
+                    },
+                    "id": {
+                        "type": "string",
+                        "description": "Extension id for the extension actions, e.g. 'accounting'.",
+                    },
+                    "template": {
+                        "type": "string",
+                        "description": "For create_agent: bookkeeper, accounts_payable, accounts_receivable, "
+                                       "month_end, tax_preparation, audit_assistant, payroll_review or "
+                                       "management_reporting.",
                     },
                 },
                 "required": ["action"],

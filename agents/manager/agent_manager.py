@@ -99,6 +99,10 @@ class AgentManager:
         self.default_policy = default_policy or PermissionPolicy()
         from .limits import TaskLimits
         self.limits = limits or TaskLimits()
+        # Plugged in by bootstrap (agents/extensions, agents/manager/scheduler).
+        # Both optional: the manager is complete without any industry pack.
+        self.extensions: Any = None
+        self.scheduler: Any = None
         self.orchestrator = Orchestrator(
             planner=planner, verifier=verifier, store=store, memory=memory,
             require_plan_approval=require_plan_approval, max_replans=max_replans,
@@ -128,6 +132,8 @@ class AgentManager:
             self._events_unsub = self.events.subscribe(self._track)
         if recover and self.store is not None:
             self.recover()
+        if self.scheduler is not None:
+            self.scheduler.start()
         return self
 
     # -- recovery ------------------------------------------------------------
@@ -210,13 +216,16 @@ class AgentManager:
         ctx = AgentContext(task=task, agent=spec, tools=self.tools,
                            provider=self._metered(provider, task),
                            events=self.events, control=control, memory=self.memory,
-                           approver=self._approver_for(task))
+                           approver=self._approver_for(task),
+                           extras=self._extras_for(task, worker, spec))
         with self._lock:
             self._active.add(task.id)
         run.future = self.runtime.submit(self._run(ctx, worker, resume=bool(task.steps)))
         return True
 
     def stop(self, timeout: float = 5.0) -> None:
+        if self.scheduler is not None:
+            self.scheduler.stop()
         if self.runtime.running:
             for run in list(self._runs.values()):
                 self.runtime.call_soon(run.control.cancel)
@@ -281,6 +290,16 @@ class AgentManager:
         other failure falls back to "this is chat" — the safe answer,
         because it loses a delegation rather than inventing one.
         """
+        if self.extensions is not None:
+            # An enabled pack's own phrases win: "prepare month-end for ABC"
+            # is the month-end agent's job, not a guess for the classifier.
+            try:
+                hit = self.extensions.match_intent(text)
+            except Exception:  # noqa: BLE001
+                log.exception("extension intent matching failed")
+                hit = None
+            if hit is not None:
+                return hit
         if self.classifier is None:
             return Intent(is_task=False, reply="")
         try:
@@ -311,7 +330,9 @@ class AgentManager:
             task = self.task_from_intent(intent, request, workspace=workspace)
         if metadata:
             task.metadata.update(metadata)
-        graph = self.decompose(task) if agent is None else None
+        # A pack's task already has its specialist and its checklist.
+        routed = bool((task.metadata or {}).get("extension"))
+        graph = self.decompose(task) if agent is None and not routed else None
         if graph is not None:
             return self.submit_project(task, graph)
         return self.submit_task(task, agent=agent)
@@ -338,6 +359,9 @@ class AgentManager:
         meta: dict[str, Any] = {"request": text, "reply": intent.reply}
         if intent.workspace_hint:
             meta["subdir"] = intent.workspace_hint
+        routed = dict(getattr(intent, "metadata", None) or {})
+        workspace = workspace or routed.pop("workspace", None)
+        meta.update(routed)
         return Task(
             title=intent.title or text[:60],
             goal=intent.goal or text,
@@ -371,10 +395,24 @@ class AgentManager:
                            provider=self._metered(provider, task),
                            events=self.events, control=control, memory=self.memory,
                            approver=self._approver_for(task),
-                           extras={"tool_names": self._tool_names_for(worker, spec),
-                                   "context_lines": self._context_lines_for(task)})
+                           extras=self._extras_for(task, worker, spec))
         self._start_or_queue(ctx, worker, run)
         return task
+
+    def _extras_for(self, task: Task, worker: BaseWorker, spec: AgentSpec) -> dict[str, Any]:
+        """What planner and worker are told beyond the goal: the tools
+        they really have, facts about this machine or client, and - for a
+        task an extension owns - that pack's domain knowledge."""
+        lines = self._context_lines_for(task)
+        skills: list[str] = []
+        if self.extensions is not None:
+            try:
+                lines = [*self.extensions.context_lines_for(task), *lines]
+                skills = self.extensions.skills_for(task)
+            except Exception:  # noqa: BLE001
+                log.exception("extension context failed")
+        return {"tool_names": self._tool_names_for(worker, spec),
+                "context_lines": lines, "skills": skills}
 
     @staticmethod
     def _context_lines_for(task: Task) -> list[str]:
@@ -757,10 +795,22 @@ class AgentManager:
         a setting, but a person saying so about this job. It dies with
         the task and is never persisted.
         """
+        if self._is_sensitive(tool_name):
+            # Releasing a payment "for the rest of this task" is exactly
+            # the blanket consent financial controls exist to prevent.
+            self.events.emit(EventKind.LOG, f"{tool_name} is sensitive: it asks every time",
+                             task_id=task_id, level="warn", data={"grant_refused": tool_name})
+            return
         with self._lock:
             self._grants.setdefault(task_id, set()).add(tool_name)
         self.events.emit(EventKind.LOG, f"{tool_name} allowed for the rest of this task",
                          task_id=task_id, data={"granted": tool_name})
+
+    def _is_sensitive(self, tool_name: str) -> bool:
+        try:
+            return bool(getattr(self.tools.get(tool_name), "sensitive", False))
+        except Exception:  # noqa: BLE001 - unknown tool
+            return False
 
     def granted_for_task(self, task_id: str) -> set[str]:
         with self._lock:
@@ -770,19 +820,29 @@ class AgentManager:
         with self._lock:
             return [req for req, _ in self._approvals.values()]
 
-    def approve(self, request_id: str, approved: bool) -> bool:
+    def approve(self, request_id: str, approved: bool, *, confirmation: str = "") -> bool:
+        """Resolve a pending approval. A SENSITIVE request is only approved
+        with its confirm word typed by a person (the dialog); a bare
+        approve - a voice "yes", a script - is refused and returns False.
+        Denying never needs a word."""
         with self._lock:
             item = self._approvals.get(request_id)
         if item is None:
             return False
         req, fut = item
+        if approved and req.sensitive and \
+                confirmation.strip().upper() != (req.confirm_word or "CONFIRM").upper():
+            self.events.emit(EventKind.LOG, f"{req.call.tool_name} needs '{req.confirm_word}' typed "
+                             "in the approval dialog", task_id=req.task_id, level="warn",
+                             data={"request_id": req.id, "needs_confirmation": True})
+            return False
         req.approved = approved
         self.runtime.call_soon(_resolve, fut, approved)
         return True
 
     def _approver_for(self, task: Task) -> Callable[[ApprovalRequest], Any]:
         async def _ask(req: ApprovalRequest) -> bool:
-            if req.call.tool_name in self.granted_for_task(task.id):
+            if not req.sensitive and req.call.tool_name in self.granted_for_task(task.id):
                 self.events.emit(EventKind.APPROVAL_RESOLVED, "approved (granted for this task)",
                                  task_id=task.id, agent_id=task.agent_id,
                                  data={"request_id": req.id, "approved": True, "granted": True})
@@ -814,6 +874,15 @@ class AgentManager:
     # -- internals -----------------------------------------------------------
 
     def _default_spec(self, task: Task) -> AgentSpec:
+        template_id = (task.metadata or {}).get("template")
+        if template_id and self.extensions is not None:
+            template = self.extensions.template(template_id)
+            if template is not None:
+                spec = template.spec(task.goal, workspace=task.workspace)
+                if self.default_policy.max_auto_risk.rank < spec.permissions.max_auto_risk.rank:
+                    # A template may be stricter than the user's setting, never looser.
+                    spec.permissions.max_auto_risk = self.default_policy.max_auto_risk
+                return spec
         return AgentSpec(
             name=AGENT_NAMES.get(task.kind, "Assistant Agent"),
             goal=task.goal,

@@ -238,6 +238,7 @@ class CompanionManager(QObject):
     sig_activity            = pyqtSignal(str, str)        # (state_key, human message)
     sig_agent_event         = pyqtSignal(object)          # agents.core.Event → Active Agents UI
     sig_agent_notice        = pyqtSignal(str, str)        # (title, body) → tray toast
+    sig_open_extension = pyqtSignal(str, str)   # (extension id, "" | "dashboard" | "wizard:<template>")
     sig_agents_ready        = pyqtSignal()                # workforce built (or failed); wire the UI now
 
     def __init__(self):
@@ -553,6 +554,12 @@ class CompanionManager(QObject):
         if recent:
             parts.append("Recently finished: " + "; ".join(
                 f"'{t.title}' {t.status.value}" for t in recent))
+        reg = getattr(mgr, "extensions", None)
+        if reg is not None:
+            try:
+                parts.extend(reg.voice_hints(include_off=False))
+            except Exception:  # noqa: BLE001
+                pass
         if not parts:
             return ""
         return (" ".join(parts) + ". If the user asks how it is going, answer from this; "
@@ -1079,8 +1086,17 @@ class CompanionManager(QObject):
             if not pending:
                 return {"error": "nothing is waiting for approval"}
             req = pending[-1]
+            if action == "approve" and getattr(req, "sensitive", False):
+                # Paying suppliers or filing a return is never a spoken yes.
+                return {"ok": False, "what": req.reason,
+                        "note": (f"This one is sensitive: the user must type {req.confirm_word} in the "
+                                 "approval dialog on screen. Tell them that; do not approve it yourself.")}
             mgr.approve(req.id, action == "approve")
             return {"ok": True, "action": action, "what": req.reason}
+
+        if action in ("list_extensions", "enable_extension", "disable_extension", "open_dashboard",
+                      "create_agent"):
+            return self._manage_extensions(mgr, action, args)
 
         candidates = [t for t in top if not t.status.is_terminal]
         if wanted:
@@ -1090,10 +1106,51 @@ class CompanionManager(QObject):
         target = candidates[0]
         done = {"pause": mgr.pause, "resume": mgr.resume, "cancel": mgr.cancel}.get(action)
         if done is None:
-            return {"error": "action must be status, pause, resume, cancel, approve or deny"}
+            return {"error": "action must be status, pause, resume, cancel, approve, deny, list_extensions, "
+                             "enable_extension, disable_extension, open_dashboard or create_agent"}
         ok = done(target.id)
         return {"ok": bool(ok), "action": action, "task": target.title,
                 "status": (mgr.get_task(target.id) or target).status.value}
+
+    def _manage_extensions(self, mgr, action: str, args: dict) -> dict:
+        """Industry packs by voice: "turn on the accounting tools", "open the
+        accounting dashboard", "create an accounts payable agent"."""
+        reg = getattr(mgr, "extensions", None)
+        if reg is None:
+            return {"error": "extensions are not available in this build"}
+        ext_id = str(args.get("id") or args.get("extension") or "").strip().lower()
+        if action == "list_extensions":
+            return {"ok": True, "extensions": [
+                {"id": e["id"], "name": e["name"], "enabled": e["enabled"], "adds": e.get("offer", [])}
+                for e in reg.available()]}
+        if not ext_id:
+            on = [e["id"] for e in reg.available() if e["enabled"]]
+            ext_id = on[0] if len(on) == 1 and action != "enable_extension" else ""
+        if not ext_id:
+            return {"error": "say which extension (id), e.g. 'accounting'"}
+        try:
+            if action == "enable_extension":
+                ext = reg.enable(ext_id)
+                self.sig_open_extension.emit(ext_id, "")
+                return {"ok": True, "enabled": ext.manifest.name, "adds": ext.manifest.offer,
+                        "agents": [t.name for t in ext.get_agent_templates()],
+                        "note": ("Tell the user it is on and what it adds, in one breath. The dashboard is "
+                                 "opening. Suggest trying the demo client, or 'prepare month-end for <client>'.")}
+            if action == "disable_extension":
+                reg.disable(ext_id)
+                return {"ok": True, "disabled": ext_id, "note": "Their data is kept."}
+            if action == "open_dashboard":
+                self.sig_open_extension.emit(ext_id, "dashboard")
+                return {"ok": True, "note": "The dashboard is opening on screen."}
+            if action == "create_agent":
+                template = str(args.get("template") or "").strip()
+                self.sig_open_extension.emit(ext_id, f"wizard:{template}")
+                return {"ok": True, "note": ("The setup wizard is on screen: accounting system, inbox, "
+                                             "permission level, approval threshold and schedule. Walk the "
+                                             "user through it briefly.")}
+        except KeyError as exc:
+            return {"error": str(exc.args[0]) if exc.args else "unknown extension"}
+        return {"error": "unknown extension action"}
 
     async def _delegate_if_task(self, text: str):
         """Cascade route: start a background task if the transcript is one.

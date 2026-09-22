@@ -254,6 +254,21 @@ class Orchestrator:
     def _result_text(task, verification_summary: str) -> str:
         done = [s.title for s in task.steps if s.status is StepStatus.DONE]
         lines = [f"Completed: {task.title}", *[f"  ✓ {t}" for t in done]]
+        checks = int((task.metadata or {}).get("checks_run") or 0)
+        findings = [f for f in (task.metadata or {}).get("findings", []) if isinstance(f, dict)]
+        if checks:
+            lines.append(f"{checks} checks completed automatically")
+        if findings:
+            # Exceptions first: the person reads this to know what THEY
+            # have to do, not to re-read what the agent did.
+            order = {"high": 0, "review": 1, "info": 2}
+            findings = sorted(findings, key=lambda f: order.get(f.get("severity", "review"), 1))
+            lines.append(f"Needs review ({len(findings)}):")
+            lines.extend(f"  {i}. {f.get('title', '')}" for i, f in enumerate(findings[:20], 1))
+            if len(findings) > 20:
+                lines.append(f"  … and {len(findings) - 20} more")
+        elif checks:
+            lines.append("Nothing needs review.")
         if verification_summary:
             lines.append(f"Verified: {verification_summary}")
         return "\n".join(lines)

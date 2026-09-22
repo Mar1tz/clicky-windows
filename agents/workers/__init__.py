@@ -36,6 +36,11 @@ class WorkerRegistry:
     def register(self, worker: BaseWorker) -> None:
         self._workers[worker.worker_type] = worker
 
+    def unregister(self, worker_type: str) -> bool:
+        """Remove a worker type (an extension being disabled). Tasks that
+        name it afterwards fall back to the generalist, like any unknown type."""
+        return self._workers.pop(worker_type, None) is not None
+
     def get(self, worker_type: str) -> BaseWorker:
         """The worker for `worker_type`. Falls back to the coding worker (the
         generalist) for an unknown type rather than failing a task over a
