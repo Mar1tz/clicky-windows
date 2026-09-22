@@ -33,8 +33,8 @@ from typing import Optional
 from PyQt6.QtCore import QPoint, QSize, Qt, pyqtSignal
 from PyQt6.QtGui import QIcon
 from PyQt6.QtWidgets import (
-    QButtonGroup, QFrame, QHBoxLayout, QLabel, QPushButton, QSizeGrip,
-    QStackedWidget, QVBoxLayout, QWidget,
+    QButtonGroup, QFrame, QHBoxLayout, QLabel, QPushButton, QStackedWidget,
+    QVBoxLayout, QWidget,
 )
 
 from ui import app_theme as T
@@ -64,68 +64,6 @@ class _NavItem(QPushButton):
         self.setIcon(QIcon(nav_icon(self._kind, T.TEXT if on else T.TEXT_DIM)))
 
 
-class _TitleBar(QWidget):
-    """Drag to move, double-click to maximise, and the three buttons.
-
-    The window is frameless so the sidebar can run to the very edge and the
-    corners can be rounded; that means the title bar is ours to draw.
-    """
-
-    def __init__(self, window: "ToraApp"):
-        super().__init__()
-        self.setObjectName("titleBar")
-        self.setFixedHeight(T.TITLEBAR_H)
-        self._window = window
-        self._press: Optional[QPoint] = None
-
-        lay = QHBoxLayout(self)
-        lay.setContentsMargins(18, 0, 10, 0)
-        lay.setSpacing(8)
-        self._title = QLabel("Tora")
-        self._title.setObjectName("windowTitle")
-        lay.addWidget(self._title)
-        lay.addStretch(1)
-
-        for text, name, slot in (
-            ("−", "winBtn", self._window.showMinimized),   # minus
-            ("□", "winBtn", self._toggle_max),             # white square
-            ("×", "winClose", self._window.hide),          # multiplication
-        ):
-            b = QPushButton(text)
-            b.setObjectName(name if name != "winClose" else "winBtn")
-            if name == "winClose":
-                b.setObjectName("winBtn")
-                b.setProperty("close", True)
-                b.setStyleSheet(
-                    f"QPushButton:hover {{ background: {T.DANGER}; color: white; }}")
-            b.setCursor(Qt.CursorShape.PointingHandCursor)
-            b.clicked.connect(slot)
-            lay.addWidget(b)
-
-    def set_title(self, text: str) -> None:
-        self._title.setText(f"Tora  ·  {text}")
-
-    def _toggle_max(self) -> None:
-        w = self._window
-        w.showNormal() if w.isMaximized() else w.showMaximized()
-
-    # -- dragging --
-    def mousePressEvent(self, event) -> None:
-        if event.button() == Qt.MouseButton.LeftButton:
-            self._press = event.globalPosition().toPoint() - \
-                self._window.frameGeometry().topLeft()
-
-    def mouseMoveEvent(self, event) -> None:
-        if self._press is not None and not self._window.isMaximized():
-            self._window.move(event.globalPosition().toPoint() - self._press)
-
-    def mouseReleaseEvent(self, _event) -> None:
-        self._press = None
-
-    def mouseDoubleClickEvent(self, _event) -> None:
-        self._toggle_max()
-
-
 class ToraApp(QWidget):
     """The single window. `show_page("agents")` is the whole API for now."""
 
@@ -135,14 +73,13 @@ class ToraApp(QWidget):
         super().__init__()
         self.setWindowTitle("Tora")
         self.setObjectName("appRoot")
-        self.setWindowFlags(Qt.WindowType.Window |
-                            Qt.WindowType.FramelessWindowHint)
-        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
-        # Qt does not paint a stylesheet background on a QWidget SUBCLASS
-        # unless this is set - it does on a plain QWidget, which is why the
-        # sidebar looked right and the page header did not: the header sat
-        # on the translucent window with nothing painted behind it, so its
-        # title and buttons came out ghosted.
+        # A NATIVE window frame, not a hand-rolled one. The first draft was
+        # frameless and translucent so the corners could be rounded; on a
+        # real desktop the strip the custom title bar sat in stayed
+        # transparent and the windows BEHIND Tora showed through it. Windows
+        # 11 already rounds every window, draws the shadow, and does snapping
+        # and drag properly - all of which a frameless window gives up in
+        # exchange for a rectangle we then have to paint ourselves.
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self.resize(T.WINDOW_W, T.WINDOW_H)
         self.setMinimumSize(T.WINDOW_MIN_W, T.WINDOW_MIN_H)
@@ -155,26 +92,29 @@ class ToraApp(QWidget):
         self._pages: dict[str, QWidget] = {}
         self._buttons: dict[str, _NavItem] = {}
         self._stack = QStackedWidget()
+        self._stack.setObjectName("stack")
 
         shell.addWidget(self._build_sidebar())
-
-        right = QWidget()
-        right_lay = QVBoxLayout(right)
-        right_lay.setContentsMargins(0, 0, 0, 0)
-        right_lay.setSpacing(0)
-        self._titlebar = _TitleBar(self)
-        right_lay.addWidget(self._titlebar)
-        right_lay.addWidget(self._stack, 1)
-
-        grip_row = QHBoxLayout()
-        grip_row.setContentsMargins(0, 0, 4, 4)
-        grip_row.addStretch(1)
-        grip_row.addWidget(QSizeGrip(self), 0,
-                           Qt.AlignmentFlag.AlignBottom | Qt.AlignmentFlag.AlignRight)
-        right_lay.addLayout(grip_row)
-        shell.addWidget(right, 1)
+        shell.addWidget(self._stack, 1)
 
         self.show_page(PAGES[0][0])
+
+    def _dark_titlebar(self) -> None:
+        """Ask DWM for a dark title bar, so the native frame is not a bright
+        white band above a near-black app. Silently does nothing off Windows
+        or on a build that does not know the attribute."""
+        try:
+            import ctypes
+            hwnd = int(self.winId())
+            for attribute in (20, 19):       # 20 = Win11/late Win10, 19 = early
+                value = ctypes.c_int(1)
+                ok = ctypes.windll.dwmapi.DwmSetWindowAttribute(
+                    ctypes.c_void_p(hwnd), ctypes.c_int(attribute),
+                    ctypes.byref(value), ctypes.sizeof(value))
+                if ok == 0:
+                    return
+        except Exception:                    # noqa: BLE001 - cosmetic only
+            pass
 
     # ── sidebar ──────────────────────────────────────────────────────────────
 
@@ -260,7 +200,7 @@ class ToraApp(QWidget):
         if button is not None and not button.isChecked():
             button.setChecked(True)
         heading = next((t for k, t, *_ in PAGES if k == key), "")
-        self._titlebar.set_title(heading)
+        self.setWindowTitle(f"Tora  ·  {heading}")
         self.page_changed.emit(key)
 
     def set_state(self, state_name: str) -> None:
@@ -276,6 +216,7 @@ class ToraApp(QWidget):
         if key:
             self.show_page(key)
         self.show()
+        self._dark_titlebar()       # needs a real window handle, so: after show
         self.raise_()
         self.activateWindow()
 

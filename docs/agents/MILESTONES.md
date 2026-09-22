@@ -1781,4 +1781,15 @@ it rather than by reading the code:
     drawn with QPainter (`nav_icon`), as is the combo-box chevron, which Qt
     stops drawing entirely once a stylesheet touches the widget.
 
+**Fixed on first sight of it running.** The first draft used a frameless,
+translucent window with a hand-drawn title bar, so the corners could be
+rounded. Offscreen it rendered perfectly; on a real desktop the strip the
+custom title bar sat in stayed transparent and whatever was behind Tora — a
+terminal, in the field screenshot — showed straight through it. It now wears
+a NATIVE frame: Windows 11 already rounds every window, draws the shadow,
+and handles snapping and drag, none of which a frameless window gets for
+free. The title bar is put into dark mode through DWM so it is not a white
+band above a near-black app. Every region paints its own background, so no
+part of the window depends on the one underneath showing through.
+
 10 tests in `test_ui_app_window.py`; 586 passing.

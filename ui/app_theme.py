@@ -73,34 +73,21 @@ def qss() -> str:
     """
     return f"""
     /* ── frame ─────────────────────────────────────────────────────────── */
-    QWidget#appRoot {{
-        background: {BG};
-        border: 1px solid {BORDER_STRONG};
-        border-radius: {RADIUS}px;
-    }}
+    /* No border and no radius: the window wears a NATIVE frame, and Windows
+       rounds and shadows it. Every region paints its own background, so no
+       part of the app depends on the one underneath it showing through. */
+    QWidget#appRoot {{ background: {BG}; }}
+    QStackedWidget#stack {{ background: {BG}; }}
     QWidget {{
         color: {TEXT};
         font-family: "{FONT}";
         font-size: 13px;
     }}
 
-    /* ── title bar ─────────────────────────────────────────────────────── */
-    QWidget#titleBar {{ background: transparent; }}
-    QLabel#windowTitle {{ color: {TEXT_DIM}; font-size: 12px; font-weight: 600; }}
-    QPushButton#winBtn {{
-        background: transparent; border: none; border-radius: {RADIUS_SMALL}px;
-        color: {TEXT_DIM}; font-size: 15px; padding: 0px; min-width: 32px;
-        min-height: 28px;
-    }}
-    QPushButton#winBtn:hover {{ background: {SURFACE_HOVER}; color: {TEXT}; }}
-    QPushButton#winClose:hover {{ background: {DANGER}; color: #FFFFFF; }}
-
     /* ── sidebar ───────────────────────────────────────────────────────── */
     QWidget#sidebar {{
         background: {BG_SIDEBAR};
         border-right: 1px solid {BORDER};
-        border-top-left-radius: {RADIUS}px;
-        border-bottom-left-radius: {RADIUS}px;
     }}
     QLabel#wordmark {{ font-size: 17px; font-weight: 700; letter-spacing: 3px; }}
     QLabel#wordmarkSub {{ color: {TEXT_FAINT}; font-size: 10px; letter-spacing: 1px; }}
