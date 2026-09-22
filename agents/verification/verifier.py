@@ -113,7 +113,10 @@ class RuleVerifier(Verifier):
             # read_file on a file that turned out not to exist, list_dir on
             # an empty folder - these are how an agent learns. Only tools
             # that ACT can fail a step by failing.
-            if not res.ok and (self._is_read_only(res.tool_name, ctx) or self._is_soft(res.tool_name, ctx)):
+            # A call can also say it only looked (run_command on Get-Item,
+            # git status, dir ...): same rule as a SAFE tool.
+            if not res.ok and (self._is_read_only(res.tool_name, ctx) or self._is_soft(res.tool_name, ctx)
+                               or (res.data or {}).get("read_only")):
                 continue
             call = calls.get(res.call_id)
             args = dict(call.arguments) if call else {}

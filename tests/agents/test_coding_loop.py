@@ -7,6 +7,7 @@ discipline is what is under test, not a model's coding ability.
 """
 from __future__ import annotations
 
+import os
 import asyncio
 import textwrap
 
@@ -254,5 +255,32 @@ def test_progress_line_is_human_readable(repo):
                                       kind=TaskKind.CODING)).id, 60)
         assert "Creating notes.txt" in actions
         assert not any(a.startswith("coding:") for a in actions)
+    finally:
+        mgr.stop()
+
+
+@pytest.mark.skipif(os.name != "nt", reason="the cmd.exe / PowerShell split is Windows-only")
+def test_florist_replay_a_powershell_check_no_longer_fails_a_finished_build(tmp_path):
+    """Field report 4, replayed with the live model's own calls: write the
+    page, check it with Get-Item | Select-Object, list the folder, say done.
+    Before the fix: 'Get-Item is not recognized' (cmd.exe) -> step failed ->
+    replan -> FAILED with the site on disk. Now: COMPLETED."""
+    page = "<!DOCTYPE html><html><body><h1>Bloom &amp; Petal</h1></body></html>"
+    script = [
+        _tc("create_folder", path="FloristWebsite"),
+        _tc("write_file", path="FloristWebsite/index.html", content=page),
+        _tc("run_command", command=f'Get-Item "{tmp_path / "FloristWebsite" / "index.html"}" '
+                                   f'| Select-Object Name, Length, LastWriteTime'),
+        _tc("list_dir", path="FloristWebsite"),
+        ProviderResponse(text="Created the florist website."),
+    ]
+    mgr, _provider = _manager(tmp_path, script)
+    try:
+        task = mgr.wait(mgr.submit_task(Task(title="Create florist website", goal="Create a florist website.",
+                                             workspace=str(tmp_path), kind=TaskKind.CODING)).id, 120)
+        assert task.status is TaskStatus.COMPLETED, task.error
+        look = next(r for c, r in zip(task.steps[0].tool_calls, task.steps[0].results)
+                    if c.tool_name == "run_command")
+        assert look.ok and look.data["shell"] == "powershell" and "index.html" in look.output
     finally:
         mgr.stop()

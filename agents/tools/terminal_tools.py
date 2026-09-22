@@ -33,6 +33,70 @@ _TIMEOUT = {"type": "number", "description": f"Seconds before the process is kil
 # npm/pip package specs: name, scope, version ranges, extras. No shell metacharacters.
 _PACKAGE_RE = re.compile(r"^[A-Za-z0-9@/._:\-\[\]<>=!~^*+,]+$")
 
+# The shell models actually write on Windows is PowerShell: a Verb-Noun
+# cmdlet (Get-Item, Test-Path, Start-Process, Select-Object), a $variable,
+# $env:. cmd.exe answers all of those with "is not recognized", which in
+# the field failed three builds whose files were already written (see
+# MILESTONES "Field report 4").
+_PS_CMDLET = re.compile(
+    r"(?:^|[|;({&]\s*)(?:Get|Set|New|Remove|Test|Select|Where|ForEach|Start|Stop|Invoke|Out|Write|Copy|Move|"
+    r"Rename|Clear|Add|Measure|Sort|Format|Resolve|Split|Join|Expand|Compress|ConvertTo|ConvertFrom|Import|"
+    r"Export|Group|Tee|Wait|Push|Pop|Update)-[A-Za-z]+\b", re.I)
+_PS_SYNTAX = re.compile(r"\$env:|\$[A-Za-z_]\w*\s*=|\$_\b|\$\(|\$PSVersionTable|\[[A-Za-z.]+\]::", re.I)
+_PS_PREFIX = re.compile(r"^\s*(?:&\s*)?[\"']?(?:powershell|pwsh)(?:\.exe)?[\"']?(?:\s|$)", re.I)
+
+# Commands that only LOOK. A failed look is information for the agent (the
+# file is not there, the tool is not installed), never proof a step failed.
+_LOOK_VERBS = {
+    "get-item", "get-childitem", "get-content", "test-path", "select-object", "where-object", "measure-object",
+    "format-table", "format-list", "sort-object", "resolve-path", "get-location", "get-command", "get-process",
+    "select-string", "out-string", "dir", "ls", "type", "cat", "echo", "where", "which", "pwd", "tree", "find",
+    "findstr", "head", "tail", "wc", "stat", "file",
+}
+_LOOK_TOOLS = {  # tool -> sub-commands that only look
+    "git": {"status", "log", "diff", "show", "branch", "remote", "rev-parse", "ls-files"},
+    "npm": {"ls", "list", "view", "outdated", "-v", "--version", "config"},
+    "node": {"-v", "--version", "-e"},
+    "python": {"--version", "-V"},
+    "py": {"--version", "-V"},
+    "pip": {"list", "show", "freeze", "--version"},
+}
+
+
+def looks_like_powershell(command: str) -> bool:
+    if _PS_PREFIX.match(command):
+        return False                       # already wrapped: run as written
+    return bool(_PS_CMDLET.search(command) or _PS_SYNTAX.search(command))
+
+
+def is_read_only_command(command: str) -> bool:
+    """True when every part of a command line only inspects."""
+    text = _PS_PREFIX.sub("", command).strip().strip('"').strip("'")
+    text = re.sub(r"^-Command\s+", "", text, flags=re.I).strip().strip('"').strip("'")
+    parts = [p.strip() for p in re.split(r"\|\||&&|[|;&]", text) if p.strip()]
+    if not parts:
+        return False
+    for part in parts:
+        if re.search(r"(?<![-\w])>{1,2}", part):    # redirection writes a file
+            return False
+        words = part.split()
+        head = words[0].lower().strip('"\'')
+        if head in _LOOK_VERBS:
+            continue
+        sub = words[1].lower() if len(words) > 1 else ""
+        if head in _LOOK_TOOLS and sub in _LOOK_TOOLS[head]:
+            continue
+        return False
+    return True
+
+
+def powershell_argv(command: str) -> list[str]:
+    """PowerShell with UTF-8 output (5.1 defaults to the OEM code page when
+    redirected) and no profile, policy or prompt getting in the way."""
+    exe = "powershell" if IS_WINDOWS else "pwsh"
+    return [exe, "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command",
+            "[Console]::OutputEncoding=[Text.Encoding]::UTF8; " + command]
+
 
 class _ProcessTool(Tool):
     """Shared cwd / timeout handling."""
@@ -55,10 +119,15 @@ class RunCommand(_ProcessTool):
     spec = make_spec(
         "run_command",
         "Run a shell command in the workspace and return its output and exit code. "
-        "Non-interactive: anything that waits for input will time out.",
+        "Non-interactive: anything that waits for input will time out. On Windows the "
+        "command runs in cmd.exe, except that PowerShell (cmdlets like Get-Item or "
+        "Start-Process, $variables) is detected and run in PowerShell - or set "
+        "shell='powershell'. To look at files prefer read_file / list_dir.",
         risk=RiskLevel.MEDIUM, category=CATEGORY,
         properties={
             "command": {"type": "string", "description": "The command line, exactly as typed in a terminal."},
+            "shell": {"type": "string", "enum": ["auto", "cmd", "powershell"],
+                      "description": "Which shell. Default auto (PowerShell syntax is detected)."},
             "cwd": _CWD,
             "timeout": _TIMEOUT,
         },
@@ -72,8 +141,12 @@ class RunCommand(_ProcessTool):
         cwd, err = self._cwd(ctx, args.get("cwd"))
         if err:
             return err
-        out = await run_process(command, cwd=cwd, timeout=self._timeout(args))
-        return self.from_process(out)
+        shell = (args.get("shell") or "auto").lower()
+        use_ps = shell == "powershell" or (shell == "auto" and IS_WINDOWS and looks_like_powershell(command))
+        target = powershell_argv(command) if use_ps else command
+        out = await run_process(target, cwd=cwd, timeout=self._timeout(args))
+        return self.from_process(out, shell="powershell" if use_ps else ("cmd" if IS_WINDOWS else "sh"),
+                                 read_only=is_read_only_command(command))
 
 
 class InstallPackage(_ProcessTool):

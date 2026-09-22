@@ -1,4 +1,5 @@
 """Terminal tools: real subprocesses (python only), no network, no installs."""
+import os
 import shutil
 import sys
 
@@ -167,3 +168,29 @@ async def test_execute_script_powershell(ws, run):
 async def test_execute_script_rejects_unknown_language(ws, run):
     res = await run("execute_script", code="x", language="ruby")
     assert not res.ok and "invalid arguments" in res.error
+
+
+# -- field report 4: PowerShell sent to cmd.exe failed three finished builds -------------------
+
+@pytest.mark.skipif(os.name != "nt", reason="cmd.exe vs PowerShell is a Windows problem")
+async def test_powershell_commands_run_in_powershell(ws, run):
+    """The florist site was written, then `Get-Item ... | Select-Object ...`
+    went to cmd.exe ("'Get-Item' is not recognized") and failed the task."""
+    (ws / "index.html").write_text("<!DOCTYPE html>", encoding="utf-8")
+    r = await run("run_command", command=f'Get-Item "{ws / "index.html"}" | Select-Object Name, Length')
+    assert r.ok, r.output
+    assert "index.html" in r.output and r.data["shell"] == "powershell"
+    assert r.data["read_only"] is True
+    plain = await run("run_command", command="echo hello")
+    assert plain.ok and plain.data["shell"] == "cmd", "ordinary commands still use cmd (npm .cmd shims)"
+    forced = await run("run_command", command="Write-Output ($PSVersionTable.PSVersion.Major)", shell="powershell")
+    assert forced.ok and forced.output.strip().splitlines()[-1].strip().isdigit()
+
+
+def test_read_only_command_classification():
+    from agents.tools.terminal_tools import is_read_only_command as ro, looks_like_powershell as ps
+    assert ro('Get-Item "a.html" | Select-Object Name') and ro("git status") and ro("dir") and ro("type a.txt")
+    assert not ro("npm run build") and not ro("echo x > a.txt") and not ro("Start-Process opera")
+    assert not ro("Test-Path a && npm install"), "one acting part makes the whole line acting"
+    assert ps("Start-Process opera") and ps("$env:PATH") and not ps("npm install")
+    assert not ps('powershell -Command "Get-Item a"'), "an explicit powershell call is left alone"

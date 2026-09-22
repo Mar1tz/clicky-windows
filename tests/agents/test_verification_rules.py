@@ -196,3 +196,28 @@ async def test_verify_task_reruns_steps_and_skips_skipped(tmp_path):
 
     res = await v.verify_task(_ctx(str(tmp_path / "missing-ws")))
     assert not res.ok and res.checks[0].name == "workspace"
+
+
+async def test_a_failed_look_by_command_does_not_fail_a_step_that_did_its_work(tmp_path):
+    """Field report 4: the florist site's index.html was written; the agent's
+    own `Get-Item ...` check then failed and the whole task was FAILED. A
+    command that only looks is information, like a SAFE tool - only
+    commands that act can fail a step by failing."""
+    (tmp_path / "Site").mkdir()
+    (tmp_path / "Site" / "index.html").write_text("<!DOCTYPE html>", encoding="utf-8")
+    step = Step("Create index.html", status=StepStatus.DONE)
+    write = ToolCall("write_file", {"path": "Site/index.html", "content": "<!DOCTYPE html>"})
+    look = ToolCall("run_command", {"command": 'Get-Item "Site/index.html" | Select-Object Name'})
+    step.tool_calls += [write, look]
+    step.results += [ToolResult.success(write, "wrote 15 bytes"),
+                     ToolResult(call_id=look.id, tool_name="run_command", ok=False, error="exit code 255",
+                                data={"read_only": True, "exit_code": 255})]
+    res = await RuleVerifier().verify_step(step, _ctx(str(tmp_path), [step]))
+    assert res.ok, res.summary
+
+    act = ToolCall("run_command", {"command": "npm run build"})
+    step.tool_calls.append(act)
+    step.results.append(ToolResult(call_id=act.id, tool_name="run_command", ok=False, error="exit code 1",
+                                   data={"read_only": False, "exit_code": 1}))
+    res = await RuleVerifier().verify_step(step, _ctx(str(tmp_path), [step]))
+    assert not res.ok, "a command that acts and fails still fails the step"

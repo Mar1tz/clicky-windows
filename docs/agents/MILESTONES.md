@@ -1481,3 +1481,32 @@ out of the TOOL_RESULT event so a 100 KB frame never lands in the
 timeline or the task store.
 
 490 passing.
+
+### Field report 4: "Create a florist website" failed with the website on disk
+
+`index.html` (28 KB) was written. The agent then checked it with
+`Get-Item "...index.html" | Select-Object Name, Length, LastWriteTime`, and
+`run_command` sent that to **cmd.exe**: `'Get-Item' is not recognized`. The
+RuleVerifier fails a step on any failed non-SAFE call, so the finished step
+failed, the one replan hit the same wall (the model then worked out
+`powershell -Command` and succeeded, but the earlier failure still
+counted), and the task ended FAILED with styles.css, script.js and the
+commit never run. The same bug failed two earlier builds (`Start-Process`).
+
+**1. Commands run in the shell they are written for.** `run_command`
+detects PowerShell (Verb-Noun cmdlets, `$variables`, `$env:`) and runs it
+through `powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass
+-Command` with UTF-8 output. Everything else still goes through cmd.exe,
+which npm/npx `.cmd` shims need. A `shell` argument (auto | cmd |
+powershell) lets the model choose, and the tool description says so.
+Results carry `data["shell"]`.
+
+**2. A failed look is not a failed step.** `run_command` marks
+`data["read_only"]` when every part of the line only inspects (Get-Item,
+Test-Path, dir, type, git status, npm ls, …; a redirect or any acting part
+makes it acting). The RuleVerifier skips failed read-only calls, the same
+rule M20 made for SAFE tools. A failed `npm run build` still fails its step.
+
+Tests: PowerShell really runs in PowerShell (the field command verbatim),
+read-only classification, the verifier rule, and a full manager replay of
+the florist run with the live model's calls, which is now COMPLETED.
