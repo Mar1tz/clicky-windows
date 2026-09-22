@@ -15,6 +15,8 @@ We use --onedir (not --onefile) because:
   • Inno Setup bundles the folder into a single Setup.exe anyway.
 """
 
+import os
+
 from PyInstaller.utils.hooks import collect_all, collect_submodules
 
 # ── Modules that are lazy-imported by CompanionManager — PyInstaller's
@@ -56,6 +58,10 @@ hidden = [
 #    failed to start" in tora.log with the app otherwise fine — which is
 #    the designed failure mode, but not one to ship.
 hidden += collect_submodules("agents")
+# Industry extensions are discovered at runtime (pkgutil over the
+# `extensions` package), so the same applies - plus each pack's
+# manifest.json, which is data, not code.
+hidden += collect_submodules("extensions")
 
 # ── Heavy packages that ship non-Python assets (DLLs, JSON, voices).
 #    collect_all grabs submodules + data files + binaries + metadata.
@@ -80,6 +86,7 @@ for pkg in (
     "imageio_ffmpeg",
     "pypdf",
     "docx",
+    "openpyxl",                 # spreadsheet tools (optional; .xlsx read/write keeping formulas)
     "langdetect",
     "pynput",
 ):
@@ -93,6 +100,10 @@ for pkg in (
 
 hiddenimports += hidden
 hiddenimports += collect_submodules("PyQt6")
+
+import glob as _glob
+for _manifest in _glob.glob(os.path.join("extensions", "*", "manifest.json")):
+    datas.append((_manifest, os.path.dirname(_manifest)))
 
 
 a = Analysis(

@@ -1162,6 +1162,126 @@ voice needs Gemini credits. TESTING.md §26 is the script for both.
 
 ---
 
+## M24 · Industry extension framework ✅
+
+**Goal** Industry packs plug into the agent platform without teaching the
+core any industry. A pack is a removable folder.
+
+**Owns** `agents/extensions/*`, `agents/manager/scheduler.py`,
+`agents/tools/spreadsheet_tools.py`, `agents/ui/extensions.py`, and the
+generic core hooks listed below. Design: `docs/agents/EXTENSIONS.md`.
+
+**Build** `IAgentExtension` (get_agent_templates / tools / workers /
+skills / workflows / permissions / integrations / dashboard modules /
+document types / validation rules / intent rules / context lines /
+scheduled jobs + lifecycle hooks), `ExtensionManifest`, and
+`ExtensionRegistry` (discover, install, enable, configure, disable,
+uninstall, restore), which records everything a pack registered so it can
+unplug exactly that. Scheduler: `Schedule` + `FolderWatch` triggers, no
+overlap, no firing for past slots, missed slot fires once, state kept
+across restarts. Generic hooks in core: `Registry.unregister`,
+`WorkerRegistry.unregister`, tool flags `sensitive` / `confirm_word` /
+`ask_reason` / `soft_fail`, `Finding` + `EventKind.FINDING`,
+`data["findings"]` / `data["checks"]` lifted onto the task,
+exception-first result text, `Intent.metadata`, `ctx.extras["skills"]`
+and `["context_lines"]` in worker prompts, `TemplateSpec.extras`, and a
+typed-word approval for sensitive calls (`approve(..., confirmation=)`,
+never granted per task, never by voice). UI: Extensions switchboard,
+dashboard frame (a tab per module), sensitive approval dialog, FINDING
+rows in the timeline, tray "Dashboard…" / "Extensions…". Voice:
+`manage_agents` list/enable/disable_extension, open_dashboard,
+create_agent; enabled packs listed in the per-turn context.
+
+**Done when** A toy pack with no industry knowledge loads, routes an
+utterance, runs a workflow, raises a finding, and unloads leaving the
+registries exactly as they were.
+
+**Landed** `test_extensions_framework.py` (toy pack: plug/unplug,
+routing, state/restore, activation offer, tool-clash rollback, schedule
+maths, once-per-slot, folder watch, sensitive approvals). Core
+spreadsheet tools with `test_tools_spreadsheet.py`.
+
+---
+
+## M25 · Accounting extension, Phase 1 ✅
+
+**Goal** The first industry pack: a digital accounting team that prepares
+and surfaces exceptions, with the accountant in control of anything that
+changes the books, moves money or files a return. All of it runs on mock
+data with no credentials. What it does: `docs/agents/ACCOUNTING.md`.
+
+**Owns** `extensions/accounting/**`, `tests/agents/test_accounting_*.py`,
+`tests/agents/test_ui_extensions.py`.
+
+**Built**
+* Manifest, knowledge layer (skills per role), `AccountingJurisdictionProfile`
+  with generic/ZA/GB/US/EU/AU presets (typical values, never advice),
+  `ClientWorkspace` (one folder per client, `accounting.json`).
+* Permission model: `ActionLevel` READ/DRAFT/POST/SENSITIVE mapped onto
+  RiskLevel + always_ask + sensitive; `ConfidencePolicy` (draft / review /
+  ask), per client.
+* `IAccountingProvider` + `MockAccountingProvider` (seeded demo company with
+  planted exceptions), `LocalBooksProvider` (real double-entry ledger),
+  `CSVExcelProvider` (reads exports, "posts" by writing import files). Xero,
+  QuickBooks, Sage, Pastel and custom ERP are declared and unavailable.
+* 61 tools (category `accounting`): reads, 15 checks, drafts, documents
+  (PDF/DOCX/EML/OCR extraction with per-field confidence), reports/packs
+  (xlsx with formulas), `post_drafts` (POST), `release_payment_batch` and
+  `submit_tax_return` (SENSITIVE).
+* `DraftStore`: drafts, the client's open exceptions, processed documents.
+* 8 templates (Bookkeeper, AP, AR, Month-End, Tax Preparation, Audit
+  Assistant, Payroll Review, Management Reporting), one `AccountingWorker`,
+  9 workflows + accountant-initiated post/release/submit runs, intent rules
+  with client/period extraction, validation rules.
+* Dashboard module (client, period, month-end %, needs attention, drafts,
+  debtors & creditors, deadlines, agents, reports, run buttons) and the
+  agent setup wizard.
+
+**Landed** `test_accounting_pack.py` (20 tests: load/unload, tool levels,
+questions stay chat, three providers answer the same questions,
+unconnected providers say so, confidence thresholds, duplicates, invoice
+pipeline on real PDFs, supplier statement, bookkeeping without touching
+the books, month-end surfaces all 18 planted exceptions, books unchanged
+by a close, missing documents, POST approval + denial, always_ask beats
+always_allow, sensitive blocking with the typed word, tax return
+sensitive, restart restores pack/agents/drafts, interrupted month-end
+resumes) and `test_ui_extensions.py`. The demo month-end runs offline in
+about 2 s.
+
+---
+
+## M26 · Accounting extension, Phase 2: real systems ⬜
+
+**Goal** The same agents against the accountant's real systems.
+
+**Owns** `extensions/accounting/providers/*`, a new
+`extensions/accounting/connectors/` (email, storage), connected-accounts UI
+additions (manager).
+
+**Build, in integration-priority order (API > OAuth > file > browser > UIA > vision)**
+1. `XeroProvider` (OAuth2 PKCE, Accounting API): accounts, TB, journals,
+   bank transactions, invoices/bills, contacts, POs; post = create
+   draft/authorised invoices/bills/manual journals; attachments.
+   Tokens in the OS keyring, never in `.env` or logs (extend `logsafe`).
+2. `QuickBooksProvider`, `SageProvider` on the same interface; run the
+   provider-abstraction test against each with recorded fixtures (no
+   network in the default suite; `-m live` for the real sandbox).
+3. Email: IMAP (generic) then Microsoft Graph / Gmail API. Attachments
+   land in the client's Inbox, so the folder watch and invoice workflow
+   run unchanged. Sending reminders is a POST-level tool that only runs
+   when the client's policy allows it.
+4. OneDrive / SharePoint / Google Drive as document sources (sync to
+   the client folder).
+5. Bank feeds where available (Open Banking / aggregator) as another
+   `import_bank_statement` source.
+6. Practice-wide dashboard: deadlines and open exceptions across clients.
+
+**Done when** A month-end on a Xero demo company produces the same
+exception categories as the mock books, a posted draft appears in Xero as
+a draft/authorised document, and no token appears in any log.
+
+---
+
 ## Appendix — the acceptance test that defines "done" for Phase 1
 
 `tests/agents/test_e2e.py` already encodes it. Any milestone that breaks it

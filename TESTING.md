@@ -390,6 +390,29 @@ This section is the manual pass.
 
 ---
 
+## 27. Accounting Extension
+
+No credentials needed - everything runs on the demo client.
+
+1. Tray → **Extensions…** → Enable **Accounting**. The card turns ON.
+2. Tray → **Dashboard…** → **Demo client**. "ABC Manufacturing (Demo)" appears with period 2026-08, ZAR.
+3. **Month-end close** → an orb appears, finishes in a few seconds. **Needs attention** lists ~27
+   exceptions, including "Supplier payment R84,200.00 to Steelco Supplies has no matching invoice".
+   **Reports** shows the management pack, variance, bank rec and `Exceptions.md`. Month-end bar: 100%.
+4. **Process inbox** → Drafts shows a draft bill for Acme AP-7790 (status draft) and BrightSpark
+   (status review); the FastFreight duplicate and "New supplier BrightSpark Electrical" are exceptions.
+5. Select the Acme draft → **Post selected…** → an approval dialog (POST) → Approve → status posted.
+6. **Payables run** → a payment batch draft; the duplicate Acme bill is held. Select it →
+   **Release payment batch…** → the dialog shows SENSITIVE and Approve stays greyed out until you
+   type RELEASE. There's no "allow for this task" button.
+7. Voice / text box: "prepare month-end for ABC" → routed to the Month-End Agent. "what is a
+   month-end?" → answered, no task.
+8. Say "I'm an accountant" with the pack off → Tora offers it; "yes" → it turns on and the dashboard opens.
+9. **New agent…** → Accounts Payable, weekdays 08:00 → it's listed under **Agents** with a next run time.
+10. Tray → Extensions… → Disable → the Accounting tab and tools are gone; the client folder is untouched.
+
+Automated: `python -m pytest tests/agents -q` (framework, pack, spreadsheet, UI tests included).
+
 ## Quick Smoke Test (5 minutes)
 
 Run this sequence to verify core features fast:

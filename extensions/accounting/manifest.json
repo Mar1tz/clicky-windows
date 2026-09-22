@@ -1,0 +1,55 @@
+{
+  "id": "accounting",
+  "name": "Accounting",
+  "version": "1.0",
+  "description": "A digital accounting team: bookkeeping, payables, receivables, month-end, tax preparation, audit support, payroll review and management reporting - drafts and exceptions, with the accountant in control of anything that changes the books, moves money or files a return.",
+  "capabilities": [
+    "bookkeeping",
+    "accounts_payable",
+    "accounts_receivable",
+    "month_end",
+    "audit",
+    "tax_preparation",
+    "payroll_review",
+    "reporting"
+  ],
+  "required_tools": [
+    "files",
+    "documents",
+    "spreadsheets"
+  ],
+  "optional_integrations": [
+    "xero",
+    "quickbooks",
+    "sage",
+    "pastel",
+    "gmail",
+    "outlook",
+    "onedrive",
+    "sharepoint",
+    "google_drive"
+  ],
+  "activation_phrases": [
+    "i am an accountant",
+    "i'm an accountant",
+    "i am a bookkeeper",
+    "i'm a bookkeeper",
+    "i do the books",
+    "i do bookkeeping",
+    "accounting firm",
+    "accounting practice",
+    "i am a cpa",
+    "i'm a cpa",
+    "chartered accountant",
+    "our finance team",
+    "i work in accounts"
+  ],
+  "offer": [
+    "Bookkeeping agents",
+    "Month-end workflows",
+    "Accounts payable and receivable tools",
+    "Financial document handling",
+    "Reconciliation workflows",
+    "Audit and tax preparation helpers"
+  ]
+}
