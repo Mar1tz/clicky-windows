@@ -371,9 +371,27 @@ class AgentManager:
                            provider=self._metered(provider, task),
                            events=self.events, control=control, memory=self.memory,
                            approver=self._approver_for(task),
-                           extras={"tool_names": self._tool_names_for(worker, spec)})
+                           extras={"tool_names": self._tool_names_for(worker, spec),
+                                   "context_lines": self._context_lines_for(task)})
         self._start_or_queue(ctx, worker, run)
         return task
+
+    @staticmethod
+    def _context_lines_for(task: Task) -> list[str]:
+        """Facts about the machine the planner and worker should not have
+        to guess. For desktop work: what is installed, so "open Devin" is
+        planned as open_app and not as "find Devin's website"."""
+        lines: list[str] = []
+        if task.kind in (TaskKind.COMPUTER, TaskKind.GENERAL):
+            try:
+                from agents.tools.app_tools import installed_apps
+                apps = installed_apps(limit=80)
+                if apps:
+                    lines.append("Installed applications (open any with open_app): "
+                                 + ", ".join(apps))
+            except Exception:  # noqa: BLE001 - not Windows, or no Start Menu
+                pass
+        return lines
 
     def _tool_names_for(self, worker: BaseWorker, spec: AgentSpec) -> list[str]:
         """What this agent can actually call - handed to the planner so it

@@ -190,3 +190,109 @@ def test_dialog_offers_for_this_task_on_always_ask_tools(tmp_path, qapp):
         assert dlg2._always_btn.text() == "Always allow delete_path"
     finally:
         mgr.stop()
+
+
+# -- the agent must be blind to Tora's own windows ---------------------------
+
+@pytest.mark.skipif(not WINDOWS, reason="Win32 windows")
+def test_agent_cannot_see_or_focus_toras_own_windows(qapp):
+    """Field incident: asked to open Devin, the agent focused the 'Active
+    Agents - Tora - AI Companion' panel, typed hello into the panel's own
+    text box, and pressed Enter - submitting 'hello' as a new task. Both
+    doors are shut: own-process windows and app-titled windows are
+    invisible to list_windows and unreachable by focus_window."""
+    from PyQt6.QtWidgets import QWidget
+    w = QWidget()
+    w.setWindowTitle("Active Agents - Tora - AI Companion")
+    w.resize(200, 100)
+    w.show()
+    # A native window takes a few event-loop turns to become visible to
+    # EnumWindows - more when other test modules have been busy on the
+    # same QApplication. Pump until Win32 sees it (or give up honestly).
+    import time
+    deadline = time.monotonic() + 3.0
+    seen = False
+    while time.monotonic() < deadline and not seen:
+        qapp.processEvents()
+        seen = any(t.endswith("Tora - AI Companion")
+                   for t in (x["title"] for x in app_tools.list_windows(include_own=True)))
+    if not seen:
+        w.close()
+        pytest.skip("Win32 never reported the test window as visible (headless session?)")
+    try:
+        titles = [x["title"] for x in app_tools.list_windows()]
+        assert not any(t.endswith("Tora - AI Companion") for t in titles), titles
+        assert app_tools.focus_window("Active Agents") is None
+        assert app_tools.is_own_window(int(w.winId()), w.windowTitle())
+        r = run("focus_window", title="Active Agents")
+        assert not r.ok
+        r = run("type_text", text="hello", window="Active Agents")
+        assert not r.ok and "no open window" in r.error
+    finally:
+        w.close()
+
+
+def test_key_press_tolerates_a_stringified_list():
+    from agents.tools import computer_tools as ct
+
+    class Rec(ct.Backend):
+        def __init__(self): self.pressed = []
+        def press(self, keys): self.pressed.append(tuple(keys))
+    rec = Rec()
+    ct.set_backend(rec)
+    ct.kill_switch.reset()
+    try:
+        ctx = ToolContext(workspace=".", policy=PermissionPolicy(max_auto_risk=RiskLevel.HIGH))
+        # a string is rejected by schema validation, with a message the model can act on
+        r = asyncio.run(default_registry().execute(ToolCall("key_press", {"keys": "['enter']"}), ctx))
+        assert not r.ok and "must be array" in r.error
+        # lists work, and a chord written as one element is split
+        for raw in (["enter"], ["ctrl", "s"], ["ctrl+s"], ["alt", "f4"]):
+            r = asyncio.run(default_registry().execute(ToolCall("key_press", {"keys": raw}), ctx))
+            assert r.ok, (raw, r.error)
+        assert rec.pressed == [("enter",), ("ctrl", "s"), ("ctrl", "s"), ("alt", "f4")]
+    finally:
+        ct.set_backend(None)
+
+
+def test_screenshot_result_carries_the_image_but_events_do_not(tmp_path):
+    """The model must SEE the screenshot; the event log must not store it."""
+    from agents.core import EventBus, EventKind
+    bus = EventBus()
+    results = []
+    bus.subscribe(results.append, kinds=[EventKind.TOOL_RESULT])
+    ctx = ToolContext(workspace=str(tmp_path), events=bus,
+                      policy=PermissionPolicy(max_auto_risk=RiskLevel.HIGH))
+    r = asyncio.run(default_registry().execute(ToolCall("screenshot", {}), ctx))
+    if not r.ok:
+        pytest.skip(f"no screen here: {r.error}")
+    assert len(r.data["image_b64"]) > 1000
+    logged = results[-1].data["result"]["data"]["image_b64"]
+    assert logged.startswith("<") and logged.endswith("chars>")
+
+
+# -- an app that launches and dies is a failure, not "launched" ---------------
+
+def test_open_app_fails_honestly_when_no_window_appears(monkeypatch):
+    """Field: Devin.exe exited straight away (pending update). The old
+    result was ok=True "launched (no window seen yet)", and the agent
+    carried on as if the app were open - acting on whatever window it
+    found next. Now it is a failure that says what happened."""
+    monkeypatch.setattr(app_tools, "find_app", lambda n: ("Devin", r"C:\x\Devin.lnk"))
+    monkeypatch.setattr(app_tools, "focus_window", lambda t: None)
+    monkeypatch.setattr(app_tools, "_launch", lambda p: None)
+    monkeypatch.setattr(app_tools, "_process_running", lambda p: False)
+    monkeypatch.setattr(app_tools, "APPEAR_TIMEOUT_S", 0.05)
+
+    async def no_window(frag, timeout):
+        return None
+    monkeypatch.setattr(app_tools, "_wait_for_window", no_window)
+    r = run("open_app", name="Devin")
+    assert not r.ok
+    assert "no window appeared" in r.error and "Do NOT assume it is open" in r.error
+    assert "exited straight away" in r.error
+    assert r.data["launched"] is True and r.data["process_running"] is False
+
+    monkeypatch.setattr(app_tools, "_process_running", lambda p: True)
+    r = run("open_app", name="Devin")
+    assert not r.ok and "process is running but showed no window" in r.error

@@ -346,7 +346,23 @@ class KeyPress(_ComputerTool):
     )
 
     async def act(self, args, ctx):
-        keys = [str(k) for k in (args.get("keys") or []) if str(k).strip()]
+        raw = args.get("keys") or []
+        if isinstance(raw, str):
+            # Models sometimes send "['ctrl', 's']" or "ctrl+s" for an array.
+            # Iterating the string would press '[', "'", 'c'... - seen in the
+            # field. Decode it instead.
+            import ast
+            try:
+                parsed = ast.literal_eval(raw)
+                raw = parsed if isinstance(parsed, (list, tuple)) else [str(parsed)]
+            except (ValueError, SyntaxError):
+                raw = [k for k in raw.replace(",", "+").replace(" ", "+").split("+")]
+        keys: list[str] = []
+        for k in raw:                              # ["ctrl+s"] -> ["ctrl", "s"]
+            for part in str(k).replace(",", "+").split("+"):
+                part = part.strip().strip("'\"")
+                if part:
+                    keys.append(part)
         if not keys:
             return self.fail("no keys given")
         await asyncio.to_thread(get_backend().press, keys)
@@ -381,8 +397,12 @@ class Screenshot(Tool):
                 fh.write(base64.b64decode(shot.base64_jpeg))
         except Exception as exc:  # noqa: BLE001
             return self.fail(f"screenshot failed: {type(exc).__name__}: {str(exc)[:160]}")
-        return self.ok(f"saved {target} ({shot.width}x{shot.height})", path=target,
-                       width=shot.width, height=shot.height)
+        # The frame travels with the result so the worker can show it to
+        # the model - a screenshot the model cannot see is a screenshot it
+        # will describe from imagination (seen in the field).
+        return self.ok(f"saved {target} ({shot.width}x{shot.height}) - the image is attached",
+                       path=target, width=shot.width, height=shot.height,
+                       image_b64=shot.base64_jpeg, image_mime="image/jpeg")
 
 
 def tools() -> list[Tool]:

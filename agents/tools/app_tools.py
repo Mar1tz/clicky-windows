@@ -29,7 +29,7 @@ from agents.core import RiskLevel, ToolContext, ToolResult
 from .base import Tool, make_spec
 
 CATEGORY = "computer"
-APPEAR_TIMEOUT_S = 6.0
+APPEAR_TIMEOUT_S = 10.0
 
 # Shortcuts an app search should ignore: uninstallers and docs, not apps.
 # "help" must be a whole word - "DevinTools Helper" is an app.
@@ -106,12 +106,41 @@ def installed_apps(limit: int = 60) -> list[str]:
 _user32 = ctypes.windll.user32 if os.name == "nt" else None
 
 
-def list_windows() -> list[dict[str, Any]]:
-    """Visible top-level windows with a title, front-most first."""
+def _pid_of(hwnd) -> int:
+    pid = wintypes.DWORD(0)
+    try:
+        _user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+    except Exception:  # noqa: BLE001
+        return -1
+    return int(pid.value)
+
+
+# Qt stamps every Tora window title with the application display name, so
+# a title check catches Tora windows from ANY process - the demo and the
+# test suite run a workforce outside the app, next to a running Tora.
+APP_TITLE_SUFFIX = "Tora - AI Companion"
+
+
+def is_own_window(hwnd, title: str = "") -> bool:
+    """True for Tora's own windows - the panel, the timeline, the orbs,
+    an approval dialog. The agent must never see, focus or act on them:
+    in the field it "opened Devin" by focusing the Active Agents panel,
+    typed hello into the panel's own text box, and pressed Enter - which
+    submitted "hello" as a new task. A workforce that can operate its
+    own controls is a loop waiting to happen."""
+    if title and title.rstrip().endswith(APP_TITLE_SUFFIX):
+        return True
+    return _user32 is not None and _pid_of(hwnd) == os.getpid()
+
+
+def list_windows(*, include_own: bool = False) -> list[dict[str, Any]]:
+    """Visible top-level windows with a title, front-most first. Never
+    Tora's own unless asked (nothing in the agent path asks)."""
     if _user32 is None:
         return []
     out: list[dict[str, Any]] = []
     proc = ctypes.WINFUNCTYPE(ctypes.c_bool, wintypes.HWND, wintypes.LPARAM)
+    me = os.getpid()
 
     def _each(hwnd, _lparam):
         if not _user32.IsWindowVisible(hwnd):
@@ -122,6 +151,8 @@ def list_windows() -> list[dict[str, Any]]:
         buf = ctypes.create_unicode_buffer(n + 1)
         _user32.GetWindowTextW(hwnd, buf, n + 1)
         title = buf.value.strip()
+        if not include_own and is_own_window(hwnd, title):
+            return True
         if title and title not in ("Program Manager", "Windows Input Experience"):
             out.append({"hwnd": int(hwnd), "title": title})
         return True
@@ -134,7 +165,7 @@ def focus_window(title_fragment: str) -> Optional[dict[str, Any]]:
     if _user32 is None:
         return None
     frag = title_fragment.lower()
-    for w in list_windows():
+    for w in list_windows():                      # never Tora's own: see list_windows
         if frag in w["title"].lower():
             try:
                 _user32.ShowWindow(w["hwnd"], 9)            # SW_RESTORE
@@ -143,6 +174,25 @@ def focus_window(title_fragment: str) -> Optional[dict[str, Any]]:
                 pass
             return w
     return None
+
+
+def _process_running(path: str) -> bool:
+    """Is an exe named like this shortcut's target running? Best effort."""
+    if os.name != "nt":
+        return False
+    name = os.path.splitext(os.path.basename(path))[0].lower()
+    try:
+        if path.lower().endswith(".lnk"):
+            ps = (f"$s=(New-Object -ComObject WScript.Shell).CreateShortcut('{path}'); $s.TargetPath")
+            target = subprocess.run(["powershell", "-NoProfile", "-Command", ps],
+                                    capture_output=True, text=True, timeout=8).stdout.strip()
+            if target:
+                name = os.path.splitext(os.path.basename(target))[0].lower()
+        out = subprocess.run(["tasklist", "/FI", f"IMAGENAME eq {name}.exe"],
+                             capture_output=True, text=True, timeout=8).stdout.lower()
+        return f"{name}.exe" in out
+    except Exception:  # noqa: BLE001
+        return False
 
 
 def _launch(path: str) -> None:
@@ -199,8 +249,18 @@ class OpenApp(Tool):
             return self.fail(f"could not launch {display}: {exc}")
         window = await _wait_for_window(display.split()[0], APPEAR_TIMEOUT_S)
         if window is None:
-            return self.ok(f"launched {display} (no window seen yet - give it a moment, "
-                           f"then list_windows)", app=display, path=path, launched=True)
+            # An honest failure beats a hopeful success. In the field the
+            # app exited on launch (a pending update); "launched, no window
+            # yet" with ok=True let the agent carry on and act on whatever
+            # window it found next - which was Tora's own panel.
+            running = await asyncio.to_thread(_process_running, path)
+            why = ("its process is running but showed no window" if running
+                   else "its process exited straight away - it may be applying an update, "
+                        "crashed, or need to be opened by hand once")
+            return self.fail(f"{display} was launched but no window appeared within "
+                             f"{APPEAR_TIMEOUT_S:.0f}s: {why}. Do NOT assume it is open. "
+                             f"Tell the user, or try list_windows once more later.",
+                             app=display, path=path, launched=True, process_running=running)
         await asyncio.to_thread(focus_window, window["title"])
         return self.ok(f"opened {display}: window {window['title']!r} is in front",
                        app=display, path=path, title=window["title"], launched=True)

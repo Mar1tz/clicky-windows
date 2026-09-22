@@ -179,9 +179,13 @@ def _pointing_root(hwnd: Optional[int] = None):
 
     import uiautomation as auto
 
+    me = os.getpid()
     if hwnd:
         try:
-            return auto.ControlFromHandle(hwnd)
+            ctrl = auto.ControlFromHandle(hwnd)
+            if ctrl is not None and ctrl.ProcessId != me:
+                return ctrl
+            log.warning("refusing to point inside Tora's own window (hwnd=%s)", hwnd)
         except Exception:
             pass
     root = None
@@ -189,7 +193,6 @@ def _pointing_root(hwnd: Optional[int] = None):
         root = auto.GetForegroundControl()
     except Exception:
         root = None
-    me = os.getpid()
     try:
         if root is not None and root.ProcessId == me:
             for w in auto.GetRootControl().GetChildren():      # z-order: topmost first

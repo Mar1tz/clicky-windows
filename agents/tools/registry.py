@@ -37,6 +37,20 @@ log = logging.getLogger("agents.tools")
 EVENT_ARG_LIMIT = 2000
 
 
+def _event_view_result(result) -> dict:
+    """Same idea for results: a screenshot's base64 is ~100 KB and belongs
+    to the worker, not to every timeline that replays the event."""
+    view = result.to_dict()
+    data = dict(view.get("data") or {})
+    for k, v in list(data.items()):
+        if isinstance(v, str) and len(v) > EVENT_ARG_LIMIT:
+            data[k] = f"<{len(v)} chars>"
+    view["data"] = data
+    if isinstance(view.get("output"), str) and len(view["output"]) > EVENT_ARG_LIMIT * 4:
+        view["output"] = view["output"][:EVENT_ARG_LIMIT * 4] + "…"
+    return view
+
+
 def _event_view(call) -> dict:
     view = call.to_dict()
     args = view.get("arguments") or {}
@@ -98,7 +112,7 @@ class Registry(ToolRegistry):
 
         status = "ok" if result.ok else f"failed: {result.error}"
         self._emit(ctx, EventKind.TOOL_RESULT, f"{call.tool_name} {status}",
-                   {"result": result.to_dict()}, level="info" if result.ok else "warn")
+                   {"result": _event_view_result(result)}, level="info" if result.ok else "warn")
         return result
 
     async def _execute(self, call: ToolCall, ctx: ToolContext) -> ToolResult:

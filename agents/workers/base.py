@@ -134,6 +134,15 @@ class Worker(BaseWorker):
                     role="tool", tool_call_id=call.id,
                     content=result.output or result.error or "(no output)",
                 ))
+                image = (result.data or {}).get("image_b64")
+                if image:
+                    # Neither OpenAI's nor Gemini's tool turn can carry an
+                    # image; a user turn can. This is how the model sees
+                    # what screenshot() captured instead of guessing at it.
+                    mime = (result.data or {}).get("image_mime", "image/jpeg")
+                    messages.append(ProviderMessage(
+                        role="user", content=f"[image from {call.tool_name}]",
+                        images_b64=[f"data:{mime};base64,{image}"]))
                 # Subclasses may stop the step here - the coding worker's
                 # test-fix loop gives up after N red runs, for example.
                 stop_reason = await self.on_tool_result(step, call, result, ctx)

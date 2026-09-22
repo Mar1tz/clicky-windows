@@ -165,6 +165,11 @@ class ProviderPlanner(Planner):
                 names = []
         if names:
             parts.append("Available tools: " + ", ".join(sorted(names)))
+        for line in (ctx.extras or {}).get("context_lines") or []:
+            parts.append(line)
+        if "open_app" in names:
+            parts.append("If the goal names an application, the FIRST step is open_app(name); "
+                         "never plan to search for it in windows or a browser.")
         if ctx.memory is not None:
             try:
                 summary = ctx.memory.project_summary(ctx.workspace, max_chars=800)

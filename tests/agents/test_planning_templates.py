@@ -33,11 +33,13 @@ class FakeProvider(AgentProvider):
     def __init__(self, text: str = "", raise_exc: Optional[Exception] = None) -> None:
         self.text, self.raise_exc, self.calls = text, raise_exc, 0
         self.last_system = ""
+        self.last_user = ""
 
     async def complete(self, messages, tools=None, *, system="", model=None,
                        temperature=0.2, max_tokens=4096) -> ProviderResponse:
         self.calls += 1
         self.last_system = system
+        self.last_user = chr(10).join(m.content or "" for m in messages if m.role == "user")
         if self.raise_exc:
             raise self.raise_exc
         return ProviderResponse(text=self.text)
@@ -219,3 +221,16 @@ def test_parse_json_object_variants():
             pass
         else:
             raise AssertionError(f"expected ValueError for {bad!r}")
+
+
+async def test_provider_planner_is_told_what_is_installed_and_to_open_apps_first():
+    """Field: asked to open Devin (installed), the planner planned 'open
+    Devin in the browser' because nothing told it Devin was on the
+    machine. The manager now hands it the Start Menu, and a rule."""
+    prov = FakeProvider('{"steps": [{"title": "Open Devin"}]}')
+    ctx = _ctx("open devin", provider=prov)
+    ctx.extras["tool_names"] = ["open_app", "list_windows", "click"]
+    ctx.extras["context_lines"] = ["Installed applications (open any with open_app): Devin, Notepad"]
+    await ProviderPlanner().plan(ctx)
+    assert "Installed applications" in prov.last_user and "Devin, Notepad" in prov.last_user
+    assert "FIRST step is open_app" in prov.last_user

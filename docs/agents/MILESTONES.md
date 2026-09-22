@@ -1321,3 +1321,43 @@ and "in <app>" now classify as COMPUTER, checked before BROWSER so
 "open opera" is an app, not a URL.
 
 485 passing.
+
+### Field report 3: "it said it opened Devin but I don't see it"
+
+The task log read like a success: `open_app Devin` → `list_windows` →
+`focus_window` → `type_text hello` → `key_press enter` → verified ✓. The
+screen said otherwise. Three things were wrong, each fixed at its root:
+
+**1. The agent could see — and drive — Tora's own windows.** With Devin
+not open, `list_windows` offered "Active Agents - Tora - AI Companion",
+the agent focused it, typed "hello" into the panel's own text box and
+pressed Enter, which submitted "hello" as a *new task*. A workforce that
+can operate its own controls is a loop waiting to happen. Now Tora's
+windows do not exist as far as the agent is concerned: `list_windows`,
+`focus_window`, `_hwnd_for` and `_pointing_root` all skip any window
+whose process is Tora's **or** whose title ends in `APP_TITLE_SUFFIX`
+(the title check catches Tora windows from another process — the demo
+and the test suite run a workforce next to a running Tora).
+
+**2. `open_app` called a dead launch a success.** Devin.exe exited
+straight away (a downloaded update pending) and the tool said
+`launched Devin (no window seen yet)` with ok=True, so the worker
+carried on. It now waits 10 s, then **fails** with what happened:
+"its process exited straight away — it may be applying an update…
+Do NOT assume it is open."
+
+**3. The planner didn't know Devin was installed.** It planned "Open
+Devin in the browser". The manager now passes `extras["context_lines"]`
+to planner and worker: for COMPUTER/GENERAL tasks that is the Start
+Menu (`installed_apps()`), plus the rule "if the goal names an
+application, the FIRST step is open_app".
+
+Also from the same log: `key_press` now decodes a stringified list
+(`"['ctrl','s']"`) and chords (`"ctrl+s"`); `screenshot` returns the
+JPEG (`image_b64`) and the worker appends it as a user turn so the model
+actually *sees* what it captured rather than describing it from
+imagination; the registry scrubs result payloads over `EVENT_ARG_LIMIT`
+out of the TOOL_RESULT event so a 100 KB frame never lands in the
+timeline or the task store.
+
+490 passing.
