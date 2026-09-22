@@ -75,6 +75,13 @@ class RuleVerifier(Verifier):
 
     # -- internals -----------------------------------------------------------
 
+    @staticmethod
+    def _is_read_only(tool_name: str, ctx: AgentContext) -> bool:
+        try:
+            return ctx.tools.get(tool_name).spec.risk.value == "safe"
+        except Exception:  # noqa: BLE001 - unknown tool: treat as acting
+            return False
+
     def _checks_for_step(self, step: Step, ctx: AgentContext) -> list[Check]:
         checks: list[Check] = []
         if step.status is StepStatus.FAILED:
@@ -90,6 +97,12 @@ class RuleVerifier(Verifier):
         last_test_run = next((r for r in reversed(step.results) if r.tool_name == "run_tests"), None)
         for res in step.results:
             if res.tool_name == "run_tests" and res is not last_test_run:
+                continue
+            # A failed LOOK is not a failed step: find_on_screen missing,
+            # read_file on a file that turned out not to exist, list_dir on
+            # an empty folder - these are how an agent learns. Only tools
+            # that ACT can fail a step by failing.
+            if not res.ok and self._is_read_only(res.tool_name, ctx):
                 continue
             call = calls.get(res.call_id)
             args = dict(call.arguments) if call else {}

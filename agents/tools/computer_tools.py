@@ -141,39 +141,81 @@ def set_backend(backend: Optional[Backend]) -> None:
 
 # -- target resolution ---------------------------------------------------------
 
-def resolve_target(name: str) -> Optional[dict[str, Any]]:
+def _hwnd_for(window: str) -> Optional[int]:
+    """The handle of the first open window whose title contains `window`,
+    brought to the front so keystrokes go there too."""
+    if not window:
+        return None
+    try:
+        from .app_tools import focus_window
+        w = focus_window(window)
+        return int(w["hwnd"]) if w else None
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def resolve_target(name: str, window: str = "") -> Optional[dict[str, Any]]:
     """Name -> {x, y, label, source, confidence} via the pointing stack.
 
-    Runs in a thread by callers: UIA walks the live window tree, OCR
-    captures the screen, and neither belongs on the agent loop.
+    `window` narrows the search to one app's window (by title fragment)
+    and brings it forward first. Runs in a thread by callers: UIA walks
+    the live window tree, OCR captures the screen, and neither belongs
+    on the agent loop.
     """
     try:
         from ai.hybrid_pointer import find_target
     except Exception:  # noqa: BLE001 - pointing stack unavailable (headless CI)
         return None
-    target = find_target(name)
+    hwnd = _hwnd_for(window)
+    target = find_target(name, hwnd=hwnd)
     if target is None:
         return None
     return {"x": target.x, "y": target.y, "label": target.label,
             "source": target.source, "confidence": round(target.confidence, 2)}
 
 
-_resolver: Callable[[str], Optional[dict[str, Any]]] = resolve_target
+def visible_names(window: str = "", limit: int = 24) -> list[str]:
+    """What the pointing stack can actually see right now - the honest
+    answer to a miss. A model shown this picks a real name instead of
+    guessing eight synonyms in a row."""
+    try:
+        from ai.hybrid_pointer import pointable_names
+        return pointable_names(limit, hwnd=_hwnd_for(window))
+    except Exception:  # noqa: BLE001
+        return []
 
 
-def set_resolver(fn: Optional[Callable[[str], Optional[dict[str, Any]]]]) -> None:
-    global _resolver
+_resolver: Callable[..., Optional[dict[str, Any]]] = resolve_target
+_names: Callable[..., list[str]] = visible_names
+
+
+def set_resolver(fn: Optional[Callable[..., Optional[dict[str, Any]]]],
+                 names: Optional[Callable[..., list[str]]] = None) -> None:
+    global _resolver, _names
     _resolver = fn or resolve_target
+    _names = names or visible_names
+
+
+def _miss_message(name: str, window: str) -> str:
+    seen = _names(window)
+    where = f" in {window!r}" if window else ""
+    if seen:
+        return (f"could not find {name!r}{where}. Controls that ARE visible: "
+                + ", ".join(repr(n) for n in seen[:24])
+                + ". Pick one of those names, or give x/y if it truly has no name.")
+    return (f"could not find {name!r}{where}, and nothing nameable is visible - the app may "
+            "not be in front. Call list_windows, then pass window=<title> to target it, "
+            "or focus_window first.")
 
 
 async def _locate(args: dict[str, Any]) -> tuple[Optional[tuple[int, int]], dict[str, Any], str]:
     """(xy, details, error) from either a name or explicit coordinates."""
     name = str(args.get("name") or "").strip()
+    window = str(args.get("window") or "").strip()
     if name:
-        found = await asyncio.to_thread(_resolver, name)
+        found = await asyncio.to_thread(_resolver, name, window)
         if found is None:
-            return None, {}, (f"could not find {name!r} on screen. Use find_on_screen to check "
-                              "what is visible, or give x/y if it has no name.")
+            return None, {}, await asyncio.to_thread(_miss_message, name, window)
         return (int(found["x"]), int(found["y"])), found, ""
     if "x" in args and "y" in args:
         try:
@@ -202,6 +244,8 @@ class _ComputerTool(Tool):
 
 _TARGET_PROPS = {
     "name": {"type": "string", "description": "What to target, by its visible name, e.g. 'Save'. Preferred."},
+    "window": {"type": "string", "description": "Part of the title of the window to look in, e.g. 'Devin'. "
+                                                "Brings it to the front. Strongly recommended."},
     "x": {"type": "integer", "description": "Fallback: screen X in pixels."},
     "y": {"type": "integer", "description": "Fallback: screen Y in pixels."},
 }
@@ -210,17 +254,23 @@ _TARGET_PROPS = {
 class FindOnScreen(Tool):
     """Look before you leap: SAFE, because it moves nothing."""
     spec = make_spec(
-        "find_on_screen", "Locate a control by name without touching it. Returns its position.",
+        "find_on_screen",
+        "Locate a control by name without touching it. On a miss, lists the controls "
+        "that ARE visible so you can pick a real name instead of guessing.",
         risk=RiskLevel.SAFE, category=CATEGORY,
-        properties={"name": {"type": "string", "description": "Visible name, e.g. 'File menu'."}},
+        properties={"name": {"type": "string", "description": "Visible name, e.g. 'File menu'."},
+                    "window": {"type": "string", "description": "Part of the window title to look in."}},
         required=["name"],
     )
 
     async def run(self, args, ctx):
         name = str(args.get("name") or "").strip()
-        found = await asyncio.to_thread(_resolver, name)
+        window = str(args.get("window") or "").strip()
+        found = await asyncio.to_thread(_resolver, name, window)
         if found is None:
-            return self.fail(f"could not find {name!r} on screen", found=False)
+            seen = await asyncio.to_thread(_names, window)
+            return self.fail(await asyncio.to_thread(_miss_message, name, window),
+                             found=False, visible=seen)
         return self.ok(f"{found.get('label', name)} at ({found['x']}, {found['y']}) via "
                        f"{found.get('source')}", found=True, **found)
 
@@ -262,9 +312,13 @@ class Click(_ComputerTool):
 
 class TypeText(_ComputerTool):
     spec = make_spec(
-        "type_text", "Type text at the current keyboard focus. Newlines press Enter.",
+        "type_text",
+        "Type text at the keyboard focus. Newlines press Enter. Most chat and editor "
+        "apps focus their input when brought to the front - pass window=<title> and "
+        "type, rather than hunting for the box by name.",
         risk=RiskLevel.HIGH, category=CATEGORY,
-        properties={"text": {"type": "string", "description": "What to type."}},
+        properties={"text": {"type": "string", "description": "What to type."},
+                    "window": {"type": "string", "description": "Bring this window to the front first."}},
         required=["text"],
     )
 
@@ -272,6 +326,11 @@ class TypeText(_ComputerTool):
         text = str(args.get("text") or "")
         if not text:
             return self.fail("nothing to type")
+        window = str(args.get("window") or "").strip()
+        if window:
+            if await asyncio.to_thread(_hwnd_for, window) is None:
+                return self.fail(f"no open window matches {window!r}; use list_windows")
+            await asyncio.sleep(0.15)             # let focus settle before keystrokes
         await asyncio.to_thread(get_backend().type_text, text)
         preview = text if len(text) <= 60 else text[:57] + "…"
         return self.ok(f"typed {preview!r}", chars=len(text))

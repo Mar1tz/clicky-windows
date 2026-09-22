@@ -48,7 +48,8 @@ SCREEN = {"Save": {"x": 100, "y": 200, "label": "Save", "source": "uia", "confid
 def rec():
     backend = Recorder()
     ct.set_backend(backend)
-    ct.set_resolver(lambda name: SCREEN.get(name))
+    ct.set_resolver(lambda name, window="": SCREEN.get(name),
+                    names=lambda window="": list(SCREEN))
     ct.kill_switch.reset()
     yield backend
     ct.set_backend(None)
@@ -71,11 +72,23 @@ def test_click_resolves_a_name_through_the_pointing_stack(rec):
     assert "Save" in r.output
 
 
-def test_unknown_name_fails_with_advice_not_a_guess(rec):
+def test_unknown_name_fails_with_what_is_visible(rec):
+    """A miss says what IS on screen, so the model picks a real name
+    instead of trying eight synonyms (seen in the field: 'message input',
+    'chat input', 'Type a message', 'Message Devin', ...)."""
     r = run("click", name="Nonexistent Button")
     assert not r.ok
-    assert "find_on_screen" in r.error
+    assert "Controls that ARE visible" in r.error
+    assert "'Save'" in r.error and "'File menu'" in r.error
     assert rec.calls == [], "nothing must be clicked when the target is unknown"
+
+
+def test_miss_with_nothing_visible_points_at_the_window(rec):
+    ct.set_resolver(lambda name, window="": None, names=lambda window="": [])
+    r = run("find_on_screen", name="anything", window="Devin")
+    assert not r.ok
+    assert "list_windows" in r.error and "'Devin'" in r.error
+    assert r.data["visible"] == []
 
 
 def test_coordinates_are_a_fallback(rec):
@@ -97,6 +110,7 @@ def test_find_on_screen_is_safe_and_moves_nothing(rec):
     assert rec.calls == []
     miss = run("find_on_screen", ctx=ctx, name="nothing")
     assert not miss.ok and miss.data["found"] is False
+    assert miss.data["visible"] == ["Save", "File menu"]
 
 
 def test_double_and_right_click(rec):
@@ -234,3 +248,48 @@ def test_live_notepad_type_and_save(tmp_path):
         assert "Tora computer worker" in target.read_text(encoding="utf-8", errors="replace")
     finally:
         proc.kill()
+
+
+# -- the reflection bug ------------------------------------------------------
+
+def test_pointing_never_searches_toras_own_windows():
+    """Field bug: the agent searched for 'text box', the Active Agents
+    panel displayed 'Looking for text box', and UIA matched THAT label
+    in Tora's own window - the pointer found its own reflection. The
+    root chooser must never return a window from this process."""
+    import os
+    pytest.importorskip("uiautomation")
+    from ai import hybrid_pointer as hp
+    root = hp._pointing_root()
+    assert root is not None
+    assert getattr(root, "ProcessId", None) != os.getpid()
+
+
+def test_verifier_treats_a_failed_look_as_information(tmp_path):
+    """find_on_screen missing three times before succeeding must not fail
+    a step that ended DONE - seen in the field as 'verification failed:
+    1/3 checks passed; failed: find_on_screen, find_on_screen'."""
+    import asyncio as aio
+
+    from agents.core import (
+        AgentContext, AgentSpec, EventBus, RunControl, Step, StepStatus, Task, ToolResult,
+    )
+    from agents.verification import RuleVerifier
+
+    reg = default_registry()
+    task = Task(title="t", goal="click save", workspace=str(tmp_path))
+    ctx = AgentContext(task=task, agent=AgentSpec(name="A", goal="g"), tools=reg,
+                       provider=None, events=EventBus(), control=RunControl())
+    step = Step("find and click", status=StepStatus.DONE, results=[
+        ToolResult(call_id="1", tool_name="find_on_screen", ok=False, error="could not find 'x'"),
+        ToolResult(call_id="2", tool_name="find_on_screen", ok=False, error="could not find 'y'"),
+        ToolResult(call_id="3", tool_name="find_on_screen", ok=True, output="Save at (1,2)"),
+        ToolResult(call_id="4", tool_name="click", ok=True, output="clicked Save"),
+    ])
+    result = aio.run(RuleVerifier().verify_step(step, ctx))
+    assert result.ok, result.summary
+    assert not any("find_on_screen" in c.name and not c.passed for c in result.checks)
+
+    # but a failed ACT still fails the step
+    step.results.append(ToolResult(call_id="5", tool_name="click", ok=False, error="denied"))
+    assert not aio.run(RuleVerifier().verify_step(step, ctx)).ok

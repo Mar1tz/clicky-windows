@@ -52,6 +52,9 @@ _SYSTEM = (
     "Fail the step when a file it claims to have written is missing, empty, "
     "truncated, a placeholder, or plainly not what the step asked for. "
     "Pass it when the work is genuinely done, even if imperfect. "
+    "Judge against the GOAL. If the goal was to open, show, or do something on "
+    "screen rather than to produce files, the evidence is the open windows and "
+    "the tool results, not the disk - do not fail a UI task for writing nothing. "
     "Reply with ONLY a JSON object: {\"ok\": true|false, \"reason\": \"one "
     "short sentence\"}. No prose, no code fence."
 )
@@ -103,6 +106,9 @@ class ProviderVerifier(Verifier):
             parts.append("Tool calls it ran:\n" + "\n".join(actions[:12]))
         evidence = self._evidence(step.results, ctx)
         parts.append("Actual state on disk:\n" + (evidence or "  (no files touched)"))
+        windows = _open_windows()
+        if windows:
+            parts.append("Open windows right now:\n" + "\n".join(f"  {w}" for w in windows))
         return "\n\n".join(parts)
 
     def _task_prompt(self, ctx: AgentContext) -> str:
@@ -208,6 +214,15 @@ def _parse(text: str) -> dict[str, Any]:
     if not isinstance(data, dict) or "ok" not in data:
         raise ValueError(f"verifier JSON lacks 'ok': {str(data)[:120]}")
     return data
+
+
+def _open_windows(limit: int = 12) -> list[str]:
+    """Window titles, for judging goals whose evidence is on screen."""
+    try:
+        from agents.tools.app_tools import list_windows
+        return [w["title"][:80] for w in list_windows()[:limit]]
+    except Exception:  # noqa: BLE001 - headless, or not Windows
+        return []
 
 
 def _short_args(args: dict[str, Any], limit: int = 60) -> str:

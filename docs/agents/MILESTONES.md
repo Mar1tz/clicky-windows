@@ -1263,3 +1263,61 @@ system ignored it.
   tests keep the app in a module-scoped fixture for exactly this reason.
 
 482 passing.
+
+---
+
+# Field report 2: what the logs said after real use
+
+Seven real tasks in `agents.db` and the pointer log behind them. Two
+completed; the failures all shared root causes that tests could not have
+shown, because they are about the desktop the agent is looking at.
+
+**1. The pointer found its own reflection.** Log:
+`UIA hit: 'text box' -> Looking for text box [TextControl]` and
+`'Compose' -> find_on_screen(name=Compose)`. The agent searched for a
+name, the Active Agents panel *displayed* "Looking for text box", and the
+UIA walk — which starts from the foreground window — matched that label
+inside Tora's own window. The same bug affects voice pointing: ask for
+the Send button with the panel in front and Tora can point at its own
+caption. `ai/hybrid_pointer._pointing_root()` now never returns a window
+from this process; when Tora is in front it walks the topmost window
+that is not ours, and callers may name a window (`hwnd`). Pinned by a
+test that asserts the root's `ProcessId` is never ours.
+
+**2. Guessing names into the void.** 'message input field', 'chat input',
+'Type a message', 'Message Devin', 'Send message', 'Ask a followup',
+'input', 'textarea' — eight misses in a row, each a model round trip,
+until the iteration budget ran out. Three fixes: `find_on_screen` on a
+miss now returns **the controls that ARE visible**, so the model picks a
+real name; every computer tool takes `window=<title>` to target one app
+and bring it forward; and `type_text(window=…)` types into the app's own
+focused input, which for chat apps means never hunting for the box.
+
+**3. OCR was off.** `rapidocr-onnxruntime not installed — Tier 2 (OCR)
+disabled`. It installs fine on 3.14 (`onnxruntime` was already present)
+and now loads in ~2 s. Placeholder text like "Message Devin" is readable
+even when the Electron tree gives the box no name.
+
+**4. A failed look failed the step.** `verification failed: 1/3 checks
+passed; failed: find_on_screen, find_on_screen` — the verifier counted
+a miss as a failure. Now a failed **SAFE** (read-only) tool never fails a
+step that ended DONE; only acting tools can. Same principle as the
+run_tests rule from M22.
+
+**5. Planned a step the worker could not do.** 'Find and open Tora's
+website' burned 67k tokens on "List workspace directory contents" —
+a computer agent with no `list_dir`. The planner was told every tool in
+the registry. It is now told the **worker's** tools (`extras["tool_names"]`),
+and the computer worker gained `read_file`/`list_dir` and a 16-iteration
+budget.
+
+**6. Judged a UI task by the disk.** 'open notepad and describe what
+Tora is' failed with "No files were written to disk". The model verifier
+is now told to judge against the goal — for open/show/do-on-screen
+goals the evidence is the open windows, which it is now shown.
+
+**7. Routing.** 'open notepad…' went to the coding worker. "open <app>"
+and "in <app>" now classify as COMPUTER, checked before BROWSER so
+"open opera" is an app, not a URL.
+
+485 passing.

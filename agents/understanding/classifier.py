@@ -63,8 +63,15 @@ _QUESTION_AUX = re.compile(r"^\s*(is|are|was|were|do|does|did|should|has|have|ha
 _RESEARCH = re.compile(r"\b(research|find\s+out|look\s+up|search\s+for)\b", re.I)
 _BROWSER = re.compile(r"\b(open\s+(the\s+)?browser|go\s+to|navigate\s+to|"
                       r"open\s+the\s+(web\s*)?page)\b", re.I)
-_COMPUTER = re.compile(r"\b(click|type|move\s+(the\s+)?(mouse|cursor)|"
-                       r"press\s+the)\b", re.I)
+_APPS = (r"notepad|calculator|paint|explorer|settings|terminal|powershell|cmd|word|excel|"
+         r"outlook|teams|slack|discord|spotify|chrome|edge|firefox|opera|brave|vs ?code|"
+         r"visual studio|devin|cursor|obsidian|notion|figma|photoshop|steam|zoom")
+_COMPUTER = re.compile(r"\b(click|type|move\s+(the\s+)?(mouse|cursor)|press\s+the|"
+                       r"open\s+(?:the\s+)?(?:" + _APPS + r")(?:\s+app)?|"
+                       r"\b(?:in|into|using)\s+(?:" + _APPS + r")\b|"
+                       r"open\s+\w+\s+app)\b", re.I)
+# "open" + an app name is a work object too, so "open notepad" is a task.
+_OBJECT_APP = re.compile(r"\bopen\s+(?:the\s+)?(?:" + _APPS + r"|\w+\s+app)\b", re.I)
 _CODING = re.compile(r"\b(react|vue|next(\.?js)?|python|node(\.?js)?|api|"
                      r"website|web\s*site|django|flask|express|typescript|"
                      r"javascript|component|repo|repository|script)\b"
@@ -91,8 +98,8 @@ class HeuristicIntentClassifier(IntentClassifier):
         raw = (text or "").strip()
         low = raw.lower()
 
-        has_imp = bool(_IMPERATIVE.search(low))
-        has_obj = bool(_OBJECT.search(low))
+        has_imp = bool(_IMPERATIVE.search(low)) or bool(_OBJECT_APP.search(low))
+        has_obj = bool(_OBJECT.search(low)) or bool(_OBJECT_APP.search(low))
         is_question = bool(_QUESTION.match(low)) or (
             raw.endswith("?") and (bool(_QUESTION_AUX.match(low)) or not has_imp))
         is_task = has_imp and has_obj and not is_question
@@ -119,10 +126,10 @@ class HeuristicIntentClassifier(IntentClassifier):
     def _kind(low: str) -> TaskKind:
         if _RESEARCH.search(low):
             return TaskKind.RESEARCH
+        if _COMPUTER.search(low):          # before BROWSER: "open opera" is an app, not a URL
+            return TaskKind.COMPUTER
         if _BROWSER.search(low):
             return TaskKind.BROWSER
-        if _COMPUTER.search(low):
-            return TaskKind.COMPUTER
         if _CODING.search(low):
             return TaskKind.CODING
         return TaskKind.GENERAL

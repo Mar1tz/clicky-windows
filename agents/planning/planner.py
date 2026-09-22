@@ -154,10 +154,15 @@ class ProviderPlanner(Planner):
         sub = (ctx.task.metadata or {}).get("subdir")
         if sub:
             parts.append(f"Create new files under the sub-folder: {sub}")
-        try:
-            names = ctx.tools.names()
-        except Exception:  # noqa: BLE001 - a stub registry in tests may not implement it
-            names = []
+        # The worker's tools, not the whole registry: a computer agent that
+        # is planned a "list the workspace" step it cannot do will burn its
+        # entire iteration budget trying (seen in the field).
+        names = list((ctx.extras or {}).get("tool_names") or [])
+        if not names:
+            try:
+                names = ctx.tools.names()
+            except Exception:  # noqa: BLE001 - a stub registry in tests may not implement it
+                names = []
         if names:
             parts.append("Available tools: " + ", ".join(sorted(names)))
         if ctx.memory is not None:

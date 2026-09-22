@@ -16,7 +16,9 @@ class ComputerWorker(Worker):
     default_tools = [
         "open_app", "list_windows", "focus_window",
         "find_on_screen", "screenshot", "move_cursor", "click", "type_text", "key_press",
+        "read_file", "list_dir",
     ]
+    max_iterations = 16
 
     def system_prompt(self, ctx: AgentContext) -> str:
         return (
@@ -27,8 +29,14 @@ class ComputerWorker(Worker):
             "  - to OPEN an application: open_app(name). Never press the Windows "
             "key and type its name - that is three approvals for one step.\n"
             "  - to see what is open: list_windows. To switch: focus_window.\n"
-            "  - to find a control before clicking: find_on_screen(name). Click "
-            "by NAME, not by guessed coordinates.\n"
+            "  - to find a control before clicking: find_on_screen(name, window=<app>). "
+            "Click by NAME, not by guessed coordinates. If it misses, it tells you "
+            "which controls ARE visible - pick one of those; do not try synonyms.\n"
+            "  - to type into a chat or editor: type_text(text, window=<app>). The app "
+            "focuses its own input when it comes to the front; you rarely need to "
+            "find the box first.\n"
+            "  - always pass window=<app title> so you act on the right app, not on "
+            "whatever happens to be in front.\n"
             "  - to read the screen: screenshot, then describe what it shows.\n"
             "Do the fewest actions that achieve the goal. If a step needs no "
             "mouse or keyboard at all, do not use them. Never claim an action "

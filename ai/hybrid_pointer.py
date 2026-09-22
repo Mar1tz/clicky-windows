@@ -164,8 +164,50 @@ def _is_chrome(name: str) -> bool:
     return any(n.startswith(p) for p in _CHROME_PREFIXES)
 
 
+def _pointing_root(hwnd: Optional[int] = None):
+    """The UIA subtree a pointing query should search.
+
+    Never Tora's own windows. The agent panel shows "Looking for Send",
+    the timeline shows "find_on_screen(name=Compose)", the approval
+    dialog shows the tool's arguments - and when any of them is in
+    front, a walk from the foreground control finds those labels and
+    reports the pointer's own reflection as a hit. So: a caller may name
+    a window (`hwnd`); otherwise the foreground window is used unless it
+    is ours, in which case the topmost window that is NOT ours is.
+    """
+    import os
+
+    import uiautomation as auto
+
+    if hwnd:
+        try:
+            return auto.ControlFromHandle(hwnd)
+        except Exception:
+            pass
+    root = None
+    try:
+        root = auto.GetForegroundControl()
+    except Exception:
+        root = None
+    me = os.getpid()
+    try:
+        if root is not None and root.ProcessId == me:
+            for w in auto.GetRootControl().GetChildren():      # z-order: topmost first
+                try:
+                    rect = w.BoundingRectangle
+                    if (w.ProcessId != me and (w.Name or "").strip()
+                            and rect and rect.width() > 0 and rect.height() > 0):
+                        return w
+                except Exception:
+                    continue
+    except Exception:
+        pass
+    return root if root is not None else auto.GetRootControl()
+
+
 def list_pointables(
-    limit: int = 40, *, max_nodes: int = 1400, max_depth: int = 16
+    limit: int = 40, *, max_nodes: int = 1400, max_depth: int = 16,
+    hwnd: Optional[int] = None,
 ) -> List[Tuple[int, int, str, str]]:
     """Named, on-screen controls from the foreground window.
 
@@ -184,7 +226,7 @@ def list_pointables(
     except ImportError:
         return []
     try:
-        root = auto.GetForegroundControl() or auto.GetRootControl()
+        root = _pointing_root(hwnd)
     except Exception:
         return []
     if root is None:
@@ -222,9 +264,9 @@ def list_pointables(
     return out
 
 
-def pointable_names(limit: int = 28) -> List[str]:
+def pointable_names(limit: int = 28, *, hwnd: Optional[int] = None) -> List[str]:
     """Just the names, for telling the model what it can point at by name."""
-    return [name for _, _, name, _ in list_pointables(limit=limit)][:limit]
+    return [name for _, _, name, _ in list_pointables(limit=limit, hwnd=hwnd)][:limit]
 
 
 def nearest_in_direction(
@@ -304,6 +346,7 @@ def focused_element() -> Optional[Tuple[str, str, bool]]:
 
 def _find_via_uia(
     query: str, min_score: float = 0.5, *, max_seconds: float = 1.2,
+    hwnd: Optional[int] = None,
 ) -> Optional[Target]:
     """Walk the UIA tree for the foreground window, find the best match.
 
@@ -321,11 +364,9 @@ def _find_via_uia(
         return None
 
     try:
-        # Get the focused (foreground) window — pointing is almost always
-        # for the active app, and walking the whole desktop is slow.
-        root = auto.GetForegroundControl()
-        if root is None:
-            root = auto.GetRootControl()
+        # The active app's window - or the app behind Tora's own windows,
+        # or the window the caller named. See _pointing_root.
+        root = _pointing_root(hwnd)
     except Exception as e:
         log.debug("UIA root lookup failed: %s", e)
         return None
@@ -525,6 +566,7 @@ def find_target(
     pil_image=None,
     skip_uia: bool = False,
     skip_ocr: bool = False,
+    hwnd: Optional[int] = None,
 ) -> Optional[Target]:
     """Resolve a natural-language pointing query into pixel coordinates.
 
@@ -549,7 +591,7 @@ def find_target(
 
     # Tier 1: UIA — fast, free, often perfect
     if not skip_uia:
-        t = _find_via_uia(query)
+        t = _find_via_uia(query, hwnd=hwnd)
         if t is not None and t.confidence >= 0.5:
             return t
 

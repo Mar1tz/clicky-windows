@@ -370,9 +370,18 @@ class AgentManager:
         ctx = AgentContext(task=task, agent=spec, tools=self.tools,
                            provider=self._metered(provider, task),
                            events=self.events, control=control, memory=self.memory,
-                           approver=self._approver_for(task))
+                           approver=self._approver_for(task),
+                           extras={"tool_names": self._tool_names_for(worker, spec)})
         self._start_or_queue(ctx, worker, run)
         return task
+
+    def _tool_names_for(self, worker: BaseWorker, spec: AgentSpec) -> list[str]:
+        """What this agent can actually call - handed to the planner so it
+        never plans a step the worker has no tool for."""
+        if spec.tools:
+            return list(spec.tools)
+        names = list(getattr(worker, "default_tools", None) or [])
+        return names or self.tools.names()
 
     def _metered(self, provider: AgentProvider, task: Task) -> AgentProvider:
         """Every model call the task makes is counted against its limits."""
