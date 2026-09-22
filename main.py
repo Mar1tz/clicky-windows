@@ -116,10 +116,13 @@ def _wire_agents(manager, tray):
         tray.on_agent_settings.connect(_unavailable)
         return
 
-    from agents.ui import attach_approvals, open_agents_window
+    from agents.ui import attach_approvals, open_agents_window, show_orbs
     from agents.ui.settings import AgentSettingsDialog
 
     attach_approvals(workforce)
+    # The top-right orbs: one per working agent, with its progress ring.
+    # Hidden until the first agent starts; a click opens the panel.
+    windows_orbs = show_orbs(workforce)
 
     windows: dict[str, object] = {}
 
@@ -152,6 +155,7 @@ def _wire_agents(manager, tray):
             pass
 
     manager.sig_agent_event.connect(_refresh_count)
+    manager.sig_agent_notice.connect(tray.show_notification)
     _refresh_count()
 
     # Esc is the kill switch for computer control. The same "Stop" that
@@ -456,9 +460,10 @@ def main():
     # ── Show UI + start listener ──────────────────────────────────────────────
     overlay.show()        # persistent overlay (cursor follow)
     # Panel is hidden by default — user can open it from the tray menu if needed
+    # The workforce builds on a worker thread (~650 ms) so the tray icon
+    # is not held up; wire its UI when it says it is ready.
+    manager.sig_agents_ready.connect(lambda: _wire_agents(manager, tray))
     manager.start()        # begin ambient mic + wake-word scanning; brings up agents
-
-    _wire_agents(manager, tray)
 
     providers = cfg.describe()
     _hk = "+".join(p.strip().capitalize() for p in cfg.hotkey.split("+"))

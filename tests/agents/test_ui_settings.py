@@ -243,4 +243,5 @@ def test_main_wires_the_tray_to_the_workforce():
     src = inspect.getsource(main._wire_agents)
     assert "attach_approvals" in src, "approvals must be attached or tasks park forever"
     assert "on_open_agents" in src and "on_agent_settings" in src
+    assert "sig_agents_ready.connect" in inspect.getsource(main.main)
     assert "_wire_agents(manager, tray)" in inspect.getsource(main.main)

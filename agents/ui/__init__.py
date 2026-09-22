@@ -15,13 +15,14 @@ from .accounts import ConnectedAccountsDialog, EndpointCard
 from .agents_panel import ActiveAgentsPanel, AgentCard, StatusDot
 from .approval import ApprovalController, ApprovalDialog
 from .bridge import AgentEventBridge
+from .orbs import AgentOrbs
 from .plan_view import PlanStepRow, PlanView
 from .timeline import ActivityTimeline, TimelineRow
 
 __all__ = ["ActiveAgentsPanel", "ActivityTimeline", "AgentCard", "AgentEventBridge",
            "ApprovalController", "ApprovalDialog", "ConnectedAccountsDialog",
-           "EndpointCard", "PlanStepRow", "PlanView", "StatusDot", "TimelineRow",
-           "attach_approvals", "open_accounts", "open_agents_window",
+           "AgentOrbs", "EndpointCard", "PlanStepRow", "PlanView", "StatusDot", "TimelineRow",
+           "attach_approvals", "open_accounts", "open_agents_window", "show_orbs",
            "open_plan", "open_timeline"]
 
 _window: Optional[ActiveAgentsPanel] = None
@@ -98,3 +99,16 @@ def open_accounts(manager=None, parent=None) -> ConnectedAccountsDialog:
     _accounts_dialog.raise_()
     _accounts_dialog.activateWindow()
     return _accounts_dialog
+
+
+_orbs: Optional[AgentOrbs] = None
+
+
+def show_orbs(manager, parent=None) -> AgentOrbs:
+    """The floating top-right strip: one orb per working agent. Created
+    once; it shows and hides itself as agents come and go."""
+    global _orbs
+    if _orbs is None:
+        _orbs = AgentOrbs(manager, parent=parent)
+        _orbs.clicked.connect(lambda _agent_id: open_agents_window(manager))
+    return _orbs

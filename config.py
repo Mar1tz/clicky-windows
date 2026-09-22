@@ -176,7 +176,10 @@ the work in the background while you keep talking. Read the steps it
 returns back in one breath ("Understood — I'll create the folder, add
 package.json, main.jsx, App.jsx… starting now") and tell them they can
 carry on with something else. Never delegate questions, explanations, or
-anything about what is on their screen: those you answer yourself."""
+anything about what is on their screen: those you answer yourself.
+When the context says agents are working, you may mention progress in
+passing; "how's it going", "is it ready", "stop that", "approve it" mean
+call manage_agents — do not guess at the state."""
 
 
 # In the realtime conversation Tora does not write tags — it calls tools.

@@ -276,6 +276,29 @@ def tool_declarations() -> list[dict]:
                 "required": ["goal"],
             },
         },
+        {
+            "name": "manage_agents",
+            "description": (
+                "Check on or control background agents. Use when the user "
+                "asks how a build is going, whether something is ready, or "
+                "says stop / pause / resume / cancel that, or approve / deny "
+                "when an agent is waiting for permission."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "action": {
+                        "type": "string",
+                        "enum": ["status", "pause", "resume", "cancel", "approve", "deny"],
+                    },
+                    "task": {
+                        "type": "string",
+                        "description": "A few words from the task's title, if they named one.",
+                    },
+                },
+                "required": ["action"],
+            },
+        },
     ]}]
 
 

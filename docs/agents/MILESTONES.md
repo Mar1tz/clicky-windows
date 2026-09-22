@@ -1177,3 +1177,49 @@ is not finished:
     → every step verified against the filesystem
     → COMPLETED, with the full history readable after a restart
 ```
+
+---
+
+# After M23 — integration review: does it work *with Tora*?
+
+A deep read of the seams between the workforce and the voice companion,
+done after every milestone was green. Tests could not have found these;
+they are about what a person experiences.
+
+**Landed** `_on_agent_event` / `_say_when_idle` / `agent_context_line` /
+`_tool_manage_agents` in `companion_manager.py`, `manage_agents` in the
+live tool declarations, `agents/ui/orbs.py`, a `sig_agents_ready` signal.
+26 tests; suite **469 passing**. Verified in the running app: workforce
+ready **0.77 s** after start, off the GUI thread, zero tracebacks.
+
+**What was missing, and what closed it**
+1. *Silence on completion.* An agent finished and Tora said nothing. Now
+   every top-level task announces its end — spoken if Tora is idle
+   (never interrupting an answer), and always a tray toast. Failures name
+   the reason; cancellations stay silent (the user did that); a project's
+   children defer to the Project Lead.
+2. *Tora did not know about its agents.* "Is my app ready?" got a blank.
+   `agent_context_line()` now adds one line to every turn's context —
+   who is working, on what, how far, and what it is doing — plus the last
+   two results, so the model answers from fact and can mention progress
+   unprompted.
+3. *No voice control.* `manage_agents(status|pause|resume|cancel|approve|deny)`
+   is a live-model tool. "Stop that", "how's it going", "approve it" all
+   resolve without guessing.
+4. *Approvals were screen-only.* An approval request is now spoken —
+   "Backend Agent needs your approval to delete path. Say approve or
+   deny" — and toasted, so a hands-off user hears it.
+5. *~650 ms on the GUI thread at startup.* Building the workforce blocked
+   the tray icon. It builds on a worker thread now, and `sig_agents_ready`
+   tells `main.py` when to wire the UI — which also fixed a bug the change
+   itself introduced (wiring ran before the workforce existed).
+
+**The orbs.** One per working agent, top-right, stacked downward: a dark
+disc with the agent's initial inside a progress ring that sweeps
+clockwise and shifts blue → cyan → green. A ring with no progress yet
+carries a slow comet, so "planning" never looks like "stuck". Paused is
+amber with a pause glyph; failure flashes red and holds 5 s; done fills
+green with a tick and fades after 2.6 s. Hover for name, task and current
+action; click to open the panel. One 60 fps timer that stops when nothing
+moves — a test asserts a paused orb costs no frames. Window flags copy
+`ui/overlay.py`, so it behaves like the cursor overlay, not a second app.

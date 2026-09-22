@@ -237,6 +237,8 @@ class CompanionManager(QObject):
     sig_guide_progress      = pyqtSignal(int, int, str)   # (current, total, instruction)
     sig_activity            = pyqtSignal(str, str)        # (state_key, human message)
     sig_agent_event         = pyqtSignal(object)          # agents.core.Event → Active Agents UI
+    sig_agent_notice        = pyqtSignal(str, str)        # (title, body) → tray toast
+    sig_agents_ready        = pyqtSignal()                # workforce built (or failed); wire the UI now
 
     def __init__(self):
         super().__init__()
@@ -432,20 +434,129 @@ class CompanionManager(QObject):
             return ""
 
     def _start_agents(self):
-        """Bring up the agent workforce on its own thread and forward its
-        events to Qt.
+        """Bring up the agent workforce without holding the GUI thread.
+
+        Building it costs ~650 ms (imports, SQLite, registries). That is
+        the difference between the tray icon appearing at once and the
+        app looking frozen for most of a second, so the build runs on a
+        worker thread and `self._agents` is set when it is ready. Both
+        delegation paths already treat None as "not yet available".
 
         Entirely optional: if the package is missing or throws, delegation
         is simply off and every other feature behaves exactly as before.
         """
+        def _build():
+            try:
+                from agents.bootstrap import build_agent_manager
+                from agents.core import EventKind
+                mgr = build_agent_manager().start()
+                mgr.events.subscribe(self.sig_agent_event.emit)
+                mgr.events.subscribe(
+                    self._on_agent_event,
+                    kinds=[EventKind.TASK_STATUS, EventKind.APPROVAL_REQUIRED])
+                self._agents = mgr
+                _log.info("agent workforce ready — workspace %s", mgr.workspace_root)
+            except Exception:
+                _log.exception("agent workforce failed to start — delegation disabled")
+                self._agents = None
+            finally:
+                # main.py wires the tray, orbs and approvals on this signal,
+                # which Qt delivers on the GUI thread. Emitted on failure too,
+                # so the tray items can say "unavailable" instead of nothing.
+                self.sig_agents_ready.emit()
+
+        threading.Thread(target=_build, name="agents-boot", daemon=True).start()
+
+    # ── Telling the user what the agents are doing ────────────────────────────
+    #
+    # A digital employee that finishes a job in silence is one you check
+    # on; one that says "MyApp is ready" is one you delegate to. So every
+    # top-level task announces its end, and an approval request is spoken
+    # rather than left as a dialog on a screen the user may not be facing.
+
+    def _on_agent_event(self, ev) -> None:
+        """Runs on the agent runtime thread. Decide, then hand off."""
         try:
-            from agents.bootstrap import build_agent_manager
-            self._agents = build_agent_manager().start()
-            self._agents.events.subscribe(self.sig_agent_event.emit)
-            _log.info("agent workforce ready — workspace %s", self._agents.workspace_root)
+            from agents.core import EventKind, TaskStatus
+            mgr = self._agents
+            if mgr is None:
+                return
+            task = mgr.get_task(ev.task_id or "")
+            if task is None:
+                return
+            if (task.metadata or {}).get("parent_id"):
+                return                       # the project lead speaks for its children
+            agent = mgr.get_agent(task.agent_id or "")
+            who = agent.spec.name if agent else "An agent"
+
+            if ev.kind is EventKind.TASK_STATUS:
+                status = TaskStatus(ev.data.get("status", ""))
+                if not status.is_terminal:
+                    return
+                if status is TaskStatus.COMPLETED:
+                    title, body = "Done", f"{who} finished: {task.title}."
+                    spoken = f"{who} is done — {task.title} is ready."
+                elif status is TaskStatus.FAILED:
+                    reason = (task.error or "").split("\n")[0][:120]
+                    title, body = "Agent stopped", f"{who} could not finish {task.title}: {reason}"
+                    spoken = f"{who} hit a problem with {task.title}: {reason}"
+                else:
+                    return                   # cancelled: the user did that
+            elif ev.kind is EventKind.APPROVAL_REQUIRED:
+                req = ev.data.get("request") or {}
+                call = (req.get("call") or {}).get("tool_name", "an action")
+                what = "the plan" if call == "approve_plan" else call.replace("_", " ")
+                title, body = "Approval needed", f"{who} wants to run {what}. {ev.message}"
+                spoken = (f"{who} needs your approval to {what}. "
+                          f"Say approve or deny, or use the dialog.")
+            else:
+                return
+            self.sig_agent_notice.emit(title, body)
+            self._say_when_idle(spoken)
         except Exception:
-            _log.exception("agent workforce failed to start — delegation disabled")
-            self._agents = None
+            _log.debug("agent event announcement failed", exc_info=True)
+
+    def _say_when_idle(self, text: str) -> None:
+        """Speak only if Tora is not mid-conversation; the toast covers the
+        rest. Interrupting an answer to announce a finished build would be
+        worse than the silence this replaces."""
+        if self._state is not AppState.IDLE:
+            return
+        if not self._loop or not self._loop.is_running():
+            return
+        try:
+            self._submit(self._reply_local(text))
+        except Exception:
+            _log.debug("agent announcement not spoken", exc_info=True)
+
+    def agent_context_line(self) -> str:
+        """One line for the model's context so it can answer 'is my app
+        ready?' and mention progress unprompted."""
+        mgr = self._agents
+        if mgr is None:
+            return ""
+        try:
+            from agents.core import AgentStatus
+            active = [a for a in mgr.list_agents(active_only=True)
+                      if not (mgr.get_task(a.current_task_id or "") or type("T", (), {"metadata": {}})()).metadata.get("parent_id")]
+            recent = [t for t in mgr.list_tasks() if t.status.is_terminal
+                      and not (t.metadata or {}).get("parent_id")][:2]
+        except Exception:
+            return ""
+        parts = []
+        if active:
+            parts.append("Agents working right now: " + "; ".join(
+                f"{a.spec.name} on '{a.current_task_title}' — {int(a.progress * 100)}%"
+                + (f", {a.current_action}" if a.current_action else "")
+                + (" (PAUSED)" if a.status is AgentStatus.PAUSED else "")
+                for a in active))
+        if recent:
+            parts.append("Recently finished: " + "; ".join(
+                f"'{t.title}' {t.status.value}" for t in recent))
+        if not parts:
+            return ""
+        return (" ".join(parts) + ". If the user asks how it is going, answer from this; "
+                "to pause, resume, cancel or approve, call manage_agents.")
 
     @property
     def agents(self):
@@ -820,6 +931,9 @@ class CompanionManager(QObject):
         if self._attached_docs:
             names = ", ".join(n for n, _ in self._attached_docs)
             bits.append(f"Documents they have attached: {names}. Use recall.")
+        agents_line = self.agent_context_line()
+        if agents_line:
+            bits.append(agents_line)
         return " ".join(bits)
 
     def _realtime_system_prompt(self) -> str:
@@ -878,6 +992,7 @@ class CompanionManager(QObject):
             "search_web":      self._tool_search,
             "recall":          self._tool_recall,
             "delegate_task":   self._tool_delegate_task,
+            "manage_agents":   self._tool_manage_agents,
         }
 
     # ── Agent delegation ──────────────────────────────────────────────────────
@@ -930,6 +1045,55 @@ class CompanionManager(QObject):
             "note": ("The agent is working in the background. Read the steps back "
                      "briefly and tell the user they can carry on with other things."),
         }
+
+    async def _tool_manage_agents(self, args: dict) -> dict:
+        """Voice control of the workforce: status, pause, resume, cancel,
+        approve, deny. `task` is a title fragment; omitted means the most
+        relevant one (a pending approval, else the newest active task)."""
+        mgr = self._agents
+        if mgr is None:
+            return {"error": "the agent workforce is not available"}
+        from agents.core import TaskStatus
+        action = str(args.get("action") or "status").strip().lower()
+        wanted = str(args.get("task") or "").strip().lower()
+
+        def _summ(t):
+            a = mgr.get_agent(t.agent_id or "")
+            return {"task": t.title, "agent": a.spec.name if a else "", "status": t.status.value,
+                    "progress": int(t.progress * 100), "current": t.current_action,
+                    "steps_done": sum(1 for s in t.steps if s.status.value == "done"),
+                    "steps_total": len(t.steps)}
+
+        top = [t for t in mgr.list_tasks() if not (t.metadata or {}).get("parent_id")]
+        if action == "status":
+            active = [_summ(t) for t in top if not t.status.is_terminal]
+            recent = [_summ(t) for t in top if t.status.is_terminal][:3]
+            pending = mgr.pending_approvals()
+            return {"ok": True, "active": active, "recent": recent,
+                    "awaiting_approval": [p.reason for p in pending],
+                    "note": ("Tell the user briefly. Nothing is running." if not active and not pending
+                             else "Summarise in one breath.")}
+
+        if action in ("approve", "deny"):
+            pending = mgr.pending_approvals()
+            if not pending:
+                return {"error": "nothing is waiting for approval"}
+            req = pending[-1]
+            mgr.approve(req.id, action == "approve")
+            return {"ok": True, "action": action, "what": req.reason}
+
+        candidates = [t for t in top if not t.status.is_terminal]
+        if wanted:
+            candidates = [t for t in candidates if wanted in t.title.lower()] or candidates
+        if not candidates:
+            return {"error": "no running task" + (f" matching {wanted!r}" if wanted else "")}
+        target = candidates[0]
+        done = {"pause": mgr.pause, "resume": mgr.resume, "cancel": mgr.cancel}.get(action)
+        if done is None:
+            return {"error": "action must be status, pause, resume, cancel, approve or deny"}
+        ok = done(target.id)
+        return {"ok": bool(ok), "action": action, "task": target.title,
+                "status": (mgr.get_task(target.id) or target).status.value}
 
     async def _delegate_if_task(self, text: str):
         """Cascade route: start a background task if the transcript is one.
