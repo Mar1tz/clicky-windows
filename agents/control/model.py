@@ -60,11 +60,24 @@ class Risk(IntEnum):
 
 @dataclass(frozen=True)
 class Param:
+    """One argument an action takes.
+
+    `choices` is enforced, not decoration - see agents/control/args.py.
+
+    A parameter with `choices` usually decides WHAT the action does:
+    volume's `direction`, media's `what`. Those must be `required`, with no
+    default in the function signature, because a default turns a dropped
+    argument into a different action - "reduce the volume" came back as a
+    volume increase exactly this way. Set `modifier=True` for the rarer
+    kind that only changes HOW something is done (an editor chat's `mode`),
+    where a default is safe. test_control_arguments.py enforces the rule.
+    """
     name: str
     description: str = ""
     required: bool = False
     type: str = "string"
     choices: tuple[str, ...] = ()
+    modifier: bool = False
 
 
 @dataclass

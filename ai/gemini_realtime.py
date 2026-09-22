@@ -74,6 +74,29 @@ TAIL_SILENCE_FRAMES = 8
 ToolHandler = Callable[[dict], Awaitable[dict]]
 
 
+def _outcome_of(result: dict) -> str:
+    """What a tool result actually SAYS happened — for the log.
+
+    This used to print "ok" for anything without an `error` key, and
+    `desktop_action` never sets one: it reports trouble as `ok: False` with
+    a `note`. So a denied action logged "ok", a failed action logged "ok",
+    and a whole evening of "Tora would not do it" came back from the field
+    with a log file full of successes. The log is the first place anyone
+    looks, and it was the one thing that could not be trusted.
+    """
+    if not isinstance(result, dict):
+        return "ok"
+    if result.get("error"):
+        return "error: " + str(result["error"])[:160]
+    if result.get("ok") is False:
+        detail = result.get("result") or result.get("note") or "no reason given"
+        state = "denied" if "did not approve" in str(detail) else "failed"
+        return f"{state}: {str(detail)[:160]}"
+    if result.get("awaiting_approval"):
+        return "waiting for the user to approve"
+    return "ok"
+
+
 def tool_declarations() -> list[dict]:
     """What the live model can do besides talk.
 
@@ -768,6 +791,5 @@ class RealtimeConversation:
             return {"error": str(e)}
         # Logged at INFO on purpose: "it stopped doing things" is otherwise
         # invisible in tora.log, which is the first place anyone looks.
-        _log.info("tool %s -> %s", call.name,
-                  "error: " + str(result["error"])[:120] if result.get("error") else "ok")
+        _log.info("tool %s -> %s", call.name, _outcome_of(result))
         return result

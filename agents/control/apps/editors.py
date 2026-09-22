@@ -243,7 +243,8 @@ class Editor:
                         (Param("prompt", "What to ask", True),
                          Param("project", "Open this project first"),
                          Param("file", "Attach this file as context"),
-                         Param("mode", "ask | edit | agent", choices=("ask", "edit", "agent"))),
+                         Param("mode", "ask | edit | agent", choices=("ask", "edit", "agent"),
+                               modifier=True)),
                         examples=("open the clicky windows project in vs code and ask the chat to explain "
                                   "the agent system",)))
         A.append(Action(self.app, "recent_projects", "List recently opened projects.", recent_projects,

@@ -48,19 +48,23 @@ class WindowsOS:
         return os.name == "nt"
 
     def actions(self) -> list[Action]:
-        async def media(what: str = "play_pause", times: int = 1) -> str:
+        async def media(what: str, times: int = 1) -> str:
+            # No default: `what` IS the verb here. Defaulting it meant a
+            # dropped argument turned "next song" into a pause.
             key = what if what.startswith("media_") else f"media_{what}"
             system.tap(key, int(times or 1))
             now = system.now_playing()
             return f"{what.replace('_', ' ')}" + (f"; {now.describe().lower()}" if now.title else "")
 
-        async def volume(direction: str = "up", steps: int = 2) -> str:
-            d = direction.lower()
-            if d.startswith("m"):
+        async def volume(direction: str, steps: int = 2) -> str:
+            # No default for `direction`: see the note on Spotify's volume.
+            # A lost argument must be an error, never the opposite action.
+            if direction == "mute":
                 system.tap("volume_mute")
-                return "muted (press again to unmute)"
-            system.tap("volume_up" if d.startswith("u") else "volume_down", max(1, min(int(steps or 2), 20)))
-            return f"volume {d} by {steps} notches"
+                return "muted (say it again to unmute)"
+            steps = max(1, min(int(steps or 2), 20))
+            system.tap("volume_up" if direction == "up" else "volume_down", steps)
+            return f"turned the volume {direction} {steps} notches"
 
         async def now_playing() -> str:
             return system.now_playing().describe()
@@ -118,12 +122,13 @@ class WindowsOS:
         return [
             Action(self.app, "media", "Play/pause, next or previous track for whatever is playing.",
                    media, Tier.SYSTEM, Risk.REVERSIBLE,
-                   (Param("what", "play_pause | next | previous | stop",
+                   (Param("what", "play_pause | next | previous | stop", required=True,
                           choices=("play_pause", "next", "previous", "stop")),
                     Param("times", "How many times", type="integer")),
                    examples=("next song", "pause the music")),
             Action(self.app, "volume", "Turn the volume up, down or mute.", volume, Tier.SYSTEM,
-                   Risk.REVERSIBLE, (Param("direction", "up | down | mute", choices=("up", "down", "mute")),
+                   Risk.REVERSIBLE, (Param("direction", "up, down or mute", required=True,
+                                            choices=("up", "down", "mute")),
                                      Param("steps", "How many notches", type="integer"))),
             Action(self.app, "now_playing", "What is playing right now.", now_playing, Tier.SYSTEM,
                    Risk.PASSIVE),

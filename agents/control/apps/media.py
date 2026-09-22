@@ -108,10 +108,15 @@ class Spotify:
             return (f"opened Spotify's search for {playlist!r} - pick the playlist there, or give me its "
                     "link and I will open it directly.")
 
-        async def volume(direction: str = "up", steps: int = 2) -> str:
-            system.tap("volume_up" if direction.lower().startswith("u") else "volume_down",
+        async def volume(direction: str, steps: int = 2) -> str:
+            # `direction` has NO default on purpose. It used to default to
+            # "up", so an argument lost anywhere upstream turned "reduce the
+            # volume" into a volume increase - the exact opposite of the
+            # request. A direction with a default is a bug waiting for a
+            # dropped argument; see agents/control/args.py.
+            system.tap("volume_up" if direction == "up" else "volume_down",
                        max(1, min(int(steps or 2), 20)))
-            return f"turned the volume {direction.lower()}"
+            return f"turned the volume {direction}"
 
         return [
             media("media_next", "skipped to the next track", "Next track (works while Spotify is hidden)."),
@@ -129,7 +134,8 @@ class Spotify:
                    (Param("playlist", "Playlist link, id or name", True),),
                    examples=("spotify, open my Deep Focus playlist",)),
             Action(self.app, "volume", "Turn the system volume up or down.", volume, Tier.SYSTEM,
-                   Risk.REVERSIBLE, (Param("direction", "up | down", choices=("up", "down")),
+                   Risk.REVERSIBLE, (Param("direction", "up or down", required=True,
+                                            choices=("up", "down")),
                                      Param("steps", "How many notches", type="integer"))),
         ]
 

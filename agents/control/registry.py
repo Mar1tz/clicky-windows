@@ -17,6 +17,7 @@ import threading
 import time
 from typing import Any, Optional
 
+from .args import BindError, bind
 from .model import Action, Outcome, Refused, Risk, Tier, Unavailable
 
 log = logging.getLogger("agents.control")
@@ -125,21 +126,26 @@ class AppControl:
         found = self.find(app, action)
         if found is None:
             return Outcome(ok=False, message=self.suggestions(app, action), app=app, action=action)
-        args = dict(arguments or {})
-        unknown = [k for k in args if k not in {p.name for p in found.params}]
-        for k in unknown:
-            args.pop(k)
-        missing = [p.name for p in found.params if p.required and not str(args.get(p.name, "")).strip()]
-        if missing:
+        # Bind, never guess. An unrecognised name, a value outside the
+        # declared choices or a missing required argument all stop the call
+        # here with a sentence. Dropping them and running on defaults is
+        # what turned "reduce the volume" into a volume increase.
+        try:
+            args = bind(found.key, found.params, dict(arguments or {}))
+        except BindError as exc:
+            log.warning("%s refused its arguments: %s", found.key, exc)
             return Outcome(ok=False, app=found.app, action=found.name, tier=found.tier,
-                           message=f"{found.key} needs {', '.join(missing)}")
+                           message=str(exc), data={"expected": exc.expected})
+        started = time.monotonic()
         attempts: list[str] = []
         try:
             message = await found.run(**args)
         except Refused as exc:
+            log.info("%s refused: %s", found.key, exc)
             return Outcome(ok=False, message=str(exc), app=found.app, action=found.name, tier=found.tier,
                            attempts=attempts)
         except Unavailable as exc:
+            log.info("%s unavailable via %s: %s", found.key, found.tier.label, exc)
             attempts.append(f"{found.tier.label}: {exc}")
             return Outcome(ok=False, app=found.app, action=found.name, tier=found.tier, attempts=attempts,
                            message=f"{found.key} is not available on this machine: {exc}")
@@ -150,8 +156,10 @@ class AppControl:
         tier = found.tier
         if isinstance(message, tuple):                      # an action may report the tier it used
             message, tier = message
-        return Outcome(ok=True, message=str(message), tier=tier, app=found.app, action=found.name,
-                       attempts=attempts, data={"unknown_arguments": unknown} if unknown else {})
+        log.info("%s tier=%s args=%s -> ok in %dms", found.key, tier.label,
+                 args or "{}", int((time.monotonic() - started) * 1000))
+        return Outcome(ok=True, message=str(message), tier=tier, app=found.app,
+                       action=found.name, attempts=attempts)
 
 
 def _discover() -> list[Any]:

@@ -1,8 +1,9 @@
 # Desktop control: the road from "it sometimes works" to "it always works"
 
-**Status:** planning document. Nothing here is built. Each milestone is
-meant to become its own spec document and then one commit-sized piece of
-work, in roughly the order given.
+**Status:** wave 1 is built — DC-01, 02, 05, 06, 07, 08, 09 and 10, in
+`milestones/DC-01-10-wave-1-arguments.md`. Everything else is still a plan.
+Each remaining milestone becomes its own spec document and then one
+commit-sized piece of work, in roughly the order given.
 
 **Written for:** whoever builds the next piece — the user reading it to
 choose what matters, and the Claude Code session that will implement it.
@@ -29,6 +30,12 @@ a numbered milestone.
 ---
 
 ## 1. What the evidence actually says
+
+> **Note, after wave 1:** §1.1, §1.2 and §1.3 are fixed — they were the
+> reported bug. They are kept here word for word because they are the
+> reasoning the rest of the plan rests on, and because the next person to
+> find a silent failure should recognise the shape of it. §1.4 and §1.5 are
+> still true.
 
 ### 1.1 The log is lying to us
 
@@ -654,16 +661,16 @@ DC-07, DC-09, DC-08.** Together they are perhaps a day's work and they fix
 the reported bug — the volume going the wrong way and the playlist doing
 nothing — while making the next failure visible instead of silent.
 
-| Wave | Milestones | What the user notices |
-|---|---|---|
-| 1 | DC-01, 02, 05, 07, 08, 09 | "Reduce the volume" reduces the volume. Failures are explained. |
-| 2 | DC-03, 06, 10, 12, 42, 44 | Wrong phrasings self-correct; nothing claims success falsely. |
-| 3 | DC-13, 14, 15, 16, 19 | Approving stops freezing the conversation; "yes" works by voice. |
-| 4 | DC-23, 24, 43, 21 | Tora reports what actually happened, not what it tried. |
-| 5 | DC-17, 18, 26, 27, 45, 46 | Fewer dialogs, no double-actions, and it stays fixed. |
-| 6 | DC-20, 22, 37, 38, 39 | Spotify properly; "turn it down" knows what "it" is. |
-| 7 | DC-28…36, 40 | The rest of the machine comes under voice control. |
-| 8 | DC-04, 47, 48 | Field failures reproducible in one command. |
+| Wave | Milestones | What the user notices | Status |
+|---|---|---|---|
+| 1 | DC-01, 02, 05, 06, 07, 08, 09, 10 | "Reduce the volume" reduces the volume. Failures are explained. | **done** — `DC-01-10-wave-1-arguments.md` |
+| 2 | DC-03, 12, 42, 44 | Wrong phrasings self-correct; nothing claims success falsely. | |
+| 3 | DC-13, 14, 15, 16, 19 | Approving stops freezing the conversation; "yes" works by voice. | |
+| 4 | DC-23, 24, 43, 21 | Tora reports what actually happened, not what it tried. | |
+| 5 | DC-17, 18, 26, 27, 45, 46 | Fewer dialogs, no double-actions, and it stays fixed. | |
+| 6 | DC-20, 22, 37, 38, 39 | Spotify properly; "turn it down" knows what "it" is. | |
+| 7 | DC-28…36, 40 | The rest of the machine comes under voice control. | |
+| 8 | DC-04, 47, 48 | Field failures reproducible in one command. | |
 
 ---
 

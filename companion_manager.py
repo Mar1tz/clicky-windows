@@ -1131,21 +1131,27 @@ class CompanionManager(QObject):
         still confirms: anything that acts shows the approval dialog, and
         the user can wave through that one action for good.
         """
-        import json as _json
         from agents.control import control
+        from agents.control.args import read_arguments
 
         app = str(args.get("app") or "").strip()
         action = str(args.get("action") or "").strip()
         arguments = args.get("arguments")
         if not isinstance(arguments, dict):
             raw = args.get("arguments_json") or args.get("value") or ""
-            arguments = {}
-            if isinstance(raw, str) and raw.strip():
-                try:
-                    parsed = _json.loads(raw)
-                    arguments = parsed if isinstance(parsed, dict) else {}
-                except ValueError:
-                    arguments = {}
+            # A parse failure used to become {} in silence, and the action
+            # then ran on its defaults - which is how "reduce the volume"
+            # became a volume increase. Now it is an error the model can
+            # read and correct.
+            arguments, how = read_arguments(raw)
+            if arguments is None:
+                _log.warning("desktop_action %s.%s: could not read arguments %r",
+                             app, action, str(raw)[:120])
+                return {"error": f"I could not read those arguments: {how}. "
+                                 "Send arguments_json as a JSON object, e.g. "
+                                 '{"direction": "down"}.'}
+            if how:
+                _log.info("desktop_action %s.%s arguments read %s", app, action, how)
         c = control()
         if not action or action in ("list", "list_actions", "what_can_you_do"):
             apps = c.apps()
