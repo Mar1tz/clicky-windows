@@ -58,6 +58,12 @@ MAX_SESSION_AGE_S = 8 * 60
 # A tool chain that never settles must not hang the conversation.
 MAX_TOOL_ROUNDS = 6
 
+# Context compression. 16k is roughly forty spoken turns of history, far more
+# than any conversation refers back to, and it caps what every later turn
+# costs. Keeping 8k after a trim leaves several turns of real context.
+COMPRESSION_TRIGGER_TOKENS = 16_000
+COMPRESSION_TARGET_TOKENS = 8_000
+
 # How much trailing silence to stream so the server's VAD hears the question
 # end. Eight frames is 800 ms, which measured reliable; the loop exits early
 # as soon as the model starts speaking, so in practice it rarely runs to the
@@ -390,6 +396,10 @@ class RealtimeConversation:
         self._player = PcmStreamPlayer()
         self._connecting: Optional[asyncio.Task] = None
         self._resume_handle: Optional[str] = None
+        # Bumped whenever a session starts BLANK rather than resuming. Callers
+        # that avoid repeating themselves — the per-turn screen context — use
+        # it to know that everything they said earlier is gone.
+        self.epoch = 0
 
         self._turn = Turn()
         self._speaking = False
@@ -447,6 +457,17 @@ class RealtimeConversation:
             },
             # Filled in by _connect: a handle continues the conversation.
             "sessionResumption": {},
+            # The Live API bills the WHOLE context window on every turn -
+            # system instruction, tools, and every earlier turn. Without a
+            # cap, turn 30 of a chat costs twice what turn 1 did and the
+            # total grows with the square of the conversation. The sliding
+            # window keeps the recent context (system instruction and the
+            # prefix are never dropped) and holds the per-turn price flat;
+            # it is also what makes an unbounded session possible.
+            "contextWindowCompression": {
+                "triggerTokens": str(COMPRESSION_TRIGGER_TOKENS),
+                "slidingWindow": {"targetTokens": str(COMPRESSION_TARGET_TOKENS)},
+            },
         }
 
     def _stale(self) -> bool:
@@ -506,6 +527,8 @@ class RealtimeConversation:
         self._session = session
         self._system = system_prompt
         self._opened_at = time.monotonic()
+        if not resume:
+            self.epoch += 1
         self._pump = asyncio.ensure_future(self._run_pump(session))
         _log.info("realtime session open (%s)%s", Models.REALTIME,
                   " - resumed" if resume else "")

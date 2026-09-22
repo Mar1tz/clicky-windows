@@ -54,6 +54,11 @@ import skills as skills_pkg
 
 _log = logging.getLogger("tora.manager")
 
+# How many turns the screen context may say "same screen" before it is
+# spelled out again. Context compression can drop the turn that carried
+# the control list, so it is repeated often enough to survive that.
+CONTEXT_REPEAT_TURNS = 6
+
 
 class _VisualCond:
     """Adapts an Expectation's `visual` text to the (kind, value) shape
@@ -343,6 +348,9 @@ class CompanionManager(QObject):
         # "that", "the same", "go back there" and "the one to its left"
         # resolve — the referent of the user's next sentence.
         self._last_ref = None
+        # (session epoch, last screen line sent, turns since it was spelled
+        # out) — see _context_head.
+        self._ctx_memo: tuple[int, str, int] = (-1, "", 0)
         # Toggles
         self._slow_mode = False
         self._quiz_mode = False
@@ -917,6 +925,30 @@ class CompanionManager(QObject):
         # and a half later.
         await conv.end_user_audio()
 
+    def _context_head(self, line: str) -> str:
+        """The screen line, or a note that nothing has changed.
+
+        The control list is the same twenty-odd names turn after turn while
+        the user stays in one app, and the Live API re-bills the whole
+        conversation every turn — so repeating it is paid for once to send
+        and then again on every turn that follows. Saying "same screen"
+        instead costs four tokens and tells the model exactly as much.
+
+        It is sent in full again when the screen changes, after a handful of
+        turns (in case compression has dropped the original), and whenever
+        the session started blank, which is when the model really has not
+        been told.
+        """
+        conv = self._realtime
+        epoch = getattr(conv, "epoch", 0) if conv is not None else 0
+        last_epoch, last_line, age = self._ctx_memo
+        if (line == last_line and epoch == last_epoch
+                and age < CONTEXT_REPEAT_TURNS - 1):
+            self._ctx_memo = (epoch, last_line, age + 1)
+            return "[context] Same screen as a moment ago."
+        self._ctx_memo = (epoch, line, 0)
+        return f"[context] Today is {datetime.now():%A, %B %d, %Y}. {line}"
+
     async def _screen_context(self) -> str:
         """One line about the screen. No pixels."""
         from ai import screen_summary
@@ -927,7 +959,7 @@ class CompanionManager(QObject):
         # Cache the control snapshot so directional coreference ("the one to
         # its left") reuses this turn's walk instead of walking again.
         self._pointables = summary.pointables
-        bits = [f"[context] Today is {datetime.now():%A, %B %d, %Y}. {summary.line}"]
+        bits = [self._context_head(summary.line)]
         ref = self._last_ref
         if self._ref_fresh():
             bits.append(
@@ -3296,6 +3328,14 @@ class CompanionManager(QObject):
 
     def _emit_state(self, state: AppState):
         self._state = state
+        # Wake-word scanning only means anything while Tora is idle: a wake
+        # word during THINKING or SPEAKING is refused by _claim_begin. Left
+        # running, it paid to transcribe Tora's own answer coming back
+        # through the microphone.
+        try:
+            self._listener.set_wake_paused(state is not AppState.IDLE)
+        except Exception:
+            pass
         self.sig_state_changed.emit(state)
 
     # ── Settings ──────────────────────────────────────────────────────────────
@@ -3488,7 +3528,10 @@ class CompanionManager(QObject):
         try:
             self._emit_state(AppState.THINKING)
             screenshots = capture_all_screens()
-            images_b64 = [s.base64_jpeg for s in screenshots]
+            # The active monitor only: three images cost three times as much
+            # and the question is always about the screen in front of them.
+            active = self._active_shot(screenshots)
+            images_b64 = [(active or screenshots[0]).base64_jpeg] if screenshots else []
             title = active_window_title()
             system = _build_system_prompt(
                 window_title=title, quiz_mode=True,

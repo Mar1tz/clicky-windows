@@ -32,7 +32,11 @@ class CodingWorker(Worker):
         "run_command", "install_package", "execute_script", "run_tests",
         "git_init", "git_status", "git_diff", "git_log", "git_add",
         "git_commit", "git_branch",
-        "read_workbook", "write_workbook", "clean_data", "reconcile_sheets", "check_formulas", "compare_periods",
+        # Spreadsheet work belongs to the file worker (and the classifier sends
+        # it there); carrying the whole set here cost ~1,200 tokens of schema
+        # on every call this worker made. read_workbook stays: a coding task
+        # sometimes needs to look at a data file it was given.
+        "read_workbook",
     ]
     max_iterations = 20              # a fix loop needs room: test, read, edit, test…
     max_fix_attempts = 3

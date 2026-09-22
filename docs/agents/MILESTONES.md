@@ -1594,3 +1594,61 @@ new spoken request now re-arms it. And every tool call is logged at INFO
 `tora.log` when the user reported it.
 
 6 new tests (`test_realtime_session.py`); 553 passing.
+
+## M28 — the same product, for less money
+
+The ask: identical behaviour, nothing removed, nothing slower — just a
+smaller bill. So this milestone touches only what is *re-sent*, never what
+is *said*. The system prompt and the tool declarations were measured
+(1,430 and 1,736 tokens, re-billed on every spoken turn) and deliberately
+left alone: the prose in both is what makes Tora reach for `point_at`
+instead of a vision call, and trimming it trades a known saving for an
+unknown regression.
+
+Five changes, each with a regression test in `test_cost_footprint.py`:
+
+**1. The agent loop stopped re-sending everything it had ever read.**
+The ReAct loop hands the provider the whole message list on every
+iteration, so a thirty-step task pays for step 1's file contents thirty
+times. `trim_history()` keeps the last three tool results verbatim and
+cuts older ones to their opening line — nothing disappears, the model
+still sees what it did and in what order. Stale screenshots are dropped
+outright (a screenshot is ~516 tokens and only the newest one is being
+looked at). Measured on the real loop: −8% on a six-step task, −32% on a
+twelve-step one, −62% on a thirty-step one.
+
+**2. Live sessions compress their own context.** `contextWindowCompression`
+(trigger 16k, sliding window to 8k) caps what an hour-long conversation
+re-bills per turn. −41% on a hundred-exchange session; nothing on a short
+one, which is correct.
+
+**3. The screen context is no longer repeated word for word.** Every turn
+carried a fresh `[context] …` line listing up to 28 control names — about
+140 tokens, paid once to send and then again on every later turn, because
+the Live API re-bills the whole conversation. It is now spelled out when
+the screen changes, every sixth turn regardless (compression may have
+dropped it), and whenever a session started blank rather than resuming —
+`RealtimeConversation.epoch` is what makes that last case knowable.
+
+**4. Ambient mode stopped paying to listen to itself.** With the wake word
+on, every speech segment near the machine is transcribed to see whether it
+was Tora's name. Three things were wasted: the trailing silence that ended
+the segment, everything after the first ~1.8s (the wake word is the first
+thing said, not the twelfth), and every segment captured while Tora was
+mid-answer — her own voice coming back through the microphone, which
+`_claim_begin` would refuse anyway. −37% on the idle bill, and a segment
+with under 180ms of voiced audio (a cough, a keystroke, a door) is no
+longer sent at all.
+
+**5. Smaller tool sets and one screenshot where three were sent.** The
+coding worker was carrying the whole spreadsheet tool set — ~900 tokens of
+schema on every call it made, for work the file worker does. The startup
+quiz sent every monitor; it now sends the one in front of the user.
+
+Net, on an hour of real use (30 exchanges, 8 screen looks, 2 small agent
+jobs, 20 minutes of other speech in the room): **$1.08 → $0.79, −27%.**
+Long agent tasks and long conversations save most; a single spoken
+question is unchanged, because half of it is the audio Tora speaks and the
+other half is the instructions that make her behave the way she does.
+
+11 tests in `test_cost_footprint.py`; 564 passing.

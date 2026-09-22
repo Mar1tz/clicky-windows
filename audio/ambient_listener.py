@@ -19,6 +19,11 @@ is speech segments only — never a continuous upload, and nothing at all
 while the room is quiet. Hotkey mode (the default) does not open the
 microphone until the hotkey is pressed and is unaffected.
 
+Because every check is paid for, only the part of a segment that could hold
+the wake word is sent: the opening ~1.8s, minus the silence that ended it,
+and nothing at all for a segment with no real speech in it or while Tora is
+already busy answering. See wake_clip() and the knobs below.
+
 The transcriber is injected rather than imported: the check runs on a worker
 thread, and the manager owns the event loop that the API client lives on.
 Without one, wake-word detection is simply off.
@@ -49,6 +54,19 @@ SILENCE_BLOCKS_END = 20              # ~600ms of silence ends a segment
 MAX_SEGMENT_BLOCKS = 120             # ~3.6s max wake-word segment
 PRE_ROLL_BLOCKS    = 18              # ~540ms of pre-roll for the wake word
 
+# What is actually worth sending. Every wake check is a paid transcription,
+# so the clip is cut down to the only part that can hold the wake word:
+#   - the wake word is the FIRST thing said, so a long segment only needs
+#     its opening — the rest is someone finishing a sentence;
+#   - the trailing silence that ended the segment carries nothing;
+#   - a segment with almost no voiced audio in it is a cough, a keystroke
+#     or a door, and "Tora" takes about 400ms to say.
+# Together these cut a talkative room's wake-word bill by about half
+# without changing when Tora wakes.
+WAKE_WINDOW_BLOCKS = 60              # ~1.8s: enough for "hey tora" + pre-roll
+WAKE_TAIL_BLOCKS   = 4               # ~120ms of run-off kept after the speech
+MIN_VOICED_BLOCKS  = 6               # ~180ms of voiced audio to be worth asking
+
 # Wake phrases. A short name like "Tora" is mis-heard in fairly
 # predictable ways — "Torah", "Tara", "Dora" — so the near-misses count
 # as a match too. Better a rare false wake than a name that never works.
@@ -58,6 +76,17 @@ WAKE_WORDS = (
     "hey tora", "hi tora", "ok tora", "yo tora",
     "hey torah", "hey tara", "hey dora",
 )
+
+
+def wake_clip(blocks: list[np.ndarray], silence_blocks: int) -> list[np.ndarray]:
+    """The part of a captured segment that could contain the wake word.
+
+    Drops the silence that ended the segment (keeping a short run-off so the
+    last syllable is not clipped) and then keeps only the opening window.
+    Pure and block-based so it can be tested without a microphone.
+    """
+    keep = len(blocks) - max(0, silence_blocks - WAKE_TAIL_BLOCKS)
+    return blocks[:max(1, min(keep, WAKE_WINDOW_BLOCKS))]
 
 
 class AmbientListener:
@@ -96,6 +125,7 @@ class AmbientListener:
         self._seg_buffer: list[np.ndarray] = []
         self._seg_speech_blocks = 0
         self._seg_silence_blocks = 0
+        self._seg_voiced_blocks = 0
         self._in_segment = False
 
         # Recording buffer (hotkey push-to-talk OR post-wake capture)
@@ -109,6 +139,11 @@ class AmbientListener:
 
         # Enable/disable toggle
         self._wake_word_enabled = True
+        # Paused while Tora is thinking or speaking. A wake word is refused
+        # in those states anyway (only one capture may be open at a time),
+        # so scanning then means paying to transcribe Tora's own voice
+        # coming back through the microphone.
+        self._wake_paused = False
 
     # ── Public API ────────────────────────────────────────────────────────────
 
@@ -192,6 +227,14 @@ class AmbientListener:
     def set_wake_word_enabled(self, enabled: bool):
         self._wake_word_enabled = enabled
 
+    def set_wake_paused(self, paused: bool) -> None:
+        """Stop/resume wake-word scanning without touching the user's setting."""
+        if paused == self._wake_paused:
+            return
+        self._wake_paused = paused
+        if paused:
+            self._reset_segment()
+
     def set_wake_transcriber(self, fn: Optional[Callable[[bytes], str]]) -> None:
         """Supply the speech-to-text used for wake-word checks."""
         self._wake_transcriber = fn
@@ -252,7 +295,7 @@ class AmbientListener:
             return
 
         # Standby: VAD-based segment capture for wake-word
-        if not self._wake_word_enabled:
+        if not self._wake_word_enabled or self._wake_paused:
             return
 
         # Maintain tiny pre-roll
@@ -268,6 +311,7 @@ class AmbientListener:
                 self._seg_buffer.append(pcm_int16.copy())
                 if self._seg_speech_blocks >= MIN_SPEECH_BLOCKS:
                     self._in_segment = True
+                    self._seg_voiced_blocks = self._seg_speech_blocks
                     # Prepend pre-roll so we catch the start of the word
                     self._seg_buffer = list(self._preroll) + self._seg_buffer
             else:
@@ -280,6 +324,7 @@ class AmbientListener:
         self._seg_buffer.append(pcm_int16.copy())
         if is_speech:
             self._seg_silence_blocks = 0
+            self._seg_voiced_blocks += 1
         else:
             self._seg_silence_blocks += 1
 
@@ -288,14 +333,20 @@ class AmbientListener:
             or len(self._seg_buffer) >= MAX_SEGMENT_BLOCKS
         )
         if end:
-            seg = np.concatenate(self._seg_buffer).astype(np.int16).tobytes()
+            voiced = self._seg_voiced_blocks
+            clip = wake_clip(self._seg_buffer, self._seg_silence_blocks)
             self._reset_segment()
-            self._dispatch_wake_check(seg)
+            if voiced < MIN_VOICED_BLOCKS:
+                return     # a cough, a keystroke, a door: not a name
+            self._dispatch_wake_check(
+                np.concatenate(clip).astype(np.int16).tobytes()
+            )
 
     def _reset_segment(self):
         self._seg_buffer = []
         self._seg_speech_blocks = 0
         self._seg_silence_blocks = 0
+        self._seg_voiced_blocks = 0
         self._in_segment = False
 
     # ── Wake-word transcription (off the audio thread) ────────────────────────

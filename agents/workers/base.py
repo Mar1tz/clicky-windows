@@ -89,6 +89,34 @@ def describe_call(call) -> str:
     return verbs.get(call.tool_name, call.tool_name.replace("_", " ").capitalize()).strip()
 
 
+# How much of the conversation stays verbatim. The last few tool results are
+# what the model is actually working from; older ones only need to say what
+# happened. Every iteration re-sends the whole list, so trimming the tail is
+# the difference between a loop that costs a fixed amount per step and one
+# that costs more with every step.
+KEEP_FULL_RESULTS = 3
+TRIMMED_RESULT_CHARS = 240
+
+
+def trim_history(messages: list[ProviderMessage]) -> list[ProviderMessage]:
+    """Shorten old tool results and drop stale images, in place of a copy.
+
+    Nothing is removed: every tool result keeps its opening line, so the model
+    still sees what it did and in what order. Only the bulk goes - file
+    contents it has already used, a screenshot it has already described.
+    """
+    tool_turns = [i for i, m in enumerate(messages) if m.role == "tool"]
+    keep_from = tool_turns[-KEEP_FULL_RESULTS] if len(tool_turns) > KEEP_FULL_RESULTS else 0
+    newest_image = max((i for i, m in enumerate(messages) if m.images_b64), default=-1)
+    for i, m in enumerate(messages):
+        if m.images_b64 and i != newest_image:
+            m.images_b64 = []
+            m.content = (m.content or "") + " (image dropped - already described)"
+        if m.role == "tool" and i < keep_from and len(m.content or "") > TRIMMED_RESULT_CHARS:
+            m.content = m.content[:TRIMMED_RESULT_CHARS] + " … (earlier output trimmed)"
+    return messages
+
+
 class Worker(BaseWorker):
     """Concrete BaseWorker. Subclasses set worker_type / default_tools /
     system_prompt; the execution logic here is shared by all of them."""
@@ -156,7 +184,7 @@ class Worker(BaseWorker):
 
         for _ in range(self.max_iterations):
             await ctx.control.checkpoint()
-            resp = await ctx.provider.complete(messages, tools=specs, system=system)
+            resp = await ctx.provider.complete(trim_history(messages), tools=specs, system=system)
 
             if not resp.tool_calls:
                 step.summary = resp.text
