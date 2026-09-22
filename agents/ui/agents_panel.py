@@ -16,10 +16,12 @@ from __future__ import annotations
 import logging
 from typing import Optional
 
+import threading
+
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtGui import QColor, QPainter
 from PyQt6.QtWidgets import (
-    QFrame, QHBoxLayout, QLabel, QProgressBar, QPushButton, QScrollArea,
+    QFrame, QHBoxLayout, QLabel, QLineEdit, QProgressBar, QPushButton, QScrollArea,
     QSizePolicy, QVBoxLayout, QWidget,
 )
 
@@ -56,6 +58,23 @@ QLabel#agentTask { font-size: 12px; color: rgb(190, 190, 205); }
 QLabel#agentStep { font-size: 11px; color: rgb(140, 140, 160); }
 QLabel#agentAction { font-size: 12px; color: rgb(220, 220, 230); }
 QLabel#emptyState { font-size: 13px; color: rgb(140, 140, 160); }
+QLabel#askStatus { font-size: 11px; color: rgb(140, 140, 160); }
+QLabel#askStatus[tone="warn"] { color: rgb(255, 180, 0); }
+QLineEdit#askBox {
+    background-color: rgba(40, 40, 50, 200);
+    border: 1px solid rgba(90, 90, 110, 150);
+    border-radius: 10px; color: rgb(240, 240, 245);
+    font-size: 13px; padding: 8px 12px;
+}
+QLineEdit#askBox:focus { border-color: rgba(0, 120, 255, 200); }
+QPushButton#askRun {
+    background-color: rgba(0, 120, 255, 120);
+    border: 1px solid rgba(0, 120, 255, 200);
+    border-radius: 10px; color: rgb(240, 240, 245);
+    font-size: 13px; font-weight: 600; padding: 8px 16px;
+}
+QPushButton#askRun:hover { background-color: rgba(0, 120, 255, 170); }
+QPushButton#askRun:disabled { color: rgb(120, 120, 140); background-color: rgba(60, 60, 75, 90); }
 QProgressBar {
     background-color: rgba(60, 60, 75, 120);
     border: none;
@@ -243,6 +262,7 @@ class ActiveAgentsPanel(QWidget):
     """The scrollable list of agent cards, plus the empty state."""
 
     view_logs = pyqtSignal(str)       # task_id - M9 connects the timeline here
+    _asked = pyqtSignal(object, str)  # (task or None, text) - back from the submit thread
 
     EMPTY_TEXT = "No agents running.\nAsk Tora to build something."
 
@@ -267,6 +287,30 @@ class ActiveAgentsPanel(QWidget):
         title = QLabel("Active Agents")
         title.setObjectName("title")
         outer.addWidget(title)
+
+        # Typed input: the same path a voice request takes, minus the
+        # microphone. Anything the classifier would delegate from speech
+        # it delegates from here, and the cards, orbs and toasts follow.
+        ask = QHBoxLayout()
+        ask.setSpacing(8)
+        self._ask = QLineEdit()
+        self._ask.setObjectName("askBox")
+        self._ask.setPlaceholderText("Give the workforce a job… e.g. build me a React app called MyApp")
+        self._ask.returnPressed.connect(self.submit_text)
+        self._run = QPushButton("Run")
+        self._run.setObjectName("askRun")
+        self._run.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._run.clicked.connect(self.submit_text)
+        ask.addWidget(self._ask, 1)
+        ask.addWidget(self._run)
+        outer.addLayout(ask)
+        self._ask_status = QLabel("")
+        self._ask_status.setObjectName("askStatus")
+        self._ask_status.setWordWrap(True)
+        self._ask_status.setVisible(False)
+        outer.addWidget(self._ask_status)
+        self._asked.connect(self._on_asked)
+        self._force_next = False
 
         self._empty = QLabel(self.EMPTY_TEXT)
         self._empty.setObjectName("emptyState")
@@ -293,6 +337,63 @@ class ActiveAgentsPanel(QWidget):
 
         for state in manager.list_agents():
             self.on_agent_changed(state)
+
+    # -- typed requests ------------------------------------------------------
+
+    def submit_text(self, text: Optional[str] = None) -> None:
+        """Hand the box's text to the workforce, off the GUI thread.
+
+        submit() classifies first, and with a provider connected that can
+        take a few seconds in the unsure band - not something to do on
+        the thread that paints the window.
+        """
+        text = (text if isinstance(text, str) else self._ask.text()).strip()
+        if not text:
+            return
+        self._run.setEnabled(False)
+        self._status("Thinking…")
+        force = self._force_next
+        self._force_next = False
+
+        def _go():
+            try:
+                if force:
+                    from agents.core import Task
+                    task = self._manager.submit_task(
+                        Task(title=text[:60], goal=text, workspace=self._manager.workspace_root))
+                else:
+                    task = self._manager.submit(text)
+            except Exception as exc:  # noqa: BLE001 - report, never crash the panel
+                task = exc
+            self._asked.emit(task, text)
+
+        threading.Thread(target=_go, name="panel-submit", daemon=True).start()
+
+    def _on_asked(self, task, text: str) -> None:
+        self._run.setEnabled(True)
+        if isinstance(task, Exception):
+            self._status(f"Could not start that: {task}", warn=True)
+            return
+        if task is None:
+            # The classifier read it as a question. Offer to run it anyway
+            # rather than silently doing nothing - the usual complaint.
+            self._force_next = True
+            self._run.setText("Run anyway")
+            self._status("That reads like a question, not a job. Press Run anyway to "
+                         "give it to an agent regardless.", warn=True)
+            return
+        self._run.setText("Run")
+        self._ask.clear()
+        who = self._manager.get_agent(task.agent_id or "")
+        name = who.spec.name if who else "An agent"
+        self._status(f"{name} has started: {task.title}")
+
+    def _status(self, text: str, *, warn: bool = False) -> None:
+        self._ask_status.setText(text)
+        self._ask_status.setProperty("tone", "warn" if warn else "")
+        self._ask_status.style().unpolish(self._ask_status)
+        self._ask_status.style().polish(self._ask_status)
+        self._ask_status.setVisible(bool(text))
 
     # -- signal handlers (GUI thread) ----------------------------------------
 

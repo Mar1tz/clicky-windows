@@ -265,3 +265,68 @@ def test_project_children_sit_under_their_lead(qapp, tmp_path):
         assert order[0][1] is None
     finally:
         mgr.stop()
+
+
+# -- typed requests (no voice needed) -----------------------------------------
+
+def _wait_status(qapp, panel, contains, timeout=15.0):
+    import time as _t
+    deadline = _t.monotonic() + timeout
+    while _t.monotonic() < deadline:
+        qapp.processEvents()
+        if contains in panel._ask_status.text():
+            return True
+        _t.sleep(0.02)
+    return False
+
+
+def test_typed_request_starts_an_agent(qapp, manager):
+    panel = ActiveAgentsPanel(manager)
+    panel._ask.setText(REQUEST)
+    panel.submit_text()
+    assert not panel._run.isEnabled(), "Run is disabled while classifying"
+    assert _wait_status(qapp, panel, "has started"), panel._ask_status.text()
+    assert "Application Builder" in panel._ask_status.text()
+    assert panel._ask.text() == "", "the box clears once the job is accepted"
+    assert panel._run.isEnabled()
+    task = manager.list_tasks()[0]
+    assert manager.wait(task.id, 60).status is TaskStatus.COMPLETED
+
+
+def test_question_offers_run_anyway(qapp, manager):
+    panel = ActiveAgentsPanel(manager)
+    panel._ask.setText("what is a React component?")
+    panel.submit_text()
+    assert _wait_status(qapp, panel, "reads like a question")
+    assert panel._run.text() == "Run anyway"
+    assert manager.list_tasks() == []
+    # pressing again forces it through as a task
+    panel.submit_text()
+    assert _wait_status(qapp, panel, "has started")
+    assert len(manager.list_tasks()) == 1
+    assert panel._run.text() == "Run"
+
+
+def test_empty_text_does_nothing(qapp, manager):
+    panel = ActiveAgentsPanel(manager)
+    panel._ask.setText("   ")
+    panel.submit_text()
+    assert panel._run.isEnabled() and manager.list_tasks() == []
+
+
+def test_submit_failure_is_reported_not_raised(qapp, manager):
+    class Broken:
+        workspace_root = manager.workspace_root
+
+        def submit(self, text):
+            raise RuntimeError("workforce on fire")
+
+        def get_agent(self, _):
+            return None
+
+    panel = ActiveAgentsPanel(manager)
+    panel._manager = Broken()
+    panel._ask.setText("build something")
+    panel.submit_text()
+    assert _wait_status(qapp, panel, "Could not start that")
+    assert panel._run.isEnabled()

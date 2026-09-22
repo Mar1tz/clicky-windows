@@ -15,7 +15,7 @@ from PyQt6.QtCore import QTimer
 from PyQt6.QtWidgets import QApplication
 
 from agents.bootstrap import build_agent_manager
-from agents.ui import open_agents_window
+from agents.ui import open_agents_window, show_orbs
 
 TASKS = [
     "Create a new folder called MyApp and build the foundation of a React application inside it.",
@@ -28,9 +28,12 @@ def main() -> int:
     workspace = tempfile.mkdtemp(prefix="tora-demo-")
     manager = build_agent_manager(workspace_root=workspace, in_memory=True).start()
 
-    window = open_agents_window(manager)
-    window.view_logs.connect(lambda task_id: print(f"[demo] logs requested for {task_id}"))
+    window = open_agents_window(manager)     # Logs buttons already open the timeline
+    show_orbs(manager)                      # the top-right strip, same feed
+    from agents.bootstrap import has_live_provider
     print(f"[demo] workspace: {workspace}")
+    print(f"[demo] provider: {'REAL (gateway/Gemini)' if has_live_provider(manager.router) else 'mock + templates'}")
+    print("[demo] type a request into the panel, or wait for the two demo tasks")
 
     for i, text in enumerate(TASKS):
         QTimer.singleShot(400 + i * 2500, lambda t=text: manager.submit(t))
