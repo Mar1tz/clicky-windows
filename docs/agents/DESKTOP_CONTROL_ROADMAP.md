@@ -12,6 +12,11 @@ commit-sized piece of work, in roughly the order given.
 **Written for:** whoever builds the next piece — the user reading it to
 choose what matters, and the Claude Code session that will implement it.
 
+**See also:** `UNIVERSAL_CONTROL.md` asks the wider question this document
+does not — how Tora acts on *any* app with nothing configured per app.
+That is where DC-28…DC-36 (the per-app long tail) should probably go to
+die: writing thirty more adapters is the thing worth avoiding.
+
 ---
 
 ## 0. Why this document exists
