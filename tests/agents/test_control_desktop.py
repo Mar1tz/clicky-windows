@@ -379,7 +379,7 @@ def test_an_app_that_failed_to_load_says_so_instead_of_vanishing():
     """
     from agents.control.registry import AppControl
 
-    control = AppControl([BrokenAdapter()])
+    control = AppControl([BrokenAdapter()], providers=[])
     assert "spotify" in control.broken()
     assert "snapshot" in control.broken()["spotify"]
 
@@ -387,6 +387,32 @@ def test_an_app_that_failed_to_load_says_so_instead_of_vanishing():
     assert "failed to load" in message
     assert "do NOT" in message and "browser" in message
     assert "It can: " not in message, "an empty list read as 'use something else'"
+
+
+def test_a_broken_adapter_is_still_named_when_generic_actions_remain():
+    """The launcher can open anything, so a broken adapter no longer leaves
+    an app with nothing. The REASON the rest is missing still has to
+    survive, or the next person debugs the symptom instead of the cause."""
+    from agents.control.model import Action, Risk, Tier
+    from agents.control.provider import AppProfile
+    from agents.control.registry import AppControl
+
+    class Launcher:
+        name = "launcher"
+
+        def apps(self):
+            return [AppProfile("spotify", "Spotify", source="launcher")]
+
+        def actions(self, app):
+            async def go() -> str:
+                return "opened it"
+            return [Action("spotify", "open", "Open Spotify.", go,
+                           Tier.SYSTEM, Risk.CHANGES)] if app == "spotify" else []
+
+    control = AppControl([BrokenAdapter()], providers=[Launcher()])
+    message = control.suggestions("spotify", "play")
+    assert "failed to load" in message and "open" in message
+    assert "restarting" in message.lower()
 
 
 def test_a_browser_is_not_how_you_play_a_song():

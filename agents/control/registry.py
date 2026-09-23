@@ -190,19 +190,36 @@ class AppControl:
                    for n in names):
                 return a.app
         # Nothing hand-written matches. Everything a provider discovered is
-        # still addressable — exact name first, then a contained match, so
-        # "notepad" finds Notepad without "note" claiming Notepad++.
+        # addressable too — but there are 223 of them here, so the matching
+        # has to be stricter than it can afford to be over eight adapters.
+        # A bare substring rule lets "word" claim "WordPad" and "a" claim
+        # whatever sorts first; both are worse than saying "I don't know".
         for profile in self._profiles.values():
             if any(flat == _flat(n) for n in profile.names):
                 return profile.app
-        best = ""
+        if len(flat) < 3:
+            return ""
+        spoken = raw.split()
+        best, best_rank = "", ()
         for profile in self._profiles.values():
             for n in profile.names:
+                words = str(n).lower().split()
                 flat_n = _flat(n)
-                if not flat_n or flat_n not in flat and flat not in flat_n:
+                if not flat_n:
                     continue
-                if not best or len(profile.app) < len(best):
-                    best = profile.app
+                if all(w in words for w in spoken):          # "word" -> Microsoft Word
+                    # A whole word beats a prefix: someone saying "word"
+                    # means Word, not WordPad, even though WordPad starts
+                    # with it.
+                    rank = (0, len(flat_n))
+                elif flat_n.startswith(flat):                # "note" -> Notepad
+                    rank = (1, len(flat_n))
+                elif flat in flat_n:                         # "paint" -> Paint 3D
+                    rank = (2, len(flat_n))
+                else:
+                    continue
+                if not best or rank < best_rank:
+                    best, best_rank = profile.app, rank
         return best
 
     def find(self, app: str, action: str) -> Optional[Action]:
@@ -238,6 +255,15 @@ class AppControl:
                    "For anything else use open_app / ui_control, or the browser tools."
         names = sorted({a.name for a in self._actions.values() if a.app == resolved}
                        | {a.name for a in self._provider_actions(resolved)})
+        if resolved in self._broken and names:
+            # A generic provider can still open it, so the app is not
+            # actionless - but the reason most of it is missing has to
+            # survive, or the next person debugs the symptom.
+            return (f"{resolved}'s own controls failed to load this session "
+                    f"({self._broken[resolved]}), so only the generic ones are "
+                    f"left: {', '.join(names)}. Say that restarting Tora "
+                    f"usually brings the rest back; do not silently use a "
+                    f"browser instead.")
         if not names:
             # It used to say "It can: " and then nothing, and the model read
             # that as "use something else" - which is how a Spotify request

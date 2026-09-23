@@ -42,6 +42,9 @@ def _grants_stay_in_the_sandbox(tmp_path, monkeypatch):
     Tora folder under LOCALAPPDATA - a permission nobody had granted, which
     then leaked into the next test. Every test gets its own file."""
     monkeypatch.setenv("TORA_GRANTS_FILE", str(tmp_path / "desktop_grants.json"))
+    # Same rule, same reason: the launcher caches the machine's app list, and
+    # a test must not write it into the user's profile or read theirs.
+    monkeypatch.setenv("TORA_APPS_CACHE", str(tmp_path / "installed_apps.json"))
 
 
 def pytest_configure(config):
