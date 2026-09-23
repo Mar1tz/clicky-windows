@@ -438,7 +438,13 @@ class SettingsPage(Page):
     def build(self) -> None:
         rails = Card("Agent rails",
                      "Agents may only ever write inside the workspace.")
-        ws = QLineEdit("C:\\Users\\torbe\\Documents\\Tora Projects")
+        # Read from the machine, never hard-coded: this ships to other
+        # people's PCs, and one developer's home folder baked into the
+        # settings page is how a product announces it was never tested
+        # anywhere else.
+        import os
+        ws = QLineEdit(os.path.join(os.path.expanduser("~"), "Documents",
+                                    "Tora Projects"))
         ws.setReadOnly(True)
         pick = QWidget()
         pl = QHBoxLayout(pick)

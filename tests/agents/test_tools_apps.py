@@ -78,6 +78,19 @@ def test_open_app_focuses_an_already_open_window(monkeypatch):
 
 @pytest.mark.skipif(not WINDOWS, reason="launches a real window")
 def test_open_app_really_opens_notepad():
+    """Opens Notepad for real, then closes ONLY the one it opened.
+
+    This used to end in `taskkill /IM notepad.exe /F` unconditionally. Run
+    on a machine where someone already had Notepad open — which is most
+    machines — it killed their window, unsaved work and all. It also failed,
+    because `open_app` correctly reported `launched: False` for a window it
+    had merely focused. A test that can destroy the user's work to check a
+    launcher is not a test worth having.
+    """
+    if any("notepad" in t.lower()
+           for t in (w["title"] for w in app_tools.list_windows())):
+        pytest.skip("Notepad is already open; this test will not touch it")
+
     r = run("open_app", name="notepad")
     try:
         assert r.ok, r.error
@@ -87,7 +100,9 @@ def test_open_app_really_opens_notepad():
         assert wins.ok and any("notepad" in t.lower() for t in wins.data["windows"])
         assert run("focus_window", title="Notepad").ok
     finally:
-        subprocess.run(["taskkill", "/IM", "notepad.exe", "/F"], capture_output=True)
+        if r.ok and r.data.get("launched"):
+            subprocess.run(["taskkill", "/IM", "notepad.exe", "/F"],
+                           capture_output=True)
 
 
 def test_focus_window_unknown_title_fails_cleanly():

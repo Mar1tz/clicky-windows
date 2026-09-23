@@ -12,7 +12,7 @@ from typing import Any
 
 log = logging.getLogger("agents.control")
 
-_MODULES: tuple[str, ...] = ("launcher",)    # a new provider is one line here
+_MODULES: tuple[str, ...] = ("launcher", "windows_ui")   # a new provider is one line here
 
 
 def available() -> list[Any]:
