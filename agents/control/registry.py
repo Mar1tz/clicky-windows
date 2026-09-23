@@ -20,6 +20,7 @@ from typing import Any, Optional
 from .args import BindError, bind
 from .model import (Action, Outcome, Refused, Risk, Tier, Unavailable,
                     Unverified)
+from .provider import AppProfile
 
 log = logging.getLogger("agents.control")
 
@@ -37,9 +38,18 @@ _OWNED_DOMAINS = {
 
 
 class AppControl:
-    def __init__(self, adapters: Optional[list[Any]] = None) -> None:
+    def __init__(self, adapters: Optional[list[Any]] = None,
+                 providers: Optional[list[Any]] = None) -> None:
         self._given = adapters
+        self._given_providers = providers
         self._adapters: list[Any] = []
+        # Capability providers (agents/control/provider.py): one mechanism
+        # each, asked about ANY app. Their apps() is cheap and runs on
+        # rebuild; their actions() can be slow and runs only when someone
+        # names that app, cached below per app.
+        self._providers: list[Any] = []
+        self._profiles: dict[str, AppProfile] = {}
+        self._provided: dict[str, tuple[float, list[Action]]] = {}
         self._actions: dict[str, Action] = {}
         # Adapters that raised while describing themselves. Remembered, not
         # just logged: one bad adapter used to disappear in silence, taking
@@ -66,7 +76,22 @@ class AppControl:
                 except Exception as exc:  # noqa: BLE001 - one bad adapter must not hide the rest
                     log.exception("adapter %s failed to describe itself", name)
                     broken[name] = f"{type(exc).__name__}: {exc}"
+            providers = (list(self._given_providers)
+                         if self._given_providers is not None else _discover_providers())
+            profiles: dict[str, AppProfile] = {}
+            for provider in providers:
+                try:
+                    for profile in provider.apps():
+                        # First provider to name an app wins; an adapter for
+                        # the same app still outranks all of them.
+                        profiles.setdefault(profile.app, profile)
+                except Exception as exc:  # noqa: BLE001 - one provider must not sink the rest
+                    log.exception("provider %s failed to list apps",
+                                  getattr(provider, "name", "?"))
+                    broken[f"provider:{getattr(provider, 'name', '?')}"] = str(exc)
             self._adapters, self._actions = adapters, actions
+            self._providers, self._profiles = providers, profiles
+            self._provided = {}
             self._broken, self._built_at = broken, time.monotonic()
             if broken:
                 log.error("NO actions available this session for: %s",
@@ -75,21 +100,69 @@ class AppControl:
     def refresh(self) -> None:
         self._build(force=True)
 
-    def apps(self) -> list[dict[str, Any]]:
+    def apps(self, include_discovered: bool = True) -> list[dict[str, Any]]:
+        """Every app that can be named. Adapters first: they are the ones
+        with hand-written actions, so they are what "what can you do" should
+        lead with. Discovered apps follow, with no action list — finding out
+        what one of THEM can do means asking, and asking costs half a
+        second, so it happens when someone names it, not now."""
         self._build()
-        out = []
+        out, seen = [], set()
         for a in self._adapters:
             names = sorted({x.name for x in self._actions.values() if x.app == a.app})
+            seen.add(a.app)
             out.append({"app": a.app, "name": getattr(a, "display_name", a.app),
                         "aliases": list(getattr(a, "aliases", ())), "actions": names})
+        if include_discovered:
+            for profile in self._profiles.values():
+                if profile.app in seen:
+                    continue
+                out.append({"app": profile.app, "name": profile.display_name,
+                            "aliases": list(profile.aliases), "actions": [],
+                            "via": profile.source})
         return out
+
+    def profiles(self) -> dict[str, AppProfile]:
+        self._build()
+        return dict(self._profiles)
+
+    def _provider_actions(self, app: str) -> list[Action]:
+        """What the providers say `app` can do, cached.
+
+        Only ever called for an app someone has NAMED. Walking a UI tree is
+        half a second; doing it for every app on the machine would be
+        minutes, and putting the result in front of the model every turn
+        would cost more than the conversation.
+        """
+        if not app:
+            return []
+        with self._lock:
+            hit = self._provided.get(app)
+            if hit and (time.monotonic() - hit[0]) < REFRESH_S:
+                return list(hit[1])
+        found: list[Action] = []
+        for provider in self._providers:
+            try:
+                found.extend(provider.actions(app) or [])
+            except Exception:  # noqa: BLE001 - a provider with nothing to say is fine
+                log.debug("provider %s could not describe %s",
+                          getattr(provider, "name", "?"), app, exc_info=True)
+        # An adapter's action always outranks a synthesised one of the same
+        # name: it was written by someone who knew the app.
+        found = [a for a in found if f"{a.app}.{a.name}" not in self._actions]
+        with self._lock:
+            self._provided[app] = (time.monotonic(), list(found))
+        return found
 
     def actions(self, app: str = "", query: str = "") -> list[Action]:
         self._build()
         want = self.resolve_app(app) if app else ""
         q = (query or "").strip().lower()
+        pool = list(self._actions.values())
+        if want:
+            pool += self._provider_actions(want)
         out = []
-        for action in self._actions.values():
+        for action in pool:
             if want and action.app != want:
                 continue
             if q and q not in f"{action.key} {action.description}".lower():
@@ -116,7 +189,21 @@ class AppControl:
             if any(flat in str(n).lower().replace(" ", "") or str(n).lower().replace(" ", "") in flat
                    for n in names):
                 return a.app
-        return ""
+        # Nothing hand-written matches. Everything a provider discovered is
+        # still addressable — exact name first, then a contained match, so
+        # "notepad" finds Notepad without "note" claiming Notepad++.
+        for profile in self._profiles.values():
+            if any(flat == _flat(n) for n in profile.names):
+                return profile.app
+        best = ""
+        for profile in self._profiles.values():
+            for n in profile.names:
+                flat_n = _flat(n)
+                if not flat_n or flat_n not in flat and flat not in flat_n:
+                    continue
+                if not best or len(profile.app) < len(best):
+                    best = profile.app
+        return best
 
     def find(self, app: str, action: str) -> Optional[Action]:
         self._build()
@@ -133,6 +220,13 @@ class AppControl:
         for a in self._actions.values():                    # "skip" -> "next"
             if a.app == resolved and (want in a.name or a.name in want):
                 return a
+        provided = self._provider_actions(resolved)
+        for a in provided:
+            if a.name == want or want in a.aliases:
+                return a
+        for a in provided:
+            if want in a.name or a.name in want:
+                return a
         return None
 
     def suggestions(self, app: str = "", action: str = "") -> str:
@@ -142,7 +236,8 @@ class AppControl:
             apps = ", ".join(a.app for a in self._adapters)
             return f"I do not control {app!r}. Apps I can drive directly: {apps}. " \
                    "For anything else use open_app / ui_control, or the browser tools."
-        names = sorted({a.name for a in self._actions.values() if a.app == resolved})
+        names = sorted({a.name for a in self._actions.values() if a.app == resolved}
+                       | {a.name for a in self._provider_actions(resolved)})
         if not names:
             # It used to say "It can: " and then nothing, and the model read
             # that as "use something else" - which is how a Spotify request
@@ -249,6 +344,17 @@ class AppControl:
         return Outcome(ok=True, message=message, tier=tier, app=found.app,
                        action=found.name, attempts=attempts,
                        data={"verified": bool(verified)})
+
+
+def _flat(name: str) -> str:
+    return str(name or "").strip().lower().replace(" ", "").replace("-", "").replace("_", "")
+
+
+def _discover_providers() -> list[Any]:
+    """Every capability provider that works on this machine. UC-01 ships the
+    protocol; the providers themselves arrive one milestone at a time."""
+    from . import providers
+    return providers.available()
 
 
 def _discover() -> list[Any]:
