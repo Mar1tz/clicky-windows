@@ -25,12 +25,28 @@ log = logging.getLogger("agents.control")
 
 REFRESH_S = 60.0
 
+# Web addresses a desktop app on this machine owns. Sending one of these to
+# a browser is doing the thing the long way round: open.spotify.com shows a
+# page about a song, spotify.play plays it.
+_OWNED_DOMAINS = {
+    "open.spotify.com": "spotify",
+    "spotify.com": "spotify",
+    "vscode.dev": "vscode",
+    "github.dev": "vscode",
+}
+
 
 class AppControl:
     def __init__(self, adapters: Optional[list[Any]] = None) -> None:
         self._given = adapters
         self._adapters: list[Any] = []
         self._actions: dict[str, Action] = {}
+        # Adapters that raised while describing themselves. Remembered, not
+        # just logged: one bad adapter used to disappear in silence, taking
+        # every action that app had with it, and Tora then reached for a
+        # browser instead — "it only thinks of things on the browsers, not
+        # actual apps". A thing that is broken has to say so.
+        self._broken: dict[str, str] = {}
         self._built_at = 0.0
         self._lock = threading.RLock()
 
@@ -41,13 +57,20 @@ class AppControl:
                 return
             adapters = list(self._given) if self._given is not None else _discover()
             actions: dict[str, Action] = {}
+            broken: dict[str, str] = {}
             for adapter in adapters:
+                name = getattr(adapter, "app", "?")
                 try:
                     for action in adapter.actions():
                         actions[action.key] = action
-                except Exception:  # noqa: BLE001 - one broken adapter must not hide the rest
-                    log.exception("adapter %s failed to describe itself", getattr(adapter, "app", "?"))
-            self._adapters, self._actions, self._built_at = adapters, actions, time.monotonic()
+                except Exception as exc:  # noqa: BLE001 - one bad adapter must not hide the rest
+                    log.exception("adapter %s failed to describe itself", name)
+                    broken[name] = f"{type(exc).__name__}: {exc}"
+            self._adapters, self._actions = adapters, actions
+            self._broken, self._built_at = broken, time.monotonic()
+            if broken:
+                log.error("NO actions available this session for: %s",
+                          ", ".join(sorted(broken)))
 
     def refresh(self) -> None:
         self._build(force=True)
@@ -120,7 +143,40 @@ class AppControl:
             return f"I do not control {app!r}. Apps I can drive directly: {apps}. " \
                    "For anything else use open_app / ui_control, or the browser tools."
         names = sorted({a.name for a in self._actions.values() if a.app == resolved})
+        if not names:
+            # It used to say "It can: " and then nothing, and the model read
+            # that as "use something else" - which is how a Spotify request
+            # turned into a web search in a browser.
+            why = self._broken.get(resolved, "it registered no actions")
+            return (f"{resolved} is installed but its controls failed to load "
+                    f"this session ({why}). Tell the user that plainly - do NOT "
+                    f"quietly do it through a browser instead. Restarting Tora "
+                    f"usually fixes it.")
         return f"{resolved} has no action {action!r}. It can: {', '.join(names)}"
+
+    def broken(self) -> dict[str, str]:
+        """Apps whose actions could not be built this session."""
+        self._build()
+        return dict(self._broken)
+
+    def app_for_url(self, url: str) -> str:
+        """The app that owns this web address, if we control it directly.
+
+        Opening open.spotify.com in a browser is not playing a song, it is
+        showing a web page about one - and that is what "it only thinks of
+        things on the browsers" looked like from the outside. If a real app
+        owns the domain, the browser is the wrong answer.
+        """
+        self._build()
+        text = (url or "").strip().lower()
+        if not text:
+            return ""
+        for domain, app in _OWNED_DOMAINS.items():
+            if domain not in text:
+                continue
+            if any(a.app == app for a in self._actions.values()):
+                return app
+        return ""
 
     # -- running ---------------------------------------------------------------------
     async def run(self, app: str, action: str, arguments: Optional[dict[str, Any]] = None) -> Outcome:

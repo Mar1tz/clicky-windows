@@ -308,18 +308,29 @@ def tool_declarations() -> list[dict]:
         {
             "name": "desktop_action",
             "description": (
-                "Do one thing in an app on this PC, straight away: Spotify (next, previous, "
-                "play_pause, now_playing, play_playlist), VS Code / Cursor (open_project, "
-                "open_file, chat, recent_projects), browsers (open_url, search), Windows "
-                "(media, volume, window, clipboard_copy, open_folder, open_settings, open_app, "
-                "open_url). Uses the app's own API, link or media key - nothing on screen moves. "
-                "Use action='list' to see what an app can do. The user confirms anything that acts."
+                "Do one thing in a REAL APP on this PC, straight away, in the background. "
+                "Spotify (play, play_playlist, next, previous, play_pause, volume, "
+                "now_playing), VS Code / Cursor / Windsurf (open_project, open_file, chat, "
+                "recent_projects, install_extension), Windows (open_app, media, volume, "
+                "window, clipboard_copy, open_folder, open_settings), browsers (open_url, "
+                "search). Uses the app's own API, deep link or media key - nothing on "
+                "screen moves and the window does not even have to be visible. "
+                "ALWAYS prefer the real app over a browser. Playing a song means "
+                "app='spotify', action='play' - NOT opening open.spotify.com in Edge, "
+                "which shows a web page instead of playing anything. Only use a browser "
+                "for things that genuinely live on the web. "
+                "If you are not sure an app can do something, call action='list' FIRST "
+                "and read what it offers; do not assume it cannot and fall back to a "
+                "browser. The user confirms anything that acts."
             ),
             "parameters": {
                 "type": "object",
                 "properties": {
                     "app": {"type": "string",
-                            "description": "spotify, vscode, cursor, edge, brave, opera, windows"},
+                            "description": "spotify, vscode, cursor, windsurf, antigravity, "
+                                           "windows, edge, brave, opera. 'windows' covers the "
+                                           "OS itself: opening any installed app, volume, "
+                                           "windows, clipboard, folders, settings pages."},
                     "action": {"type": "string",
                                "description": "The action name, or 'list' to see what exists."},
                     "arguments_json": {

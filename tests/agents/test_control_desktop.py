@@ -352,3 +352,85 @@ def test_a_sensitive_confirmation_is_never_approved_by_voice(tmp_path):
         assert out["ok"] is False and "CONFIRM" in out["note"]
     finally:
         mgr.stop()
+
+
+# ── "it only thinks of things on the browsers, not actual apps" ──────────────
+
+class BrokenAdapter:
+    """An app whose actions() raises — exactly what a stale module does."""
+    app = "spotify"
+    display_name = "Spotify"
+    aliases = ("music",)
+
+    def available(self) -> bool:
+        return True
+
+    def actions(self):
+        raise TypeError("Action.__init__() got an unexpected keyword argument 'snapshot'")
+
+
+def test_an_app_that_failed_to_load_says_so_instead_of_vanishing():
+    """Field report: every Spotify request came back as an Edge tab.
+
+    The cause was one adapter raising while describing itself. The registry
+    caught it per-adapter — correct, so one bad app cannot hide the rest —
+    but then said nothing, so the app simply had no actions and the model
+    went looking for another way to do it. A browser is always another way.
+    """
+    from agents.control.registry import AppControl
+
+    control = AppControl([BrokenAdapter()])
+    assert "spotify" in control.broken()
+    assert "snapshot" in control.broken()["spotify"]
+
+    message = control.suggestions("spotify", "play")
+    assert "failed to load" in message
+    assert "do NOT" in message and "browser" in message
+    assert "It can: " not in message, "an empty list read as 'use something else'"
+
+
+def test_a_browser_is_not_how_you_play_a_song():
+    """open.spotify.com shows a page ABOUT a song. It does not play one."""
+    from agents.control.registry import AppControl
+    from agents.control.apps import browsers, media
+
+    control = AppControl([media.Spotify(), *browsers.adapters()])
+    assert control.app_for_url("https://open.spotify.com/search/Love%20Story") == "spotify"
+    assert control.app_for_url("https://news.ycombinator.com") == ""
+    assert control.app_for_url("") == ""
+
+
+def test_opening_an_owned_url_in_a_browser_is_sent_back_to_the_app(tmp_path):
+    from agents.bootstrap import build_agent_manager
+    from companion_manager import CompanionManager
+
+    mgr = build_agent_manager(workspace_root=str(tmp_path), in_memory=True, offline=True).start()
+    companion = CompanionManager.__new__(CompanionManager)
+    companion._agents = mgr
+    companion._realtime = None
+    try:
+        out = asyncio.run(companion._tool_desktop_action({
+            "app": "edge", "action": "open_url",
+            "arguments_json": '{"url": "https://open.spotify.com/search/Love Story"}'}))
+        assert "spotify" in out.get("error", "")
+        assert out.get("actions"), "and it is told what spotify can do instead"
+        assert not mgr.pending_approvals(), "nothing was queued to run"
+    finally:
+        mgr.stop()
+
+
+def test_a_wrong_action_name_comes_back_with_the_real_ones(fake, tmp_path):
+    from agents.bootstrap import build_agent_manager
+    from companion_manager import CompanionManager
+
+    mgr = build_agent_manager(workspace_root=str(tmp_path), in_memory=True, offline=True).start()
+    companion = CompanionManager.__new__(CompanionManager)
+    companion._agents = mgr
+    companion._realtime = None
+    try:
+        out = asyncio.run(companion._tool_desktop_action(
+            {"app": "spotify", "action": "skip_forward_two"}))
+        names = {a["action"] for a in out.get("actions", [])}
+        assert "next" in names, "guessing wrong must not be a dead end"
+    finally:
+        mgr.stop()

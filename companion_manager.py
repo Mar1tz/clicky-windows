@@ -1185,6 +1185,15 @@ class CompanionManager(QObject):
             if how:
                 _log.info("desktop_action %s.%s arguments read %s", app, action, how)
         c = control()
+        # An app whose controls failed to load must say so, not quietly let
+        # the model reach for a browser instead.
+        broken = c.broken()
+        if app and c.resolve_app(app) in broken:
+            name = c.resolve_app(app)
+            return {"error": f"{name} is installed but its controls did not load "
+                             f"this session ({broken[name]}). Say that plainly. Do "
+                             f"NOT do it through a browser instead.",
+                    "restart_may_fix": True}
         if not action or action in ("list", "list_actions", "what_can_you_do"):
             apps = c.apps()
             if app:
@@ -1195,7 +1204,18 @@ class CompanionManager(QObject):
                     "note": "Say the app and the action; I confirm before anything that acts."}
         found = c.find(app, action)
         if found is None:
-            return {"error": c.suggestions(app, action)}
+            return {"error": c.suggestions(app, action),
+                    "actions": [a.describe() for a in c.actions(app=app)][:20]}
+
+        # A browser is the LAST way to do something an app can do itself.
+        # The field log has "play Love Story" becoming an Edge tab pointed at
+        # open.spotify.com/search, which is a web page, not a song playing.
+        better = c.app_for_url(str(arguments.get("url") or arguments.get("query") or ""))
+        if better and better != found.app:
+            return {"error": f"{better} can do this directly - use app "
+                             f"{better!r} instead of opening a web page for it. "
+                             f"Call desktop_action again with app={better!r}.",
+                    "actions": [a.describe() for a in c.actions(app=better)][:20]}
         if found.risk.needs_confirmation:
             mgr = self._agents
             if mgr is None or not hasattr(mgr, "request_confirmation"):

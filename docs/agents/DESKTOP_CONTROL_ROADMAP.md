@@ -3,7 +3,8 @@
 **Status:** built so far — DC-01, 02, 05, 06, 07, 08, 09, 10
 (`milestones/DC-01-10-wave-1-arguments.md`) and DC-13, 23, 24, 43
 (`milestones/DC-13-23-24-43-asking-and-proving.md`) and DC-14, 16
-(`milestones/DC-14-16-24b-yes-out-loud.md`). Everything else is still a
+(`milestones/DC-14-16-24b-yes-out-loud.md`), plus the browser-fallback fix
+in `milestones/DC-21b-apps-not-browsers.md`. Everything else is still a
 plan.
 Each remaining milestone becomes its own spec document and then one
 commit-sized piece of work, in roughly the order given.
