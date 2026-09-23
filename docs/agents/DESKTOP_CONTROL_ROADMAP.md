@@ -2,8 +2,9 @@
 
 **Status:** built so far — DC-01, 02, 05, 06, 07, 08, 09, 10
 (`milestones/DC-01-10-wave-1-arguments.md`) and DC-13, 23, 24, 43
-(`milestones/DC-13-23-24-43-asking-and-proving.md`). Everything else is
-still a plan.
+(`milestones/DC-13-23-24-43-asking-and-proving.md`) and DC-14, 16
+(`milestones/DC-14-16-24b-yes-out-loud.md`). Everything else is still a
+plan.
 Each remaining milestone becomes its own spec document and then one
 commit-sized piece of work, in roughly the order given.
 
@@ -667,7 +668,7 @@ nothing — while making the next failure visible instead of silent.
 |---|---|---|---|
 | 1 | DC-01, 02, 05, 06, 07, 08, 09, 10 | "Reduce the volume" reduces the volume. Failures are explained. | **done** — `DC-01-10-wave-1-arguments.md` |
 | 2 | DC-03, 12, 42, 44 | Wrong phrasings self-correct; nothing claims success falsely. | |
-| 3 | DC-13 ✓, 14, 15, 16, 19 | Approving stops freezing the conversation; "yes" works by voice. | **DC-13 done** |
+| 3 | DC-13 ✓, 14 ✓, 15, 16 ✓, 19 | Approving stops freezing the conversation; "yes" works by voice. | **DC-15, 19 left** |
 | 4 | DC-23 ✓, 24 ✓, 43 ✓, 21 | Tora reports what actually happened, not what it tried. | **all but DC-21 done** |
 | 5 | DC-17, 18, 26, 27, 45, 46 | Fewer dialogs, no double-actions, and it stays fixed. | |
 | 6 | DC-20, 22, 37, 38, 39 | Spotify properly; "turn it down" knows what "it" is. | |

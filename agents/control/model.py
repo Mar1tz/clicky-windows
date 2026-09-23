@@ -109,6 +109,11 @@ class Action:
     # Without this, ok=True only ever meant "the call did not raise": a
     # media key tap "succeeded" whether or not anything was listening.
     verify: Optional[Callable[..., Awaitable[Optional[str]]]] = None
+    # Read whatever `verify` will need to compare against, BEFORE the action
+    # runs. Its result is handed to verify as `before=`. Proving "next
+    # track" worked means knowing which track was playing a moment ago, and
+    # no amount of looking afterwards recovers that.
+    snapshot: Optional[Callable[[], Awaitable[Any]]] = None
 
     @property
     def key(self) -> str:

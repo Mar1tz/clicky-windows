@@ -116,6 +116,27 @@ _MEDIA_APPS = {
 }
 
 
+async def track_changed(before: Optional["NowPlaying"], settle_s: float = 0.45) -> Optional[str]:
+    """Did the track actually change? The observation, or None if unknowable.
+
+    A media key tap "succeeds" whether or not anything was listening to it,
+    so the only honest proof is that what is playing is not what was
+    playing. The app needs a moment to update its window title, hence the
+    settle; and if there was nothing to compare against, or nothing is
+    playing at all, this says None rather than guessing.
+    """
+    import asyncio
+    if before is None or not before.app:
+        return None
+    await asyncio.sleep(settle_s)
+    after = now_playing()
+    if not after.app:
+        return None
+    if (after.title, after.artist) != (before.title, before.artist):
+        return after.describe()
+    return None
+
+
 def now_playing() -> NowPlaying:
     """Read the current track from the media app's window title.
 

@@ -139,6 +139,12 @@ class AppControl:
                            message=str(exc), data={"expected": exc.expected})
         started = time.monotonic()
         attempts: list[str] = []
+        before: Any = None
+        if found.snapshot is not None:
+            try:
+                before = await found.snapshot()
+            except Exception:  # noqa: BLE001 - no snapshot just means no proof
+                log.debug("%s could not be sampled beforehand", found.key, exc_info=True)
         try:
             message = await found.run(**args)
         except Refused as exc:
@@ -165,7 +171,9 @@ class AppControl:
         verified: Optional[bool] = None
         if found.verify is not None:
             try:
-                observed = await found.verify(**args)
+                observed = await (found.verify(before=before, **args)
+                                  if found.snapshot is not None
+                                  else found.verify(**args))
             except Unverified as exc:
                 log.info("%s ran but did not take: %s", found.key, exc)
                 return Outcome(ok=False, message=str(exc), tier=tier, app=found.app,

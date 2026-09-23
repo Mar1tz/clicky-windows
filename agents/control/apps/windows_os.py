@@ -58,6 +58,14 @@ class WindowsOS:
             now = system.now_playing()
             return f"{what.replace('_', ' ')}" + (f"; {now.describe().lower()}" if now.title else "")
 
+        async def playing_now():
+            return system.now_playing()
+
+        async def verify_media(before=None, what: str = "", times: int = 1):
+            if what in ("next", "previous", "media_next", "media_previous"):
+                return await system.track_changed(before)
+            return None          # play/pause and stop cannot be read from a title
+
         async def volume(direction: str, steps: int = 2, to_percent: int = 0) -> str:
             # No default for `direction`: a lost argument must be an error,
             # never the opposite action. See agents/control/args.py.
@@ -162,6 +170,7 @@ class WindowsOS:
                    (Param("what", "play_pause | next | previous | stop", required=True,
                           choices=("play_pause", "next", "previous", "stop")),
                     Param("times", "How many times", type="integer")),
+                   snapshot=playing_now, verify=verify_media,
                    examples=("next song", "pause the music")),
             Action(self.app, "volume", "Turn the volume up or down, set it to a "
                    "percentage, or mute it.", volume, Tier.SYSTEM, Risk.REVERSIBLE,

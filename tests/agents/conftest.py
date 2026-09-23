@@ -34,6 +34,16 @@ def _offline_by_default(monkeypatch, request):
         pass
 
 
+@pytest.fixture(autouse=True)
+def _grants_stay_in_the_sandbox(tmp_path, monkeypatch):
+    """Standing desktop permissions are written to disk (DC-16), and the
+    default path is the USER'S profile. The first test to call
+    allow_desktop_action wrote a real "always allow Spotify next" into the
+    Tora folder under LOCALAPPDATA - a permission nobody had granted, which
+    then leaked into the next test. Every test gets its own file."""
+    monkeypatch.setenv("TORA_GRANTS_FILE", str(tmp_path / "desktop_grants.json"))
+
+
 def pytest_configure(config):
     config.addinivalue_line("markers", "live: hits a real provider over the network")
 

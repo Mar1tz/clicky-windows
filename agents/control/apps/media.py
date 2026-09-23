@@ -61,9 +61,18 @@ class Spotify:
                 system.tap(key, int(times or 1))
                 now = system.now_playing()
                 return f"{label}" + (f"; now {now.describe().lower()}" if now.title else "")
+            async def snapshot():
+                return system.now_playing()
+
+            async def verify(before=None, times: int = 1):
+                if key not in ("media_next", "media_previous"):
+                    return None      # play/pause is not visible in a title
+                return await system.track_changed(before)
+
             return Action(self.app, key.replace("media_", ""), description, run, Tier.SYSTEM,
                           Risk.REVERSIBLE, (Param("times", "How many times", type="integer"),),
-                          needs_app_running=True, aliases=(key,))
+                          needs_app_running=True, aliases=(key,),
+                          snapshot=snapshot, verify=verify)
 
         async def now_playing() -> str:
             return system.now_playing().describe()

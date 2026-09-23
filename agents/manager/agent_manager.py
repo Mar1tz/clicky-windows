@@ -33,6 +33,49 @@ from agents.core import (
 from .orchestrator import Orchestrator
 from .runtime import AgentRuntime
 
+
+# -- standing permissions, on disk ---------------------------------------------------
+#
+# Small enough for a JSON file, and it has to be readable by a person: the
+# whole point of a permission is that you can see what you gave and take it
+# back. TORA_GRANTS_FILE lets a test point it somewhere temporary.
+
+def _grants_path() -> str:
+    override = os.environ.get("TORA_GRANTS_FILE")
+    if override:
+        return override
+    try:
+        from config import data_dir
+        return str(data_dir() / "desktop_grants.json")
+    except Exception:  # noqa: BLE001 - config is optional for the agent package
+        return ""
+
+
+def _read_grants() -> set[str]:
+    path = _grants_path()
+    if not path or not os.path.exists(path):
+        return set()
+    try:
+        import json
+        with open(path, "r", encoding="utf-8") as handle:
+            return {str(k) for k in json.load(handle) if str(k).strip()}
+    except Exception:  # noqa: BLE001 - a corrupt file means "ask me again"
+        log.warning("could not read %s; every action will be asked about", path)
+        return set()
+
+
+def _write_grants(keys: set[str]) -> None:
+    path = _grants_path()
+    if not path:
+        return
+    try:
+        import json
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w", encoding="utf-8") as handle:
+            json.dump(sorted(keys), handle, indent=2)
+    except Exception:  # noqa: BLE001 - never let a permission write kill an action
+        log.warning("could not save standing permissions to %s", path, exc_info=True)
+
 log = logging.getLogger("agents.manager")
 
 
@@ -121,9 +164,10 @@ class AgentManager:
         self._tasks: dict[str, Task] = {}               # task_id -> task (incl. finished)
         self._approvals: dict[str, tuple[ApprovalRequest, Any]] = {}
         # Desktop actions a person has waved through for good ("always allow
-        # spotify.next"). In memory: a standing yes should not outlive the
-        # session that gave it without the user saying so in settings.
-        self._desktop_grants: set[str] = set()
+        # spotify.next"). Persisted: "always" meant "until you restart",
+        # so every session asked again about the same track skip and the
+        # dialog became something to click past rather than read.
+        self._desktop_grants: set[str] = _read_grants()
         self._grants: dict[str, set[str]] = {}          # task_id -> tools a human allowed for it
         self._store_unsub: Optional[Unsubscribe] = None
         self._events_unsub: Optional[Unsubscribe] = None
@@ -864,7 +908,25 @@ class AgentManager:
             return
         with self._lock:
             self._desktop_grants.add(key)
+            _write_grants(self._desktop_grants)
         self.events.emit(EventKind.LOG, f"{key} allowed from now on", data={"granted": key})
+
+    def desktop_grants(self) -> list[str]:
+        """Everything standing, so Settings can show and revoke it."""
+        with self._lock:
+            return sorted(self._desktop_grants)
+
+    def revoke_desktop_action(self, key: str) -> bool:
+        """Take a standing yes back. A permission you cannot withdraw is
+        not a permission, it is a one-way door."""
+        with self._lock:
+            if key not in self._desktop_grants:
+                return False
+            self._desktop_grants.discard(key)
+            _write_grants(self._desktop_grants)
+        self.events.emit(EventKind.LOG, f"{key} will be asked about again",
+                         data={"revoked": key})
+        return True
 
     def request_confirmation(self, reason: str, *, tool_name: str = "desktop_action",
                              arguments: Optional[dict[str, Any]] = None, grant_key: str = "",

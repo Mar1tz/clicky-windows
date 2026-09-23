@@ -1003,6 +1003,9 @@ class CompanionManager(QObject):
                 f"{len(self._lesson_steps)}. If they say 'next', teach the "
                 f"following step only."
             )
+        waiting = self._pending_confirmation_line()
+        if waiting:
+            bits.append(waiting)
         if self._attached_docs:
             names = ", ".join(n for n, _ in self._attached_docs)
             bits.append(f"Documents they have attached: {names}. Use recall.")
@@ -1010,6 +1013,35 @@ class CompanionManager(QObject):
         if agents_line:
             bits.append(agents_line)
         return " ".join(bits)
+
+    def _pending_confirmation_line(self) -> str:
+        """Tell the model something is waiting on a yes, and how to give it.
+
+        Without this, a confirmation could only be answered with the mouse -
+        which is a strange thing to require of a voice assistant, and the
+        approve/deny machinery to do it by voice was already there in
+        manage_agents. All that was missing was the model knowing.
+        """
+        mgr = self._agents
+        if mgr is None:
+            return ""
+        try:
+            pending = mgr.pending_approvals()
+        except Exception:  # noqa: BLE001
+            return ""
+        if not pending:
+            return ""
+        req = pending[-1]
+        if getattr(req, "sensitive", False):
+            return (f'WAITING ON YOU: "{req.reason}". This one is sensitive - '
+                    f'it can ONLY be approved by typing {req.confirm_word} in the '
+                    f'box on screen. If they say yes, tell them that; never '
+                    f'approve it for them.')
+        return (f'WAITING ON YOU: "{req.reason}". If they say yes, go on, do it, '
+                f'sure, please do - call manage_agents with action "approve". '
+                f'If they say no, stop, cancel, leave it - call manage_agents '
+                f'with action "deny". Do this INSTEAD of answering; they are '
+                f'replying to the box, not asking something new.')
 
     def _realtime_system_prompt(self) -> str:
         """The session-level prompt. Deliberately free of per-turn detail.

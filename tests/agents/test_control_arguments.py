@@ -343,3 +343,112 @@ def test_the_volume_can_be_set_to_a_number():
         assert "20 percent" in out.message
     finally:
         audio.set_level(before)
+
+
+# ── DC-24 continued: proving a transport change needs a BEFORE ──────────────
+
+class FakePlayer:
+    """Spotify, as far as a window title is concerned."""
+    app = "player"
+    display_name = "Player"
+    aliases = ()
+
+    def __init__(self) -> None:
+        self.track = "Norwegian Wood"
+        self.moves = True
+
+    def available(self) -> bool:
+        return True
+
+    def actions(self):
+        from agents.control.system import NowPlaying
+
+        def now():
+            return NowPlaying(app="Player", title=self.track, playing=True)
+
+        async def skip() -> str:
+            if self.moves:
+                self.track = "Michelle"
+            return "skipped to the next track"
+
+        async def snapshot():
+            return now()
+
+        async def verify(before=None):
+            after = now()
+            if before is not None and after.title != before.title:
+                return after.describe()
+            return None
+
+        return [Action(self.app, "next", "Next track.", skip, Tier.SYSTEM,
+                       Risk.REVERSIBLE, (), snapshot=snapshot, verify=verify)]
+
+
+def test_next_track_is_proven_by_the_track_changing():
+    player = FakePlayer()
+    out = run(AppControl([player]).run("player", "next"))
+    assert out.ok and out.data.get("verified") is True
+    assert "Michelle" in out.message, "it says what is playing, not what it pressed"
+
+
+def test_a_media_key_nothing_listened_to_is_not_a_success():
+    """The honest half: a tap that changed nothing cannot claim it did."""
+    player = FakePlayer()
+    player.moves = False
+    out = run(AppControl([player]).run("player", "next"))
+    assert out.ok, "the key was pressed; we just cannot prove it landed"
+    assert out.data.get("verified") is False
+    assert "skipped" in out.message
+
+
+def test_a_snapshot_that_breaks_does_not_stop_the_action():
+    player = FakePlayer()
+    actions = player.actions()
+
+    async def explode():
+        raise RuntimeError("no window list")
+
+    actions[0].snapshot = explode
+    player.actions = lambda: actions
+    out = run(AppControl([player]).run("player", "next"))
+    assert out.ok and player.track == "Michelle"
+
+
+# ── DC-16: a standing yes outlives the session that gave it ─────────────────
+
+def test_always_allow_survives_a_restart(tmp_path, monkeypatch):
+    from agents.bootstrap import build_agent_manager
+
+    monkeypatch.setenv("TORA_GRANTS_FILE", str(tmp_path / "grants.json"))
+    first = build_agent_manager(workspace_root=str(tmp_path), in_memory=True,
+                                offline=True)
+    first.allow_desktop_action("app_action:spotify.next")
+    assert first.desktop_granted("app_action:spotify.next")
+
+    second = build_agent_manager(workspace_root=str(tmp_path), in_memory=True,
+                                 offline=True)
+    assert second.desktop_granted("app_action:spotify.next"), \
+        "'always' has to mean more than 'until you restart'"
+    assert second.desktop_grants() == ["app_action:spotify.next"]
+
+
+def test_a_standing_yes_can_be_taken_back(tmp_path, monkeypatch):
+    from agents.bootstrap import build_agent_manager
+
+    monkeypatch.setenv("TORA_GRANTS_FILE", str(tmp_path / "grants.json"))
+    mgr = build_agent_manager(workspace_root=str(tmp_path), in_memory=True, offline=True)
+    mgr.allow_desktop_action("app_action:spotify.next")
+    assert mgr.revoke_desktop_action("app_action:spotify.next")
+    assert not mgr.revoke_desktop_action("app_action:spotify.next")
+
+    after = build_agent_manager(workspace_root=str(tmp_path), in_memory=True, offline=True)
+    assert not after.desktop_granted("app_action:spotify.next")
+
+
+def test_a_corrupt_grants_file_means_ask_me_again(tmp_path, monkeypatch):
+    path = tmp_path / "grants.json"
+    path.write_text("{not json", encoding="utf-8")
+    monkeypatch.setenv("TORA_GRANTS_FILE", str(path))
+    from agents.bootstrap import build_agent_manager
+    mgr = build_agent_manager(workspace_root=str(tmp_path), in_memory=True, offline=True)
+    assert mgr.desktop_grants() == [], "failing open would grant what was never granted"

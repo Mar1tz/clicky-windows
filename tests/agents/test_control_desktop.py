@@ -300,3 +300,55 @@ def test_an_action_already_allowed_runs_straight_away(fake, tmp_path):
         assert fake.calls[-1][0] == "next"
     finally:
         mgr.stop()
+
+
+def test_a_pending_confirmation_is_offered_to_the_voice(tmp_path):
+    """DC-14: a voice assistant that needs a mouse click to say yes is not
+    hands-free. The approve/deny machinery already existed in
+    manage_agents; the model simply was not told anything was waiting."""
+    from agents.bootstrap import build_agent_manager
+    from companion_manager import CompanionManager
+
+    mgr = build_agent_manager(workspace_root=str(tmp_path), in_memory=True, offline=True).start()
+    companion = CompanionManager.__new__(CompanionManager)
+    companion._agents = mgr
+    try:
+        assert companion._pending_confirmation_line() == "", "silence when nothing waits"
+
+        mgr.request_confirmation("spotify.next - Next track (system)",
+                                 grant_key="app_action:spotify.next")
+        line = companion._pending_confirmation_line()
+        assert "WAITING ON YOU" in line and "spotify.next" in line
+        assert "approve" in line and "deny" in line
+
+        req = mgr.pending_approvals()[0]
+        out = asyncio.run(companion._tool_manage_agents({"action": "approve"}))
+        assert out["ok"] and not mgr.pending_approvals()
+        assert req.approved is True
+    finally:
+        mgr.stop()
+
+
+def test_a_sensitive_confirmation_is_never_approved_by_voice(tmp_path):
+    """Paying a supplier is not a spoken yes."""
+    from agents.bootstrap import build_agent_manager
+    from agents.core import ApprovalRequest, ToolCall
+    from companion_manager import CompanionManager
+
+    mgr = build_agent_manager(workspace_root=str(tmp_path), in_memory=True, offline=True).start()
+    companion = CompanionManager.__new__(CompanionManager)
+    companion._agents = mgr
+    try:
+        req = ApprovalRequest(task_id="", agent_id="", call=ToolCall("pay_supplier", {}),
+                              reason="release a payment", sensitive=True,
+                              confirm_word="CONFIRM")
+        with mgr._lock:
+            mgr._approvals[req.id] = (req, None)
+        line = companion._pending_confirmation_line()
+        assert "sensitive" in line and "CONFIRM" in line
+        assert "never approve it for them" in line
+
+        out = asyncio.run(companion._tool_manage_agents({"action": "approve"}))
+        assert out["ok"] is False and "CONFIRM" in out["note"]
+    finally:
+        mgr.stop()
