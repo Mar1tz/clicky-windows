@@ -86,6 +86,18 @@ def find_app(name: str) -> Optional[tuple[str, str]]:
     exe = shutil.which(query) or shutil.which(query + ".exe")
     if exe:
         return os.path.splitext(os.path.basename(exe))[0], exe
+
+    # Nothing on disk. A packaged app has no shortcut and no executable to
+    # find - Calculator, Mail, Camera, Clock, Copilot and 72 others on this
+    # machine - so ask Windows for its own list. The launch target is a
+    # shell: path rather than a file, which os.startfile opens the same way.
+    try:
+        from agents.control.providers.launcher import find_app as find_packaged
+        packaged = find_packaged(name)
+    except Exception:  # noqa: BLE001 - the control package is optional here
+        packaged = None
+    if packaged:
+        return packaged[0], f"shell:AppsFolder\\{packaged[1]}"
     return None
 
 

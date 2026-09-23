@@ -124,6 +124,64 @@ def app_id_for(app: str) -> str:
     return ""
 
 
+def find_app(name: str) -> Optional[tuple[str, str]]:
+    """(display name, AppUserModelID) for whatever the user called it.
+
+    The one place anything asks "is that app on this machine?". There used
+    to be two answers: this list, and a walk of the Start Menu's `.lnk`
+    files. The second misses every packaged app, because a Store app has no
+    shortcut on disk — 77 of them here, including Calculator, Calendar,
+    Camera, Clock, Mail and Copilot. Asking for one of those got "no app
+    called that. Installed: …", which was wrong, and wrong in a way that
+    made the machine look half-empty.
+
+    Matching is the same ladder the registry uses for app ids: exact, then
+    whole word, then prefix, then substring, and nothing under three
+    characters — so "word" is Word rather than whatever sorts first.
+    """
+    said = " ".join(str(name or "").lower().split())
+    if not said:
+        return None
+    entries = installed()
+    flat = said.replace(" ", "")
+    for entry in entries:
+        if entry["name"].lower() == said or _slug(entry["name"]) == _slug(said):
+            return entry["name"], entry["id"]
+    if len(flat) < 3:
+        return None
+    spoken = said.split()
+    best, best_rank = None, ()
+    for entry in entries:
+        low = entry["name"].lower()
+        words = low.split()
+        flat_name = low.replace(" ", "")
+        if all(w in words for w in spoken):
+            rank = (0, len(flat_name))
+        elif flat_name.startswith(flat):
+            rank = (1, len(flat_name))
+        elif flat in flat_name:
+            rank = (2, len(flat_name))
+        else:
+            continue
+        if best is None or rank < best_rank:
+            best, best_rank = (entry["name"], entry["id"]), rank
+    return best
+
+
+def near_matches(name: str, limit: int = 6) -> list[str]:
+    """Apps whose names are close to what was asked for — for the error."""
+    import difflib
+    names = [e["name"] for e in installed()]
+    close = difflib.get_close_matches(str(name or ""), names, n=limit, cutoff=0.5)
+    said = str(name or "").lower()
+    for n in names:
+        if len(close) >= limit:
+            break
+        if said and said in n.lower() and n not in close:
+            close.append(n)
+    return close
+
+
 def _slug(name: str) -> str:
     """"Microsoft Edge" -> "microsoft_edge". The id the model says."""
     keep = [c.lower() if c.isalnum() else " " for c in str(name)]

@@ -145,13 +145,35 @@ class WindowsOS:
             return f"opened Windows Settings{f' at {page}' if page else ''}"
 
         async def open_app(name: str) -> str:
-            from agents.tools.app_tools import find_app
-            found = find_app(name)
-            if not found:
-                apps = ", ".join(list(scan().apps)[:12])
-                raise Refused(f"no app called {name!r}. Installed: {apps}…")
-            os.startfile(found[1])
-            return f"opened {found[0]}"
+            """Open anything on this machine, by whatever the user called it.
+
+            Windows' own app list first (`Get-StartApps`), because that is
+            the one that includes packaged apps. The Start Menu shortcut
+            walk underneath it misses every Store app - 77 of them here,
+            Calculator and Mail and Camera among them - and answering "no
+            app called that" for an app sitting on the Start menu is the
+            worst kind of wrong.
+            """
+            from ..providers import launcher
+
+            found = launcher.find_app(name)
+            if found:
+                launcher.launch(found[1])
+                return f"opened {found[0]}"
+
+            # Nothing packaged matched; a plain shortcut still might.
+            try:
+                from agents.tools.app_tools import find_app as find_shortcut
+                shortcut = find_shortcut(name)
+            except Exception:  # noqa: BLE001
+                shortcut = None
+            if shortcut:
+                os.startfile(shortcut[1])
+                return f"opened {shortcut[0]}"
+
+            near = launcher.near_matches(name)
+            hint = f" Did you mean: {', '.join(near)}?" if near else ""
+            raise Refused(f"there is no app called {name!r} on this PC.{hint}")
 
         async def open_url(url: str) -> str:
             if not url.startswith(("http://", "https://")):

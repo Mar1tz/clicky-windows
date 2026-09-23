@@ -163,3 +163,55 @@ def test_no_powershell_means_no_apps_not_a_crash(tmp_path, monkeypatch):
 
     monkeypatch.setattr(launcher, "scan_installed", boom)
     assert launcher.installed() == []
+
+
+# ── the 77 apps that used to be invisible ────────────────────────────────────
+
+PACKAGED = ENTRIES + [
+    {"name": "Camera", "id": "Microsoft.WindowsCamera_8wekyb3d8bbwe!App"},
+    {"name": "Films & TV", "id": "Microsoft.ZuneVideo_8wekyb3d8bbwe!Microsoft.ZuneVideo"},
+]
+
+
+@pytest.fixture
+def listed(monkeypatch):
+    monkeypatch.setattr(launcher, "installed", lambda refresh=False: PACKAGED)
+
+
+def test_a_store_app_is_found_even_though_it_has_no_shortcut(listed):
+    """The complaint: "it keeps saying this app was not found in the
+    installed list". Two lists existed — a walk of the Start Menu's .lnk
+    files, and Windows' own. A packaged app has no .lnk, so 77 apps on this
+    machine were invisible to the first one: Calculator, Mail, Camera,
+    Clock, Copilot."""
+    found = launcher.find_app("camera")
+    assert found and found[0] == "Camera"
+
+
+@pytest.mark.parametrize("said, expect", [
+    ("Calculator", "Calculator"),
+    ("calculator", "Calculator"),
+    ("films", "Films & TV"),
+    ("word", "Microsoft Word"),
+    ("note", "Notepad"),
+])
+def test_an_app_is_found_by_whatever_it_is_called(listed, said, expect):
+    found = launcher.find_app(said)
+    assert found and found[0] == expect
+
+
+@pytest.mark.parametrize("said", ["", "zz", "photoshop"])
+def test_an_app_that_is_not_here_is_not_invented(listed, said):
+    assert launcher.find_app(said) is None
+
+
+def test_a_near_miss_is_offered_rather_than_a_flat_no(listed):
+    assert "Calculator" in launcher.near_matches("calulator")
+
+
+def test_the_agent_tool_sees_packaged_apps_too(listed):
+    """open_app reached its own Start-Menu walk, which had the same hole."""
+    from agents.tools.app_tools import find_app
+    got = find_app("camera")
+    assert got and got[0] == "Camera"
+    assert got[1].startswith("shell:AppsFolder")
