@@ -17,8 +17,9 @@ from __future__ import annotations
 import re
 import urllib.parse
 from dataclasses import dataclass
+from typing import Optional
 
-from .. import system
+from .. import audio, system
 from ..discovery import open_uri, scan
 from ..model import Action, Param, Refused, Risk, Tier, Unavailable
 
@@ -114,9 +115,25 @@ class Spotify:
             # volume" into a volume increase - the exact opposite of the
             # request. A direction with a default is a bug waiting for a
             # dropped argument; see agents/control/args.py.
-            system.tap("volume_up" if direction == "up" else "volume_down",
-                       max(1, min(int(steps or 2), 20)))
-            return f"turned the volume {direction}"
+            #
+            # Spotify has no volume of its own that we can reach without the
+            # Web API, so this is the system volume - the same one
+            # windows.volume drives, read back the same way.
+            steps = max(1, min(int(steps or 2), 20))
+            try:
+                before = audio.level()
+                after = audio.set_level(before + (0.02 * steps if direction == "up"
+                                                  else -0.02 * steps))
+                return f"volume {direction} - now at {audio.describe(after)}"
+            except Unavailable:
+                system.tap("volume_up" if direction == "up" else "volume_down", steps)
+                return f"turned the volume {direction}"
+
+        async def verify_volume(direction: str, steps: int = 2) -> Optional[str]:
+            try:
+                return f"volume is at {audio.describe(audio.level())}"
+            except Unavailable:
+                return None
 
         return [
             media("media_next", "skipped to the next track", "Next track (works while Spotify is hidden)."),
@@ -136,7 +153,8 @@ class Spotify:
             Action(self.app, "volume", "Turn the system volume up or down.", volume, Tier.SYSTEM,
                    Risk.REVERSIBLE, (Param("direction", "up or down", required=True,
                                             choices=("up", "down")),
-                                     Param("steps", "How many notches", type="integer"))),
+                                     Param("steps", "How much", type="integer")),
+                   verify=verify_volume),
         ]
 
 

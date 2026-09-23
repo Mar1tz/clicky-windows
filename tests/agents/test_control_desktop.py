@@ -230,39 +230,73 @@ def test_windows_itself_is_always_controllable():
     assert out.ok and out.tier is Tier.SYSTEM
 
 
-def test_voice_fast_path_confirms_then_acts(fake, tmp_path):
-    """"Spotify, next song" must not spawn a task, and must still ask."""
+def test_voice_fast_path_asks_without_going_silent(fake, tmp_path):
+    """"Spotify, next song" must not spawn a task, must still ask - and must
+    NOT make Tora wait for the answer.
+
+    The live model is blocked until a tool returns, so awaiting the dialog
+    meant she went mute for as long as the box was on screen: fourteen
+    seconds in the field log, reported as "it just gets stuck". The call now
+    comes back at once and the outcome is volunteered afterwards.
+    """
     from agents.bootstrap import build_agent_manager
     from companion_manager import CompanionManager
 
     mgr = build_agent_manager(workspace_root=str(tmp_path), in_memory=True, offline=True).start()
     companion = CompanionManager.__new__(CompanionManager)
     companion._agents = mgr
+    companion._realtime = None
+    said: list[str] = []
+    background: list = []
+    companion._submit = background.append
+
+    async def remember(note):
+        said.append(note)
+
+    companion._speak_aside = remember
     try:
-        async def answer(approve: bool):
-            task = asyncio.get_running_loop().create_task(
-                companion._tool_desktop_action({"app": "spotify", "action": "next"}))
-            for _ in range(200):                       # wait for the dialog request
-                if mgr.pending_approvals():
-                    break
-                await asyncio.sleep(0.01)
-            req = mgr.pending_approvals()[0]
-            assert "spotify.next" in req.reason
-            mgr.approve(req.id, approve)
-            return await task
+        async def ask_then(approve: bool):
+            out = await companion._tool_desktop_action({"app": "spotify", "action": "next"})
+            assert out.get("awaiting_approval") is True, "it must not block"
+            assert not out.get("ok"), "and must not claim it is done"
+            assert mgr.pending_approvals(), "the dialog has been raised"
+            mgr.approve(mgr.pending_approvals()[0].id, approve)
+            await background.pop()               # what _submit would have run
+            return out
 
-        out = asyncio.run(answer(False))
-        assert out["ok"] is False and "did not approve" in out["note"]
-        assert not [c for c in fake.calls if c[0] == "next"]
+        asyncio.run(ask_then(False))
+        assert not [c for c in fake.calls if c[0] == "next"], "a denial acts on nothing"
+        assert said and "did not approve" in said[-1]
 
-        out = asyncio.run(answer(True))
-        assert out["ok"] and out["how"] == "system" and "skipped" in out["result"]
-        assert fake.calls[-1][0] == "next"
+        asyncio.run(ask_then(True))
+        assert fake.calls[-1][0] == "next", "an approval runs it, after the fact"
+        assert "has now run" in said[-1] and "skipped" in said[-1]
 
         listing = asyncio.run(companion._tool_desktop_action({"app": "spotify", "action": "list"}))
         assert listing["ok"] and {a["action"] for a in listing["actions"]} >= {"next", "now_playing"}
 
         passive = asyncio.run(companion._tool_desktop_action({"app": "spotify", "action": "now_playing"}))
         assert passive["ok"] and not mgr.pending_approvals(), "reading never asks"
+    finally:
+        mgr.stop()
+
+
+def test_an_action_already_allowed_runs_straight_away(fake, tmp_path):
+    """"Always allow" has to mean no dialog AND no round trip - otherwise
+    waving an action through makes it slower, not faster."""
+    from agents.bootstrap import build_agent_manager
+    from companion_manager import CompanionManager
+
+    mgr = build_agent_manager(workspace_root=str(tmp_path), in_memory=True, offline=True).start()
+    companion = CompanionManager.__new__(CompanionManager)
+    companion._agents = mgr
+    companion._realtime = None
+    companion._submit = lambda coro: pytest.fail("nothing should be deferred")
+    try:
+        mgr.allow_desktop_action("app_action:spotify.next")
+        out = asyncio.run(companion._tool_desktop_action({"app": "spotify", "action": "next"}))
+        assert out["ok"] and "skipped" in out["result"]
+        assert not mgr.pending_approvals()
+        assert fake.calls[-1][0] == "next"
     finally:
         mgr.stop()

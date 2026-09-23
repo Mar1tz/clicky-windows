@@ -18,7 +18,8 @@ import time
 from typing import Any, Optional
 
 from .args import BindError, bind
-from .model import Action, Outcome, Refused, Risk, Tier, Unavailable
+from .model import (Action, Outcome, Refused, Risk, Tier, Unavailable,
+                    Unverified)
 
 log = logging.getLogger("agents.control")
 
@@ -156,10 +157,34 @@ class AppControl:
         tier = found.tier
         if isinstance(message, tuple):                      # an action may report the tier it used
             message, tier = message
-        log.info("%s tier=%s args=%s -> ok in %dms", found.key, tier.label,
-                 args or "{}", int((time.monotonic() - started) * 1000))
-        return Outcome(ok=True, message=str(message), tier=tier, app=found.app,
-                       action=found.name, attempts=attempts)
+        message = str(message)
+
+        # Did it actually happen? Without this, "ok" only ever meant "the
+        # call did not raise" - a media key tap reported success whether or
+        # not anything was listening to it.
+        verified: Optional[bool] = None
+        if found.verify is not None:
+            try:
+                observed = await found.verify(**args)
+            except Unverified as exc:
+                log.info("%s ran but did not take: %s", found.key, exc)
+                return Outcome(ok=False, message=str(exc), tier=tier, app=found.app,
+                               action=found.name, attempts=attempts,
+                               data={"verified": False})
+            except Exception:  # noqa: BLE001 - a check that breaks is not a failure
+                log.debug("%s could not be verified", found.key, exc_info=True)
+                observed = None
+            if observed:
+                verified, message = True, str(observed)
+            else:
+                verified = None
+
+        log.info("%s tier=%s args=%s -> ok%s in %dms", found.key, tier.label,
+                 args or "{}", "" if verified else " (unverified)",
+                 int((time.monotonic() - started) * 1000))
+        return Outcome(ok=True, message=message, tier=tier, app=found.app,
+                       action=found.name, attempts=attempts,
+                       data={"verified": bool(verified)})
 
 
 def _discover() -> list[Any]:

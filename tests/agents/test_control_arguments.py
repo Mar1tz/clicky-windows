@@ -224,3 +224,122 @@ def test_a_refused_argument_is_recorded_in_the_log(volume_app, caplog):
     with caplog.at_level(logging.WARNING, logger="agents.control"):
         run(control.run("windows", "volume", {"direction": "sideways"}))
     assert any("refused its arguments" in r.getMessage() for r in caplog.records)
+
+
+# ── DC-24: "ok" has to mean it happened, not that the call returned ─────────
+
+class FakeVerified:
+    """An app whose action can be made to take, or not."""
+    app = "lamp"
+    display_name = "Lamp"
+    aliases = ()
+
+    def __init__(self) -> None:
+        self.state = "off"
+        self.takes = True
+
+    def available(self) -> bool:
+        return True
+
+    def actions(self):
+        from agents.control.model import Unverified
+
+        async def switch(to: str) -> str:
+            if self.takes:
+                self.state = to
+            return f"asked the lamp to go {to}"
+
+        async def verify_switch(to: str):
+            if self.state != to:
+                raise Unverified(f"the lamp is still {self.state}")
+            return f"the lamp is {self.state}"
+
+        async def blind(to: str) -> str:
+            return f"asked the lamp to go {to}"
+
+        async def verify_blind(to: str):
+            return None                      # genuinely cannot tell
+
+        return [
+            Action(self.app, "switch", "Switch the lamp.", switch, Tier.API,
+                   Risk.REVERSIBLE, (Param("to", "on or off", required=True,
+                                           choices=("on", "off")),),
+                   verify=verify_switch),
+            Action(self.app, "blind", "Switch it with no way to check.", blind,
+                   Tier.API, Risk.REVERSIBLE,
+                   (Param("to", "on or off", required=True, choices=("on", "off")),),
+                   verify=verify_blind),
+        ]
+
+
+def test_an_action_that_did_not_take_is_reported_as_failed():
+    """A media key tap used to "succeed" whether or not anything heard it."""
+    app = FakeVerified()
+    control = AppControl([app])
+    app.takes = False
+    out = run(control.run("lamp", "switch", {"to": "on"}))
+    assert not out.ok and "still off" in out.message
+    assert out.data.get("verified") is False
+
+
+def test_a_confirmed_action_reports_what_was_observed():
+    """The spoken confirmation should describe the world, not the attempt."""
+    app = FakeVerified()
+    out = run(AppControl([app]).run("lamp", "switch", {"to": "on"}))
+    assert out.ok and out.message == "the lamp is on"
+    assert out.data.get("verified") is True
+
+
+def test_not_being_able_to_check_is_not_a_failure():
+    """Honest uncertainty: it still ran, we just cannot prove it."""
+    out = run(AppControl([FakeVerified()]).run("lamp", "blind", {"to": "on"}))
+    assert out.ok and out.data.get("verified") is False
+    assert "asked the lamp" in out.message
+
+
+def test_a_broken_check_never_fails_a_good_action():
+    app = FakeVerified()
+    actions = app.actions()
+
+    async def explode(**_kw):
+        raise RuntimeError("the sensor fell off")
+
+    actions[0].verify = explode
+    app.actions = lambda: actions
+    out = run(AppControl([app]).run("lamp", "switch", {"to": "on"}))
+    assert out.ok, "a check that breaks is not the action failing"
+
+
+def test_the_volume_is_read_back_from_the_device():
+    """The real reason DC-24 exists: "turn it down" can now be proven."""
+    from agents.control import audio
+    from agents.control.apps import windows_os
+
+    if not audio.available():
+        pytest.skip("no audio endpoint on this machine")
+    before = audio.level()
+    try:
+        control = AppControl([windows_os.WindowsOS()])
+        out = run(control.run("windows", "volume", {"direction": "down", "steps": 1}))
+        assert out.ok and out.data.get("verified") is True
+        assert "percent" in out.message
+        assert audio.level() < before, "down must mean down"
+    finally:
+        audio.set_level(before)
+
+
+def test_the_volume_can_be_set_to_a_number():
+    from agents.control import audio
+    from agents.control.apps import windows_os
+
+    if not audio.available():
+        pytest.skip("no audio endpoint on this machine")
+    before = audio.level()
+    try:
+        control = AppControl([windows_os.WindowsOS()])
+        out = run(control.run("windows", "volume",
+                              {"direction": "down", "to_percent": 20}))
+        assert out.ok and abs(audio.level() - 0.20) < 0.03
+        assert "20 percent" in out.message
+    finally:
+        audio.set_level(before)

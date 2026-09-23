@@ -23,6 +23,8 @@ class FakeSession:
     opened: list["FakeSession"] = []
     fail_with_handle = False
 
+    is_open = True
+
     def __init__(self, model, setup, resume_handle=None):
         self.model, self.setup, self.resume_handle_in = model, setup, resume_handle
         self.resume_handle = "handle-from-server"
@@ -200,3 +202,40 @@ def test_a_runaway_tool_chain_in_one_request_is_still_capped(monkeypatch):
             await asyncio.sleep(0.01)
         assert calls == rt.MAX_TOOL_ROUNDS, "one request still cannot loop forever"
     asyncio.run(scenario())
+
+
+# -- saying something after the conversation has moved on -----------------------------
+
+def test_say_now_waits_for_a_gap_then_speaks(monkeypatch):
+    """An approval answered ten seconds late still has to be reported. It
+    must not land on top of a sentence already being spoken."""
+    import ai.gemini_realtime as rt
+
+    conv = rt.RealtimeConversation.__new__(rt.RealtimeConversation)
+    session = FakeSession("m", {})
+    conv._session = session
+    conv._speaking = True
+    conv._player = type("P", (), {"queued_seconds": 0.0})()
+
+    async def scenario():
+        async def stop_speaking():
+            await asyncio.sleep(0.05)
+            conv._speaking = False
+        asyncio.ensure_future(stop_speaking())
+        assert await conv.say_now("[it is done]", wait_s=3.0) is True
+
+    asyncio.run(scenario())
+    assert session.sent == [("[it is done]", True)], "the turn must END, or she never answers"
+
+
+def test_say_now_gives_up_rather_than_talking_over_her(monkeypatch):
+    import ai.gemini_realtime as rt
+
+    conv = rt.RealtimeConversation.__new__(rt.RealtimeConversation)
+    session = FakeSession("m", {})
+    conv._session = session
+    conv._speaking = True
+    conv._player = type("P", (), {"queued_seconds": 0.0})()
+
+    assert asyncio.run(conv.say_now("[it is done]", wait_s=0.2)) is False
+    assert session.sent == []

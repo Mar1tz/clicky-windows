@@ -620,6 +620,32 @@ class RealtimeConversation:
             except Exception:
                 _log.debug("send_context failed", exc_info=True)
 
+    async def say_now(self, note: str, *, wait_s: float = 25.0) -> bool:
+        """Hand the model something to say, unprompted, and let it speak.
+
+        `send_context` deliberately does NOT end the turn — it is background
+        for a question that is still being asked. This does end it, which is
+        what makes the model answer. It is how something that finished after
+        the conversation moved on ("you approved it; the playlist is
+        playing") gets said out loud instead of being silently dropped.
+
+        It waits for a gap first: barging in on a half-spoken sentence is
+        worse than being a few seconds late. Returns False if no gap came.
+        """
+        if not note:
+            return False
+        deadline = time.monotonic() + wait_s
+        while self.speaking and time.monotonic() < deadline:
+            await asyncio.sleep(0.15)
+        if not self.ready or self.speaking:
+            return False
+        try:
+            await self._session.send_text(note, turn_complete=True)
+            return True
+        except Exception:
+            _log.debug("say_now failed", exc_info=True)
+            return False
+
     async def send_image(self, jpeg_b64: str) -> None:
         if jpeg_b64 and self.ready:
             try:

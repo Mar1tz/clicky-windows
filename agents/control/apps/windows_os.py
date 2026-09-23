@@ -14,7 +14,9 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 
-from .. import system
+from typing import Optional
+
+from .. import audio, system
 from ..discovery import open_uri, scan
 from ..model import Action, Param, Refused, Risk, Tier, Unavailable
 
@@ -56,15 +58,50 @@ class WindowsOS:
             now = system.now_playing()
             return f"{what.replace('_', ' ')}" + (f"; {now.describe().lower()}" if now.title else "")
 
-        async def volume(direction: str, steps: int = 2) -> str:
-            # No default for `direction`: see the note on Spotify's volume.
-            # A lost argument must be an error, never the opposite action.
+        async def volume(direction: str, steps: int = 2, to_percent: int = 0) -> str:
+            # No default for `direction`: a lost argument must be an error,
+            # never the opposite action. See agents/control/args.py.
+            #
+            # By VALUE where the machine allows it. Tapping a key N times
+            # cannot honour "set it to twenty percent", cannot know where it
+            # started, and cannot tell afterwards whether anything heard the
+            # key. audio.py reads and writes the endpoint directly; the key
+            # taps stay as the fallback for a machine with no endpoint.
             if direction == "mute":
-                system.tap("volume_mute")
-                return "muted (say it again to unmute)"
+                try:
+                    now = audio.set_muted(not audio.muted())
+                    return "muted" if now else "unmuted"
+                except Unavailable:
+                    system.tap("volume_mute")
+                    return "muted (say it again to unmute)"
+
             steps = max(1, min(int(steps or 2), 20))
-            system.tap("volume_up" if direction == "up" else "volume_down", steps)
-            return f"turned the volume {direction} {steps} notches"
+            try:
+                before = audio.level()
+            except Unavailable:
+                system.tap("volume_up" if direction == "up" else "volume_down", steps)
+                return f"turned the volume {direction} {steps} notches"
+
+            if to_percent:
+                target = max(0, min(int(to_percent), 100)) / 100.0
+            else:
+                delta = 0.02 * steps
+                target = before + delta if direction == "up" else before - delta
+            after = audio.set_level(target)
+            return f"volume {direction} - now at {audio.describe(after)}"
+
+        async def verify_volume(direction: str, steps: int = 2,
+                                to_percent: int = 0) -> Optional[str]:
+            """What the volume IS now, read back from the device."""
+            if direction == "mute":
+                try:
+                    return "muted" if audio.muted() else "unmuted"
+                except Unavailable:
+                    return None
+            try:
+                return f"volume is at {audio.describe(audio.level())}"
+            except Unavailable:
+                return None            # a key tap cannot be checked; say so
 
         async def now_playing() -> str:
             return system.now_playing().describe()
@@ -126,10 +163,14 @@ class WindowsOS:
                           choices=("play_pause", "next", "previous", "stop")),
                     Param("times", "How many times", type="integer")),
                    examples=("next song", "pause the music")),
-            Action(self.app, "volume", "Turn the volume up, down or mute.", volume, Tier.SYSTEM,
-                   Risk.REVERSIBLE, (Param("direction", "up, down or mute", required=True,
-                                            choices=("up", "down", "mute")),
-                                     Param("steps", "How many notches", type="integer"))),
+            Action(self.app, "volume", "Turn the volume up or down, set it to a "
+                   "percentage, or mute it.", volume, Tier.SYSTEM, Risk.REVERSIBLE,
+                   (Param("direction", "up, down or mute", required=True,
+                          choices=("up", "down", "mute")),
+                    Param("steps", "How much, in small notches", type="integer"),
+                    Param("to_percent", "Set it to exactly this, 0-100", type="integer")),
+                   verify=verify_volume,
+                   examples=("turn it down", "set the volume to 20 percent")),
             Action(self.app, "now_playing", "What is playing right now.", now_playing, Tier.SYSTEM,
                    Risk.PASSIVE),
             Action(self.app, "window", "Focus, minimise, maximise, restore or close a window by title.",

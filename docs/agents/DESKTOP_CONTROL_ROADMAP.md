@@ -1,7 +1,9 @@
 # Desktop control: the road from "it sometimes works" to "it always works"
 
-**Status:** wave 1 is built — DC-01, 02, 05, 06, 07, 08, 09 and 10, in
-`milestones/DC-01-10-wave-1-arguments.md`. Everything else is still a plan.
+**Status:** built so far — DC-01, 02, 05, 06, 07, 08, 09, 10
+(`milestones/DC-01-10-wave-1-arguments.md`) and DC-13, 23, 24, 43
+(`milestones/DC-13-23-24-43-asking-and-proving.md`). Everything else is
+still a plan.
 Each remaining milestone becomes its own spec document and then one
 commit-sized piece of work, in roughly the order given.
 
@@ -31,11 +33,11 @@ a numbered milestone.
 
 ## 1. What the evidence actually says
 
-> **Note, after wave 1:** §1.1, §1.2 and §1.3 are fixed — they were the
-> reported bug. They are kept here word for word because they are the
-> reasoning the rest of the plan rests on, and because the next person to
-> find a silent failure should recognise the shape of it. §1.4 and §1.5 are
-> still true.
+> **Note, after waves 1, 3 and 4:** §1.1–§1.4 are fixed. They are kept
+> here word for word because they are the reasoning the rest of the plan
+> rests on, and because the next person to find a silent failure should
+> recognise the shape of it. §1.5 — two apps offering the same action with
+> nothing to choose between them — is still true (DC-37).
 
 ### 1.1 The log is lying to us
 
@@ -665,8 +667,8 @@ nothing — while making the next failure visible instead of silent.
 |---|---|---|---|
 | 1 | DC-01, 02, 05, 06, 07, 08, 09, 10 | "Reduce the volume" reduces the volume. Failures are explained. | **done** — `DC-01-10-wave-1-arguments.md` |
 | 2 | DC-03, 12, 42, 44 | Wrong phrasings self-correct; nothing claims success falsely. | |
-| 3 | DC-13, 14, 15, 16, 19 | Approving stops freezing the conversation; "yes" works by voice. | |
-| 4 | DC-23, 24, 43, 21 | Tora reports what actually happened, not what it tried. | |
+| 3 | DC-13 ✓, 14, 15, 16, 19 | Approving stops freezing the conversation; "yes" works by voice. | **DC-13 done** |
+| 4 | DC-23 ✓, 24 ✓, 43 ✓, 21 | Tora reports what actually happened, not what it tried. | **all but DC-21 done** |
 | 5 | DC-17, 18, 26, 27, 45, 46 | Fewer dialogs, no double-actions, and it stays fixed. | |
 | 6 | DC-20, 22, 37, 38, 39 | Spotify properly; "turn it down" knows what "it" is. | |
 | 7 | DC-28…36, 40 | The rest of the machine comes under voice control. | |

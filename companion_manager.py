@@ -1176,18 +1176,80 @@ class CompanionManager(QObject):
                                               arguments={"app": found.app, "action": found.name,
                                                          **arguments},
                                               grant_key=f"app_action:{found.key}")
+            if not future.done():
+                # DO NOT WAIT HERE. The live model is blocked until a tool
+                # returns, so awaiting the dialog meant Tora went silent for
+                # as long as the box was on screen - fourteen seconds in the
+                # field log, which is what "it just gets stuck" was. Hand
+                # the answer back now and finish the job in the background;
+                # _after_approval says how it went when it knows.
+                self._submit(self._after_approval(future, found, dict(arguments)))
+                return {
+                    "awaiting_approval": True,
+                    "action": found.key,
+                    "note": ("Say in ONE short sentence that you need a yes and "
+                             "the box is on screen. Then stop talking and wait - "
+                             "do not try another way, and do not say it is done."),
+                }
             try:
-                approved = await asyncio.wrap_future(future)
+                approved = future.result()
             except Exception:  # noqa: BLE001
                 approved = False
             if not approved:
                 return {"ok": False, "action": found.key,
                         "note": "The user did not approve it. Say so plainly and do not try another way."}
         out = await c.run(app, action, arguments)
+        return self._desktop_result(out)
+
+    @staticmethod
+    def _desktop_result(out) -> dict:
         return {"ok": out.ok, "action": out.action, "app": out.app,
                 "how": out.tier.label if out.tier else "", "result": out.message,
                 "note": ("Read the result back in a few words." if out.ok
                          else "Tell the user what stopped it; do not pretend it worked.")}
+
+    async def _after_approval(self, future, found, arguments: dict) -> None:
+        """Wait for the dialog, run the action, and say how it went.
+
+        This runs with nothing blocked on it. The conversation carried on
+        while the box was open, so the outcome has to be volunteered rather
+        than returned - see RealtimeConversation.say_now.
+        """
+        from agents.control import control
+        try:
+            approved = await asyncio.wrap_future(future)
+        except Exception:  # noqa: BLE001 - a broken dialog is a refusal
+            _log.debug("approval future failed", exc_info=True)
+            approved = False
+
+        if not approved:
+            _log.info("%s was not approved", found.key)
+            await self._speak_aside(
+                f"[The user did not approve {found.key}. Say so in a few words, "
+                f"plainly, and do not try another way.]")
+            return
+
+        out = await control().run(found.app, found.name, arguments)
+        _log.info("%s after approval -> %s", found.key, "ok" if out.ok else out.message)
+        if out.ok:
+            note = (f"[The user approved it and {found.key} has now run: "
+                    f"{out.message}. Tell them in a few words. Do not thank them "
+                    f"for approving.]")
+        else:
+            note = (f"[The user approved it but {found.key} did not work: "
+                    f"{out.message}. Tell them what stopped it, briefly. Do not "
+                    f"pretend it worked.]")
+        await self._speak_aside(note)
+
+    async def _speak_aside(self, note: str) -> None:
+        """Have Tora volunteer something, once there is a gap to say it in."""
+        conv = self._realtime
+        if conv is None or not conv.ready:
+            return
+        try:
+            await conv.say_now(note)
+        except Exception:  # noqa: BLE001 - never let a follow-up break a turn
+            _log.debug("could not deliver the follow-up", exc_info=True)
 
     async def _tool_manage_agents(self, args: dict) -> dict:
         """Voice control of the workforce: status, pause, resume, cancel,

@@ -98,6 +98,17 @@ class Action:
     needs_app_running: bool = False
     examples: tuple[str, ...] = ()
     aliases: tuple[str, ...] = ()
+    # How to find out whether it actually happened. Called with the same
+    # bound arguments after `run` returns; give it **kwargs if it does not
+    # want them. Returning a sentence means "yes, and here is the proof" -
+    # that sentence is what Tora reads back, so the confirmation describes
+    # the world rather than the attempt. Returning None means "cannot
+    # tell", which is honest and leaves ok alone. Raising Unverified means
+    # "demonstrably not", and the action is reported as failed.
+    #
+    # Without this, ok=True only ever meant "the call did not raise": a
+    # media key tap "succeeded" whether or not anything was listening.
+    verify: Optional[Callable[..., Awaitable[Optional[str]]]] = None
 
     @property
     def key(self) -> str:
@@ -109,6 +120,11 @@ class Action:
                 "params": [{"name": p.name, "required": p.required, "description": p.description,
                             "choices": list(p.choices)} for p in self.params],
                 "examples": list(self.examples)}
+
+
+class Unverified(RuntimeError):
+    """The action ran and the world did not change. Distinct from a crash:
+    nothing went wrong, it just did not take."""
 
 
 class Unavailable(RuntimeError):
