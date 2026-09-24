@@ -73,10 +73,12 @@ never going to hold against a model in a loop.
 
 Three things jump out.
 
-**The plans are too thin.** Twelve of fourteen are two or three steps.
-"Update Visual Studio Code" is not a two-step task, and a plan that skips
-steps leaves the person to find the missing ones alone — which is the
-experience of being given bad directions.
+~~**The plans are too thin.**~~ **Wrong — corrected by GW-06.** This was
+read from step *counts*. Reading the step *text* of live plans showed they
+follow the real click path: "update Visual Studio Code" really is Help →
+Check for Updates... Short counts were short tasks. The actual defect was
+the occasional compound step ("select your picture *and* click Choose
+picture"), which GW-06 fixes.
 
 **The pointer misses constantly.** 52 fallbacks to the vision model, each
 costing two to four seconds of silence and a paid call. The planner names
