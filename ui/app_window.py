@@ -20,10 +20,9 @@ right, and no pop-ups. Opened from the tray with "Open Tora app".
     │  ● Idle    │                                          │
     └────────────┴──────────────────────────────────────────┘
 
-Nothing is wired to the running app yet, by request: this is the shape and
-the look, so the placement can be judged before any of it is made live. The
-old windows are untouched and still open from the tray, so nothing is lost
-while this is being finished.
+Every page is live (APP-10 to APP-19): it reads the running companion
+through ui/app_bridge.py, and every control goes down the same path as the
+tray item it replaces. The old floating windows still open from the tray.
 """
 
 from __future__ import annotations
@@ -199,6 +198,7 @@ class ToraApp(QWidget):
             for k, _text, _glyph, cls, _sec in PAGES:
                 if k == key:
                     widget = cls(self.bridge)
+                    widget.navigate.connect(self.show_page)
                     self._pages[key] = widget
                     self._stack.addWidget(widget)
                     # A page builds its labels before it is parented here, so

@@ -165,6 +165,32 @@ def qss() -> str:
         font-size: 12px; font-weight: 600; padding: 2px;
     }}
 
+    /* ── what the embedded windows bring ───────────────────────────────── */
+    /* A pack's dashboard is drawn by the pack, and its buttons and tabs
+       have no names here. Without these they are light-grey Windows
+       controls on a near-black page; with them, ghost buttons and tabs
+       like the rest. A named rule above still wins wherever it applies. */
+    QPushButton {{
+        background: transparent; border: 1px solid {BORDER_STRONG};
+        border-radius: {RADIUS_SMALL}px; color: {TEXT};
+        font-size: 13px; font-weight: 500; padding: 6px 12px;
+    }}
+    QPushButton:hover {{ background: {SURFACE_HOVER}; border-color: {ACCENT_EDGE}; }}
+    QPushButton:disabled {{ color: {TEXT_FAINT}; border-color: {BORDER}; }}
+    QTabWidget::pane {{
+        background: {SURFACE}; border: 1px solid {BORDER};
+        border-radius: {RADIUS_SMALL}px; top: -1px;
+    }}
+    QTabBar::tab {{
+        background: transparent; color: {TEXT_DIM}; border: none;
+        border-bottom: 2px solid transparent; padding: 7px 14px; margin-right: 2px;
+    }}
+    QTabBar::tab:hover {{ color: {TEXT}; }}
+    QTabBar::tab:selected {{ color: {TEXT}; border-bottom-color: {ACCENT}; }}
+    /* Their pop-ups too: a message box parented inside this window takes
+       the light text above, and Windows' own light dialog under it. */
+    QMessageBox, QInputDialog {{ background: {SURFACE}; }}
+
     QLineEdit, QComboBox, QPlainTextEdit {{
         background: {SURFACE_SUNK}; border: 1px solid {BORDER};
         border-radius: {RADIUS_SMALL}px; padding: 7px 10px;

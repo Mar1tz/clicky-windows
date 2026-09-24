@@ -185,6 +185,16 @@ def entries_all() -> list[dict]:
     return [dict(zip(cols, r)) for r in rows]
 
 
+def recent(limit: int = 10) -> list[dict]:
+    """The latest entries, newest first - the Journal page's list."""
+    with _connect() as conn:
+        rows = conn.execute(
+            "SELECT * FROM entries ORDER BY created_at DESC LIMIT ?", (limit,)
+        ).fetchall()
+        cols = [r[1] for r in conn.execute("PRAGMA table_info(entries)").fetchall()]
+    return [dict(zip(cols, r)) for r in rows]
+
+
 def due_for_review(limit: int = 5) -> list[dict]:
     """Spaced-repetition: pull entries whose `next_review_at` is in the past."""
     now = time.time()
@@ -196,6 +206,26 @@ def due_for_review(limit: int = 5) -> list[dict]:
         ).fetchall()
         cols = [r[1] for r in conn.execute("PRAGMA table_info(entries)").fetchall()]
     return [dict(zip(cols, r)) for r in rows]
+
+
+def due_count() -> int:
+    """How many entries are due for review now."""
+    with _connect() as conn:
+        (n,) = conn.execute(
+            "SELECT COUNT(*) FROM entries WHERE next_review_at IS NOT NULL AND "
+            "next_review_at <= ?", (time.time(),),
+        ).fetchone()
+    return int(n)
+
+
+def next_due_at() -> Optional[float]:
+    """When the next entry comes back for review, if none is due yet."""
+    with _connect() as conn:
+        (at,) = conn.execute(
+            "SELECT MIN(next_review_at) FROM entries WHERE next_review_at > ?",
+            (time.time(),),
+        ).fetchone()
+    return float(at) if at is not None else None
 
 
 def mark_reviewed(entry_id: int, correct: bool) -> None:

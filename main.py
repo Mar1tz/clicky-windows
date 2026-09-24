@@ -288,8 +288,9 @@ def main():
 
     # The one-window app (ui/app_window). Built the first time it is asked
     # for — nine pages of widgets is a visible pause, and most sessions never
-    # open it. It is a design draft: nothing in it drives the companion yet,
-    # so every existing window below still works exactly as before.
+    # open it — and kept, so what it embeds (the agents panel, a pack's
+    # dashboard) is built once. Every control in it goes down the same path
+    # as the tray item it stands for, so the windows below still work too.
     app_window = {}
 
     def _open_app():

@@ -75,29 +75,27 @@ The in-memory control snapshot is used only when it is from the same
 window and recent; otherwise the live search runs. (Part of GW-17.)
 *Proof:* a stale snapshot with a same-named control is ignored.
 
-### Part 2 — the Tora app, live (5)
+### Part 2 — the Tora app, live (5) — done
 
 Built on one bridge (`ui/app_bridge.py`): it reads the real state (manager,
 config, journal, agents, extensions) and every control calls the **same**
-handler the tray menu calls, so the two can never disagree.
+handler the tray menu calls, so the two can never disagree. Planned as ten
+page milestones; built as four commits, each a group of pages:
 
-**APP-10 · The bridge and the shell** — the window opens with live status
-(listening / thinking / speaking, connected or not) and refreshes a page
-each time it is shown.
-**APP-11 · Settings** — workspace, what runs without asking, plan first,
-microphone, always listening, hotkey, panel.
-**APP-12 · Tutor** — every switch live and saved (with APP-03).
-**APP-13 · Voice & models** — the voice, the conversation route, the real
-model list and refresh.
-**APP-14 · Setup** — real key status, set/test a key, live diagnostics
-(mic, session, agents, screens, OCR), the wizard, the report, Quit.
-**APP-15 · Journal** — real entries and walkthroughs (GW-16), due for
-review, attach, recording and workflow capture.
-**APP-16 · Home** — what is really happening: state, agents, today's
-questions, walkthroughs, and what to try.
-**APP-17 · Agents** — live tasks, plan, activity, approvals, stop/pause.
-**APP-18 · Extensions** — the installed packs and their real switches.
-**APP-19 · Accounting** — the pack's own data, or its dashboard, in the page.
+**APP-10 · The bridge, the shell and Home** — done. Live status (listening
+/ thinking / speaking, connected or not), a page refreshed each time it is
+shown, and Home: what is really happening, today's questions and
+walkthroughs, what is due.
+**APP-11 · Settings and Tutor** — done. Workspace, what runs without
+asking, plan first, microphone, always listening, hotkey, panel, start
+with Windows; every tutor switch live and saved (with APP-03).
+**APP-12 · Voice & models and Setup** — done. The voice, the conversation
+route, the real models and refresh; key status (never the key), local
+diagnostics, the wizard, the report, Quit.
+**APP-13 · Journal, Agents, Extensions and Accounting** — done. The real
+journal with an honest review; the workforce's own panel with every task's
+plan and activity; the packs that really exist and their switches; the
+Accounting pack's own dashboard.
 
 ### Part 3 — the rest (7–9, then the walkthrough plan)
 

@@ -217,7 +217,7 @@ class Row(QFrame):
 
     def __init__(self, heading: str, sub: str = "", *,
                  dot: Optional[str] = None, trailing: Optional[QWidget] = None,
-                 first: bool = False):
+                 first: bool = False, wrap: bool = False):
         super().__init__()
         self.setObjectName("cardQuiet" if first else "row")
         if first:
@@ -229,7 +229,10 @@ class Row(QFrame):
             lay.addWidget(Dot(dot, 8), 0, Qt.AlignmentFlag.AlignVCenter)
         text = QVBoxLayout()
         text.setSpacing(2)
-        text.addWidget(label(heading))
+        # wrap: a heading nobody wrote to fit - a question someone asked, a
+        # task's title. Unwrapped, one long line widens the whole page past
+        # the window, and the page does not scroll sideways.
+        text.addWidget(label(heading, wrap=wrap))
         if sub:
             text.addWidget(label(sub, "faint", wrap=True))
         lay.addLayout(text, 1)
@@ -410,6 +413,20 @@ class PageBody(QScrollArea):
                 elif item.layout() is not None:
                     drop(item.layout())
         drop(self.column)
+
+
+def refill(layout, widgets) -> None:
+    """Swap a layout's widgets for new ones: a card whose rows are redrawn
+    from live data while the rest of its page - anything embedded that
+    keeps its own state - stays exactly where it is."""
+    while layout.count():
+        item = layout.takeAt(0)
+        widget = item.widget()
+        if widget is not None:
+            widget.setParent(None)
+            widget.deleteLater()
+    for widget in widgets:
+        layout.addWidget(widget)
 
 
 def columns(*widgets: QWidget, spacing: int = T.GAP) -> QHBoxLayout:

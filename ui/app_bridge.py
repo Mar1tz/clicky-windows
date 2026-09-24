@@ -32,7 +32,8 @@ class AppBridge(QObject):
     """What the app window can read and do. Nothing else."""
 
     # Something the pages show has changed: "state", "account", "agents",
-    # "guide", "switches". A page shown at the time refreshes itself.
+    # "guide", "switches", "journal", "recording", "extensions". A page
+    # shown at the time refreshes itself.
     changed = pyqtSignal(str)
 
     def __init__(self, manager: Any = None, tray: Any = None, panel: Any = None):
@@ -42,17 +43,31 @@ class AppBridge(QObject):
         if manager is not None:
             manager.sig_state_changed.connect(self._on_state)
             for signal, topic in (("sig_account_problem", "account"),
-                                  ("sig_agent_event", "agents"),
                                   ("sig_agents_ready", "agents"),
-                                  ("sig_guide_progress", "guide")):
+                                  ("sig_guide_progress", "guide"),
+                                  ("sig_recording_state", "recording")):
                 sig = getattr(type(manager), signal, None)
                 if sig is not None:
                     getattr(manager, signal).connect(
                         lambda *_a, _t=topic: self.changed.emit(_t))
+            if getattr(type(manager), "sig_agent_event", None) is not None:
+                manager.sig_agent_event.connect(self._on_agent_event)
 
     def _on_state(self, state) -> None:
+        was = self._state
         self._state = str(getattr(state, "name", state) or "idle").lower()
         self.changed.emit("state")
+        # A turn has just ended, and what was asked is in the journal now.
+        if self._state == "idle" and was != "idle":
+            self.changed.emit("journal")
+
+    def _on_agent_event(self, ev) -> None:
+        self.changed.emit("agents")
+        # A pack turned on or off is announced on the same bus - from the
+        # Extensions page, or by voice ("turn on the accounting tools").
+        data = getattr(ev, "data", None)
+        if isinstance(data, dict) and data.get("extension"):
+            self.changed.emit("extensions")
 
     # ── what is happening ────────────────────────────────────────────────────
 
@@ -138,7 +153,7 @@ class AppBridge(QObject):
         from tutor_features import journal
         try:
             entries = journal.entries_today()
-            due = len(journal.due_for_review(limit=100))
+            due = journal.due_count()
         except Exception:  # noqa: BLE001
             return {"questions": 0, "walkthroughs": 0, "due": 0}
         walks = sum(1 for e in entries if journal.WALKTHROUGH_TAG in (e.get("tags") or ""))
@@ -325,6 +340,188 @@ class AppBridge(QObject):
     def quit(self) -> None:
         if self.tray is not None:
             self.tray.on_quit.emit()
+
+    # ── journal (APP-15) ─────────────────────────────────────────────────────
+
+    def _journal(self):
+        """The journal - or None for a window opened on its own, which has
+        no user to read (see today())."""
+        if self.manager is None:
+            return None
+        from tutor_features import journal
+        return journal
+
+    def _read_journal(self, what: str, default, *args):
+        journal = self._journal()
+        if journal is None:
+            return default
+        try:
+            return getattr(journal, what)(*args)
+        except Exception:  # noqa: BLE001 - a locked or broken db is not a crash
+            _log.debug("could not read the journal (%s)", what, exc_info=True)
+            return default
+
+    def due(self, limit: int = 5) -> list[dict]:
+        """Entries due for review now, the longest-waiting first."""
+        return self._read_journal("due_for_review", [], limit)
+
+    def due_count(self) -> int:
+        return self._read_journal("due_count", 0)
+
+    def next_due(self) -> Optional[float]:
+        """When the next entry comes back, if nothing is due now."""
+        return self._read_journal("next_due_at", None)
+
+    def recent(self, limit: int = 8) -> list[dict]:
+        """The latest questions and walkthroughs, newest first."""
+        return self._read_journal("recent", [], limit)
+
+    def review(self, entry_id: int, knew: bool) -> None:
+        """Grade one review: knew it - it comes back later; not yet - tomorrow."""
+        journal = self._journal()
+        if journal is not None:
+            try:
+                journal.mark_reviewed(int(entry_id), bool(knew))
+            except Exception:  # noqa: BLE001
+                _log.warning("could not save a review", exc_info=True)
+        self.changed.emit("journal")
+
+    def open_journal_folder(self) -> None:
+        if self.tray is not None:
+            self.tray.on_journal_open.emit()
+
+    def attach_document(self) -> None:
+        if self.tray is not None:
+            self.tray.on_attach_doc.emit()
+
+    def recording(self) -> bool:
+        """Is a lesson being recorded right now?"""
+        try:
+            return bool(getattr(self.manager, "is_recording", False))
+        except Exception:  # noqa: BLE001
+            return False
+
+    def set_recording(self, on: bool) -> None:
+        # The tray's own handlers: they say where the video went, and the
+        # manager's sig_recording_state redraws the page ("recording").
+        if self.tray is not None:
+            (self.tray.on_record_start if on else self.tray.on_record_stop).emit()
+
+    def capturing(self) -> bool:
+        """Is Workflow Capture recording clicks and keys right now?"""
+        capture = getattr(self.manager, "_workflow", None)
+        return bool(capture is not None and getattr(capture, "is_running", False))
+
+    def set_capturing(self, on: bool) -> None:
+        if self.tray is not None:
+            (self.tray.on_workflow_start if on else self.tray.on_workflow_stop).emit()
+        self.changed.emit("journal")          # capture has no signal of its own
+
+    # ── agents (APP-17) ──────────────────────────────────────────────────────
+
+    def tasks(self, limit: int = 8) -> list[dict]:
+        """The latest tasks, newest first. A project's members are left to
+        its lead, as the notifications do."""
+        wf = self.workforce()
+        if wf is None:
+            return []
+        try:
+            tasks = wf.list_tasks()
+        except Exception:  # noqa: BLE001
+            _log.debug("could not list tasks", exc_info=True)
+            return []
+        out = []
+        for t in tasks:
+            if (t.metadata or {}).get("parent_id"):
+                continue
+            out.append({
+                "id": t.id, "title": t.title or (t.goal or "")[:60] or "Task",
+                "status": str(getattr(t.status, "value", t.status)),
+                "error": (t.error or "").strip().split("\n")[0][:160],
+                "when": float(t.updated_at or t.created_at or 0.0),
+            })
+            if len(out) >= limit:
+                break
+        return out
+
+    def approvals(self) -> list[dict]:
+        """What the agents are waiting for a yes on."""
+        wf = self.workforce()
+        if wf is None:
+            return []
+        try:
+            pending = wf.pending_approvals()
+        except Exception:  # noqa: BLE001
+            return []
+        out = []
+        for req in pending:
+            task = wf.get_task(req.task_id)
+            out.append({"id": req.id, "tool": req.call.tool_name,
+                        "reason": req.reason or req.call.tool_name,
+                        "task": task.title if task else "",
+                        "sensitive": bool(req.sensitive)})
+        return out
+
+    def stop_agents(self) -> None:
+        if self.tray is not None:
+            self.tray.on_stop_agents.emit()
+
+    # ── extensions (APP-18, APP-19) ──────────────────────────────────────────
+
+    def _packs(self):
+        return getattr(self.workforce(), "extensions", None)
+
+    def extensions(self) -> list[dict]:
+        """Every pack found: its manifest, and whether it is on."""
+        reg = self._packs()
+        if reg is None:
+            return []
+        try:
+            return list(reg.available())
+        except Exception:  # noqa: BLE001
+            _log.debug("could not list extensions", exc_info=True)
+            return []
+
+    def extension_on(self, ext_id: str) -> bool:
+        reg = self._packs()
+        try:
+            return bool(reg is not None and reg.is_enabled(ext_id))
+        except Exception:  # noqa: BLE001
+            return False
+
+    def set_extension(self, ext_id: str, on: bool) -> str:
+        """Turn a pack on or off, as the Extensions window does. Returns ""
+        when it worked, otherwise why not."""
+        reg = self._packs()
+        if reg is None:
+            return "The agents did not start, so no pack can run."
+        try:
+            reg.enable(ext_id) if on else reg.disable(ext_id)
+            return ""
+        except Exception as exc:  # noqa: BLE001 - said on the page, not raised
+            _log.exception("could not turn %s %s", ext_id, "on" if on else "off")
+            return str(exc) or type(exc).__name__
+        finally:
+            self.changed.emit("extensions")
+
+    def dashboard(self, ext_id: str, parent=None):
+        """The pack's own dashboard widget, built fresh - or None when the
+        pack is off or has none. A pack's dashboard failing to build raises:
+        the page says why."""
+        reg = self._packs()
+        if reg is None or not self.extension_on(ext_id):
+            return None
+        for module in reg.dashboard_modules():
+            if module.extension_id == ext_id:
+                return module.factory(self.workforce(), reg.get(ext_id), parent)
+        return None
+
+    def open_dashboard(self, ext_id: str) -> None:
+        """The floating dashboard, for a pack with no page of its own."""
+        wf = self.workforce()
+        if wf is not None:
+            from agents.ui import open_dashboard
+            open_dashboard(wf, f"{ext_id}.dashboard")
 
     # ── doing ────────────────────────────────────────────────────────────────
 

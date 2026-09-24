@@ -1,37 +1,43 @@
 """The nine pages of the app window.
 
-Each one is the single-window home of something that is currently its own
-floating window or a branch of the tray menu:
+Each one is the single-window home of something that was its own floating
+window or a branch of the tray menu:
 
-    Home         the panel's status, plus what to do next
-    Agents       agents/ui/agents_panel · plan_view · timeline
-    Extensions   agents/ui/extensions (the pack switches)
-    Accounting   extensions/accounting/ui/dashboard
+    Home         what is happening now, and what to try
+    Agents       agents/ui/agents_panel · plan_view · timeline, embedded
+    Extensions   the pack switches (agents/extensions)
+    Accounting   extensions/accounting/ui/dashboard, embedded
     Journal      the Journal / Lesson Recording / Workflow Capture menus
     Tutor        the Tutor Mode menu
     Voice        the Conversation / Voice / Models menus
     Settings     agents/ui/settings · the mic, hotkey and privacy items
     Setup        ui/api_keys_dialog · the setup wizard · diagnostics
 
-The existing windows are untouched and still open from the tray. This is
-the layout those surfaces will move into, with the content drawn from real
-examples so the spacing is judged against real text rather than lorem
-ipsum. Nothing here reads or writes live state yet — every number is a
-placeholder and every control is inert on purpose.
+Every page reads the running app through ui/app_bridge.py and changes it
+down the tray's own path, so the menu and the window cannot disagree
+(APP-10 to APP-19). Where a worker already built the real thing - the
+agents panel, the endpoint editor, a pack's dashboard - it is embedded, not
+drawn again. The floating windows still open from the tray.
 """
 
 from __future__ import annotations
 
-from PyQt6.QtCore import Qt
+import logging
+from datetime import date, datetime
+
+from PyQt6.QtCore import Qt, QTimer, pyqtSignal
 from PyQt6.QtWidgets import (
-    QFrame, QHBoxLayout, QLineEdit, QVBoxLayout, QWidget,
+    QFrame, QHBoxLayout, QLabel, QLineEdit, QPushButton, QStackedWidget,
+    QTabWidget, QVBoxLayout, QWidget,
 )
 
 from ui import app_theme as T
 from ui.app_widgets import (
     Card, Dot, Meter, Metric, PageBody, Pill, Row, Select, Switch, ToggleRow,
-    button, columns, hrule, label, lede, section, spacer, title,
+    button, columns, hrule, label, lede, refill, section, spacer, title,
 )
+
+_log = logging.getLogger("tora.app")
 
 
 class Page(QWidget):
@@ -40,8 +46,12 @@ class Page(QWidget):
     A LIVE page (APP-10) reads everything it shows from the bridge and is
     rebuilt each time it is shown or something it shows changes: its
     header buttons go in build_actions (once), its content in build (every
-    refresh). A page that is not live yet builds once, as the M29 drafts do.
+    refresh). A page that embeds something with its own state overrides
+    refresh to redraw only around it.
     """
+
+    # Another page asked for by this one ("Open dashboard" -> accounting).
+    navigate = pyqtSignal(str)
 
     HEADING = "Page"
     LEDE = ""
@@ -192,98 +202,286 @@ class HomePage(Page):
         self.body.add(start)
 
 
+# ── shared by the pages below ─────────────────────────────────────────────────
+
+def _tidy(embedded: QWidget, *titles: str) -> QWidget:
+    """Fit a floating window's widget into a card: its Close would hide it
+    and leave the card empty, and its own title repeats the card's."""
+    for b in embedded.findChildren(QPushButton):
+        if b.text().strip().lower() == "close":
+            b.hide()
+    for lbl in embedded.findChildren(QLabel):
+        if lbl.objectName() in ("title", "accTitle") or lbl.text().strip() in titles:
+            lbl.hide()
+    # A tab reads "&" as a keyboard mnemonic: "Debtors & creditors" drew as
+    # "Debtors  creditors" - the nav rail's old bug, in someone else's tabs.
+    for tabs in embedded.findChildren(QTabWidget):
+        for i in range(tabs.count()):
+            text = tabs.tabText(i)
+            if "&" in text and "&&" not in text:
+                tabs.setTabText(i, text.replace("&", "&&"))
+    return embedded
+
+
+# How a pack's integration ids read to a person.
+_BRANDS = {"quickbooks": "QuickBooks", "onedrive": "OneDrive", "sharepoint": "SharePoint",
+           "google_drive": "Google Drive", "gmail": "Gmail"}
+
+
+def _brand(ident: str) -> str:
+    return _BRANDS.get(ident, ident.replace("_", " ").title())
+
+
+def _no_agents(why: str) -> Card:
+    card = Card()
+    card.add(Row("The agents did not start", why, dot=T.WARN, first=True))
+    return card
+
+
+def _clip(text: str, n: int) -> str:
+    text = " ".join(str(text or "").split())
+    return text if len(text) <= n else text[: n - 1].rstrip() + "…"
+
+
+def _when(ts: float) -> str:
+    """"Today, 18:55" · "Yesterday, 20:21" · "21 Sep, 14:25"."""
+    d = datetime.fromtimestamp(ts)
+    days = (date.today() - d.date()).days
+    day = "Today" if days == 0 else "Yesterday" if days == 1 else f"{d.day} {d:%b}"
+    return f"{day}, {d:%H:%M}"
+
+
+def _ago(ts: float) -> str:
+    days = (date.today() - datetime.fromtimestamp(ts).date()).days
+    return "today" if days <= 0 else "yesterday" if days == 1 else f"{days} days ago"
+
+
+def _coming(ts: float) -> str:
+    """When a review comes back: "tomorrow" · "on Friday" · "on 3 Oct"."""
+    d = datetime.fromtimestamp(ts).date()
+    days = (d - date.today()).days
+    if days <= 0:
+        return "later today"
+    if days == 1:
+        return "tomorrow"
+    return f"on {d:%A}" if days < 7 else f"on {d.day} {d:%b}"
+
+
 # ── Agents ────────────────────────────────────────────────────────────────────
+
+# A task's status, as its row says it, and the colour of its dot.
+_TASK_WORDS = {
+    "completed": ("Done", T.OK),
+    "failed": ("Failed", T.DANGER),
+    "cancelled": ("Stopped", T.TEXT_FAINT),
+    "running": ("Working", T.ACCENT),
+    "planning": ("Planning", T.ACCENT),
+    "verifying": ("Checking its work", T.ACCENT),
+    "pending": ("Queued", T.TEXT_DIM),
+    "waiting_approval": ("Waiting for you", T.WARN),
+    "paused": ("Paused", T.WARN),
+}
+
 
 class AgentsPage(Page):
     HEADING = "Agents"
     LEDE = "Work Tora is doing for you in the background — the plan, the progress, and every step it took."
+    LIVE = True
+    TOPICS = frozenset({"agents"})
+
+    def __init__(self, bridge=None):
+        # Built once and kept for the life of the window: the live panel,
+        # and a plan-and-activity view for each task looked at. They all
+        # listen through ONE event bridge, so neither opening this page nor
+        # redrawing it ever adds a listener to the workforce.
+        self._events = None
+        self._panel = None
+        self._details: dict[str, QWidget] = {}
+        self._drawn: tuple = ()
+        super().__init__(bridge)
+
+    def build_actions(self) -> None:
+        self.action("Agent settings").clicked.connect(lambda: self.navigate.emit("settings"))
+        self.action("Stop all", "danger").clicked.connect(self.bridge.stop_agents)
 
     def build(self) -> None:
-        self.action("Stop all", "danger")
-        self.action("New task", "primary")
+        wf = self.bridge.workforce()
+        if wf is None:
+            self.body.add(_no_agents("Nothing can be handed to them until they do - "
+                                     "see tora.log for why."))
+            return
+        # The workforce's own panel - the one the tray's "Active Agents"
+        # opens: a card per agent with its progress, Pause and Stop, and a
+        # box to give them a job. It redraws itself from agent events.
+        from agents.ui import ActiveAgentsPanel, AgentEventBridge
+        self._events = AgentEventBridge(wf, self)
+        self._panel = _tidy(ActiveAgentsPanel(wf, bridge=self._events))
+        self._panel.setMinimumHeight(320)
+        self._panel.view_logs.connect(self.show_task)
+        work = Card("Working now", "Give them a job here, or just ask Tora out loud.")
+        work.add(self._panel)
+        self.body.add(work)
 
-        active = Card("Application Builder",
-                      "Create a React landing page in ~/Tora Projects/CoffeeCo",
-                      action=button("Pause"))
-        bar = QVBoxLayout()
-        bar.setSpacing(8)
-        meta = QHBoxLayout()
-        meta.addWidget(label("Step 4 of 10 · Creating Navbar.tsx", "faint"), 1)
-        meta.addWidget(label("70%", "faint"))
-        bar.addLayout(meta)
-        bar.addWidget(Meter(0.7))
-        active.body.addLayout(bar)
-        self.body.add(active)
+        self._waiting = Card("Waiting for you",
+                             "Nothing risky runs without a yes - answer in the approval window.")
+        self.body.add(self._waiting)
+        self._recent = Card("Recent tasks", "Open one for its plan and every step it took.")
+        self.body.add(self._recent)
 
-        split = QHBoxLayout()
-        split.setSpacing(T.GAP)
+        self._detail = Card("Plan and activity")
+        self._detail_title = label("", "cardSub")
+        self._detail.add(self._detail_title)
+        self._detail.add(spacer(10))
+        self._stack = QStackedWidget()
+        self._stack.setMinimumHeight(360)
+        self._detail.add(self._stack)
+        self._detail.hide()
+        self.body.add(self._detail)
+        self._drawn = ()
+        self._fill()
 
-        plan = Card("Plan", "What it decided to do, before it did any of it.")
-        for mark, step, colour in (
-            ("✓", "Create project folder", T.OK),
-            ("✓", "Write package.json", T.OK),
-            ("▸", "Create src/components/Navbar.tsx", T.ACCENT),
-            ("○", "Create src/pages/Home.tsx", T.TEXT_FAINT),
-            ("○", "Install dependencies", T.TEXT_FAINT),
-            ("○", "Run the dev server", T.TEXT_FAINT),
-        ):
-            row = Row(f"{mark}   {step}", first=(mark == "✓" and "folder" in step))
-            row.setStyleSheet(row.styleSheet() + f"QLabel {{ color: {colour}; }}"
-                              if mark != "○" else row.styleSheet())
-            plan.add(row)
-        split.addWidget(plan, 1)
+    def refresh(self) -> None:
+        """Only the lists are redrawn: the panel and the task views follow
+        the agents by themselves, and keep what is typed and scrolled."""
+        if self._panel is None:
+            if self.bridge.workforce() is not None:
+                super().refresh()        # the agents started after this page was drawn
+            return
+        self._fill()
 
-        timeline = Card("Activity", "Minute by minute.")
-        for when, what in (
-            ("21:40", "Created project folder"),
-            ("21:42", "npm create vite@latest — exit 0"),
-            ("21:44", "Wrote 6 files"),
-            ("21:45", "Asked to install 3 packages"),
-            ("21:45", "Approved by you"),
-            ("21:47", "Installing dependencies…"),
-        ):
-            timeline.add(Row(what, when, first=(when == "21:40")))
-        split.addWidget(timeline, 1)
-        self.body.add_layout(split)
+    def _fill(self) -> None:
+        tasks, waiting = self.bridge.tasks(), self.bridge.approvals()
+        drawn = (tuple((t["id"], t["status"]) for t in tasks), tuple(a["id"] for a in waiting))
+        if drawn == self._drawn:
+            return                       # a progress tick: nothing listed here changed
+        self._drawn = drawn
 
-        waiting = Card("Waiting for you", "Nothing risky runs without a yes.")
-        waiting.add(Row("Delete build/ and rebuild",
-                        "file worker · delete_path · medium risk",
-                        dot=T.WARN,
-                        trailing=button("Review", "primary"), first=True))
-        self.body.add(waiting)
+        rows = []
+        for i, a in enumerate(waiting):
+            sub = a["tool"] + (" · needs a typed confirm word" if a["sensitive"] else "")
+            if a["task"]:
+                sub = f"{a['task']} · {sub}"
+            rows.append(Row(_clip(a["reason"], 200), sub, dot=T.WARN, first=(i == 0), wrap=True))
+        refill(self._waiting.body, rows)
+        self._waiting.setVisible(bool(waiting))
+
+        rows = []
+        for i, t in enumerate(tasks):
+            words, colour = _TASK_WORDS.get(t["status"], (t["status"].capitalize(), T.TEXT_DIM))
+            sub = f"{words} · {_when(t['when'])}" if t["when"] else words
+            if t["status"] == "failed" and t["error"]:
+                sub += f" · {t['error']}"
+            details = button("Details")
+            details.clicked.connect(lambda _c=False, tid=t["id"]: self.show_task(tid))
+            rows.append(Row(_clip(t["title"], 120), sub, dot=colour, trailing=details,
+                            first=(i == 0), wrap=True))
+        if not rows:
+            rows.append(Row("Nothing yet",
+                            "Jobs given to the agents are listed here, finished ones too.",
+                            first=True))
+        refill(self._recent.body, rows)
+
+    def show_task(self, task_id: str) -> None:
+        """One task's plan and activity log, under the lists."""
+        wf = self.bridge.workforce()
+        if wf is None or self._events is None:
+            return
+        view = self._details.get(task_id)
+        if view is None:
+            from agents.ui import ActivityTimeline, PlanView
+            view = QWidget()
+            lay = QHBoxLayout(view)
+            lay.setContentsMargins(0, 0, 0, 0)
+            lay.setSpacing(T.GAP)
+            lay.addWidget(PlanView(wf, task_id, self._events, embedded=True), 1)
+            timeline = _tidy(ActivityTimeline(wf, task_id, bridge=self._events))
+            timeline.layout().setContentsMargins(0, 0, 0, 0)    # level with the plan
+            lay.addWidget(timeline, 1)
+            self._details[task_id] = view
+            self._stack.addWidget(view)
+        task = wf.get_task(task_id)
+        self._detail_title.setText(task.title if task else "")
+        self._stack.setCurrentWidget(view)
+        self._detail.show()
+        QTimer.singleShot(0, lambda: self.body.ensureWidgetVisible(self._detail))
 
 
 # ── Extensions ────────────────────────────────────────────────────────────────
 
+# Packs whose dashboard is a page of this window. Any other pack's opens in
+# the floating dashboard, as it does from the tray.
+PACK_PAGES = {"accounting": "accounting"}
+
+
 class ExtensionsPage(Page):
     HEADING = "Extensions"
     LEDE = "Industry packs. Each one adds its own agents, tools and dashboard — and nothing at all while it is off."
+    LIVE = True
+    TOPICS = frozenset({"extensions"})
+
+    def __init__(self, bridge=None):
+        self._errors: dict[str, str] = {}      # a pack that would not switch says why
+        super().__init__(bridge)
 
     def build(self) -> None:
-        self.action("Browse packs", "primary")
-
-        for name, blurb, on, extra in (
-            ("Accounting", "Bookkeeping, bank reconciliation, invoice capture, "
-                           "month-end and VAT. 61 tools · 8 agent templates.",
-             True, "Enabled · ABC Manufacturing (Demo)"),
-            ("Legal", "Contract review, clause extraction, matter tracking.",
-             False, "Not installed"),
-            ("Medical practice", "Scheduling, claims, patient correspondence.",
-             False, "Not installed"),
-            ("Property", "Listings, viewings, tenant paperwork.",
-             False, "Not installed"),
-        ):
-            card = Card(name, blurb)
+        br = self.bridge
+        if br.workforce() is None:
+            self.body.add(_no_agents("Packs plug into the agents, so none can run "
+                                     "until they do - see tora.log for why."))
+            return
+        packs = br.extensions()
+        if not packs:
+            card = Card()
+            card.add(Row("No packs found",
+                         "Packs live in the extensions folder next to Tora.", first=True))
+            self.body.add(card)
+            return
+        for info in packs:
+            ext_id, on = info["id"], bool(info.get("enabled"))
+            card = Card(info.get("name") or ext_id, info.get("description") or "")
+            if info.get("offer"):
+                card.add(label("Adds: " + " · ".join(info["offer"]), "faint", wrap=True))
+            if info.get("optional_integrations"):
+                card.add(label("Works with: " + ", ".join(_brand(i) for i in info["optional_integrations"]),
+                               "faint", wrap=True))
+            card.add(spacer(10))
             foot = QHBoxLayout()
             foot.setSpacing(10)
-            foot.addWidget(Pill(extra, T.OK if on else T.TEXT_FAINT, dot=on))
+            foot.addWidget(Pill("On" if on else "Off", T.OK if on else T.TEXT_FAINT, dot=on))
+            if info.get("version"):
+                foot.addWidget(label(f"v{info['version']}", "faint"))
             foot.addStretch(1)
             if on:
-                foot.addWidget(button("Open dashboard"))
-            foot.addWidget(Switch(on), 0, Qt.AlignmentFlag.AlignVCenter)
+                opener = button("Open dashboard")
+                opener.clicked.connect(lambda _c=False, e=ext_id: self._open(e))
+                foot.addWidget(opener)
+            switch = Switch(on)
+            switch.toggled.connect(lambda v, e=ext_id: self._turn(e, v))
+            foot.addWidget(switch, 0, Qt.AlignmentFlag.AlignVCenter)
             card.body.addLayout(foot)
+            if self._errors.get(ext_id):
+                why = label(f"That did not work: {self._errors[ext_id]}", wrap=True)
+                why.setStyleSheet(f"color: {T.DANGER};")
+                card.add(spacer(8))
+                card.add(why)
             self.body.add(card)
+
+    def _turn(self, ext_id: str, on: bool) -> None:
+        why = self.bridge.set_extension(ext_id, on)
+        if why:
+            self._errors[ext_id] = why
+        else:
+            self._errors.pop(ext_id, None)
+        # Redrawn after the click has finished: the switch being clicked is
+        # one of the widgets a redraw replaces.
+        QTimer.singleShot(0, self.refresh)
+
+    def _open(self, ext_id: str) -> None:
+        page = PACK_PAGES.get(ext_id)
+        if page:
+            self.navigate.emit(page)
+        else:
+            self.bridge.open_dashboard(ext_id)
 
 
 # ── Accounting ────────────────────────────────────────────────────────────────
@@ -291,72 +489,111 @@ class ExtensionsPage(Page):
 class AccountingPage(Page):
     HEADING = "Accounting"
     LEDE = "One client at a glance. Exceptions first — everything clean is already done."
+    LIVE = True
+    TOPICS = frozenset({"extensions"})
+    PACK = "accounting"
+
+    def __init__(self, bridge=None):
+        # The pack's own dashboard (extensions/accounting/ui/dashboard.py) -
+        # client picker, month-end, exceptions, drafts, reports. Built when
+        # the pack is on and kept while it stays on: it holds the chosen
+        # client and redraws itself.
+        self._dash = None
+        self._drawn_for = ""
+        self._error = ""
+        super().__init__(bridge)
+
+    def _mode(self) -> str:
+        if self.bridge.workforce() is None:
+            return "no agents"
+        return "on" if self.bridge.extension_on(self.PACK) else "off"
 
     def build(self) -> None:
-        self.action("Run month-end", "primary")
+        br = self.bridge
+        mode = self._drawn_for = self._mode()
+        if mode == "no agents":
+            self.body.add(_no_agents("The Accounting pack runs on them - see tora.log for why."))
+            return
+        if mode == "on":
+            why = ""
+            try:
+                dash = br.dashboard(self.PACK)
+            except Exception as exc:  # noqa: BLE001 - the pack's code; the page says why
+                dash, why = None, str(exc) or type(exc).__name__
+            if dash is not None:
+                self._dash = _tidy(dash)
+                dash.setMinimumHeight(640)
+                holder = Card()
+                holder.add(dash)
+                self.body.add(holder)
+                return
+            card = Card()
+            card.add(Row("The dashboard could not load", why or "See tora.log for why.",
+                         dot=T.DANGER, first=True, wrap=True))
+            self.body.add(card)
+            return
 
-        head = Card()
-        row = QHBoxLayout()
-        row.setSpacing(12)
-        row.addWidget(Select("ABC Manufacturing (Demo)", "Karoo Coffee Roasters",
-                             "+ New client…", width=250))
-        row.addWidget(Select("September 2026", "August 2026", "July 2026",
-                             width=170))
-        row.addWidget(Pill("ZAR · South Africa", T.TEXT_DIM))
-        row.addWidget(Pill("Mock provider", T.WARN))
-        row.addStretch(1)
-        head.body.addLayout(row)
-        self.body.add(head)
+        info = next((p for p in br.extensions() if p.get("id") == self.PACK), None)
+        if info is None:
+            card = Card()
+            card.add(Row("The Accounting pack is not installed",
+                         "It lives in the extensions folder next to Tora.", first=True))
+            self.body.add(card)
+            return
+        card = Card("Accounting is off", info.get("description") or "")
+        if info.get("offer"):
+            card.add(label("Adds: " + " · ".join(info["offer"]), "faint", wrap=True))
+        card.add(spacer(10))
+        foot = QHBoxLayout()
+        foot.setSpacing(10)
+        turn_on = button("Turn on Accounting", "primary")
+        turn_on.clicked.connect(self._turn_on)
+        every = button("All extensions")
+        every.clicked.connect(lambda: self.navigate.emit("extensions"))
+        foot.addWidget(turn_on)
+        foot.addWidget(every)
+        foot.addStretch(1)
+        card.body.addLayout(foot)
+        if self._error:
+            why = label(f"That did not work: {self._error}", wrap=True)
+            why.setStyleSheet(f"color: {T.DANGER};")
+            card.add(spacer(8))
+            card.add(why)
+        self.body.add(card)
 
-        progress = Card("Month-end", "Five of nine workflows have run.")
-        pl = QVBoxLayout()
-        pl.setSpacing(8)
-        meta = QHBoxLayout()
-        meta.addWidget(label("Bank reconciliation · 62 of 140 lines matched",
-                             "faint"), 1)
-        meta.addWidget(label("56%", "faint"))
-        pl.addLayout(meta)
-        pl.addWidget(Meter(0.56))
-        progress.body.addLayout(pl)
-        self.body.add(progress)
+    def refresh(self) -> None:
+        if self._mode() == self._drawn_for:
+            if self._dash is not None:
+                try:
+                    self._dash.refresh()
+                except Exception:  # noqa: BLE001 - the pack's code
+                    _log.debug("the accounting dashboard could not refresh", exc_info=True)
+            return
+        self._clock(False)                # the old dashboard's clock stops before it goes
+        self._dash = None
+        super().refresh()
 
-        self.body.add_layout(columns(
-            Metric("18", "need attention", T.WARN),
-            Metric("122", "posted clean", T.OK),
-            Metric("4", "awaiting approval", T.ACCENT),
-            Metric("R 48,210", "unreconciled"),
-        ))
+    def _turn_on(self) -> None:
+        self._error = self.bridge.set_extension(self.PACK, True)
+        self._drawn_for = ""              # redraw even if it stayed off: to say why
+        QTimer.singleShot(0, self.refresh)
 
-        attn = Card("Needs attention", "Most severe first.",
-                    action=button("Export"))
-        for what, why, colour in (
-            ("Duplicate payment · Nkosi Supplies R12,400",
-             "Two payments, same reference, four days apart", T.DANGER),
-            ("VAT on a zero-rated supply · Invoice 20261 ",
-             "R1,830 claimed where the supplier is not registered", T.DANGER),
-            ("Unmatched deposit · R6,500 on 14 Sep",
-             "No invoice within R50 of this amount", T.WARN),
-            ("Supplier invoice missing · Cape Freight",
-             "Payment posted with no document attached", T.WARN),
-            ("Coding confidence 42% · “ADT services”",
-             "Could be security or IT — ask before posting", T.ACCENT),
-        ):
-            attn.add(Row(what, why, dot=colour,
-                         trailing=button("Resolve"),
-                         first=what.startswith("Duplicate")))
-        self.body.add(attn)
+    # The dashboard redraws itself every few seconds. Only while it can be
+    # seen: kept for the life of the window, it would otherwise read the
+    # books all day behind a page nobody has open.
+    def showEvent(self, event) -> None:
+        super().showEvent(event)
+        self._clock(True)
 
-        flows = Card("Workflows", "Run one now, or leave it on a schedule.")
-        for name, when in (
-            ("Bank reconciliation", "Nightly at 02:00"),
-            ("Invoice capture from Inbox\\Bank", "On new file"),
-            ("Supplier statement matching", "Weekly, Mondays"),
-            ("VAT return preparation", "Bi-monthly"),
-            ("Management pack", "Month-end"),
-        ):
-            flows.add(Row(name, when, trailing=button("Run now"),
-                          first=name.startswith("Bank")))
-        self.body.add(flows)
+    def hideEvent(self, event) -> None:
+        super().hideEvent(event)
+        self._clock(False)
+
+    def _clock(self, on: bool) -> None:
+        if self._dash is None:
+            return
+        for timer in self._dash.findChildren(QTimer, options=Qt.FindChildOption.FindDirectChildrenOnly):
+            timer.start() if on else timer.stop()
 
 
 # ── Journal ───────────────────────────────────────────────────────────────────
@@ -364,41 +601,154 @@ class AccountingPage(Page):
 class JournalPage(Page):
     HEADING = "Journal"
     LEDE = "What you have learned, what you asked, and the walkthroughs worth keeping."
+    LIVE = True
+    TOPICS = frozenset({"journal", "recording", "guide", "switches"})
+    SHOWN_DUE = 5
+
+    def __init__(self, bridge=None):
+        # The entries opened on the page stay open when it redraws - per
+        # list: opening a review must not give its answer away under Recent.
+        self._open: set[tuple[str, int]] = set()
+        super().__init__(bridge)
+
+    def build_actions(self) -> None:
+        self.action("Open folder").clicked.connect(self.bridge.open_journal_folder)
+        self.action("Attach document", "primary").clicked.connect(self.bridge.attach_document)
 
     def build(self) -> None:
-        self.action("Open folder")
-        self.action("Attach document", "primary")
+        br = self.bridge
+        due, n_due = br.due(self.SHOWN_DUE), br.due_count()
+        if n_due:
+            sub = (f"{n_due} due now. Answer it in your head, then check - "
+                   "what you knew comes back later, the rest tomorrow.")
+        else:
+            nxt = br.next_due()
+            sub = (f"Nothing due. The next one comes back {_coming(nxt)}." if nxt else
+                   "Nothing due. What you ask comes back here the next day, to check it stuck.")
+        card = Card("Due for review", sub)
+        for i, entry in enumerate(due):
+            card.add(self._entry(entry, first=(i == 0), review=True))
+        if n_due > len(due):
+            card.add(Row(f"…and {n_due - len(due)} more", "They come up here as you go."))
+        self.body.add(card)
 
-        due = Card("Due for review", "Spaced repetition — three questions today.")
-        for q, when in (
-            ("How do you share a single window in Google Meet?", "learned 3 days ago"),
-            ("Where is display scaling in Windows Settings?", "learned 6 days ago"),
-            ("What does a VAT zero-rated supply mean?", "learned 12 days ago"),
-        ):
-            due.add(Row(q, when, trailing=button("Quiz me"),
-                        first=q.startswith("How do you")))
-        self.body.add(due)
-
-        recent = Card("Recent entries")
-        for what, when in (
-            ("Google Meet — adding people to a call", "Yesterday, 18:55"),
-            ("VS Code — installing an extension", "Yesterday, 20:21"),
-            ("Takealot — filtering by price", "21 Sep, 14:25"),
-        ):
-            recent.add(Row(what, when, first=what.startswith("Google")))
-        self.body.add(recent)
+        recent = br.recent(8)
+        card = Card("Recent", "Newest first." if br.switch("journal") else
+                    "Saving is off - new questions are not being kept.")
+        for i, entry in enumerate(recent):
+            card.add(self._entry(entry, first=(i == 0)))
+        if not recent:
+            card.add(Row("Nothing yet", "Ask Tora anything; it is kept here.", first=True))
+        self.body.add(card)
 
         split = QHBoxLayout()
         split.setSpacing(T.GAP)
-        rec = Card("Lesson recording",
-                   "Record a walkthrough once; replay it for someone else.")
-        rec.body.addWidget(button("Start recording", "primary"))
-        split.addWidget(rec, 1)
-        cap = Card("Workflow capture",
-                   "Do the task yourself and Tora writes down the steps.")
-        cap.body.addWidget(button("Capture my clicks", "primary"))
-        split.addWidget(cap, 1)
+        split.addWidget(self._recording(), 1)
+        split.addWidget(self._capture(), 1)
         self.body.add_layout(split)
+
+        keep = Card()
+        row = ToggleRow("Keep a journal",
+                        "Save every question and answer, so they come back for "
+                        "review. Kept on this PC.", br.switch("journal"), first=True)
+        row.switch.toggled.connect(lambda on: br.set_switch("journal", on))
+        keep.add(row)
+        self.body.add(keep)
+
+    def _entry(self, e: dict, *, first: bool, review: bool = False) -> QWidget:
+        """One entry: the question and when - and, opened, the answer."""
+        from tutor_features.journal import WALKTHROUGH_TAG
+        entry_id = int(e["id"])
+        key = ("due" if review else "recent", entry_id)
+        walk = WALKTHROUGH_TAG in (e.get("tags") or "")
+        answer = (e.get("answer") or "").strip()
+        opened = key in self._open
+        if review:
+            sub = f"{'walked through' if walk else 'asked'} {_ago(e['created_at'])}"
+            streak = int(e.get("streak") or 0)
+            if streak:
+                sub += " · remembered " + {1: "once", 2: "twice"}.get(streak, f"{streak} times")
+        else:
+            sub = _when(e["created_at"])
+            if walk:
+                sub += f" · walkthrough · {len(answer.splitlines())} steps"
+        flip = button("Hide" if opened else ("Show answer" if review else "Show"))
+        flip.clicked.connect(lambda: self._flip(key))
+        box = QWidget()
+        lay = QVBoxLayout(box)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(0)
+        lay.addWidget(Row(_clip(e.get("question"), 200), sub, trailing=flip,
+                          first=first, wrap=True))
+        if opened:
+            well = QFrame()
+            well.setObjectName("well")
+            inner = QVBoxLayout(well)
+            inner.setContentsMargins(14, 12, 14, 12)
+            inner.setSpacing(10)
+            text = answer if len(answer) <= 1200 else answer[:1199].rstrip() + "…"
+            inner.addWidget(label(text, wrap=True))
+            if review:
+                grade = QHBoxLayout()
+                grade.setSpacing(8)
+                grade.addStretch(1)
+                again = button("Not yet")
+                again.clicked.connect(lambda: self._grade(entry_id, False))
+                knew = button("I knew it", "primary")
+                knew.clicked.connect(lambda: self._grade(entry_id, True))
+                grade.addWidget(again)
+                grade.addWidget(knew)
+                inner.addLayout(grade)
+            lay.addWidget(well)
+            lay.addSpacing(10)
+        return box
+
+    def _flip(self, key: tuple[str, int]) -> None:
+        self._open.symmetric_difference_update({key})
+        QTimer.singleShot(0, self.refresh)
+
+    def _grade(self, entry_id: int, knew: bool) -> None:
+        self._open.discard(("due", entry_id))
+        self.bridge.review(entry_id, knew)
+        QTimer.singleShot(0, self.refresh)
+
+    def _recording(self) -> Card:
+        on = self.bridge.recording()
+        card = Card("Lesson recording",
+                    "Records the screen and every question and answer into "
+                    "Documents\\Tora Lessons - to watch again, or to send to someone.")
+        foot = QHBoxLayout()
+        foot.setSpacing(10)
+        go = button("Stop recording", "danger") if on else button("Start recording", "primary")
+        go.clicked.connect(lambda: self.bridge.set_recording(not on))
+        foot.addWidget(go)
+        if on:
+            foot.addWidget(Pill("Recording", T.DANGER, dot=True))
+        foot.addStretch(1)
+        card.body.addLayout(foot)
+        return card
+
+    def _capture(self) -> Card:
+        on = self.bridge.capturing()
+        card = Card("Workflow capture",
+                    "Do a task yourself while Tora notes every click and key, then "
+                    "ask “what did I just do?”. It records typing too - stop it "
+                    "before a password.")
+        foot = QHBoxLayout()
+        foot.setSpacing(10)
+        go = (button("Stop and send to Tora", "danger") if on else
+              button("Capture my clicks", "primary"))
+        go.clicked.connect(lambda: self._set_capturing(not on))
+        foot.addWidget(go)
+        if on:
+            foot.addWidget(Pill("Capturing", T.WARN, dot=True))
+        foot.addStretch(1)
+        card.body.addLayout(foot)
+        return card
+
+    def _set_capturing(self, on: bool) -> None:
+        self.bridge.set_capturing(on)
+        QTimer.singleShot(0, self.refresh)
 
 
 # ── Tutor ─────────────────────────────────────────────────────────────────────
@@ -514,15 +864,8 @@ class VoicePage(Page):
         ends = Card("Agent endpoints", "Where the agents' requests go.")
         wf = br.workforce()
         if wf is not None:
-            from PyQt6.QtWidgets import QLabel, QPushButton
             from agents.ui.accounts import ConnectedAccountsDialog
-            embedded = ConnectedAccountsDialog(wf)
-            for b in embedded.findChildren(QPushButton):
-                if b.text().strip().lower() == "close":
-                    b.hide()
-            for lbl in embedded.findChildren(QLabel):
-                if lbl.objectName() == "title":
-                    lbl.hide()
+            embedded = _tidy(ConnectedAccountsDialog(wf))
             embedded.setMinimumHeight(420)
             ends.body.addWidget(embedded)
         else:
@@ -549,18 +892,8 @@ class SettingsPage(Page):
         rails = Card("Agent rails", "Agents may only ever write inside the workspace.")
         wf = br.workforce()
         if wf is not None:
-            from PyQt6.QtWidgets import QLabel, QPushButton
             from agents.ui.settings import AgentSettingsDialog
-            embedded = AgentSettingsDialog(wf)
-            # Inside a page its own title repeats the card's, and its Close
-            # would hide it and leave an empty card.
-            for b in embedded.findChildren(QPushButton):
-                if b.text().strip().lower() == "close":
-                    b.hide()
-            for lbl in embedded.findChildren(QLabel):
-                if lbl.text().strip() == "Agent settings":
-                    lbl.hide()
-            rails.body.addWidget(embedded)
+            rails.body.addWidget(_tidy(AgentSettingsDialog(wf), "Agent settings"))
         else:
             rails.add(Row("The agents did not start",
                           "Nothing here can be changed until they do - see "
