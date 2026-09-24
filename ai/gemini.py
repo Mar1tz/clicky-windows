@@ -32,7 +32,7 @@ import asyncio
 import json
 import logging
 import os
-from typing import Any, AsyncIterator, Optional
+from typing import Any, AsyncIterator, Callable, Optional
 
 import httpx
 
@@ -192,16 +192,109 @@ async def warm_up() -> bool:
 # Timeouts are not retried: that would double a wait that was already long.
 _STALE_CONNECTION = (httpx.ProtocolError, httpx.NetworkError)
 
+# ── What kind of failure it is (APP-02) ──────────────────────────────────────
+#
+# 22 September: 77 requests failed with "Your prepayment credits are
+# depleted" over eleven hours, and Tora simply went quiet - the voice uses
+# the same account, so she could not even say why. 24 September: a
+# walkthrough failed on two 503s ("high demand") and was reported as "I
+# couldn't work out the steps from this screen". Each kind needs its own
+# answer, so each is named.
+
+_BILLING = ("prepayment credits", "credits are depleted", "check your plan and billing",
+            "exceeded your current quota", "billing", "payment required")
+_KEY = ("api key not valid", "api_key_invalid", "api key expired", "invalid api key",
+        "api key was reported as leaked", "permission denied", "permission_denied")
+_BUSY = ("high demand", "overloaded", "unavailable", "try again later",
+         "resource has been exhausted", "rate limit", "too many requests")
+_NETWORK = ("getaddrinfo failed", "name or service not known", "timed out during opening handshake",
+            "network is unreachable", "connection refused", "no route to host")
+
+
+def problem_of(error: Any) -> str:
+    """"billing", "key", "busy", "network", or "" - what went wrong, in the
+    terms a person can act on. Takes an exception or a message."""
+    text = str(error or "").lower()
+    status = getattr(error, "status", 0) or 0
+    if any(w in text for w in _BILLING) or status == 402:
+        return "billing"
+    if any(w in text for w in _KEY) or status in (401, 403):
+        return "key"
+    if status in (429, 503) or any(w in text for w in _BUSY):
+        return "busy"
+    if isinstance(error, (httpx.ConnectError, httpx.ConnectTimeout, ConnectionError)) \
+            or any(w in text for w in _NETWORK):
+        return "network"
+    return ""
+
+
+# Told about account problems - out of credit, key refused - wherever they
+# happen: a request, a stream, the live session. The app shows them; see
+# CompanionManager._account_problem. One listener; set by the app.
+_problem_listener: Optional[Callable[[str, str], None]] = None
+
+
+def on_problem(listener: Optional[Callable[[str, str], None]]) -> None:
+    global _problem_listener
+    _problem_listener = listener
+
+
+_problem_active = False
+
+
+def report_problem(error: Any) -> str:
+    """Classify `error` and, if it is about the account, tell the app.
+    Returns the kind. Never raises - a report must not become the failure."""
+    global _problem_active
+    kind = problem_of(error)
+    if kind in ("billing", "key") and _problem_listener is not None:
+        _problem_active = True
+        try:
+            _problem_listener(kind, str(error)[:300])
+        except Exception:  # noqa: BLE001
+            _log.debug("problem listener failed", exc_info=True)
+    return kind
+
+
+def report_ok() -> None:
+    """A request got through: an account problem, if there was one, is over
+    (the user topped up, or fixed the key). The app takes its warning down."""
+    global _problem_active
+    if _problem_active and _problem_listener is not None:
+        _problem_active = False
+        try:
+            _problem_listener("", "")
+        except Exception:  # noqa: BLE001
+            _log.debug("problem listener failed", exc_info=True)
+
+
+# A busy server is asked again, twice, before anything gives up: 1 s, then 2 s.
+BUSY_RETRY_DELAYS = (1.0, 2.0)
+
 
 async def _post(url: str, body: dict, timeout: float) -> httpx.Response:
-    try:
-        return await client().post(url, params={"key": api_key()}, json=body,
-                                   timeout=timeout)
-    except _STALE_CONNECTION as e:
-        _log.info("retrying once on a fresh connection after %s: %s",
-                  type(e).__name__, e)
-        return await client().post(url, params={"key": api_key()}, json=body,
-                                   timeout=timeout)
+    async def once() -> httpx.Response:
+        try:
+            return await client().post(url, params={"key": api_key()}, json=body,
+                                       timeout=timeout)
+        except _STALE_CONNECTION as e:
+            _log.info("retrying once on a fresh connection after %s: %s",
+                      type(e).__name__, e)
+            return await client().post(url, params={"key": api_key()}, json=body,
+                                       timeout=timeout)
+
+    r = await once()
+    for delay in BUSY_RETRY_DELAYS:
+        if r.status_code not in (429, 503) or problem_of(r.text) != "busy":
+            break
+        _log.info("Google is busy (%d) - asking again in %.0fs", r.status_code, delay)
+        await asyncio.sleep(delay)
+        r = await once()
+    if r.status_code != 200:
+        report_problem(GeminiError(r.status_code, r.text))
+    else:
+        report_ok()
+    return r
 
 
 def _url(model: str, method: str) -> str:
@@ -373,11 +466,14 @@ async def stream(
 async def _sse(model: str, body: dict, timeout: float) -> AsyncIterator[dict]:
     """The JSON objects of a streamGenerateContent reply, as they arrive.
 
-    A dead pooled connection (see _STALE_CONNECTION) is retried once - but
-    only if nothing has arrived yet: a stream that has started cannot be
-    replayed without saying its first part twice.
+    A dead pooled connection (see _STALE_CONNECTION) is retried once, and a
+    busy server twice (BUSY_RETRY_DELAYS) - but only if nothing has arrived
+    yet: a stream that has started cannot be replayed without saying its
+    first part twice. An account problem is reported (report_problem).
     """
-    for attempt in (1, 2):
+    stale_left = 1
+    busy_delays = list(BUSY_RETRY_DELAYS)
+    while True:
         started = False
         try:
             async with client().stream(
@@ -390,6 +486,7 @@ async def _sse(model: str, body: dict, timeout: float) -> AsyncIterator[dict]:
                 if resp.status_code != 200:
                     raise GeminiError(resp.status_code,
                                       (await resp.aread()).decode(), model)
+                report_ok()
                 async for line in resp.aiter_lines():
                     if not line.startswith("data: "):
                         continue
@@ -404,10 +501,20 @@ async def _sse(model: str, body: dict, timeout: float) -> AsyncIterator[dict]:
                     yield obj
             return
         except _STALE_CONNECTION as e:
-            if started or attempt == 2:
+            if started or stale_left == 0:
                 raise
+            stale_left -= 1
             _log.info("retrying the stream once on a fresh connection after "
                       "%s: %s", type(e).__name__, e)
+        except GeminiError as e:
+            if not started and busy_delays and problem_of(e) == "busy":
+                delay = busy_delays.pop(0)
+                _log.info("Google is busy (%d) - asking again in %.0fs",
+                          e.status, delay)
+                await asyncio.sleep(delay)
+                continue
+            report_problem(e)
+            raise
 
 
 async def stream_audio(

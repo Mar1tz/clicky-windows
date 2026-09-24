@@ -270,6 +270,9 @@ def main():
             "Tora error", f"{e}\n\nFull details: {_log_hint}"
         )
     )
+    # Out of credit / a refused key (APP-02): a warning in the tray menu and
+    # one notification - never 77 silent failures.
+    manager.sig_account_problem.connect(tray.set_account_problem)
 
     # Panel → Manager
     panel.on_model_changed.connect(manager.set_model)

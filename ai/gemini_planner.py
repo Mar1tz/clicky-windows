@@ -286,6 +286,10 @@ class Guide:
     preamble: str = ""
     steps: list[Step] = None
     feasible: bool = True
+    # Why there is no plan, when it was Google rather than the goal:
+    # "busy", "billing", "key", "network" (gemini.problem_of). The preamble
+    # then says so, instead of blaming the screen (APP-02).
+    failure: str = ""
 
     def __post_init__(self):
         if self.steps is None:
@@ -457,7 +461,9 @@ async def plan(
         # str(TimeoutError()) is '' — the log said 'planner failed: ' and
         # nothing else. Name the type.
         _log.warning("planner failed: %s %s", type(e).__name__, e)
-        return Guide(goal=goal, feasible=False)
+        kind = gemini.problem_of(e)
+        return Guide(goal=goal, feasible=False, failure=kind,
+                     preamble=_FAILURE_WORDS.get(kind, ""))
 
     if not data:
         return Guide(goal=goal, feasible=False)
@@ -467,6 +473,17 @@ async def plan(
     if controls:
         snap_targets(guide, controls)
     return guide
+
+
+# What to say when there is no plan because of Google, not the goal. The
+# 24 September walkthrough failed on two 503s and was told "I couldn't work
+# out the steps for that from this screen" - it was never the screen.
+_FAILURE_WORDS = {
+    "busy": "Google's planner is overloaded right now - ask me again in a moment.",
+    "network": "I can't reach Google right now - check the internet connection.",
+    "billing": "I can't plan that: the Gemini credits have run out.",
+    "key": "I can't plan that: Google refused the API key.",
+}
 
 
 _STEPS_KEY = re.compile(r'"steps"\s*:\s*\[')

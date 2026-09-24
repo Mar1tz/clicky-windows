@@ -559,6 +559,10 @@ class RealtimeConversation:
             return await self._connecting
         except Exception as e:
             _log.warning("realtime connect failed: %s", e)
+            # Out of credit or a refused key arrives here first, as a 1011 on
+            # the websocket. It used to end at this log line (APP-02).
+            from ai import gemini
+            gemini.report_problem(e)
             return False
         finally:
             self._connecting = None
@@ -595,6 +599,8 @@ class RealtimeConversation:
         self._pump = asyncio.ensure_future(self._run_pump(session))
         _log.info("realtime session open (%s)%s", Models.REALTIME,
                   " - resumed" if resume else "")
+        from ai import gemini
+        gemini.report_ok()           # an account problem, if any, is over
         if not resume:
             await self._reseed()
         return True

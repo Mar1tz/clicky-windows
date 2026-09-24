@@ -101,6 +101,8 @@ class TrayManager(QObject):
         self._journal_enabled = True
         self._ocr_enabled = True
         self._is_recording = False
+        # "billing" / "key" while Google is refusing the account (APP-02).
+        self._account_problem = ""
 
         self._build_menu()
         self._tray.activated.connect(self._on_activated)
@@ -118,6 +120,15 @@ class TrayManager(QObject):
         providers = cfg.describe()
         if not cfg.has_key():
             warn = menu.addAction("⚠  No Google API key — click API Key…")
+            warn.triggered.connect(self.on_api_keys)
+            menu.addSeparator()
+        elif self._account_problem == "billing":
+            warn = menu.addAction("⚠  Gemini credits have run out — top up…")
+            warn.triggered.connect(
+                lambda: __import__("webbrowser").open("https://ai.studio/projects"))
+            menu.addSeparator()
+        elif self._account_problem == "key":
+            warn = menu.addAction("⚠  Google refused the API key — fix it…")
             warn.triggered.connect(self.on_api_keys)
             menu.addSeparator()
         info = menu.addAction(
@@ -551,6 +562,19 @@ class TrayManager(QObject):
     def rebuild_menu(self):
         """Rebuild so the Model submenu reflects the newly-active provider."""
         self._build_menu()
+
+    def set_account_problem(self, kind: str, words: str) -> None:
+        """Google is refusing the account ("billing" / "key"), or ("", "")
+        has stopped. A warning at the top of the menu while it lasts, and
+        one notification when it starts - Tora cannot SAY it, her voice is
+        on the same account (APP-02)."""
+        kind = kind if kind in ("billing", "key") else ""
+        if kind and words:
+            self._tray.showMessage("Tora can't reach Google", words,
+                                   QSystemTrayIcon.MessageIcon.Warning, 8000)
+        if kind != self._account_problem:
+            self._account_problem = kind
+            self._build_menu()
 
     def show_notification(self, title: str, message: str):
         self._tray.showMessage(

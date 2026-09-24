@@ -301,6 +301,7 @@ class CompanionManager(QObject):
     sig_agent_notice        = pyqtSignal(str, str)        # (title, body) → tray toast
     sig_open_extension = pyqtSignal(str, str)   # (extension id, "" | "dashboard" | "wizard:<template>")
     sig_agents_ready        = pyqtSignal()                # workforce built (or failed); wire the UI now
+    sig_account_problem     = pyqtSignal(str, str)        # (kind, plain words); ("", "") = over
 
     def __init__(self):
         super().__init__()
@@ -468,6 +469,9 @@ class CompanionManager(QObject):
         except Exception as e:
             self.sig_error.emit(f"Mic error: {e}")
         self._start_agents()
+        # Out of credit, or a refused key, from any request anywhere: shown,
+        # because it cannot be spoken - the voice uses the same account.
+        gemini.on_problem(self._account_problem)
         # Sleep/wake watchdog — restarts mic + loop after system resume
         self._start_sleep_watchdog()
         # Open everything now, while the user is still reading the startup
@@ -938,6 +942,60 @@ class CompanionManager(QObject):
     async def _realtime_reconnect(self) -> None:
         await asyncio.sleep(1.0)
         await self._realtime_connect()
+
+    # ── When Google is the problem (APP-02) ──────────────────────────────────
+    #
+    # 22 September: 77 requests failed with "your prepayment credits are
+    # depleted" over eleven hours and Tora just went quiet - she could not
+    # even say why, because her voice runs on the same account. So these
+    # are SHOWN: in the caption every time a request fails, and as a toast
+    # and a tray warning at most once every ten minutes.
+
+    _PROBLEM_WORDS = {
+        "billing": ("Tora can't reach Google: your Gemini credits have run out. "
+                    "Top them up at ai.studio/projects and she'll work again."),
+        "key": ("Tora can't reach Google: it refused the API key. Check it in "
+                "Setup - API keys."),
+        "network": "Tora can't reach Google - check the internet connection.",
+        "busy": ("Google's servers are overloaded right now - ask again in a "
+                 "moment."),
+    }
+    _PROBLEM_RENOTIFY_S = 600.0
+    _problem_kind = ""
+    _problem_told = None          # kind -> when it was last shown
+
+    def _account_problem(self, kind: str, detail: str) -> None:
+        """An account problem was reported (gemini.report_problem), or - with
+        kind "" - is over. Safe from any thread: it only emits a signal."""
+        if not kind:
+            if self._problem_kind:
+                _log.info("account problem over: Google is answering again")
+                self._problem_kind = ""
+                self._problem_told = {}
+                self.sig_account_problem.emit("", "")
+            return
+        self._problem_kind = kind
+        told = self._problem_told
+        if told is None:
+            told = self._problem_told = {}
+        now = time.monotonic()
+        if now - told.get(kind, -1e9) < self._PROBLEM_RENOTIFY_S:
+            return
+        told[kind] = now
+        _log.warning("account problem (%s): %s", kind, (detail or "")[:200])
+        self.sig_account_problem.emit(kind, self._PROBLEM_WORDS.get(kind, detail))
+
+    def _show_failure(self, error) -> bool:
+        """Put a failed request's REASON on screen, in words a person can act
+        on. True when it was one of the known kinds; the caller shows the
+        raw error otherwise."""
+        kind = gemini.problem_of(error)
+        words = self._PROBLEM_WORDS.get(kind)
+        if not words:
+            return False
+        self.sig_response_chunk.emit(words)
+        self.sig_response_done.emit(words)
+        return True
 
     def _feed_realtime(self, block: bytes) -> None:
         """Audio-thread callback. Must be cheap and must never raise.
@@ -2255,7 +2313,10 @@ class CompanionManager(QObject):
             controls=controls, fast=True,
             on_first_step=first if on_first_step is not None else None,
         )
-        if not guide and not started:
+        # No credit, a refused key or no network fail the pro model the same
+        # way - after 10-20 s more. A busy fast model is worth one careful
+        # try: they are served separately.
+        if not guide and not started and guide.failure not in ("billing", "key", "network"):
             _log.info("fast plan unusable for %r — retrying with the pro model",
                       goal[:60])
             guide = await gemini_planner.plan(
@@ -3059,7 +3120,8 @@ class CompanionManager(QObject):
             # "'NoneType' object has no attribute 'write'" with no way to
             # tell which call produced it.
             _log.exception("request failed: %s", e)
-            self.sig_error.emit(str(e))
+            if not self._show_failure(e):
+                self.sig_error.emit(str(e))
 
         finally:
             if pointing_held:
