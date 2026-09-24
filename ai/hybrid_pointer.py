@@ -384,9 +384,24 @@ def focused_value() -> Optional[str]:
         return None
 
 
+# How much a control gains when its surroundings carry the step's own words:
+# "Click the search bar ON TAKEALOT" puts the page's Search (inside the
+# document titled "Takealot.com: ...") ahead of the browser's. On 24 Sep the
+# two scored 0.75 and 0.70 and the walk gave up as ambiguous (LG-05).
+CONTEXT_BONUS = 0.15
+
+
+def _context_words(context: str, query: str) -> frozenset:
+    """The words of a step's instruction that could tell two same-named
+    controls apart: not the target's own words, not filler, 4+ letters."""
+    q = set(_normalize(query).split())
+    return frozenset(w for w in _normalize(context).split()
+                     if len(w) >= 4 and w not in q and w not in _STOPWORDS)
+
+
 def _find_via_uia(
     query: str, min_score: float = 0.5, *, max_seconds: float = 1.2,
-    hwnd: Optional[int] = None,
+    hwnd: Optional[int] = None, context: str = "",
 ) -> Optional[Target]:
     """Walk the UIA tree for the foreground window, find the best match.
 
@@ -413,8 +428,11 @@ def _find_via_uia(
 
     best: Optional[Tuple[float, "auto.Control"]] = None
     second: float = 0.0            # runner-up score, for the ambiguity check
-    # Bounded walk — UIA trees can be huge in Chrome/Electron
-    queue: List[Tuple["auto.Control", int]] = [(root, 0)]
+    ctx = _context_words(context, query)
+    # Bounded walk — UIA trees can be huge in Chrome/Electron. Each entry
+    # carries the names of its ancestors BELOW the root: the root is the
+    # window, whose title every control would otherwise share.
+    queue: List[Tuple["auto.Control", int, str]] = [(root, 0, "")]
     visited = 0
     MAX_NODES = 3500
     MAX_DEPTH = 40
@@ -428,7 +446,7 @@ def _find_via_uia(
         if time.monotonic() > deadline:
             log.debug("UIA walk hit its %.1fs deadline for %r", max_seconds, query)
             break
-        node, depth = queue.pop(0)
+        node, depth, trail = queue.pop(0)
         visited += 1
         try:
             name = node.Name or ""
@@ -444,6 +462,11 @@ def _find_via_uia(
             # trip on nearly every node for a signal that almost never decided
             # the match — pure latency.
             score = _score_match(query, name, ctrl_type)
+            # WHERE it is, not what it is called: the names of what it sits
+            # inside. "Press Enter" must not favour a box called "Search or
+            # enter address".
+            if score and ctx and any(f" {w} " in f" {trail} " for w in ctx):
+                score = min(1.0, score + CONTEXT_BONUS)
             if score >= 0.92 and _is_actionable(ctrl_type):
                 # A clear winner: stop walking. There is nothing better to
                 # find, and every further node is another COM call.
@@ -464,9 +487,10 @@ def _find_via_uia(
                     second = score
 
         if depth < MAX_DEPTH:
+            here = trail if depth == 0 else (trail + " " + _normalize(name))[-240:]
             try:
                 for child in node.GetChildren():
-                    queue.append((child, depth + 1))
+                    queue.append((child, depth + 1, here))
             except Exception:
                 continue
 
@@ -573,8 +597,33 @@ _ocr_last: Optional[tuple] = None      # (monitor key, captured at, detections)
 OCR_SHARE_S = 0.5                      # a read begun this long before you asked is yours
 
 
+def _ocr_region(hwnd: Optional[int] = None) -> Optional[dict]:
+    """What OCR reads: the target app's window, clipped to its monitor.
+
+    The whole monitor includes the taskbar: on 24 Sep "Search" on Takealot
+    was matched to "Q Search" at (566, 1056) - the Windows taskbar's search
+    box (LG-05). A maximised window stops at the taskbar. Falls back to the
+    monitor when the window cannot be read."""
+    monitor = _monitor_for(hwnd)
+    if monitor is None:
+        return None
+    try:
+        r = _pointing_root(hwnd).BoundingRectangle
+        left = max(r.left, monitor["left"])
+        top = max(r.top, monitor["top"])
+        right = min(r.right, monitor["left"] + monitor["width"])
+        bottom = min(r.bottom, monitor["top"] + monitor["height"])
+        if right - left >= 40 and bottom - top >= 40:
+            return {"left": int(left), "top": int(top),
+                    "width": int(right - left), "height": int(bottom - top)}
+    except Exception:  # noqa: BLE001 - the monitor is the next best thing
+        pass
+    return monitor
+
+
 def _ocr_screen(monitor: dict, asked_at: float):
-    """RapidOCR's detections for one monitor - shared, see _ocr_lock."""
+    """RapidOCR's detections for one region of the screen - shared, see
+    _ocr_lock."""
     global _ocr_last
     key = (monitor["left"], monitor["top"], monitor["width"], monitor["height"])
     with _ocr_lock:
@@ -613,11 +662,11 @@ def _find_via_ocr(query: str, screenshot_path: Optional[str] = None,
     try:
         offset = (0, 0)
         if pil_image is None and screenshot_path is None:
-            monitor = _monitor_for(hwnd)
-            if monitor is None:
+            region = _ocr_region(hwnd)
+            if region is None:
                 return None
-            offset = (int(monitor["left"]), int(monitor["top"]))
-            result = _ocr_screen(monitor, time.monotonic())
+            offset = (int(region["left"]), int(region["top"]))
+            result = _ocr_screen(region, time.monotonic())
         else:
             import numpy as np
             img_arr = np.array(pil_image) if pil_image is not None else screenshot_path
@@ -708,8 +757,12 @@ def find_target(
     skip_uia: bool = False,
     skip_ocr: bool = False,
     hwnd: Optional[int] = None,
+    context: str = "",
 ) -> Optional[Target]:
     """Resolve a natural-language pointing query into pixel coordinates.
+
+    `context` is what the target is for - a walkthrough step's instruction.
+    It breaks ties between controls with the same name (LG-05).
 
     Tries UIA then OCR - both local - and returns the first hit above the
     tier's confidence threshold. Returns None when neither finds it, which
@@ -735,7 +788,7 @@ def find_target(
 
     # Tier 1: UIA — fast, free, often perfect
     if not skip_uia:
-        t = _find_via_uia(query, hwnd=hwnd)
+        t = _find_via_uia(query, hwnd=hwnd, context=context)
         if t is not None and t.confidence >= 0.5:
             return t
 

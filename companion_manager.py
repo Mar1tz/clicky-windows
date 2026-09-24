@@ -1981,7 +1981,8 @@ class CompanionManager(QObject):
         except Exception:
             return 1.0
 
-    async def _resolve_point(self, query: str, *, shot=None, use_reference: bool = True):
+    async def _resolve_point(self, query: str, *, shot=None, use_reference: bool = True,
+                             context: str = "", vision: bool = True):
         """Resolve a natural-language target to LOGICAL screen pixels.
 
         The chain that makes "take me there" reliable, cheap → strong, first
@@ -2030,15 +2031,23 @@ class CompanionManager(QObject):
         # once in an app already known to have no tree - and the first
         # answer wins (APP-23).
         from ai.hybrid_pointer import find_target
-        local = asyncio.ensure_future(asyncio.to_thread(find_target, query, screenshot=shot))
+        # `context` is what the target is for - a walkthrough step's own
+        # instruction. It breaks ties between same-named controls (LG-05).
+        local = asyncio.ensure_future(asyncio.to_thread(
+            find_target, query, screenshot=shot, context=context))
         local.add_done_callback(_retrieve)
+        if not vision:
+            # A look-ahead (LG-06): free tiers only, never a paid call.
+            await asyncio.wait({local})
+            return self._local_hit(local, shot, query)
         grace = 0.0 if self._uia_poor() else self.LOCAL_GRACE_S
         if grace:
             done, _ = await asyncio.wait({local}, timeout=grace)
             if done:
                 hit = self._local_hit(local, shot, query)
-                return hit if hit is not None else await self._vision_point(query, shot)
-        vision = asyncio.ensure_future(self._vision_point(query, shot))
+                return hit if hit is not None else await self._vision_point(
+                    query, shot, context=context)
+        vision = asyncio.ensure_future(self._vision_point(query, shot, context=context))
         try:
             done, _ = await asyncio.wait({local, vision}, return_when=asyncio.FIRST_COMPLETED)
             if local in done:
@@ -2096,7 +2105,7 @@ class CompanionManager(QObject):
             via=getattr(target, "source", "") or "local",
         )
 
-    async def _vision_point(self, query: str, shot=None):
+    async def _vision_point(self, query: str, shot=None, *, context: str = ""):
         """Tier 3: the vision model. It sends a screenshot, so the privacy
         guard applies here - unlike the local tiers, which never leave the
         machine. None when it cannot place it, or cannot be asked."""
@@ -2111,6 +2120,7 @@ class CompanionManager(QObject):
                 shot = self._active_shot(screens) or screens[0]
             found = await gemini_vision.locate(
                 query,
+                hint=context,
                 screenshot_jpeg_b64=shot.base64_jpeg,
                 original_width=shot.width,
                 original_height=shot.height,
@@ -3848,6 +3858,7 @@ class CompanionManager(QObject):
         w = getattr(step, "_watcher", None)
         if w is not None:
             result = await w.poll()
+            self._look_ahead(w)
             if result is not True and w.unsure and not getattr(step, "_asked_unsure", False):
                 step._asked_unsure = True
                 self._submit(self._ask_if_done(step, w))
@@ -4618,12 +4629,19 @@ class CompanionManager(QObject):
         if self._step_jobs is None:
             self._step_jobs = {}
         key = (id(plan), idx)
+        ahead = (self._step_found or {}).pop(key, None)
+        if ahead is not None:
+            found, at, title = ahead
+            if (time.monotonic() - at <= self.AHEAD_TRUST_S
+                    and title == (active_window_title() or "")):
+                return found                    # already found: the arrow is instant
         job = self._step_jobs.get(key)
         if job is None or job.done():
             async def _look():
                 self._activity("finding")
                 try:
-                    return await self._resolve_point(step.target)
+                    return await self._resolve_point(
+                        step.target, context=getattr(step, "instruction", "") or "")
                 finally:
                     self._activity("")
             job = asyncio.ensure_future(_look())
@@ -4632,6 +4650,44 @@ class CompanionManager(QObject):
                                   and self._step_jobs.pop(k, None))
             self._step_jobs[key] = job
         return await asyncio.shield(job)
+
+    # LG-06: while a step is being done, the NEXT step's target is looked up
+    # as soon as the screen settles after a change - clicking "Captions" is
+    # what puts "Auto captions" on screen - so its arrow is there when its
+    # words are. Free tiers only; trusted for this long, in the same window.
+    AHEAD_SETTLE_S = 0.6
+    AHEAD_TRUST_S = 3.0
+    _step_found = None                  # (plan id, step) -> (found, when, window)
+    _ahead_mark = None                  # the change the last look-ahead was for
+
+    def _look_ahead(self, watcher) -> None:
+        """Called while a step is polled: look the next step's target up once
+        the screen has settled after a change."""
+        plan = self._lesson_plan
+        changed = getattr(watcher, "changed_at", 0.0) or 0.0
+        if plan is None or not changed or time.monotonic() - changed < self.AHEAD_SETTLE_S:
+            return
+        nxt = self._lesson_step_idx + 1
+        if not (0 <= nxt < len(plan.steps)) or not getattr(plan.steps[nxt], "target", ""):
+            return
+        mark = (id(plan), nxt, changed)
+        if self._ahead_mark == mark:
+            return
+        self._ahead_mark = mark
+        job = asyncio.ensure_future(self._find_ahead(plan, nxt))
+        job.add_done_callback(_retrieve)
+
+    async def _find_ahead(self, plan, idx: int) -> None:
+        step = plan.steps[idx]
+        found = await self._resolve_point(
+            step.target, context=getattr(step, "instruction", "") or "", vision=False)
+        if found is None or self._lesson_plan is not plan:
+            return
+        found.via = "ahead " + (getattr(found, "via", "") or "local")
+        if self._step_found is None:
+            self._step_found = {}
+        self._step_found[(id(plan), idx)] = (found, time.monotonic(),
+                                             active_window_title() or "")
 
     def _drop_step_jobs(self, keep: int = -1) -> None:
         """Stop looking for the targets of steps that are over."""

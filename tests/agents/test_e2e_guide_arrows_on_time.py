@@ -114,10 +114,33 @@ def test_an_ocr_hit_is_in_screen_pixels(ocr, monkeypatch):
     """A hit on the right-hand screen is 1920 px to the right of the same
     spot on the primary - it used to come back without that 1920."""
     monkeypatch.setattr(hybrid_pointer, "_monitor_for", lambda hwnd=None: dict(MONITORS[0]))
+    maximised = SimpleNamespace(BoundingRectangle=_Rect(1920, 0, 3840, 1040))
+    monkeypatch.setattr(hybrid_pointer, "_pointing_root", lambda hwnd=None: maximised)
     hit = hybrid_pointer._find_via_ocr("Captions")
     assert hit is not None and hit.source == "ocr"
     assert (hit.x, hit.y) == (1920 + 55, 86)
     assert hit.bbox == (1950, 81, 2001, 92)
+
+
+def test_ocr_reads_only_the_apps_window(ocr, monkeypatch):
+    """A window that is not maximised: OCR reads it, not the monitor around
+    it, so a hit comes back offset by the WINDOW's position (LG-05)."""
+    monkeypatch.setattr(hybrid_pointer, "_monitor_for", lambda hwnd=None: dict(MONITORS[1]))
+    window = SimpleNamespace(BoundingRectangle=_Rect(100, 50, 1000, 700))
+    monkeypatch.setattr(hybrid_pointer, "_pointing_root", lambda hwnd=None: window)
+    hit = hybrid_pointer._find_via_ocr("Captions")
+    assert (hit.x, hit.y) == (100 + 55, 50 + 86)
+
+
+def test_ocr_reads_the_apps_window_never_the_taskbar(monkeypatch):
+    """24 Sep: "Search" on Takealot matched "Q Search" at (566, 1056) - the
+    Windows taskbar. A maximised window stops at the taskbar (LG-05)."""
+    monkeypatch.setattr(hybrid_pointer, "_monitor_for", lambda hwnd=None: dict(MONITORS[1]))
+    browser = SimpleNamespace(BoundingRectangle=_Rect(-8, -8, 1928, 1040))   # maximised
+    monkeypatch.setattr(hybrid_pointer, "_pointing_root", lambda hwnd=None: browser)
+    region = hybrid_pointer._ocr_region()
+    assert region == {"left": 0, "top": 0, "width": 1920, "height": 1040}
+    assert region["top"] + region["height"] <= 1040 < 1056, "the taskbar is not read"
 
 
 def test_ocr_runs_one_at_a_time_and_shares_its_read(ocr):
@@ -185,7 +208,7 @@ def _companion(monkeypatch, *, local_s=3.0, local=None, vision=None, vision_s=0.
         time.sleep(local_s)
         return local
 
-    async def vision_point(query, shot=None):
+    async def vision_point(query, shot=None, **kw):
         calls["vision"] += 1
         await asyncio.sleep(vision_s)
         return vision

@@ -301,6 +301,9 @@ class StepWatcher:
         self._base_shot: str = ""
         self._last: Optional[Fingerprint] = None
         self._stable_since = 0.0
+        # When the screen last changed during this step (0: not yet). The
+        # guide looks the NEXT step's target up once it settles (LG-06).
+        self.changed_at = 0.0
         self._cheap_at = 0.0
         self._thumb_at = 0.0
         self._local_at = 0.0
@@ -439,6 +442,8 @@ class StepWatcher:
         fp = await self._fingerprint(now)
         if fp is not None:
             if self._last is None or not fp.same_as(self._last):
+                if self._last is not None:
+                    self.changed_at = now
                 self._last = fp
                 self._stable_since = now
             elif (self._base is not None and fp.what_changed(self._base)

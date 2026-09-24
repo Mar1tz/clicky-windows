@@ -194,7 +194,7 @@ and the 41-call loop becomes at most 3 calls.
 *Proof:* a scripted 429 makes the Windows voice speak the step. The
 account problem is set once and cleared once.
 
-### LG-05 · The right target, in under a second — M
+### LG-05 · The right target, in under a second — M — **done, two parts wait for a yes** (milestones/LG-05-06-wave-two.md)
 
 **Done:**
 * **UIA.** Ties are broken with the step's own words ("on Takealot"
@@ -217,7 +217,7 @@ account problem is set once and cleared once.
 * **Timing.** Step shown → arrow landed, from the log (LG-08): p50 ≤ 1 s
   in the browser, ≤ 2.5 s in CapCut.
 
-### LG-06 · The next step's target is found before it is due — M
+### LG-06 · The next step's target is found before it is due — M — **done** (milestones/LG-05-06-wave-two.md)
 
 This is GW-17, done properly.
 

@@ -362,6 +362,11 @@ _LOCATE_SCHEMA = {
         "box": {
             "type": "array",
             "items": {"type": "integer"},
+            # Exactly four. Unbounded, a reply can run on past the box until
+            # max_tokens: twice on 24 Sep a locate came back as
+            # '"box": [964,' and finish=MAX_TOKENS, and the arrow was lost.
+            "minItems": 4,
+            "maxItems": 4,
             "description": "[ymin,xmin,ymax,xmax] normalized 0-1000.",
         },
     },
@@ -383,6 +388,7 @@ worse than saying no — a wrong arrow sends the user to the wrong place."""
 async def locate(
     question: str,
     *,
+    hint: str = "",
     screenshot_jpeg_b64: str,
     original_width: int,
     original_height: int,
@@ -409,11 +415,14 @@ async def locate(
             Models.VISION_FAST,
             [{"role": "user", "parts": [
                 gemini.image_part(screenshot_jpeg_b64),
-                gemini.text_part(f'Where is: "{question}"'),
+                gemini.text_part(f'Where is: "{question}"' + (
+                    f'\nIt is for this step: "{hint}"' if hint else "")),
             ]}],
             _LOCATE_SCHEMA,
             system=_LOCATE_SYSTEM,
-            max_tokens=1024,
+            # Room for the answer even if the model deliberates first: at
+            # 1024 two replies were cut off right at the box (24 Sep).
+            max_tokens=2048,
             think=0,
             timeout=timeout,
         )
