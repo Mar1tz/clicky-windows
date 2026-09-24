@@ -837,6 +837,65 @@ class CompanionManager(QObject):
             self._tts.on_fallback = self._voice_fell_back
         return self._tts
 
+    # ── LG-09: every walkthrough measured ──────────────────────────────────
+    #
+    # What "live" is judged by (LIVE_GUIDE_PLAN): from a step going up to its
+    # arrow landing, to its first word, to the next step going up. One line
+    # per step while it happens, and a scorecard when the guide ends - what
+    # the next "it was slow" is diagnosed from, instead of from guesses.
+
+    def _clock_step(self, idx: int, what: str, via: str = "") -> None:
+        stats = self._guide_stats
+        if stats is None or idx < 0:
+            return
+        clock = stats.setdefault("clock", {}).setdefault(idx, {})
+        if what == "shown":
+            clock.clear()                   # shown again: a repeat or a back
+        if what not in clock:
+            clock[what] = time.monotonic()
+            if via:
+                clock["via"] = via
+
+    def _log_step_timeline(self, idx: int, step) -> None:
+        stats = self._guide_stats
+        clock = ((stats or {}).get("clock") or {}).get(idx) or {}
+        shown = clock.get("shown")
+        if shown is None:
+            return
+        parts = []
+        if "arrow" in clock:
+            gap = clock["arrow"] - shown
+            parts.append("arrow +%.1fs (%s)" % (gap, clock.get("via") or "?"))
+            stats.setdefault("arrows", []).append(gap)
+            if str(clock.get("via", "")).startswith("ahead"):
+                stats["ahead"] = stats.get("ahead", 0) + 1
+        elif getattr(step, "target", ""):
+            parts.append("no arrow")
+            stats["no_arrow"] = stats.get("no_arrow", 0) + 1
+        parts.append("voice +%.1fs" % (clock["voice"] - shown) if "voice" in clock
+                     else "not said")
+        _log.info("guide step %d timeline: %s", idx + 1, ", ".join(parts))
+
+    @staticmethod
+    def _scorecard(stats: dict) -> str:
+        def pct(values, q):
+            values = sorted(values)
+            return values[min(len(values) - 1, int(q * len(values)))] if values else None
+
+        arrows, gaps = stats.get("arrows") or [], stats.get("next_gaps") or []
+        bits = []
+        if arrows:
+            bits.append("arrow p50 %.1fs p90 %.1fs (%d, %d found ahead)"
+                        % (pct(arrows, 0.5), pct(arrows, 0.9), len(arrows),
+                           stats.get("ahead", 0)))
+        bits.append("no arrow %d" % stats.get("no_arrow", 0))
+        bits.append("not said %d" % stats.get("unsaid", 0))
+        if stats.get("windows_voice"):
+            bits.append("Windows voice")
+        if gaps:
+            bits.append("next step up p50 %.1fs" % pct(gaps, 0.5))
+        return ", ".join(bits)
+
     def _voice_fell_back(self, kind: str, secs: float) -> None:
         """Google stopped speaking for Tora; the Windows voice took over
         (LG-04). Said once, in words that match what happened - a daily limit
@@ -847,6 +906,8 @@ class CompanionManager(QObject):
                "billing": "Google refused Tora's voice: the Gemini credits have run out",
                "key": "Google refused Tora's voice: check the API key in Setup"}.get(
                    kind, "Google did not answer for Tora's voice")
+        if self._guide_stats is not None:
+            self._guide_stats["windows_voice"] = True
         self.sig_agent_notice.emit(
             "Tora's voice", f"{why}. She is using the Windows voice until about {back}.")
 
@@ -3473,6 +3534,10 @@ class CompanionManager(QObject):
         idx = detail.get("index", -1)
 
         if kind == "step_shown":
+            self._clock_step(idx, "shown")
+            if stats is not None and stats.get("ended_at"):
+                stats.setdefault("next_gaps", []).append(time.monotonic() - stats["ended_at"])
+                stats["ended_at"] = None
             text = plan.steps[idx].instruction if plan and 0 <= idx < total else ""
             writing = plan is not None and plan is self._plan_in_progress
             _log.info("guide step %d/%s shown: %s", idx + 1,
@@ -3506,7 +3571,9 @@ class CompanionManager(QObject):
                       detail.get("secs", 0.0),
                       (" (" + how + ")") if how else "",
                       (", %d vision check(s)" % judged) if judged else "")
+            self._log_step_timeline(idx, step)
             if stats is not None:
+                stats["ended_at"] = time.monotonic()
                 stats["judged"] += judged
                 if outcome == "done":
                     stats["auto"] += 1
@@ -3541,6 +3608,7 @@ class CompanionManager(QObject):
             share = (" (vision decided %d%%)" % round(100 * by_vision / finished)
                      if finished else "")
             said = ", ".join("%s %d" % kv for kv in sorted((stats.get("said") or {}).items()))
+            _log.info("guide scorecard: %s", self._scorecard(stats))
             _log.info(
                 "guide ended (%s): %r - %d steps, %d finished by themselves (%s)%s, "
                 "%d manual moves, %d vision checks, targets: %s%s, stuck %d, "
@@ -3792,13 +3860,17 @@ class CompanionManager(QObject):
             return
         msg = self._step_line(idx)
         self._emit_state(AppState.SPEAKING)
+
+        def heard() -> None:
+            self._clock_step(idx, "voice")
+            self._note_first_word()
+
         try:
             prepared = self._step_audio.pop(idx, None)
             if prepared is not None:
-                await prepared.play(on_start=self._note_first_word)
+                await prepared.play(on_start=heard)
             else:
-                await self._get_tts().speak(_speakable(msg),
-                                            on_start=self._note_first_word)
+                await self._get_tts().speak(_speakable(msg), on_start=heard)
         except Exception:
             pass
         self._emit_state(AppState.IDLE)
@@ -4608,6 +4680,11 @@ class CompanionManager(QObject):
         # first would advance the guide before they had pressed it.
         if _is_typing_step(step.instruction):
             local = verification.AnyOf([local, verification.TypedText()])
+        # "Press Ctrl and T" finishes the moment the keys are pressed, not
+        # after a 4 s vision check (LG-08).
+        keys = verification.shortcut_in(step.instruction)
+        if keys:
+            local = verification.AnyOf([local, verification.KeysPressed(keys)])
         return StepWatcher(
             step.instruction,
             judge=gemini_vision.judge_step,
@@ -4658,6 +4735,7 @@ class CompanionManager(QObject):
     AHEAD_SETTLE_S = 0.6
     AHEAD_TRUST_S = 3.0
     _step_found = None                  # (plan id, step) -> (found, when, window)
+    _guide_stats = None                 # the running walkthrough's numbers (GW-03, LG-09)
     _ahead_mark = None                  # the change the last look-ahead was for
 
     def _look_ahead(self, watcher) -> None:
@@ -4739,6 +4817,7 @@ class CompanionManager(QObject):
         if not self._show_guide_point(found, step.target):
             return
         self._arrow_for = (id(plan), idx)
+        self._clock_step(idx, "arrow", via=getattr(found, "via", "") or "")
         self._step_point[idx] = found
         w = getattr(step, "_watcher", None)
         bbox = getattr(found, "bbox", None)

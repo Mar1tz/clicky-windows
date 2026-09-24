@@ -85,3 +85,15 @@ def _windows_voice_is_scripted(monkeypatch):
         monkeypatch.setattr(windows_voice, "_voice", None)
     except Exception:  # noqa: BLE001 - a suite without the app still runs
         pass
+
+
+@pytest.fixture(autouse=True)
+def _no_real_keyboard_hooks(monkeypatch):
+    """A shortcut step (LG-08) registers its keys with the global keyboard
+    hook. No test may install a real one on the machine running the suite."""
+    try:
+        from ai import verification
+        monkeypatch.setattr(verification, "_keyboard_hook",
+                            lambda combo, on_press: (lambda: None))
+    except Exception:  # noqa: BLE001
+        pass

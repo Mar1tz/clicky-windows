@@ -35,6 +35,7 @@ from __future__ import annotations
 
 import ctypes
 import logging
+import re
 import time
 from ctypes import wintypes
 from dataclasses import dataclass, field
@@ -410,6 +411,110 @@ class TypedText:
                        detail=f"{len(value)} characters typed")
 
 
+# ── A shortcut, pressed ──────────────────────────────────────────────────────
+#
+# "Press Ctrl and T together to open a new tab" was decided by a 4 s vision
+# check on 24 Sep (23:03:08 -> :12). The keyboard knows the moment it happens.
+# A short settle lets what the keys do (a tab opening, a page loading) begin
+# before the next step is shown against it (LG-08).
+
+KEYS_SETTLE_S = 0.4
+
+_KEY_NAMES = {
+    "ctrl": "ctrl", "control": "ctrl", "shift": "shift", "alt": "alt",
+    "win": "windows", "windows": "windows", "enter": "enter", "return": "enter",
+    "tab": "tab", "esc": "esc", "escape": "esc", "delete": "delete", "del": "delete",
+    "backspace": "backspace", "space": "space", "spacebar": "space", "home": "home",
+    "end": "end", "up": "up", "down": "down", "left": "left", "right": "right",
+}
+_MODIFIERS = ("ctrl", "shift", "alt", "windows")
+_SHORTCUT = re.compile(
+    r"\b(?:press|hit)\s+(?:the\s+)?(?P<keys>[a-z0-9 +]+?)"
+    r"(?=\s+(?:keys?|together|at the same time|on your keyboard|shortcut|to)\b|[.,;!]|$)",
+    re.I)
+
+
+def shortcut_in(instruction: str) -> str:
+    """The key combination a step tells you to press, as the `keyboard`
+    library names it - "ctrl+t", "enter" - or "" when it names none."""
+    m = _SHORTCUT.search(instruction or "")
+    if not m:
+        return ""
+    keys = []
+    for token in re.split(r"\s*\+\s*|\s+and\s+|\s+plus\s+|\s+", m.group("keys").strip().lower()):
+        if not token or token == "the":
+            continue
+        if token in _KEY_NAMES:
+            keys.append(_KEY_NAMES[token])
+        elif len(token) == 1 and token.isalnum():
+            keys.append(token)
+        elif re.fullmatch(r"f(?:[1-9]|1[0-2])", token):
+            keys.append(token)
+        else:
+            return ""                 # "press the Export button" is not a shortcut
+    if not keys:
+        return ""
+    keys.sort(key=lambda k: (_MODIFIERS.index(k) if k in _MODIFIERS else len(_MODIFIERS)))
+    return "+".join(dict.fromkeys(keys))
+
+
+def _keyboard_hook(combo: str, on_press):
+    """Register `combo` with the global keyboard hook; returns its release.
+    Never suppresses: the keys still do what they do. (Tests replace this.)"""
+    import keyboard
+    handle = keyboard.add_hotkey(combo, on_press, suppress=False)
+    return lambda: keyboard.remove_hotkey(handle)
+
+
+class KeysPressed:
+    """A shortcut step's finish line: its keys were pressed (LG-08).
+
+    Armed when the step is shown - the combination is registered with the
+    keyboard hook for as long as the step lasts, and released by close().
+    Pressing it is never swallowed: the keys still do what they do."""
+
+    def __init__(self, combo: str, *, hook=None, clock=time.monotonic) -> None:
+        self.combo = combo
+        self._hook = hook
+        self._clock = clock
+        self._pressed_at = 0.0
+        self._release = None
+        self.armed = False
+
+    def _pressed(self) -> None:
+        self._pressed_at = self._clock()
+
+    def arm(self) -> list[str]:
+        if self._release is not None:
+            return ["keys"]
+        try:
+            hook = self._hook or _keyboard_hook
+            self._release = hook(self.combo, self._pressed)
+            self.armed = True
+        except Exception:  # noqa: BLE001 - no hook: the other signals still count
+            self.armed = False
+        return ["keys"] if self.armed else []
+
+    def close(self) -> None:
+        release, self._release = self._release, None
+        if release is not None:
+            try:
+                release()
+            except Exception:  # noqa: BLE001
+                pass
+
+    @property
+    def muted(self) -> set[str]:
+        return set() if self.armed else {"keys"}
+
+    def __call__(self) -> Verdict:
+        if not self._pressed_at:
+            return Verdict(confidence=0.0, method="none", detail=f"{self.combo} not pressed")
+        if self._clock() - self._pressed_at < KEYS_SETTLE_S:
+            return Verdict(confidence=0.0, method="none", detail="settling")
+        return Verdict(confidence=ADVANCE, method="keys", detail=f"{self.combo} pressed")
+
+
 class AnyOf:
     """Several finish lines for one step; the first to be crossed wins.
 
@@ -437,6 +542,12 @@ class AnyOf:
         for check in self.checks:
             out |= set(getattr(check, "muted", set()) or set())
         return out
+
+    def close(self) -> None:
+        for check in self.checks:
+            close = getattr(check, "close", None)
+            if callable(close):
+                close()
 
     def __call__(self) -> Verdict:
         best = Verdict(confidence=0.0, method="none", detail="nothing yet")

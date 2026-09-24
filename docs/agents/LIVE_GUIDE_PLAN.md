@@ -234,7 +234,7 @@ This is GW-17, done properly.
 *Proof:* scripted: the screen changes, then the step is done; the next
 arrow is drawn in the same frame as the next step's words.
 
-### LG-07 · Every step has something to point at, and one thing to do — M
+### LG-07 · Every step has something to point at, and one thing to do — M — **done locally; the planner prompt waits for a yes** (milestones/LG-07-09-wave-three.md)
 
 **Done:**
 * **Every action step names its target.** Typing steps name the field ("the
@@ -249,7 +249,7 @@ arrow is drawn in the same frame as the next step's words.
 a target on every action step and no compound steps. This needs about two
 planner calls.
 
-### LG-08 · Knowing a step is done within a second — M
+### LG-08 · Knowing a step is done within a second — M — **done: shortcuts** (milestones/LG-07-09-wave-three.md)
 
 **Done:**
 * **Local signals decide first.** Window title, URL, focus, a new tab, a
@@ -262,7 +262,7 @@ planner calls.
 *Proof:* the 23:03 steps replayed against their logged window titles and
 URLs; each is done within 1 s of the change.
 
-### LG-09 · Measured, every walkthrough — S
+### LG-09 · Measured, every walkthrough — S — **done** (milestones/LG-07-09-wave-three.md)
 
 **Done:**
 * **One timeline line per step.** Step shown · arrow landed (and by which

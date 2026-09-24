@@ -405,6 +405,14 @@ class StepWatcher:
         t, self._judge_task = self._judge_task, None
         if t is not None and not t.done():
             t.cancel()
+        # A shortcut the step registered with the keyboard hook (LG-08)
+        # must not outlive the step.
+        close = getattr(self._local_check, "close", None)
+        if callable(close):
+            try:
+                close()
+            except Exception:  # noqa: BLE001
+                _log.debug("closing the step's local check failed", exc_info=True)
 
     # ── polling ──
 

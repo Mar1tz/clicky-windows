@@ -655,6 +655,47 @@ def _starts_pointing(clause: str) -> bool:
     return any(low == v or low.startswith(v + " ") for v in _POINTING_VERBS)
 
 
+# Verbs that put text into a field. "Click the search bar, type laptops, and
+# press Enter" is a click and then some typing: two things to do, one arrow
+# each - on 24 Sep it was one step, and the check said "not done yet" twice
+# while the user was halfway through it (LG-07).
+_TYPING_VERBS = ("type", "enter", "write", "paste", "fill in", "input", "key in")
+
+_POINT_THEN_TYPE = re.compile(
+    r"^(?P<point>.+?)(?:\s*,\s*(?:and\s+)?(?:then\s+)?|\s+and\s+(?:then\s+)?|\s+then\s+)"
+    r"(?P<rest>(?:" + "|".join(_TYPING_VERBS) + r")\b.+)$", re.I)
+
+# The field a typing step names: "type takealot.com INTO THE ADDRESS BAR".
+# On 24 Sep that step came back with no target, and got no arrow at all.
+_FIELD_NAMED = re.compile(
+    r"\b(?:into|in|on)\s+(?:the\s+)?(?P<field>[\w' -]{0,30}?"
+    r"(?:address bar|search bar|search box|search field|url bar|bar|box|field))\b", re.I)
+
+
+def _starts_typing(clause: str) -> bool:
+    low = clause.strip().lower()
+    return any(low == v or low.startswith(v + " ") for v in _TYPING_VERBS)
+
+
+def name_typing_targets(guide: "Guide") -> list[int]:
+    """Give a typing step with no target the field its own words name.
+    Returns the indexes given one."""
+    named = []
+    for i, step in enumerate(guide.steps):
+        if step.target or getattr(step, "kind", "action") == "wait":
+            continue
+        if not _starts_typing(step.instruction or ""):
+            continue
+        m = _FIELD_NAMED.search(step.instruction)
+        if m:
+            step.target = m.group("field").strip()
+            named.append(i)
+    if named:
+        _log.info("typing steps given the field they name as a target: %s",
+                  ", ".join(str(i + 1) for i in named))
+    return named
+
+
 def split_compound_steps(guide: Guide, controls: Optional[list[str]] = None
                          ) -> list[int]:
     """Split "Select your picture and click Choose picture" into two steps.
@@ -678,6 +719,22 @@ def split_compound_steps(guide: Guide, controls: Optional[list[str]] = None
     split: list[int] = []
     for i, step in enumerate(guide.steps):
         text = (step.instruction or "").strip()
+        # A click and then some typing (LG-07): the click, then the typing
+        # - both at the same field, which the arrow stays on.
+        m = _POINT_THEN_TYPE.match(text)
+        if m and _starts_pointing(m.group("point")):
+            first_text = m.group("point").rstrip(" .,") + "."
+            second_text = m.group("rest").strip()
+            second_text = second_text[:1].upper() + second_text[1:]
+            if not second_text.endswith((".", "!", "?")):
+                second_text += "."
+            out.append(Step(instruction=first_text, target=step.target))
+            out.append(Step(instruction=second_text, target=step.target,
+                            done_when=step.done_when, completion=step.completion,
+                            expected=step.expected,
+                            possible_actions=step.possible_actions))
+            split.append(i)
+            continue
         parts = re.split(r"\s*,?\s+and then\s+|\s*,?\s+and\s+", text, maxsplit=1)
         if len(parts) != 2 or not all(_starts_pointing(p) for p in parts):
             out.append(step)
@@ -703,6 +760,7 @@ def split_compound_steps(guide: Guide, controls: Optional[list[str]] = None
         guide.steps = out
         _log.info("split %d compound step(s) into two each: %s", len(split),
                   ", ".join(str(i + 1) for i in split))
+    name_typing_targets(guide)
     return split
 
 
