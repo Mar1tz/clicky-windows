@@ -104,6 +104,12 @@ ask.
 
 ### Part 3 — the rest (7–9, then the walkthrough plan)
 
+**APP-23 · The arrow arrives with its step** — done (reported 24 Sep).
+In CapCut every arrow came 16–29 s after its step, pointing at the last
+one: OCR read the wrong monitor, four ran at once, UIA overran its cap, and
+the vision model waited for all of it. Now vision races the local tiers,
+OCR reads the app's monitor one read at a time, and a late arrow is dropped.
+
 **APP-20 · The wake word is always heard** — why 1 in ~N transcriptions
 hangs for 12 s, and a shorter, retried path.
 **APP-21 · Agent tasks judge themselves fairly** — the six failures

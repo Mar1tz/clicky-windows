@@ -276,6 +276,13 @@ POINT_TRIGGER_RE = re.compile(
 )
 
 
+def _retrieve(task) -> None:
+    """Mark a finished background task's outcome as seen: a lookup that lost
+    a race, or whose step ended, has nobody left to read its exception."""
+    if not task.cancelled():
+        task.exception()
+
+
 class CompanionManager(QObject):
     """Thread-safe signals for Qt UI updates from async/audio threads."""
 
@@ -1090,6 +1097,7 @@ class CompanionManager(QObject):
         self._pointables = summary.pointables
         self._pointables_at = time.monotonic()
         self._pointables_title = active_window_title()
+        self._note_uia(self._pointables_title, len(summary.pointables or ()))
         bits = [self._context_head(summary.line)]
         ref = self._last_ref
         if self._ref_fresh():
@@ -1981,47 +1989,109 @@ class CompanionManager(QObject):
             snap.via = "snapshot"
             return snap
 
-        # 1 + 2 — local and fast.
+        # 1 + 2 — local and free, but not always fast. In an app with no
+        # accessibility tree both miss, and waiting for that before asking
+        # the model made every walkthrough arrow in CapCut 13-32 s late. So
+        # the model is asked as well once they have had LOCAL_GRACE_S - at
+        # once in an app already known to have no tree - and the first
+        # answer wins (APP-23).
+        from ai.hybrid_pointer import find_target
+        local = asyncio.ensure_future(asyncio.to_thread(find_target, query, screenshot=shot))
+        local.add_done_callback(_retrieve)
+        grace = 0.0 if self._uia_poor() else self.LOCAL_GRACE_S
+        if grace:
+            done, _ = await asyncio.wait({local}, timeout=grace)
+            if done:
+                hit = self._local_hit(local, shot, query)
+                return hit if hit is not None else await self._vision_point(query, shot)
+        vision = asyncio.ensure_future(self._vision_point(query, shot))
         try:
-            from ai.hybrid_pointer import find_target
-            target = await asyncio.to_thread(find_target, query, screenshot=shot)
-        except Exception:
-            target = None
-        if target is not None:
-            scale = (shot.dpi_scale if shot is not None else None) or self._dpi_scale()
-            bbox = None
-            if getattr(target, "bbox", None):
-                l, t, r, b = target.bbox
-                bbox = (l / scale, t / scale, r / scale, b / scale)
-            return SimpleNamespace(
-                x=target.x / scale, y=target.y / scale,
-                label=(target.label or query), bbox=bbox,
-                via=getattr(target, "source", "") or "local",
-            )
+            done, _ = await asyncio.wait({local, vision}, return_when=asyncio.FIRST_COMPLETED)
+            if local in done:
+                hit = self._local_hit(local, shot, query)
+                if hit is not None:
+                    vision.cancel()
+                    return hit
+                return await vision
+            found = vision.result()
+            if found is not None:
+                return found
+            # The model could not place it; OCR may still read it as text.
+            await asyncio.wait({local})
+            return self._local_hit(local, shot, query)
+        except asyncio.CancelledError:
+            vision.cancel()
+            raise
 
-        # 3 — the vision fallback. It sends a screenshot, so the privacy guard
-        # applies here (unlike the local tiers above, which never leave the
-        # machine).
-        if shot is None:
-            if self._privacy_guard and is_sensitive_window(active_window_title()):
-                return None
-            screens = await self._capture_shots(max_width=1024)
-            if not screens:
-                return None
-            shot = self._active_shot(screens) or screens[0]
+    # How long UIA and OCR have before the vision model is asked as well.
+    # UIA answers well inside this wherever it can answer at all (0.9 s in
+    # the field log); OCR of a 1080p screen takes ~2 s even on an idle PC.
+    LOCAL_GRACE_S = 1.0
+    # An app whose accessibility tree names this few controls has no tree
+    # worth waiting for: CapCut's named 1.
+    UIA_POOR_AT = 2
+    _uia_counts = None                  # app key -> controls its tree named
 
-        found = await gemini_vision.locate(
-            query,
-            screenshot_jpeg_b64=shot.base64_jpeg,
-            original_width=shot.width,
-            original_height=shot.height,
-            physical_width=shot.physical_width,
-            physical_height=shot.physical_height,
-            physical_left=shot.physical_left,
-            physical_top=shot.physical_top,
-            dpi_scale=shot.dpi_scale,
-            screen_index=shot.index,
+    def _note_uia(self, title: str, count: int) -> None:
+        if self._uia_counts is None:
+            self._uia_counts = {}
+        self._uia_counts[app_key(title or "")] = int(count)
+
+    def _uia_poor(self) -> bool:
+        """Does the app in front expose (next to) no controls at all?"""
+        n = (self._uia_counts or {}).get(app_key(active_window_title() or ""))
+        return n is not None and n <= self.UIA_POOR_AT
+
+    def _local_hit(self, task, shot, query: str):
+        """A finished local lookup as logical pixels, or None."""
+        from types import SimpleNamespace
+        try:
+            target = task.result()
+        except BaseException:  # noqa: BLE001 - a failed local tier is a miss
+            return None
+        if target is None:
+            return None
+        scale = (shot.dpi_scale if shot is not None else None) or self._dpi_scale()
+        bbox = None
+        if getattr(target, "bbox", None):
+            l, t, r, b = target.bbox
+            bbox = (l / scale, t / scale, r / scale, b / scale)
+        return SimpleNamespace(
+            x=target.x / scale, y=target.y / scale,
+            label=(target.label or query), bbox=bbox,
+            via=getattr(target, "source", "") or "local",
         )
+
+    async def _vision_point(self, query: str, shot=None):
+        """Tier 3: the vision model. It sends a screenshot, so the privacy
+        guard applies here - unlike the local tiers, which never leave the
+        machine. None when it cannot place it, or cannot be asked."""
+        from types import SimpleNamespace
+        try:
+            if shot is None:
+                if self._privacy_guard and is_sensitive_window(active_window_title()):
+                    return None
+                screens = await self._capture_shots(max_width=1024)
+                if not screens:
+                    return None
+                shot = self._active_shot(screens) or screens[0]
+            found = await gemini_vision.locate(
+                query,
+                screenshot_jpeg_b64=shot.base64_jpeg,
+                original_width=shot.width,
+                original_height=shot.height,
+                physical_width=shot.physical_width,
+                physical_height=shot.physical_height,
+                physical_left=shot.physical_left,
+                physical_top=shot.physical_top,
+                dpi_scale=shot.dpi_scale,
+                screen_index=shot.index,
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception:  # noqa: BLE001 - a failed look is "not found"
+            _log.debug("vision locate failed for %r", query, exc_info=True)
+            return None
         if found is None:
             return None
         return SimpleNamespace(
@@ -2088,6 +2158,10 @@ class CompanionManager(QObject):
             found = await self._resolve_point(query, shot=shot)
         finally:
             self._activity("")
+        return self._show_point(found, query, hold=hold)
+
+    def _show_point(self, found, query: str, *, hold: bool = True) -> bool:
+        """Fly the buddy to something already resolved. True if it landed."""
         self._last_found = found
         if found is None:
             return False
@@ -2425,6 +2499,7 @@ class CompanionManager(QObject):
                 process = ""
             _log.info("planning %r against %d on-screen controls", goal[:60],
                       len(controls))
+            self._note_uia(title, len(controls))
             guide = await self._plan_guide(goal, shot, title, controls,
                                            on_first_step=first_step)
             if guide and not started:
@@ -3290,6 +3365,7 @@ class CompanionManager(QObject):
         runner = self._guide_runner
         if runner is not None:
             runner.stop()
+        self._drop_step_jobs()
 
     def _note_first_word(self) -> None:
         """The first sound of a walkthrough's first step went out. What the
@@ -3585,6 +3661,7 @@ class CompanionManager(QObject):
             return
         self._lesson_step_idx = idx
         self._lesson_nagged = False
+        self._drop_step_jobs(keep=idx)
         step = plan.steps[idx]
         self._reset_step_verification(step)
         msg = self._step_line(idx)
@@ -3996,7 +4073,10 @@ class CompanionManager(QObject):
         """Resolve '@element name' → logical bbox via UIA (fast tier only)."""
         try:
             from ai.hybrid_pointer import find_target
-            t = find_target(name, skip_ocr=True, skip_vision=True)
+            # skip_vision was dropped from find_target when the vision tier
+            # moved to the manager, and passing it raised - caught below, so
+            # every "@element" anchor quietly resolved to nothing.
+            t = find_target(name, skip_ocr=True)
             if t is None:
                 return None
             shot = self._shot(1)
@@ -4436,6 +4516,40 @@ class CompanionManager(QObject):
             local_check=local,
         )
 
+    _step_jobs = None                   # (plan id, step) -> its lookup, while it runs
+
+    async def _step_target(self, plan, idx: int, step):
+        """Look a step's target up ONCE, however many ask while it runs.
+
+        Step one is asked for when it is planned and again when it is said,
+        and "where is it?" can ask a third time: each used to start its own
+        UIA walk, OCR and vision call for the one arrow."""
+        if self._step_jobs is None:
+            self._step_jobs = {}
+        key = (id(plan), idx)
+        job = self._step_jobs.get(key)
+        if job is None or job.done():
+            async def _look():
+                self._activity("finding")
+                try:
+                    return await self._resolve_point(step.target)
+                finally:
+                    self._activity("")
+            job = asyncio.ensure_future(_look())
+            job.add_done_callback(_retrieve)
+            job.add_done_callback(lambda j, k=key: (self._step_jobs or {}).get(k) is j
+                                  and self._step_jobs.pop(k, None))
+            self._step_jobs[key] = job
+        return await asyncio.shield(job)
+
+    def _drop_step_jobs(self, keep: int = -1) -> None:
+        """Stop looking for the targets of steps that are over."""
+        plan_id = id(self._lesson_plan)
+        for (pid, i), job in list((self._step_jobs or {}).items()):
+            if pid != plan_id or i != keep:
+                job.cancel()
+                self._step_jobs.pop((pid, i), None)
+
     async def _point_first_step(self, guide, asked_at: float) -> None:
         """Step one's arrow, the moment step one exists (GW-08).
 
@@ -4455,12 +4569,27 @@ class CompanionManager(QObject):
     async def _point_step_target(self, idx: int, step, *, note: bool = True) -> None:
         """Point at a guide step's target and tell its watcher the bounds,
         so a click inside them counts as the step being done."""
+        plan = self._lesson_plan
         started = time.monotonic()
-        ok = await self._point_to(step.target, hold=False)
-        found = self._last_found if ok else None
+        try:
+            found = await self._step_target(plan, idx, step)
+        except asyncio.CancelledError:
+            task = asyncio.current_task()
+            if task is not None and task.cancelling():
+                raise                  # we were stopped, not just the lookup
+            return                     # the step ended and its lookup went with it
         if note:
             self._note_target(idx, step.target, found, time.monotonic() - started)
-        if found is None:
+        # The walkthrough may have moved on while that was being looked up.
+        # Drawing it now points at the last screen's button while the user
+        # reads the next step: the field log had step one's arrow landing
+        # when they were on step three (APP-23).
+        if plan is not self._lesson_plan or self._lesson_step_idx != idx:
+            if found is not None:
+                _log.info("guide step %d arrow came too late - not drawn (now on step %d)",
+                          idx + 1, self._lesson_step_idx + 1)
+            return
+        if not self._show_point(found, step.target, hold=False):
             return
         self._step_point[idx] = found
         w = getattr(step, "_watcher", None)

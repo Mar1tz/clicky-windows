@@ -9,22 +9,24 @@ the wrong button.
 
 This module is the local half of a three-tier resolver:
 
-  Tier 1  Windows UI Automation (UIA)     ~5 ms     pixel-perfect
+  Tier 1  Windows UI Automation (UIA)     <1 s, capped at ~1.2 s   pixel-perfect
           Walks the OS accessibility tree, finds elements by name/role.
           Works in every standard UI: Chrome/Edge/Firefox, VS Code, IDEs,
           Office, Electron apps, native Win32, WinUI/UWP, Settings, etc.
 
-  Tier 2  Offline OCR (RapidOCR/ONNX)     ~300 ms   text-perfect
-          For canvas apps where UIA gives no tree: Figma, Photoshop, games,
-          older Java/Swing UIs. Runs entirely on CPU, no API calls.
+  Tier 2  Offline OCR (RapidOCR/ONNX)     ~2 s at 1080p, idle CPU  text-perfect
+          For canvas apps where UIA gives no tree: CapCut, Figma, Photoshop,
+          games, older Java/Swing UIs. Runs entirely on CPU, no API calls.
 
-  Tier 3  The vision model                ~1-2 s    handles anything
+  Tier 3  The vision model                ~3-4 s    handles anything
           Lives in ai/gemini_vision.py and is run by the manager, because
-          it is a network call and these two are not. Reached only when both
-          tiers above miss.
+          it is a network call and these two are not.
 
-Both tiers here are free and finish before a network call would have
-connected, which is the whole reason to try them first.
+Both tiers here are free, and UIA is usually the fastest of the three. But
+"local" is not "instant": in an app with no accessibility tree both miss,
+and waiting for them to before asking the model cost 13-32 s per walkthrough
+step in CapCut. So the manager starts the model too when they are slow, or
+straight away in an app it already knows has no tree (APP-23).
 
 Public API:
     find_target(query: str) -> Optional[Target]
@@ -37,6 +39,7 @@ from __future__ import annotations
 
 import logging
 import re
+import threading
 import time
 from dataclasses import dataclass
 from typing import Optional, List, Tuple
@@ -418,7 +421,11 @@ def _find_via_uia(
 
     deadline = time.monotonic() + max_seconds
     while queue and visited < MAX_NODES:
-        if (visited & 31) == 0 and time.monotonic() > deadline:
+        # Every node, not every 32nd: a node is four COM calls into the app,
+        # and an app busy drawing (CapCut rendering captions) answers each
+        # slowly - 32 of them ran the 1.2 s walk for many seconds (APP-23).
+        # A clock read is nothing next to one COM call.
+        if time.monotonic() > deadline:
             log.debug("UIA walk hit its %.1fs deadline for %r", max_seconds, query)
             break
         node, depth = queue.pop(0)
@@ -516,30 +523,105 @@ def _get_ocr():
     return _ocr_engine
 
 
+def _monitors() -> list[dict]:
+    """Every monitor, as mss describes them (physical px, not the union)."""
+    import mss
+    make = getattr(mss, "MSS", None) or mss.mss
+    with make() as sct:
+        return [dict(m) for m in sct.monitors[1:]]
+
+
+def _monitor_for(hwnd: Optional[int] = None) -> Optional[dict]:
+    """The monitor the app being pointed into is on.
+
+    mss's monitors[1] is NOT the primary monitor: on a PC with three
+    screens it was the right-hand one, so OCR read whichever screen that
+    was while CapCut sat on another, and could never find a thing there
+    (APP-23). The window's own centre decides, as ScreenShot does.
+    """
+    monitors = _monitors()
+    if not monitors:
+        return None
+    centre = None
+    try:
+        r = _pointing_root(hwnd).BoundingRectangle
+        if r and r.width() > 0 and r.height() > 0:
+            centre = ((r.left + r.right) // 2, (r.top + r.bottom) // 2)
+    except Exception:  # noqa: BLE001 - fall back to the foreground window
+        centre = None
+    if centre is None:
+        try:
+            from tutor import foreground_window_center
+            centre = foreground_window_center()
+        except Exception:  # noqa: BLE001
+            centre = None
+    if centre is not None:
+        cx, cy = centre
+        for m in monitors:
+            if m["left"] <= cx < m["left"] + m["width"] and m["top"] <= cy < m["top"] + m["height"]:
+                return m
+    return next((m for m in monitors if m.get("is_primary")), monitors[0])
+
+
+# One OCR at a time, and its answer shared. It is CPU-bound: four at once
+# took 8.3-8.8 s EACH on an 8-core PC where one takes 2.2 s, and a guide
+# asks several times for the same screen (step one is pointed at twice,
+# the next step's lookup overlaps the last). A caller who asked while a
+# read of the same monitor was under way takes that read.
+_ocr_lock = threading.Lock()
+_ocr_last: Optional[tuple] = None      # (monitor key, captured at, detections)
+OCR_SHARE_S = 0.5                      # a read begun this long before you asked is yours
+
+
+def _ocr_screen(monitor: dict, asked_at: float):
+    """RapidOCR's detections for one monitor - shared, see _ocr_lock."""
+    global _ocr_last
+    key = (monitor["left"], monitor["top"], monitor["width"], monitor["height"])
+    with _ocr_lock:
+        last = _ocr_last
+        if last is not None and last[0] == key and last[1] >= asked_at - OCR_SHARE_S:
+            return last[2]
+        ocr = _get_ocr()
+        if ocr is None:
+            return None
+        import mss
+        import numpy as np
+        from PIL import Image
+        make = getattr(mss, "MSS", None) or mss.mss
+        captured_at = time.monotonic()
+        with make() as sct:
+            raw = sct.grab({k: monitor[k] for k in ("left", "top", "width", "height")})
+        image = Image.frombytes("RGB", raw.size, raw.bgra, "raw", "BGRX")
+        result, _ = ocr(np.array(image))
+        _ocr_last = (key, captured_at, result)
+        return result
+
+
 def _find_via_ocr(query: str, screenshot_path: Optional[str] = None,
-                  pil_image=None, min_score: float = 0.5) -> Optional[Target]:
-    """Run OCR on the primary screen, fuzzy-match the query against detected text."""
+                  pil_image=None, min_score: float = 0.5, *,
+                  hwnd: Optional[int] = None) -> Optional[Target]:
+    """OCR the monitor the app is on, fuzzy-match the query against its text.
+
+    Given an image, that image is read and the result is in its own
+    pixels. Otherwise the result is in screen pixels: the monitor's origin
+    is added, which it never was - a hit on any screen but the one at
+    (0, 0) sent the arrow to the same spot on the wrong monitor."""
     ocr = _get_ocr()
     if ocr is None:
         return None
 
     try:
+        offset = (0, 0)
         if pil_image is None and screenshot_path is None:
-            # Capture primary screen at full resolution
-            import mss
-            with mss.mss() as sct:
-                mon = sct.monitors[1]
-                raw = sct.grab(mon)
-                from PIL import Image
-                pil_image = Image.frombytes("RGB", raw.size, raw.bgra, "raw", "BGRX")
-
-        import numpy as np
-        if pil_image is not None:
-            img_arr = np.array(pil_image)
+            monitor = _monitor_for(hwnd)
+            if monitor is None:
+                return None
+            offset = (int(monitor["left"]), int(monitor["top"]))
+            result = _ocr_screen(monitor, time.monotonic())
         else:
-            img_arr = screenshot_path  # RapidOCR accepts paths directly
-
-        result, _ = ocr(img_arr)
+            import numpy as np
+            img_arr = np.array(pil_image) if pil_image is not None else screenshot_path
+            result, _ = ocr(img_arr)
         if not result:
             log.debug("OCR returned no detections")
             return None
@@ -582,12 +664,14 @@ def _find_via_ocr(query: str, screenshot_path: Optional[str] = None,
             return None
 
         score, hit = best
+        ox, oy = offset
         l, t, r, b = hit["bbox"]
+        l, t, r, b = l + ox, t + oy, r + ox, b + oy
         cx, cy = (l + r) // 2, (t + b) // 2
         log.info("OCR hit: %r -> %r @ (%d,%d) score=%.2f",
                  query, hit["text"], cx, cy, score)
         return Target(
-            x=cx, y=cy, bbox=hit["bbox"],
+            x=cx, y=cy, bbox=(l, t, r, b),
             label=hit["text"], source="ocr",
             confidence=score * hit["conf"],
         )
@@ -627,9 +711,12 @@ def find_target(
 ) -> Optional[Target]:
     """Resolve a natural-language pointing query into pixel coordinates.
 
-    Tries UIA then OCR — both local, both sub-100 ms — and returns the first
-    hit above the tier's confidence threshold. Returns None when neither
-    finds it, which is the caller's cue to ask the vision model.
+    Tries UIA then OCR - both local - and returns the first hit above the
+    tier's confidence threshold. Returns None when neither finds it, which
+    is the caller's cue to ask the vision model. "Local" is not "instant":
+    the UIA walk is capped at ~1.2 s, and OCR of a 1080p screen takes about
+    2 s on an idle 8-core PC and much longer on a busy one - which is why
+    the manager does not wait for this before asking the model (APP-23).
 
     Args:
         query:      what the user asked Tora to point at (e.g. "save button",
@@ -654,7 +741,7 @@ def find_target(
 
     # Tier 2: OCR — text-based fallback for canvas apps
     if not skip_ocr:
-        t = _find_via_ocr(query, pil_image=pil_image)
+        t = _find_via_ocr(query, pil_image=pil_image, hwnd=hwnd)
         if t is not None and t.confidence >= 0.5:
             return t
 
