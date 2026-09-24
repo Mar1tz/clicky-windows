@@ -67,6 +67,7 @@ class GuideRunner:
         on_stop: Callable[[], None],
         look_ahead: Optional[Callable[[int], Awaitable[Optional[int]]]] = None,
         on_stuck: Optional[Callable[[int], Awaitable[None]]] = None,
+        on_event: Optional[Callable[[str, dict], None]] = None,
         observer=None,
         start_index: int = 0,
         poll_s: float = 0.3,
@@ -90,7 +91,15 @@ class GuideRunner:
         # is a user who is stuck, as opposed to one who is simply taking their
         # time, and the difference is worth acting on.
         self._on_stuck = on_stuck
+        # Told about everything that happens to the walkthrough - a step
+        # shown, how it ended, a nudge, the end. The runner is the only thing
+        # that knows whether a step finished by itself or the user said
+        # "next", and until this existed none of it reached the log: 14
+        # walkthroughs, 0 endings recorded, and every complaint was guesswork.
+        self._on_event = on_event
         self._observer = observer
+        self._shown_at = 0.0
+        self._end_reason = ""
 
         self._poll_s = poll_s
         self._confirm_polls = confirm_polls
@@ -186,6 +195,14 @@ class GuideRunner:
     def stop(self) -> None:
         self.request("stop")
 
+    def _emit(self, kind: str, **detail) -> None:
+        if self._on_event is None:
+            return
+        try:
+            self._on_event(kind, detail)
+        except Exception:  # noqa: BLE001 - reporting must never stop a guide
+            _log.debug("guide on_event failed", exc_info=True)
+
     # ── The loop ─────────────────────────────────────────────────────────────
 
     async def _run(self) -> None:
@@ -200,7 +217,10 @@ class GuideRunner:
 
             while 0 <= self._idx < self.total:
                 outcome = await self._await_step(self._guide.steps[self._idx])
+                self._emit("step_ended", index=self._idx, outcome=outcome,
+                           secs=round(time.monotonic() - self._shown_at, 1))
                 if outcome == "stop":
+                    self._end_reason = "stopped by the user"
                     break
                 if outcome == "repeat":
                     await self._show(self._idx)
@@ -214,6 +234,7 @@ class GuideRunner:
                     self._idx = int(outcome.split(":", 1)[1])
                     if self._idx >= self.total - 1:
                         self._completed = True
+                        self._end_reason = "the user got there ahead of the guide"
                         await self._say_safe(
                             "Looks like you're already there — nicely done!"
                         )
@@ -225,16 +246,21 @@ class GuideRunner:
                 self._idx += 1
                 if self._idx >= self.total:
                     self._completed = True
+                    self._end_reason = "finished"
                     await self._say_safe(
                         "That's the last step — you're all done!"
                     )
                     break
                 await self._show(self._idx)
         except asyncio.CancelledError:
+            self._end_reason = self._end_reason or "cancelled"
             raise
         except Exception:
+            self._end_reason = "crashed"
             _log.exception("guide runner crashed")
         finally:
+            self._emit("ended", completed=self._completed, at=self._idx,
+                       reason=self._end_reason or "stopped before it began")
             # on_stop runs while _idx still holds where we stopped, so a caller
             # can save it for resume; only then is the index cleared.
             try:
@@ -245,6 +271,8 @@ class GuideRunner:
 
     async def _show(self, idx: int) -> None:
         await self._wait_idle()
+        self._shown_at = time.monotonic()
+        self._emit("step_shown", index=idx)
         try:
             await self._speak_step(idx)
         except Exception:
@@ -332,6 +360,8 @@ class GuideRunner:
                 self._observer.poll()
                 if self._observer.idle_seconds() > self._stuck_after_s:
                     helped = True
+                    self._emit("stuck", index=self._idx,
+                               idle=round(self._observer.idle_seconds(), 1))
                     if not self._is_busy():
                         try:
                             await self._on_stuck(self._idx)
@@ -340,6 +370,8 @@ class GuideRunner:
                         self._observer.reset()
 
             if not nudged and (time.monotonic() - started) > self._step_timeout_s:
+                self._emit("nudged", index=self._idx,
+                           waited=round(time.monotonic() - started, 1))
                 await self._say_safe(
                     "Take your time. Say 'next' when you've done it, 'back' to "
                     "hear it again, or 'stop' to finish here."

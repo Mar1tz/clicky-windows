@@ -346,6 +346,9 @@ class CompanionManager(QObject):
         # one "next" said is one step moved however often the model calls.
         self._request_serial = 0
         self._guide_moved_for = -1
+        # Per-walkthrough counts for the one-line summary GW-03 logs at the
+        # end. None when no walkthrough is running.
+        self._guide_stats = None
         # Per-turn control snapshot (cx, cy, name, type) for directional
         # coreference — filled from the same walk that lists control names.
         self._pointables: list = []
@@ -1624,6 +1627,7 @@ class CompanionManager(QObject):
         # common case and it resolves in microseconds instead of a tree walk.
         snap = self._match_snapshot(query)
         if snap is not None:
+            snap.via = "snapshot"
             return snap
 
         # 1 + 2 — local and fast.
@@ -1641,6 +1645,7 @@ class CompanionManager(QObject):
             return SimpleNamespace(
                 x=target.x / scale, y=target.y / scale,
                 label=(target.label or query), bbox=bbox,
+                via=getattr(target, "source", "") or "local",
             )
 
         # 3 — the vision fallback. It sends a screenshot, so the privacy guard
@@ -1670,6 +1675,7 @@ class CompanionManager(QObject):
             return None
         return SimpleNamespace(
             x=found.x, y=found.y, label=(getattr(found, "label", "") or query),
+            via="vision",
         )
 
     def _match_snapshot(self, query: str):
@@ -1967,6 +1973,7 @@ class CompanionManager(QObject):
 
         title = active_window_title()
         self._activity("planning")
+        planning_started = time.monotonic()
         try:
             guide = await self._plan_guide(goal, shot, title)
         finally:
@@ -1980,8 +1987,12 @@ class CompanionManager(QObject):
             )
             return
 
-        _log.info("guide ready: %d steps for %r", len(guide.steps), goal[:60])
+        plan_s = time.monotonic() - planning_started
+        _log.info("guide ready: %d steps for %r (planned in %.1fs)",
+                  len(guide.steps), goal[:60], plan_s)
         self._start_guide(guide)
+        if self._guide_stats is not None:
+            self._guide_stats["plan_s"] = plan_s
 
     async def _tool_search(self, args: dict) -> dict:
         query = str(args.get("query") or "").strip()
@@ -2724,6 +2735,7 @@ class CompanionManager(QObject):
             # except here it SKIPPED them. Off until it can use the watcher.
             look_ahead=None,
             on_stuck=self._guide_stuck,
+            on_event=self._guide_event,
             stuck_after_s=25.0,
             step_timeout_s=60.0,
             observer=__import__(
@@ -2732,6 +2744,11 @@ class CompanionManager(QObject):
             start_index=start_index,
         )
         self._guide_runner = runner
+        self._guide_stats = {
+            "goal": guide.goal, "steps": len(guide.steps), "plan_s": None,
+            "started": time.monotonic(), "auto": 0, "manual": 0, "by": {},
+            "judged": 0, "targets": {}, "missed": 0, "stuck": 0, "nudged": 0,
+        }
         self._step_audio.clear()
         self._step_point.clear()
         # Start generating step one's speech NOW, while the model is still
@@ -2752,6 +2769,88 @@ class CompanionManager(QObject):
         runner = self._guide_runner
         if runner is not None:
             runner.stop()
+
+    def _note_target(self, idx: int, target: str, found, secs: float) -> None:
+        """Which tier found a step's target, and how long it took.
+
+        52 targets fell through to the vision model across fourteen
+        walkthroughs, and until this line existed there was no way to see
+        which, or why. GW-18 is measured from here.
+        """
+        stats = self._guide_stats
+        via = getattr(found, "via", "") if found is not None else ""
+        _log.info("guide step %d target %r %s in %.2fs", idx + 1, target[:40],
+                  ("found via " + (via or "unknown")) if found is not None
+                  else "NOT FOUND", secs)
+        if stats is None:
+            return
+        if found is None:
+            stats["missed"] += 1
+        else:
+            key = via or "unknown"
+            stats["targets"][key] = stats["targets"].get(key, 0) + 1
+
+    def _guide_event(self, kind: str, detail: dict) -> None:
+        """What the runner reports, written down.
+
+        Before this, fourteen walkthroughs in the log recorded their start
+        and nothing else: not one ending, nudge or step outcome. The audit
+        that led to GW-01 had to guess at durations. Every later walkthrough
+        milestone is measured from these lines.
+        """
+        stats = self._guide_stats
+        plan = self._lesson_plan
+        total = len(plan.steps) if plan is not None else (stats or {}).get("steps", 0)
+        idx = detail.get("index", -1)
+
+        if kind == "step_shown":
+            text = plan.steps[idx].instruction if plan and 0 <= idx < total else ""
+            _log.info("guide step %d/%d shown: %s", idx + 1, total, text[:70])
+
+        elif kind == "step_ended":
+            outcome = detail.get("outcome", "")
+            step = plan.steps[idx] if plan and 0 <= idx < total else None
+            watcher = getattr(step, "_watcher", None) if step is not None else None
+            how = (getattr(watcher, "done_by", "") or "") if outcome == "done" else ""
+            judged = getattr(watcher, "judged", 0) if watcher is not None else 0
+            said = "finished by itself" if outcome == "done" else "ended: " + outcome
+            _log.info("guide step %d/%d %s after %.1fs%s%s", idx + 1, total, said,
+                      detail.get("secs", 0.0),
+                      (" (" + how + ")") if how else "",
+                      (", %d vision check(s)" % judged) if judged else "")
+            if stats is not None:
+                stats["judged"] += judged
+                if outcome == "done":
+                    stats["auto"] += 1
+                    key = how.split(":")[0].split(" (")[0].strip() or "unknown"
+                    stats["by"][key] = stats["by"].get(key, 0) + 1
+                elif outcome in ("next", "back", "repeat"):
+                    stats["manual"] += 1
+
+        elif kind in ("stuck", "nudged"):
+            rest = ", ".join("%s %ss" % (k, v) for k, v in detail.items() if k != "index")
+            _log.info("guide step %d/%d %s (%s)", idx + 1, total, kind, rest)
+            if stats is not None:
+                stats[kind] += 1
+
+        elif kind == "ended":
+            if stats is None:
+                _log.info("guide ended: %s", detail.get("reason", ""))
+                return
+            by = ", ".join("%s %d" % kv for kv in sorted(stats["by"].items())) or "none"
+            targets = ", ".join("%s %d" % kv for kv in sorted(stats["targets"].items()))
+            missed = (", %d not found" % stats["missed"]) if stats["missed"] else ""
+            plan_s = stats.get("plan_s")
+            planned = ("planned in %.1fs, " % plan_s) if plan_s is not None else ""
+            _log.info(
+                "guide ended (%s): %r - %d steps, %d finished by themselves (%s), "
+                "%d manual moves, %d vision checks, targets: %s%s, stuck %d, "
+                "nudged %d, %s%.0fs total",
+                detail.get("reason", "?"), stats["goal"][:50], stats["steps"],
+                stats["auto"], by, stats["manual"], stats["judged"],
+                targets or "none", missed, stats["stuck"], stats["nudged"],
+                planned, time.monotonic() - stats["started"])
+            self._guide_stats = None
 
     def _guide_stopped(self, runner) -> None:
         """The runner's on_stop — clears state only if it is still the active
@@ -3677,8 +3776,10 @@ class CompanionManager(QObject):
     async def _point_step_target(self, idx: int, step) -> None:
         """Point at a guide step's target and tell its watcher the bounds,
         so a click inside them counts as the step being done."""
+        started = time.monotonic()
         ok = await self._point_to(step.target, hold=False)
         found = self._last_found if ok else None
+        self._note_target(idx, step.target, found, time.monotonic() - started)
         if found is None:
             return
         self._step_point[idx] = found

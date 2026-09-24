@@ -293,6 +293,10 @@ class StepWatcher:
         self._done_at = 0.0
         self.done_by = ""
         self._began = False
+        # How many times the vision model was asked about this step. Each is
+        # a screenshot upload and two to four seconds; GW-11 wants it rare,
+        # and GW-03 logs it so "rare" can be checked.
+        self.judged = 0
 
     # ── lifecycle ──
 
@@ -437,6 +441,7 @@ class StepWatcher:
             after, thumb = await asyncio.to_thread(grab_screen)
             fp.thumb = thumb
             _log.info("screen changed (%s) — asking whether the step is done", why)
+            self.judged += 1
             res = await asyncio.wait_for(
                 self._judge(self.instruction, self._base_shot, after),
                 timeout=JUDGE_TIMEOUT_S,
