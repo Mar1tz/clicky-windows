@@ -60,6 +60,19 @@ _log = logging.getLogger("tora.manager")
 CONTEXT_REPEAT_TURNS = 6
 
 
+_TYPING_VERBS = ("type", "enter ", "write", "paste", "fill in", "input")
+_SUBMIT_WORDS = ("press enter", "hit enter", "press return", "hit return",
+                 "and submit", "then submit")
+
+
+def _is_typing_step(instruction: str) -> bool:
+    """A step that asks for text and does not also ask to submit it."""
+    low = " ".join(str(instruction or "").lower().split())
+    if not low.startswith(_TYPING_VERBS):
+        return False
+    return not any(w in low for w in _SUBMIT_WORDS)
+
+
 class _VisualCond:
     """Adapts an Expectation's `visual` text to the (kind, value) shape
     _visual_done already understands."""
@@ -3804,6 +3817,15 @@ class CompanionManager(QObject):
             # that names the app the user is already sitting in.
             local = verification.ArmedExpectation(expected)
         target = (getattr(step, "target", "") or "").strip()
+        # A typing step also finishes on the text the user typed, read from
+        # the field - not from a screenshot. It sits ALONGSIDE the step's
+        # other signals, not instead of them: a typing step nearly always
+        # has the next step's target as a signal too, and that one is often
+        # already on screen and muted. One that ends in Enter is left to what
+        # Enter causes (a page loads, a search runs) - the value settling
+        # first would advance the guide before they had pressed it.
+        if _is_typing_step(step.instruction):
+            local = verification.AnyOf([local, verification.TypedText()])
         return StepWatcher(
             step.instruction,
             judge=gemini_vision.judge_step,

@@ -352,6 +352,103 @@ class TargetGone:
                        detail=f"{self.target!r} is gone")
 
 
+# A typing step is done when the field holds something new AND has stopped
+# changing for this long. "Changed" alone fires on the first keystroke and
+# advances the guide while the person is still typing.
+TYPING_SETTLE_S = 1.5
+
+
+class TypedText:
+    """A typing step's finish line: new text in the focused field, settled.
+
+    Read locally through UI Automation - no screenshot, no vision call. Arms
+    only if a field is focused when the step starts (a password field never
+    counts; its value is never read). Done when the value is non-empty,
+    differs from what it was at the start, and has not changed for
+    TYPING_SETTLE_S - so "youtube.com" typed at a normal pace finishes once,
+    at the end, not at the "y".
+    """
+
+    def __init__(self, read=None, clock=time.monotonic) -> None:
+        self._read = read
+        self._clock = clock
+        self.armed = False
+        self._start: Optional[str] = None
+        self._last: Optional[str] = None
+        self._since = 0.0
+
+    def _value(self) -> Optional[str]:
+        if self._read is not None:
+            return self._read()
+        from ai.hybrid_pointer import focused_value
+        return focused_value()
+
+    def arm(self) -> list[str]:
+        value = self._value()
+        self.armed = value is not None
+        self._start = self._last = value
+        self._since = self._clock()
+        return ["typed_text"] if self.armed else []
+
+    @property
+    def muted(self) -> set[str]:
+        return set() if self.armed else {"typed_text"}
+
+    def __call__(self) -> Verdict:
+        if not self.armed:
+            return Verdict(confidence=0.0, method="none", detail="no field to watch")
+        value = self._value()
+        now = self._clock()
+        if value != self._last:
+            self._last, self._since = value, now
+            return Verdict(confidence=0.0, method="none", detail="still typing")
+        if not value or value == self._start:
+            return Verdict(confidence=0.0, method="none", detail="nothing new typed")
+        if now - self._since < TYPING_SETTLE_S:
+            return Verdict(confidence=0.0, method="none", detail="settling")
+        return Verdict(confidence=ADVANCE, method="typed_text",
+                       detail=f"{len(value)} characters typed")
+
+
+class AnyOf:
+    """Several finish lines for one step; the first to be crossed wins.
+
+    The watcher takes one local check. This lets a step carry its planner
+    signals AND a mechanism-specific one (the typed text) without either
+    having to know about the other. Each part is armed on its own, so one
+    that was already true when the step began mutes itself and the rest
+    still count.
+    """
+
+    def __init__(self, checks) -> None:
+        self.checks = [c for c in checks if c is not None]
+
+    def arm(self) -> list[str]:
+        kept: list[str] = []
+        for check in self.checks:
+            arm = getattr(check, "arm", None)
+            if callable(arm):
+                kept += list(arm() or [])
+        return kept
+
+    @property
+    def muted(self) -> set[str]:
+        out: set[str] = set()
+        for check in self.checks:
+            out |= set(getattr(check, "muted", set()) or set())
+        return out
+
+    def __call__(self) -> Verdict:
+        best = Verdict(confidence=0.0, method="none", detail="nothing yet")
+        for check in self.checks:
+            verdict = check()
+            if verdict.confidence > best.confidence:
+                best = verdict
+            if best.done:
+                return best
+        return best
+
+
 # ── Is anything happening at all? ────────────────────────────────────────────
 
 @dataclass

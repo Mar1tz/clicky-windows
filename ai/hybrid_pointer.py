@@ -362,6 +362,25 @@ def focused_element() -> Optional[Tuple[str, str, bool]]:
         return None
 
 
+def focused_value() -> Optional[str]:
+    """The text in whatever field has keyboard focus, or None.
+
+    None - not "" - when there is no focused field, it exposes no value, or
+    it is a password: a password box is never read, not even its length.
+    """
+    try:
+        import uiautomation as auto
+        node = auto.GetFocusedControl()
+        if node is None or bool(getattr(node, "IsPassword", False)):
+            return None
+        pattern = node.GetPattern(auto.PatternId.ValuePattern)
+        if pattern is None:
+            return None
+        return str(pattern.Value or "")
+    except Exception:
+        return None
+
+
 def _find_via_uia(
     query: str, min_score: float = 0.5, *, max_seconds: float = 1.2,
     hwnd: Optional[int] = None,
