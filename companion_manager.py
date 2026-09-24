@@ -341,6 +341,11 @@ class CompanionManager(QObject):
         # Whether an arrow has landed this turn — drives the guaranteed-
         # pointing safety net, so a locate question never ends in words alone.
         self._pointed_this_turn = False
+        # Counts the things the user has said to Tora; see _begin_capture.
+        # _guide_moved_for is the request that last moved a walkthrough, so
+        # one "next" said is one step moved however often the model calls.
+        self._request_serial = 0
+        self._guide_moved_for = -1
         # Per-turn control snapshot (cx, cy, name, type) for directional
         # coreference — filled from the same walk that lists control names.
         self._pointables: list = []
@@ -1440,16 +1445,40 @@ class CompanionManager(QObject):
             return {"error": "no guide is running"}
         if action not in ("next", "back", "repeat", "stop"):
             return {"error": "action must be next, back, repeat, stop or resume"}
-        accepted = runner.request(action)
-        # Say where the walkthrough now is. Returning a bare "ok" told the
-        # model nothing, so when it was unsure it called again — three times
-        # in 1.4s in the field log, which walked the user off the end of a
-        # two-step guide.
-        out = {"ok": True, "action": action,
-               "step": runner.index + 1, "of": runner.total}
+        # One move per thing the user SAID. The runner also refuses a
+        # second move before the new step has been spoken, but that window
+        # is only as long as the speech: a model looping every 0.6 s would
+        # still land a move every few seconds. What the user meant by one
+        # "next" is one step, however many times the model calls this.
+        serial = self._request_serial
+        if action in ("next", "back", "repeat") and self._guide_moved_for == serial:
+            accepted = False
+        else:
+            accepted = runner.request(action)
+            if accepted and action in ("next", "back", "repeat"):
+                self._guide_moved_for = serial
+        if action == "stop":
+            return {"ok": True, "action": "stop",
+                    "note": "The walkthrough is stopped. Say so in a few words."}
+
+        # Report where the guide is GOING, not where it was. This used to
+        # read runner.index straight after request(), before the loop had
+        # consumed the command, so a "next" on step 1 of 2 came back as
+        # "step 1 of 2" - the model was told it had not moved, and called
+        # next again. The field that was added to stop repeat calls was the
+        # thing inviting them.
+        heading, total = runner.heading, runner.total
+        where = ("the walkthrough is finishing - that was the last step"
+                 if heading >= total else f"now on step {heading + 1} of {total}")
+        out = {"ok": True, "action": action, "where": where,
+               "note": ("Done - the move has happened and Tora is reading the "
+                        "step aloud herself. Do NOT call guide_step again, and "
+                        "do not read the step out; stay quiet or answer "
+                        "briefly.")}
         if not accepted:
-            out["note"] = ("Already done a moment ago — the guide has moved "
-                           "once, not again. Do not call this again.")
+            out["note"] = ("That was already done: the guide moved once and is "
+                           "speaking the new step now. Do NOT call guide_step "
+                           "again for this.")
         return out
 
     async def _tool_point_at(self, args: dict) -> dict:
@@ -2057,6 +2086,9 @@ class CompanionManager(QObject):
         self._rt_audio.clear()
         self._heard_buf = []
         self._pointed_this_turn = False
+        # A new thing the user is saying to Tora. Anything budgeted "per
+        # request" - a guide move, for one - is measured against this.
+        self._request_serial += 1
         try:
             # The sink has to be attached BEFORE the first block is captured,
             # or the opening syllable of the question is only in the buffer

@@ -43,12 +43,16 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import threading
 import time
 from typing import Awaitable, Callable, Optional
 
 _log = logging.getLogger("tora.guide")
 
 Command = str   # "next" | "back" | "repeat" | "stop"
+
+# Commands that move the guide. Each is allowed once per presented step.
+_MOVES = frozenset({"next", "back", "repeat"})
 
 
 class GuideRunner:
@@ -70,7 +74,6 @@ class GuideRunner:
         step_timeout_s: float = 35.0,
         stuck_after_s: float = 15.0,
         present_delay_s: float = 0.8,
-        repeat_guard_s: float = 1.5,
     ):
         self._guide = guide
         self._speak_step = speak_step
@@ -98,10 +101,14 @@ class GuideRunner:
         # once every few polls, not every one.
         self._lookahead_every = 6
 
-        # Repeat guard for request(); see the note there.
-        self._repeat_guard_s = repeat_guard_s
-        self._last_command: Optional[Command] = None
-        self._last_command_at = 0.0
+        # One move per presentation - see request(). _shown counts steps
+        # that have finished being spoken; _moved_at is the value of _shown
+        # when the last manual move was accepted. Equal means "already moved
+        # from this step, and the next one has not been spoken yet".
+        self._shown = 0
+        self._moved_at = -1
+        self._heading: Optional[int] = None
+        self._move_lock = threading.Lock()
 
         self._start_index = max(0, start_index)
         self._idx = -1
@@ -145,19 +152,26 @@ class GuideRunner:
         wake is marshalled onto the loop; the plain _pending attribute is what
         the loop actually reads, so the command is never lost either way.
 
-        Returns False when the command was swallowed as a repeat. The live
-        model fires a tool three times in a second when it is unsure whether
-        the first one landed — the log has three guide_step calls inside 1.4
-        seconds — and three "next"es on a two-step guide end the walkthrough
-        before the user has done anything. One "next" is one step.
+        Returns False when the command was refused as a repeat.
+
+        **One move per presentation.** After next / back / repeat has been
+        accepted, every further move is refused until the step it moved to
+        has actually been spoken. This used to be a 1.5-second timer, and the
+        live model in a loop calls every ~0.6 s - so the timer caught 22 of
+        39 calls on 23 September and let the other 17 through, walking a
+        two-step guide off its end. A timer is a guess about how fast the
+        model retries; "has the new step been spoken yet" is a fact.
+
+        `stop` is never refused.
         """
-        now = time.monotonic()
-        if (command == self._last_command
-                and now - self._last_command_at < self._repeat_guard_s):
-            _log.info("ignoring a repeated '%s' %.1fs after the last one",
-                      command, now - self._last_command_at)
-            return False
-        self._last_command, self._last_command_at = command, now
+        if command in _MOVES:
+            with self._move_lock:
+                if self._moved_at == self._shown:
+                    _log.info("refusing a second '%s' before the step it moved "
+                              "to has been spoken", command)
+                    return False
+                self._moved_at = self._shown
+                self._heading = self._destination(command)
         self._pending = command
         loop = self._loop
         if loop is not None and loop.is_running():
@@ -235,6 +249,34 @@ class GuideRunner:
             await self._speak_step(idx)
         except Exception:
             _log.debug("speak_step failed", exc_info=True)
+        finally:
+            # Spoken (or tried to be): a manual move is allowed again, and
+            # nothing is in flight any more.
+            with self._move_lock:
+                self._shown += 1
+                self._heading = None
+
+    @property
+    def heading(self) -> int:
+        """The step the guide is on, or moving to if a move is in flight.
+
+        What the model is told after it calls guide_step. `index` alone
+        still names the OLD step at that moment - the loop has not consumed
+        the command yet - so reporting it told the model "you are still on
+        step 1" right after it had said next, and it said next again.
+        """
+        with self._move_lock:
+            heading = self._heading
+        return self._idx if heading is None else heading
+
+    def _destination(self, command: Command) -> int:
+        """Where a move will land, computed at the moment it is accepted."""
+        here = max(self._idx, 0)
+        if command == "next":
+            return min(here + 1, self.total)
+        if command == "back":
+            return max(here - 1, 0)
+        return here
 
     async def _await_step(self, step) -> str:
         """Wait until the step is done (or the user takes over). Returns the

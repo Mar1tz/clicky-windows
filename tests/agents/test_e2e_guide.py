@@ -142,25 +142,117 @@ async def _never(instruction, before, after):
 
 # ── "next" three times is still one step ─────────────────────────────────────
 
-def test_a_repeated_next_does_not_walk_off_the_end_of_the_guide():
-    """The live model fired guide_step three times in 1.4 seconds. On a
-    two-step walkthrough that ended it before the user had done anything."""
+def _runner(steps=3, speech_s=0.0, **kw):
+    """A real GuideRunner over a fake guide, with nothing wired to Windows.
+    `speech_s` is how long speaking a step takes - real steps take seconds."""
+    from types import SimpleNamespace
+
     from tutor_features.guide import GuideRunner
 
-    runner = GuideRunner.__new__(GuideRunner)
-    runner._repeat_guard_s = 1.5
-    runner._last_command = None
-    runner._last_command_at = 0.0
-    runner._pending = None
-    runner._loop = None
-    runner._wake = asyncio.Event()
+    spoken: list[int] = []
 
+    async def speak(idx):
+        spoken.append(idx)
+        if speech_s:
+            await asyncio.sleep(speech_s)
+
+    async def never_done(step):
+        return None
+
+    async def say(text):
+        pass
+
+    guide = SimpleNamespace(steps=[SimpleNamespace(instruction=f"step {i}")
+                                   for i in range(steps)])
+    runner = GuideRunner(guide, speak_step=speak, check=never_done, say=say,
+                         is_busy=lambda: False, on_stop=lambda: None,
+                         poll_s=0.02, present_delay_s=0.0, **kw)
+    return runner, spoken
+
+
+def test_a_repeated_next_does_not_walk_off_the_end_of_the_guide():
+    """GW-02: one move per presentation. The 1.5 s timer this replaced let
+    17 of 39 calls through on 23 September, because the model in a loop
+    calls every ~0.6 s. "Has the new step been spoken yet" is a fact; a
+    timer is a guess about the model's retry speed."""
+    runner, _spoken = _runner()
     assert runner.request("next") is True
-    assert runner.request("next") is False
-    assert runner.request("next") is False
-    assert runner._pending == "next", "exactly one advance is queued"
+    for _ in range(40):
+        assert runner.request("next") is False
+    assert runner.request("back") is False, "any move waits for the new step"
+    assert runner.request("stop") is True, "stop is never refused"
 
-    assert runner.request("stop") is True, "a different command is never a repeat"
+
+def test_a_burst_during_one_step_moves_the_live_runner_exactly_once():
+    """The RUNNER's guarantee: however many moves arrive while a step is
+    being presented, one lands. (A stream of moves spread over several
+    steps' worth of speech is the MANAGER's job - see
+    test_one_thing_said_is_one_move_however_often_the_model_calls - because
+    only the manager knows where one user request ends and the next
+    begins. Writing this test first with sleeps between the requests showed
+    exactly that: Windows' timer made the "burst" 600 ms long, and the
+    runner rightly allowed one move per spoken step.)"""
+    runner, spoken = _runner(steps=5, speech_s=0.5)
+
+    async def scenario():
+        await runner.start()
+        for _ in range(100):
+            if spoken:
+                break
+            await asyncio.sleep(0.01)
+        accepted = sum(runner.request("next") for _ in range(40))   # one burst
+        await asyncio.sleep(1.3)          # step 0 finishes, step 1 is spoken
+        runner.stop()
+        await asyncio.sleep(0.1)
+        return accepted
+
+    accepted = asyncio.run(scenario())
+    assert accepted == 1, f"one of forty accepted, got {accepted}"
+    assert spoken[:2] == [0, 1], f"expected step 0 then step 1, got {spoken}"
+    assert max(spoken) == 1, "the burst moved the guide exactly one step"
+
+
+def test_a_move_is_allowed_again_once_the_new_step_has_been_spoken():
+    runner, _ = _runner()
+
+    async def scenario():
+        assert runner.request("next") is True
+        await runner._show(1)                 # the new step gets spoken
+        assert runner.request("next") is True
+
+    asyncio.run(scenario())
+
+
+def test_the_model_is_told_where_the_guide_is_going_not_where_it_was():
+    """Reading `index` straight after request() named the OLD step - "step 1
+    of 2" right after the model said next - so it said next again."""
+    runner, _ = _runner(steps=2)
+    runner._idx = 0
+    runner.request("next")
+    assert runner.heading == 1, "moving to the second step"
+    runner2, _ = _runner(steps=2)
+    runner2._idx = 1
+    runner2.request("next")
+    assert runner2.heading == 2, "past the last step: the guide is finishing"
+
+
+def test_the_tool_result_names_the_destination_and_says_stop_calling():
+    from companion_manager import CompanionManager
+
+    runner, _ = _runner(steps=2)
+    runner._idx = 0
+    runner._task = type("T", (), {"done": lambda self: False})()
+    companion = CompanionManager.__new__(CompanionManager)
+    companion._guide_runner = runner
+    companion._request_serial, companion._guide_moved_for = 1, -1
+
+    first = asyncio.run(companion._tool_guide_step({"action": "next"}))
+    assert first["where"] == "now on step 2 of 2"
+    assert "Do NOT call guide_step again" in first["note"]
+
+    second = asyncio.run(companion._tool_guide_step({"action": "next"}))
+    assert "already done" in second["note"].lower()
+    assert second["ok"] is True, "a refused repeat must not read as a failure to retry"
 
 
 # ── pointing ─────────────────────────────────────────────────────────────────
@@ -254,3 +346,43 @@ def test_a_player_that_cannot_be_read_never_blocks_the_guide():
     conv._speaking = False
     conv._player = Broken()
     assert conv.speaking is False
+
+
+
+def test_one_thing_said_is_one_move_however_often_the_model_calls():
+    """The per-presentation guard is only as long as the speech, so a model
+    looping every 0.6 s would still land a move every few seconds. The
+    invariant the user means is: one "next" said, one step moved."""
+    from companion_manager import CompanionManager
+
+    runner, _ = _runner(steps=6)
+    runner._idx = 0
+    runner._task = type("T", (), {"done": lambda self: False})()
+    companion = CompanionManager.__new__(CompanionManager)
+    companion._guide_runner = runner
+    companion._request_serial, companion._guide_moved_for = 1, -1
+
+    moves = 0
+    for _ in range(12):
+        out = asyncio.run(companion._tool_guide_step({"action": "next"}))
+        moves += "already done" not in out["note"].lower()
+        runner._shown += 1          # as if each step had been spoken meanwhile
+    assert moves == 1, f"one request, one move - got {moves}"
+
+    companion._request_serial = 2   # the user speaks again
+    out = asyncio.run(companion._tool_guide_step({"action": "next"}))
+    assert "already done" not in out["note"].lower(), "a new request may move again"
+
+
+def test_stop_always_works_even_after_a_move():
+    from companion_manager import CompanionManager
+
+    runner, _ = _runner()
+    runner._idx = 0
+    runner._task = type("T", (), {"done": lambda self: False})()
+    companion = CompanionManager.__new__(CompanionManager)
+    companion._guide_runner = runner
+    companion._request_serial, companion._guide_moved_for = 1, -1
+    asyncio.run(companion._tool_guide_step({"action": "next"}))
+    out = asyncio.run(companion._tool_guide_step({"action": "stop"}))
+    assert out["action"] == "stop" and runner._pending == "stop"
