@@ -2810,6 +2810,7 @@ class CompanionManager(QObject):
             "goal": guide.goal, "steps": len(guide.steps), "plan_s": None,
             "started": time.monotonic(), "auto": 0, "manual": 0, "by": {},
             "judged": 0, "targets": {}, "missed": 0, "stuck": 0, "nudged": 0,
+            "asked": 0,
         }
         self._step_audio.clear()
         self._step_point.clear()
@@ -2911,11 +2912,11 @@ class CompanionManager(QObject):
             _log.info(
                 "guide ended (%s): %r - %d steps, %d finished by themselves (%s)%s, "
                 "%d manual moves, %d vision checks, targets: %s%s, stuck %d, "
-                "nudged %d, %s%.0fs total",
+                "nudged %d, asked %d, %s%.0fs total",
                 detail.get("reason", "?"), stats["goal"][:50], stats["steps"],
                 stats["auto"], by, share, stats["manual"], stats["judged"],
                 targets or "none", missed, stats["stuck"], stats["nudged"],
-                planned, time.monotonic() - stats["started"])
+                stats.get("asked", 0), planned, time.monotonic() - stats["started"])
             self._guide_stats = None
 
     def _guide_stopped(self, runner) -> None:
@@ -3134,8 +3135,33 @@ class CompanionManager(QObject):
             return None            # tray switch off: only 'next' advances
         w = getattr(step, "_watcher", None)
         if w is not None:
-            return await w.poll()
+            result = await w.poll()
+            if result is not True and w.unsure and not getattr(step, "_asked_unsure", False):
+                step._asked_unsure = True
+                self._submit(self._ask_if_done(step, w))
+            return result
         return await self._step_done_by_expectation(step)
+
+    async def _ask_if_done(self, step, watcher) -> None:
+        """The screen has changed twice and the vision model said "not done"
+        both times. Ask - once - rather than stall in silence until the
+        minute-long nudge, and never advance on a guess.
+
+        The target is pointed at again first, because the likeliest story is
+        that the person did something nearby but not quite the step, and the
+        arrow shows them where it actually is. A "yes" is a "next": the
+        per-turn guide context already routes that to guide_step.
+        """
+        plan = self._lesson_plan
+        idx = plan.steps.index(step) if plan is not None and step in plan.steps else -1
+        _log.info("guide step %d unsure after %d 'not done yet' answers (%s) - asking",
+                  idx + 1, watcher.not_yet, watcher.last_reason[:80])
+        if self._guide_stats is not None:
+            self._guide_stats["asked"] = self._guide_stats.get("asked", 0) + 1
+        if getattr(step, "target", ""):
+            self._submit(self._point_step_target(idx, step))
+        await self._reply_local(
+            "I can't quite tell if that worked. If it did, say next and I'll move on.")
 
     async def _step_done_by_expectation(self, step):
         """The previous engine: the planner's predicted end state. Kept as

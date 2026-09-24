@@ -73,6 +73,11 @@ WAIT_SETTLE_S     = 3.0
 WAIT_JUDGE_GAP_S  = 8.0
 JUDGE_TIMEOUT_S   = 9.0
 JUDGE_MIN_CONF    = 0.70
+# After this many "not done yet" judgements in a row - each on a screen that
+# HAD changed - the watcher is unsure: something is clearly happening, the
+# vision model keeps saying it is not the step, and silence until the
+# minute-long nudge is the worst response. The guide asks instead.
+UNSURE_AFTER      = 2
 LOCAL_EVERY_S     = 0.90
 
 _VK_LBUTTON = 0x01
@@ -311,6 +316,9 @@ class StepWatcher:
         # a screenshot upload and two to four seconds; GW-11 wants it rare,
         # and GW-03 logs it so "rare" can be checked.
         self.judged = 0
+        # Consecutive "not done yet" answers, and the last reason given.
+        self.not_yet = 0
+        self.last_reason = ""
 
     # ── lifecycle ──
 
@@ -465,6 +473,11 @@ class StepWatcher:
             return True
         return False
 
+    @property
+    def unsure(self) -> bool:
+        """The screen keeps changing and the vision model keeps saying no."""
+        return not self._done and self.not_yet >= UNSURE_AFTER
+
     def _finish(self) -> bool:
         self._done = True
         _log.info("step done — %s", self.done_by)
@@ -503,7 +516,10 @@ class StepWatcher:
             if done:
                 self.done_by = f"vision: {reason}"
                 self._judge_result = True
+                self.not_yet = 0
             else:
+                self.not_yet += 1
+                self.last_reason = reason
                 _log.info("not done yet (%s) — rebasing", reason or "no reason given")
                 # This state has been judged; do not ask about it again.
                 self._base = fp
