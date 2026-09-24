@@ -52,6 +52,16 @@ _SCHEMA = {
                         "type": "string",
                         "description": "The UI element this step acts on, or '' if none.",
                     },
+                    "kind": {
+                        "type": "string",
+                        "enum": ["action", "wait"],
+                        "description": (
+                            "action: the user does something. wait: the app is "
+                            "doing something (processing, exporting, "
+                            "downloading, installing, rendering, generating) "
+                            "and the user only has to let it finish."
+                        ),
+                    },
                     "done_when": {
                         "type": "string",
                         "description": "How the user knows this step worked.",
@@ -149,6 +159,12 @@ _SYSTEM = """You plan hands-on computer tutorials for a voice tutor that
 speaks one step at a time and points at things on screen.
 
 Rules:
+  • When the app has to finish something before the user can go on -
+    processing, exporting, downloading, installing, rendering, generating,
+    uploading - that is its own step with kind "wait", no target, and a
+    done_when saying what appears when it has finished ("the caption blocks
+    appear on the timeline"). Put what appears at the end in expected_state
+    as control_appears if it has a name. Everything else is kind "action".
   • Each step is ONE action the user performs. Never merge two clicks:
     "Select your picture and click Choose picture" is TWO steps, because
     the tutor points at one thing per step and watches for one thing to
@@ -227,6 +243,15 @@ class Step:
     # user can reach the outcome their own way. See ai.verification.
     expected: object = None
     possible_actions: list = None
+    # "action" - the user does something; "wait" - the app does, and the
+    # user lets it finish. They are watched differently: a progress bar
+    # changes the screen every second, and treating each change as "maybe
+    # the user did it" asked the vision model over and over (CapCut, 22 Sep).
+    kind: str = "action"
+
+    @property
+    def waiting(self) -> bool:
+        return self.kind == "wait"
 
     def __post_init__(self):
         if self.completion is None:
@@ -382,7 +407,8 @@ async def plan(
         steps=[
             Step(
                 instruction=s.get("instruction", ""),
-                target=s.get("target", ""),
+                target=s.get("target", "") if s.get("kind") != "wait" else "",
+                kind="wait" if s.get("kind") == "wait" else "action",
                 done_when=s.get("done_when", ""),
                 completion=_parse_condition(s.get("completion")),
                 expected=_parse_expected(s.get("expected_state")),

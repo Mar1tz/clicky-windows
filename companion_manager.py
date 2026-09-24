@@ -2954,7 +2954,15 @@ class CompanionManager(QObject):
         plan = self._lesson_plan
         if plan is None or not (0 <= idx < len(plan.steps)):
             return ""
-        return f"Step {idx + 1} of {len(plan.steps)}: {plan.steps[idx].instruction}"
+        step = plan.steps[idx]
+        line = f"Step {idx + 1} of {len(plan.steps)}: {step.instruction}"
+        if getattr(step, "waiting", False):
+            # Say that nothing needs doing and that Tora will speak up - or a
+            # person sits there wondering whether they missed an instruction.
+            line += " This takes a moment - I'll tell you when it's done."
+        elif idx > 0 and getattr(plan.steps[idx - 1], "waiting", False):
+            line = "That's finished. " + line
+        return line
 
     async def _prefetch_step(self, idx: int) -> None:
         """Generate the next step's SPEECH in advance.
@@ -3801,6 +3809,7 @@ class CompanionManager(QObject):
             judge=gemini_vision.judge_step,
             dpi_scale=self._dpi_scale(),
             fallback_check=verification.TargetGone(target) if target else None,
+            waiting=bool(getattr(step, "waiting", False)),
             local_check=local,
         )
 

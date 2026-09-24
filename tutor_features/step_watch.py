@@ -65,6 +65,12 @@ THUMB_DIFF_MIN    = 10.0    # mean abs gray delta (0-255) that counts as change
 THUMB_SKIP_TOP    = 0.09    # ignore the top 9% — the caption island lives there
 SETTLE_S          = 0.60    # change must hold still this long before judging
 JUDGE_MIN_GAP_S   = 2.0     # never ask the model more often than this
+# A step where the APP is working ("wait for the captions to generate"). A
+# progress bar changes the screen every second, and every settled change was
+# a vision call asking "did the user do it?". The screen only goes still when
+# the work is finished, so a long settle means: ask once, at the end.
+WAIT_SETTLE_S     = 3.0
+WAIT_JUDGE_GAP_S  = 8.0
 JUDGE_TIMEOUT_S   = 9.0
 JUDGE_MIN_CONF    = 0.70
 LOCAL_EVERY_S     = 0.90
@@ -272,6 +278,7 @@ class StepWatcher:
         local_check: Optional[Callable[[], object]] = None,
         target_bbox: Optional[tuple[float, float, float, float]] = None,
         fallback_check: Optional[Callable[[], object]] = None,
+        waiting: bool = False,
     ) -> None:
         self.instruction = instruction
         self._judge = judge
@@ -280,6 +287,9 @@ class StepWatcher:
         # Used only if nothing in local_check survives arming - see
         # ai.verification.TargetGone.
         self._fallback_check = fallback_check
+        self.waiting = waiting
+        self._settle_s = WAIT_SETTLE_S if waiting else SETTLE_S
+        self._judge_gap_s = WAIT_JUDGE_GAP_S if waiting else JUDGE_MIN_GAP_S
         self.target_bbox = target_bbox          # logical px; may be set later
 
         self._base: Optional[Fingerprint] = None
@@ -433,9 +443,9 @@ class StepWatcher:
                 self._last = fp
                 self._stable_since = now
             elif (self._base is not None and fp.what_changed(self._base)
-                    and now - self._stable_since >= SETTLE_S
+                    and now - self._stable_since >= self._settle_s
                     and self._judge_task is None
-                    and now - self._judge_at >= JUDGE_MIN_GAP_S):
+                    and now - self._judge_at >= self._judge_gap_s):
                 why = fp.what_changed(self._base)
                 self._judge_at = now
                 self._judge_task = asyncio.create_task(self._ask(fp, why))

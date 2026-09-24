@@ -54,6 +54,11 @@ Command = str   # "next" | "back" | "repeat" | "stop"
 # Commands that move the guide. Each is allowed once per presented step.
 _MOVES = frozenset({"next", "back", "repeat"})
 
+# How much longer a step where the app is working may take before the user
+# is nudged. A minute is a long time to click a button and a short time to
+# export a video.
+WAIT_TIMEOUT_FACTOR = 5
+
 
 class GuideRunner:
     def __init__(
@@ -355,7 +360,8 @@ class GuideRunner:
             # Nothing on screen has moved and the step is still not done —
             # that is stuck, not slow. Offer a hand once, early, instead of
             # waiting out the full timeout in silence.
-            if (not helped and self._on_stuck is not None
+            waiting = bool(getattr(step, "waiting", False))
+            if (not helped and not waiting and self._on_stuck is not None
                     and self._observer is not None):
                 self._observer.poll()
                 if self._observer.idle_seconds() > self._stuck_after_s:
@@ -369,7 +375,10 @@ class GuideRunner:
                             _log.debug("on_stuck failed", exc_info=True)
                         self._observer.reset()
 
-            if not nudged and (time.monotonic() - started) > self._step_timeout_s:
+            # Waiting for an export is not being stuck, and "say next when
+            # you've done it" is the wrong thing to say about a render.
+            limit = self._step_timeout_s * (WAIT_TIMEOUT_FACTOR if waiting else 1)
+            if not nudged and (time.monotonic() - started) > limit:
                 self._emit("nudged", index=self._idx,
                            waited=round(time.monotonic() - started, 1))
                 await self._say_safe(
