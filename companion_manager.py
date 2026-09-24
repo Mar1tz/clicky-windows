@@ -293,6 +293,9 @@ class CompanionManager(QObject):
     sig_point_at            = pyqtSignal(float, float, str)
     sig_point_hold          = pyqtSignal(bool)            # True → dwell forever until release
     sig_point_release       = pyqtSignal()                # end dwell + fly buddy back
+    # A walkthrough step's arrow (LG-02): quick, and held until the step changes.
+    sig_guide_point         = pyqtSignal(float, float, str)
+    sig_guide_release       = pyqtSignal()
     sig_error               = pyqtSignal(str)
     sig_models_refreshed    = pyqtSignal(str, int)        # (provider, count)
     sig_arrow               = pyqtSignal(float, float, float, float)
@@ -831,7 +834,21 @@ class CompanionManager(QObject):
         if self._tts is None:
             from audio.tts.gemini_tts import GeminiTTS
             self._tts = GeminiTTS(cfg.voice)
+            self._tts.on_fallback = self._voice_fell_back
         return self._tts
+
+    def _voice_fell_back(self, kind: str, secs: float) -> None:
+        """Google stopped speaking for Tora; the Windows voice took over
+        (LG-04). Said once, in words that match what happened - a daily limit
+        is not "out of credit"."""
+        from datetime import datetime, timedelta
+        back = (datetime.now() + timedelta(seconds=secs)).strftime("%H:%M")
+        why = {"quota": "Google's daily limit for Tora's voice is used up on this key",
+               "billing": "Google refused Tora's voice: the Gemini credits have run out",
+               "key": "Google refused Tora's voice: check the API key in Setup"}.get(
+                   kind, "Google did not answer for Tora's voice")
+        self.sig_agent_notice.emit(
+            "Tora's voice", f"{why}. She is using the Windows voice until about {back}.")
 
     # ── Realtime conversation ─────────────────────────────────────────────────
 
@@ -966,6 +983,9 @@ class CompanionManager(QObject):
         "network": "Tora can't reach Google - check the internet connection.",
         "busy": ("Google's servers are overloaded right now - ask again in a "
                  "moment."),
+        # A limit on one model, not the account (LG-04): nothing to top up.
+        "quota": ("Google's daily limit for one of Tora's models is used up on "
+                  "this key. It resets within a day; everything else still works."),
     }
     _PROBLEM_RENOTIFY_S = 600.0
     _problem_kind = ""
@@ -1649,6 +1669,8 @@ class CompanionManager(QObject):
     _GUIDE_COMMANDS = ("next", "skip", "back", "repeat", "stop", "pause",
                        "resume", "where", "help", "do_it")
     _GUIDE_STAYS = ("where", "help", "do_it")
+    # (request serial, move) last refused as words the check did not know (LG-03).
+    _guide_refused = None
     # Also set in __init__; the class default keeps every reader safe on a
     # manager that has not run it.
     _plan_in_progress = None
@@ -1739,10 +1761,22 @@ class CompanionManager(QObject):
         heard = " ".join(self._heard_buf or []).strip()
         if not heard:
             return None
-        from tutor_features.guide_intent import guide_intent
+        from tutor_features.guide_intent import guide_intent, looks_like_command
         intent = guide_intent(heard)
         if intent == move:
             return None
+        # The model heard the audio; this reads a transcript of it. Asked for
+        # the same move twice for the same short, command-shaped words, it is
+        # the transcript that is wrong - "next" came back as "net" on 24 Sep,
+        # and refusing it cost 41 calls and a frozen guide (LG-03). A
+        # question, an "okay", a "not yet" are never let through this way.
+        key = (self._request_serial, move)
+        if intent is None and looks_like_command(heard):
+            if self._guide_refused == key:
+                _log.info("guide_step %s: asked twice for %r - taking the model's word",
+                          move, heard[:60])
+                return None
+            self._guide_refused = key
         if intent in self._GUIDE_STAYS:
             # "Where is it?", "I'm stuck" or "do it for me", read as a move.
             # Do what they asked instead - none of those moves the guide.
@@ -2159,6 +2193,18 @@ class CompanionManager(QObject):
         finally:
             self._activity("")
         return self._show_point(found, query, hold=hold)
+
+    def _show_guide_point(self, found, query: str) -> bool:
+        """A walkthrough step's arrow: there in a blink and held on the
+        target until the step changes (LG-02), with its ring."""
+        self._last_found = found
+        if found is None:
+            return False
+        label = (found.label or query)[:24]
+        self.sig_guide_point.emit(float(found.x), float(found.y), label)
+        self._highlight(found)
+        self._remember_ref(found.x, found.y, label)
+        return True
 
     def _show_point(self, found, query: str, *, hold: bool = True) -> bool:
         """Fly the buddy to something already resolved. True if it landed."""
@@ -3312,7 +3358,11 @@ class CompanionManager(QObject):
 
         runner = GuideRunner(
             guide,
-            speak_step=self._present_step,
+            # LG-01: on screen at once, said when quiet. The step watcher
+            # arms itself, so a click made before the line was said counts.
+            show_step=self._display_step,
+            speak_step=self._speak_step_line,
+            self_arming=lambda step: getattr(step, "_watcher", None) is not None,
             check=self._step_done,
             say=self._reply_local,
             is_busy=self._guide_busy,
@@ -3332,9 +3382,9 @@ class CompanionManager(QObject):
             start_index=start_index,
             writing=writing,
             # The pause lets "sure, let me walk you through it" begin before
-            # step one; _wait_idle then holds the step until it has ended.
-            # From a streamed plan step one comes ~2 s after that answer
-            # started, so the pause is only a margin.
+            # step one. Step one then goes on screen at once, and its line
+            # waits for that answer to end (LG-01). From a streamed plan step
+            # one comes ~2 s after the answer started, so this is a margin.
             present_delay_s=0.3 if writing else 0.8,
         )
         self._guide_runner = runner
@@ -3366,6 +3416,8 @@ class CompanionManager(QObject):
         if runner is not None:
             runner.stop()
         self._drop_step_jobs()
+        self._arrow_for = None
+        self.sig_guide_release.emit()
 
     def _note_first_word(self) -> None:
         """The first sound of a walkthrough's first step went out. What the
@@ -3421,6 +3473,14 @@ class CompanionManager(QObject):
                 stats["first_s"] = time.monotonic() - asked_at
                 _log.info("guide step one up %.1fs after it was asked for",
                           stats["first_s"])
+
+        elif kind == "step_unsaid":
+            # LG-01: the step was on screen and done before there was a quiet
+            # moment to say it. Counted: a guide where most lines go unsaid
+            # is one where the conversation is always talking over it.
+            _log.info("guide step %d was done before it could be said - not said", idx + 1)
+            if stats is not None:
+                stats["unsaid"] = stats.get("unsaid", 0) + 1
 
         elif kind == "step_ended":
             # The screen was just acted on: the control snapshot from the
@@ -3496,6 +3556,10 @@ class CompanionManager(QObject):
             self._lesson_step_idx = 0
             self._drop_step_audio()
             self._step_point.clear()
+            self._drop_step_jobs()
+            # A held walkthrough arrow outlives its guide otherwise (LG-02).
+            self._arrow_for = None
+            self.sig_guide_release.emit()
             try:
                 from tutor_features.step_watch import _clicks
                 _clicks.stop()
@@ -3650,11 +3714,17 @@ class CompanionManager(QObject):
         # place. Targets are resolved when the step is actually presented.
 
     async def _present_step(self, idx: int) -> None:
-        """Speak one guide step and point at its target — both immediately.
+        """Show one guide step and say it - the two halves the runner now
+        calls separately (LG-01): _display_step at once, _speak_step_line
+        when it is quiet."""
+        await self._display_step(idx)
+        await self._speak_step_line(idx)
 
-        Everything slow was prefetched while the previous step was being done,
-        so the arrow and the first word land together instead of one long
-        pause, some words, another pause, then the arrow.
+    async def _display_step(self, idx: int) -> None:
+        """Put a step on screen: its words, its arrow, its progress pill -
+        and start watching for it being done. Nothing here makes a sound,
+        so nothing here waits for a quiet moment (LG-01): on 24 Sep the arrow
+        and the words were held behind every sentence Tora or the user said.
         """
         plan = self._lesson_plan
         if plan is None or not (0 <= idx < len(plan.steps)):
@@ -3662,6 +3732,15 @@ class CompanionManager(QObject):
         self._lesson_step_idx = idx
         self._lesson_nagged = False
         self._drop_step_jobs(keep=idx)
+        # The last step's arrow and box point at something that is done:
+        # off with them, before this step's arrow flies in. Boxes used to
+        # pile up, one per step, for the whole walkthrough. Not this step's
+        # own arrow, though - step one's is often up before step one is
+        # (GW-08), and a repeat keeps its arrow where it is.
+        if self._arrow_for != (id(plan), idx):
+            self._arrow_for = None
+            self.sig_guide_release.emit()
+            self.sig_clear_drawings.emit()
         step = plan.steps[idx]
         self._reset_step_verification(step)
         msg = self._step_line(idx)
@@ -3691,6 +3770,17 @@ class CompanionManager(QObject):
         self.sig_response_chunk.emit(msg)
         self.sig_response_done.emit(msg)
         self._last_response = msg
+        if self._guide_runner is not None and self._guide_runner.running:
+            self._activity("waiting")
+
+    async def _speak_step_line(self, idx: int) -> None:
+        """Say a step that is already on screen. The runner's voice lane
+        calls this once it is quiet - and not at all if the user finished
+        the step first."""
+        plan = self._lesson_plan
+        if plan is None or not (0 <= idx < len(plan.steps)):
+            return
+        msg = self._step_line(idx)
         self._emit_state(AppState.SPEAKING)
         try:
             prepared = self._step_audio.pop(idx, None)
@@ -4517,6 +4607,7 @@ class CompanionManager(QObject):
         )
 
     _step_jobs = None                   # (plan id, step) -> its lookup, while it runs
+    _arrow_for = None                   # (plan id, step) whose arrow is up now
 
     async def _step_target(self, plan, idx: int, step):
         """Look a step's target up ONCE, however many ask while it runs.
@@ -4589,8 +4680,9 @@ class CompanionManager(QObject):
                 _log.info("guide step %d arrow came too late - not drawn (now on step %d)",
                           idx + 1, self._lesson_step_idx + 1)
             return
-        if not self._show_point(found, step.target, hold=False):
+        if not self._show_guide_point(found, step.target):
             return
+        self._arrow_for = (id(plan), idx)
         self._step_point[idx] = found
         w = getattr(step, "_watcher", None)
         bbox = getattr(found, "bbox", None)

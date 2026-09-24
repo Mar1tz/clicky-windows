@@ -16,6 +16,7 @@ between lines (GW-08).
 from __future__ import annotations
 
 import asyncio
+import time
 import logging
 import os
 from typing import Optional
@@ -104,9 +105,20 @@ class _Output:
 class GeminiTTS(BaseTTS):
     """Text to speech via the Gemini TTS model."""
 
+    # How long a refusal sends lines to the Windows voice (LG-04), when
+    # Google does not say. A daily limit says ("retry in 2h56m"); a key or
+    # billing problem is tried again every ten minutes, so a fix is noticed.
+    REFUSED_FOR_S = {"quota": 3600.0, "billing": 600.0, "key": 600.0,
+                     "busy": 20.0, "network": 20.0}
+
     def __init__(self, voice: str = DEFAULT_VOICE):
         self._voice = voice if voice in VOICES else DEFAULT_VOICE
         self._out = _Output()
+        # While Google is refusing this model, lines go straight to the
+        # Windows voice instead of failing one by one.
+        self._fallback_until = 0.0
+        # Told once per refusal: (kind, seconds it will last). Set by the app.
+        self.on_fallback = None
 
     def set_voice(self, voice: str) -> None:
         if voice and voice in VOICES:
@@ -123,6 +135,31 @@ class GeminiTTS(BaseTTS):
             voice=self._voice,
         )
 
+    def gemini_ok(self) -> bool:
+        """May the Gemini voice be asked right now?"""
+        return time.monotonic() >= self._fallback_until
+
+    def note_refused(self, error) -> None:
+        """Google refused a line. Until it is likely to answer again, the
+        Windows voice speaks - and the app is told once, not per line."""
+        from ai import gemini
+        kind = gemini.problem_of(error)
+        secs = gemini.retry_after(error) if kind == "quota" else None
+        secs = secs or self.REFUSED_FOR_S.get(kind, 0.0)
+        if secs <= 0:
+            return                      # this line only: try Gemini again next time
+        fresh = self.gemini_ok()
+        self._fallback_until = time.monotonic() + secs
+        if fresh:
+            _log.warning("Tora's voice: Google refused the speech model (%s) - "
+                         "the Windows voice speaks for the next %s", kind,
+                         f"{secs / 60:.0f} min" if secs >= 60 else f"{secs:.0f} s")
+            if self.on_fallback is not None:
+                try:
+                    self.on_fallback(kind, secs)
+                except Exception:  # noqa: BLE001 - a notice must not stop the line
+                    _log.debug("on_fallback failed", exc_info=True)
+
     def warm(self, rate: int = 24000) -> None:
         """Open the output now, because a line is about to be said - a
         walkthrough was just asked for, and step one follows in seconds."""
@@ -138,6 +175,9 @@ class GeminiTTS(BaseTTS):
         text = (text or "").strip()
         if not text:
             return b"", 0
+        from audio.tts.windows_voice import windows_voice
+        if not self.gemini_ok():
+            return await windows_voice().render(text)
         pcm, rate = bytearray(), 0
         try:
             async for piece, piece_rate in self._stream(text):
@@ -145,7 +185,8 @@ class GeminiTTS(BaseTTS):
                 rate = rate or piece_rate
         except Exception as e:
             _log.warning("TTS failed: %s", e)
-            return b"", 0
+            self.note_refused(e)
+            return await windows_voice().render(text)
         return bytes(pcm), rate
 
     def prepare(self, text: str) -> "SpeechBuffer":
@@ -187,6 +228,9 @@ class SpeechBuffer:
 
     async def _fill(self, tts: GeminiTTS, text: str) -> None:
         try:
+            if not tts.gemini_ok():
+                await self._fill_windows(text)
+                return
             async for piece, rate in tts._stream(text):
                 self._pieces.append(piece)
                 self._rate = self._rate or rate
@@ -195,8 +239,23 @@ class SpeechBuffer:
             raise
         except Exception as e:  # noqa: BLE001 - silence beats a crash mid-lesson
             _log.warning("TTS failed: %s", e)
+            tts.note_refused(e)
+            if not self._pieces:
+                # Nothing of it arrived: say the whole line another way,
+                # rather than not at all (LG-04).
+                await self._fill_windows(text)
         finally:
             self._done = True
+            self._grew.set()
+
+    async def _fill_windows(self, text: str) -> None:
+        from audio.tts.windows_voice import windows_voice
+        pcm, rate = await windows_voice().render(text)
+        if pcm:
+            self._rate = rate
+            step = rate // 5 * 2                     # 0.2 s of PCM16 per piece
+            for i in range(0, len(pcm), step):
+                self._pieces.append(pcm[i:i + step])
             self._grew.set()
 
     def cancel(self) -> None:

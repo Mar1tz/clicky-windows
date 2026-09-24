@@ -124,7 +124,7 @@ There are two more problems here:
 
 In order of how much each makes the walkthrough feel live.
 
-### LG-01 · The arrow never waits for a voice — S
+### LG-01 · The arrow never waits for a voice — S — **done** (milestones/LG-01-04-wave-one.md)
 
 **Done:**
 * **Show at once, speak when quiet.** When a step is due, its words, its
@@ -142,7 +142,7 @@ arrow and the words are up within 0.2 s and the voice follows. Replaying
 23:03:12, step two is shown within 1 s of step one being seen done, not
 24 s.
 
-### LG-02 · The arrow gets there fast and stays — S
+### LG-02 · The arrow gets there fast and stays — S — **done** (milestones/LG-01-04-wave-one.md)
 
 **Done:**
 * **Fast flight for walkthroughs.** An arrow for a walkthrough step flies
@@ -155,7 +155,7 @@ arrow and the words are up within 0.2 s and the voice follows. Replaying
 *Proof:* overlay tests on the flight time and the hold; a step shown for
 20 s keeps its arrow on the target for all 20.
 
-### LG-03 · "Next" always means next — S
+### LG-03 · "Next" always means next — S — **done** (milestones/LG-01-04-wave-one.md)
 
 **Done:** `guide_step` trusts the model when the transcript is unreliable:
 * **Near misses.** Words close to "next" ("net", "nex", "necks", "text")
@@ -166,9 +166,9 @@ arrow and the words are up within 0.2 s and the voice follows. Replaying
   utterance after a refusal, the move is made: it heard the audio.
 
 A real loop breaker:
-* After three calls that change nothing in one turn, tools are no longer
-  run.
-* The model is told, once, to say one sentence.
+* The brake still stops running tools after six rounds.
+* After ten, the session is closed and the conversation resumes in a fresh
+  one. It no longer answers 35 errors that the model ignores.
 * The guide is never blocked by that turn (LG-01).
 
 *Surface:* `tutor_features/guide_intent.py`, `companion_manager.py`,
@@ -176,7 +176,7 @@ A real loop breaker:
 *Proof:* the 23:03 transcript replayed: "net" moves once, "nächste" moves,
 and the 41-call loop becomes at most 3 calls.
 
-### LG-04 · The step is always spoken — S
+### LG-04 · The step is always spoken — S — **done** (milestones/LG-01-04-wave-one.md)
 
 **Done:**
 * **Windows voice fallback.** When Google refuses the TTS model (the

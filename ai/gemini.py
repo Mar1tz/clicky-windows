@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import logging
 import os
 from typing import Any, AsyncIterator, Callable, Optional
@@ -201,6 +202,14 @@ _STALE_CONNECTION = (httpx.ProtocolError, httpx.NetworkError)
 # couldn't work out the steps from this screen". Each kind needs its own
 # answer, so each is named.
 
+# A per-model limit - "generate_requests_per_model_per_day, limit: 100" on the
+# TTS model, 24 Sep. Its message ALSO says "exceeded your current quota,
+# please check your plan and billing", so it was read as billing: "your
+# credits have run out" when they had not, and an account warning that
+# every other model's next success took down again (LG-04). It is checked
+# first, and it is not an account problem: that one model is resting.
+_QUOTA = ("quota exceeded for metric", "per_model_per_day", "requests_per_day",
+          "perday", "per_day")
 _BILLING = ("prepayment credits", "credits are depleted", "check your plan and billing",
             "exceeded your current quota", "billing", "payment required")
 _KEY = ("api key not valid", "api_key_invalid", "api key expired", "invalid api key",
@@ -212,10 +221,14 @@ _NETWORK = ("getaddrinfo failed", "name or service not known", "timed out during
 
 
 def problem_of(error: Any) -> str:
-    """"billing", "key", "busy", "network", or "" - what went wrong, in the
-    terms a person can act on. Takes an exception or a message."""
+    """"quota", "billing", "key", "busy", "network", or "" - what went
+    wrong, in the terms a person can act on. Takes an exception or a
+    message."""
     text = str(error or "").lower()
     status = getattr(error, "status", 0) or 0
+    body = str(getattr(error, "body", "") or "").lower()
+    if any(w in text or w in body for w in _QUOTA):
+        return "quota"
     if any(w in text for w in _BILLING) or status == 402:
         return "billing"
     if any(w in text for w in _KEY) or status in (401, 403):
@@ -226,6 +239,24 @@ def problem_of(error: Any) -> str:
             or any(w in text for w in _NETWORK):
         return "network"
     return ""
+
+
+_RETRY_IN = re.compile(r"retry in\s+(?:(\d+)h)?(?:(\d+)m(?!s))?(?:([\d.]+)s)?", re.I)
+_RETRY_DELAY = re.compile(r'"retryDelay"\s*:\s*"([\d.]+)s"')
+
+
+def retry_after(error: Any) -> Optional[float]:
+    """Seconds until Google says to try again ("Please retry in 2h56m56.7s",
+    or a RetryInfo "retryDelay"), or None when it does not say."""
+    text = f"{error} {getattr(error, 'body', '')}"
+    m = _RETRY_DELAY.search(text)
+    if m:
+        return float(m.group(1))
+    m = _RETRY_IN.search(text)
+    if m and any(m.groups()):
+        h, mins, secs = (float(g) if g else 0.0 for g in m.groups())
+        return h * 3600 + mins * 60 + secs
+    return None
 
 
 # Told about account problems - out of credit, key refused - wherever they

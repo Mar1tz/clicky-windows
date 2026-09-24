@@ -233,6 +233,8 @@ def _bare(monkeypatch):
     mgr._plan_in_progress = None
     mgr.progress = []
     mgr.sig_guide_progress = SimpleNamespace(emit=lambda *a: mgr.progress.append(a))
+    # A new step takes the last one's arrow and box down (LG-02).
+    mgr.sig_guide_release = mgr.sig_clear_drawings = SimpleNamespace(emit=lambda *a: None)
     mgr.submitted = []
 
     def submit(coro):
@@ -561,11 +563,13 @@ def test_a_line_can_still_be_synthesised_whole(monkeypatch):
     assert asyncio.run(tts.synthesize("hello")) == (b"abcd", 24000)
 
 
-def test_a_failed_stream_is_silence_not_a_crash(monkeypatch):
+def test_a_failed_stream_is_not_a_crash_and_not_silence(monkeypatch):
     tts = _tts(monkeypatch, [b"ab"], fail=True)
     asyncio.run(tts.speak("hello"))
     assert _Player.events[-1] == "drain", "what arrived is played; nothing raises"
-    assert asyncio.run(tts.synthesize("hello")) == (b"", 0)
+    # LG-04: a line that could not be fetched is said in the Windows voice
+    # (scripted as 0.1 s of silence by the test sandbox), not dropped.
+    assert asyncio.run(tts.synthesize("hello")) == (b"\x00\x00" * 2400, 24000)
 
 
 # ── the requests themselves ──────────────────────────────────────────────────

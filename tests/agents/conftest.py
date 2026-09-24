@@ -71,3 +71,17 @@ def pytest_collection_modifyitems(config, items):
     for item in items:
         if item.get_closest_marker("live"):
             item.add_marker(skip)
+
+
+@pytest.fixture(autouse=True)
+def _windows_voice_is_scripted(monkeypatch):
+    """The Windows voice (LG-04) is real SAPI: a second to start, and not on
+    every machine the suite runs on. Every test gets 0.1 s of silence from it
+    instead; nothing here ever drives the real one."""
+    try:
+        from audio.tts import windows_voice
+        monkeypatch.setattr(windows_voice.WindowsVoice, "_render",
+                            lambda self, text: b"\x00\x00" * 2400)
+        monkeypatch.setattr(windows_voice, "_voice", None)
+    except Exception:  # noqa: BLE001 - a suite without the app still runs
+        pass

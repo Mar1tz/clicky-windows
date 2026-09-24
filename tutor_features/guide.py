@@ -16,6 +16,9 @@ has no idea what a screenshot or a websocket is and can be tested against
 scripted state:
 
     speak_step(idx)  say step idx aloud and point at its target
+    show_step(idx)   put step idx on screen - its words, its arrow - at once.
+                     With it, speak_step only speaks, on a lane of its own
+                     that waits for a quiet moment (LG-01, below)
     check(step)      is this step done? True / False / None (can't tell)
     say(text)        speak one line (a nudge, "you're done")
     is_busy()        True while Tora is answering something else
@@ -37,6 +40,14 @@ Three details earn their keep:
   • Not talking over you. If you ask a question mid-guide, is_busy() is true
     while Tora answers, and the runner holds the next step until it is quiet
     again rather than speaking on top of the reply.
+
+    With show_step (LG-01) it holds only the VOICE. The step's words and
+    arrow make no sound, and holding them for every sentence is what made
+    arrows arrive "at the end of all the steps": on 24 Sep a step seen done
+    at 23:03:12 came up at 23:03:36, behind a conversation stuck in a loop.
+    So a step goes on screen the moment it is due, the runner watches for
+    it being done straight away, and its line is said when it is quiet - or
+    not at all, if the user finished the step first.
 """
 
 from __future__ import annotations
@@ -67,6 +78,8 @@ class GuideRunner:
         *,
         speak_step: Callable[[int], Awaitable[None]],
         check: Callable[[object], Awaitable[Optional[bool]]],
+        show_step: Optional[Callable[[int], Awaitable[None]]] = None,
+        self_arming: Optional[Callable[[object], bool]] = None,
         say: Callable[[str], Awaitable[None]],
         is_busy: Callable[[], bool],
         on_stop: Callable[[], None],
@@ -85,6 +98,12 @@ class GuideRunner:
     ):
         self._guide = guide
         self._speak_step = speak_step
+        self._show_step = show_step
+        # A check that arms ITSELF (the step watcher mutes whatever was true
+        # when the step went up). Its True is a real transition even at the
+        # first poll - which, now that the arrow is up before the voice, is
+        # often the case: the user clicked while the line was waiting.
+        self._self_arming = self_arming
         self._check = check
         self._say = say
         self._is_busy = is_busy
@@ -142,6 +161,11 @@ class GuideRunner:
         self._idx = -1
         self._completed = False
         self._pending: Optional[Command] = None
+        # The voice lane (LG-01): the step waiting to be said, and whether a
+        # line is being said now.
+        self._voice_want: Optional[int] = None
+        self._voice_task: Optional[asyncio.Task] = None
+        self._voice_speaking = False
         self._wake = asyncio.Event()
         self._task: Optional[asyncio.Task] = None
         self._loop: Optional[asyncio.AbstractEventLoop] = None
@@ -310,6 +334,10 @@ class GuideRunner:
             self._end_reason = "crashed"
             _log.exception("guide runner crashed")
         finally:
+            self._voice_want = None
+            voice = self._voice_task
+            if voice is not None and not voice.done():
+                voice.cancel()
             self._emit("ended", completed=self._completed, at=self._idx,
                        reason=self._end_reason or "stopped before it began")
             # on_stop runs while _idx still holds where we stopped, so a caller
@@ -321,6 +349,9 @@ class GuideRunner:
             self._idx = -1
 
     async def _show(self, idx: int) -> None:
+        if self._show_step is not None:
+            await self._show_now(idx)
+            return
         await self._wait_idle()
         self._shown_at = time.monotonic()
         self._emit("step_shown", index=idx)
@@ -334,6 +365,69 @@ class GuideRunner:
             with self._move_lock:
                 self._shown += 1
                 self._heading = None
+
+    async def _show_now(self, idx: int) -> None:
+        """LG-01: the step's words and arrow go up at once; its line is
+        queued on the voice lane."""
+        self._shown_at = time.monotonic()
+        self._emit("step_shown", index=idx)
+        try:
+            await self._show_step(idx)
+        except Exception:
+            _log.debug("show_step failed", exc_info=True)
+        finally:
+            # On screen: a manual move is allowed again.
+            with self._move_lock:
+                self._shown += 1
+                self._heading = None
+        self._voice(idx)
+
+    # ── The voice lane (LG-01) ──────────────────────────────────────────────
+
+    def _voice(self, idx: int) -> None:
+        """Say step idx when it is quiet. A newer step replaces one still
+        waiting to be said; a line already being said is finished first."""
+        waiting = self._voice_want
+        if waiting is not None and waiting != idx:
+            self._emit("step_unsaid", index=waiting)
+        self._voice_want = idx
+        if self._voice_task is None or self._voice_task.done():
+            self._voice_task = asyncio.ensure_future(self._voice_loop())
+
+    async def _voice_loop(self) -> None:
+        while self._voice_want is not None:
+            await self._wait_idle()
+            idx, self._voice_want = self._voice_want, None
+            if idx is None or idx != self._idx:
+                # Done before there was a quiet moment to say it: saying it
+                # now would describe a step that is already behind them.
+                if idx is not None:
+                    self._emit("step_unsaid", index=idx)
+                continue
+            self._voice_speaking = True
+            try:
+                await self._speak_step(idx)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                _log.debug("speak_step failed", exc_info=True)
+            finally:
+                self._voice_speaking = False
+
+    async def _voice_done(self, *, drop_waiting: bool = False,
+                          timeout: float = 15.0) -> None:
+        """Wait for the voice lane to finish what it is saying - and, with
+        drop_waiting, forget a line that has not started (the guide is
+        over, or about to say something that replaces it)."""
+        if drop_waiting:
+            self._voice_want = None
+        start = time.monotonic()
+        while (self._voice_task is not None and not self._voice_task.done()
+               and (time.monotonic() - start) < timeout):
+            if drop_waiting and not self._voice_speaking:
+                self._voice_task.cancel()
+                break
+            await asyncio.sleep(0.05)
 
     @property
     def heading(self) -> int:
@@ -367,7 +461,10 @@ class GuideRunner:
         # mean the screen looked done before the user did anything, and
         # firing would skip the step. An unsure (None) start still arms:
         # the watcher reports None while it waits for the user to act.
-        armed = (await self._check_quiet(step)) is not True
+        if self._self_arming is not None and self._self_arming(step):
+            armed = True
+        else:
+            armed = (await self._check_quiet(step)) is not True
         seen_true = 0
         started = time.monotonic()
         nudged = False
@@ -396,7 +493,10 @@ class GuideRunner:
             if val is True:
                 if armed:
                     seen_true += 1
-                    if seen_true >= self._confirm_polls and not self._is_busy():
+                    # With show_step, a busy conversation holds only the
+                    # voice: the next step goes on screen now (LG-01).
+                    if seen_true >= self._confirm_polls and (
+                            self._show_step is not None or not self._is_busy()):
                         return "done"
             else:
                 seen_true = 0
@@ -480,6 +580,7 @@ class GuideRunner:
         the ending when there is one (it saves the walkthrough and shows a
         summary); without one - or if it fails - a plain line."""
         if self._on_finish is not None:
+            await self._voice_done(drop_waiting=True)
             await self._wait_idle()
             try:
                 await self._on_finish(ahead)
@@ -490,6 +591,7 @@ class GuideRunner:
                              else "That's the last step — you're all done!")
 
     async def _say_safe(self, text: str) -> None:
+        await self._voice_done()
         await self._wait_idle()
         try:
             await self._say(text)

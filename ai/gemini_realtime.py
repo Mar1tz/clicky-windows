@@ -57,6 +57,12 @@ MAX_SESSION_AGE_S = 8 * 60
 
 # A tool chain that never settles must not hang the conversation.
 MAX_TOOL_ROUNDS = 6
+# Past MAX_TOOL_ROUNDS every call is answered with an error, and on 24 Sep the
+# model ignored 35 of those in a row: 41 guide_step calls in 20 s, each one a
+# paid pass over the whole conversation, until the 22 s watchdog ended it.
+# Past this many it is not asking any more, it is looping - the session is
+# closed, and the conversation resumes in a fresh one (LG-03).
+HARD_TOOL_ROUNDS = 10
 
 # Context compression. 16k is roughly forty spoken turns of history, far more
 # than any conversation refers back to, and it caps what every later turn
@@ -789,6 +795,16 @@ class RealtimeConversation:
                 elif ev.kind == "tool_call":
                     _log.info("tool call: %s", ", ".join(c.name for c in ev.calls))
                     self._tool_rounds += 1
+                    if self._tool_rounds > HARD_TOOL_ROUNDS:
+                        _log.warning("tool loop cut off after %d rounds - closing the session; "
+                                     "the conversation resumes in a fresh one",
+                                     self._tool_rounds - 1)
+                        reason = "tool loop"
+                        try:
+                            await session.close()
+                        except Exception:  # noqa: BLE001 - it is being dropped anyway
+                            pass
+                        break
                     if self._tool_rounds > MAX_TOOL_ROUNDS:
                         _log.warning("tool loop did not settle after %d rounds in this request — "
                                      "answering anyway", self._tool_rounds - 1)

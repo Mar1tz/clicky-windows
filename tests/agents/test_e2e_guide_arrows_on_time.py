@@ -263,7 +263,7 @@ def _guide(monkeypatch, *, resolve_s=0.2):
         return SimpleNamespace(x=1.0, y=2.0, label=query, via="vision", bbox=None)
 
     companion._resolve_point = resolve
-    companion._show_point = lambda found, query, hold=True: drawn.append(query) or True
+    companion._show_guide_point = lambda found, query: drawn.append(query) or True
     return companion, plan, drawn, looked
 
 

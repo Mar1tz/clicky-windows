@@ -203,6 +203,13 @@ FLY_DURATION_MAX = 2.8
 DWELL_SECONDS    = 4.0    # sits on the element while the LLM explains
 RETURN_DURATION  = 1.4
 
+# A walkthrough step's arrow is a signpost, not a lecture (LG-02). Teacher
+# pace - a 1.6-2.8 s flight, 4 s on the target, then back to the cursor - is
+# for pointing while Tora explains something. A step's arrow at that pace
+# landed ~2 s after the step and was gone again before a slow reader got
+# there. So it arrives in a blink and stays until the step changes.
+GUIDE_FLY_S = 0.35
+
 # Pointing state machine
 _PHASE_FOLLOW    = "follow"
 _PHASE_FLYING    = "flying"
@@ -316,6 +323,25 @@ class CursorOverlay(QWidget):
         eased = min(norm * 2.85, 1.0) ** 0.76
         self._audio_level = self._audio_level * 0.55 + eased * 0.45
         self._caption.note_audio_level(self._audio_level)
+
+    def guide_point(self, x: float, y: float, label: str = ""):
+        """A walkthrough step's arrow: there in GUIDE_FLY_S (doubled in slow
+        mode), and held on the target until guide_release() - a step is not
+        over until it is done."""
+        self._hold_dwell = True
+        self._locked_pos = QPointF(x, y)
+        self._bubble_text = label or random.choice(POINTER_PHRASES)
+        self._bubble_scale = 0.5
+        self._bubble_alpha = 0.0
+        self._ring = (x, y, 26.0)
+        self._ring_phase = 0.0
+        self._lock_timer.stop()
+        self._begin_flight(self._display_pos, self._locked_pos, _PHASE_FLYING,
+                           duration=GUIDE_FLY_S)
+
+    def guide_release(self):
+        """The step changed or the walkthrough ended: the arrow goes home."""
+        self.release_point()
 
     def point_at(self, x: float, y: float, label: str = ""):
         """Fly to an on-screen target at teacher pace, dwell, then fly back.
@@ -538,15 +564,20 @@ class CursorOverlay(QWidget):
         u = (now - active["start"]) / active["dur"]
         return _stroke_tip(active, u)
 
-    def _begin_flight(self, start: QPointF, end: QPointF, phase: str):
+    def _begin_flight(self, start: QPointF, end: QPointF, phase: str,
+                      duration: Optional[float] = None):
         dx, dy = end.x() - start.x(), end.y() - start.y()
         dist = math.hypot(dx, dy)
-        mult = 1.7 if self._slow_mode else 1.0
-        # Scale duration by distance so short hops don't feel sluggish
-        dur = max(FLY_DURATION_MIN, min(FLY_DURATION_MAX, FLY_DURATION_MIN + dist / 700.0))
-        if phase == _PHASE_RETURNING:
-            dur = RETURN_DURATION
-        dur *= mult
+        if duration is not None:
+            # Walkthrough pace (LG-02): a fixed blink, doubled in slow mode.
+            dur = duration * (2.0 if self._slow_mode else 1.0)
+        else:
+            mult = 1.7 if self._slow_mode else 1.0
+            # Scale duration by distance so short hops don't feel sluggish
+            dur = max(FLY_DURATION_MIN, min(FLY_DURATION_MAX, FLY_DURATION_MIN + dist / 700.0))
+            if phase == _PHASE_RETURNING:
+                dur = RETURN_DURATION
+            dur *= mult
         # Arc up over the midpoint
         mid = QPointF((start.x() + end.x()) / 2, (start.y() + end.y()) / 2)
         arc_height = min(dist * 0.22, 90.0)

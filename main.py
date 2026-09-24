@@ -250,6 +250,8 @@ def main():
     manager.sig_point_at.connect(overlay.point_at)
     manager.sig_point_hold.connect(overlay.set_point_hold)
     manager.sig_point_release.connect(overlay.release_point)
+    manager.sig_guide_point.connect(overlay.guide_point)
+    manager.sig_guide_release.connect(overlay.guide_release)
 
     # Whiteboard annotations (legacy per-shape signals)
     manager.sig_arrow.connect(overlay.add_arrow)
