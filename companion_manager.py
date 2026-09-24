@@ -1084,8 +1084,12 @@ class CompanionManager(QObject):
         )
         self._screen_names = summary.names
         # Cache the control snapshot so directional coreference ("the one to
-        # its left") reuses this turn's walk instead of walking again.
+        # its left") reuses this turn's walk instead of walking again. When
+        # and where it was taken decide whether it may still be trusted -
+        # see _match_snapshot (APP-04).
         self._pointables = summary.pointables
+        self._pointables_at = time.monotonic()
+        self._pointables_title = active_window_title()
         bits = [self._context_head(summary.line)]
         ref = self._last_ref
         if self._ref_fresh():
@@ -2022,6 +2026,28 @@ class CompanionManager(QObject):
             via="vision",
         )
 
+    # How long the control snapshot taken with a question may answer "where
+    # is it" without walking again: the same turn, not the next screen.
+    SNAPSHOT_TRUST_S = 10.0
+    _pointables_at = 0.0
+    _pointables_title = ""
+
+    def _snapshot_fresh(self) -> bool:
+        """May the control snapshot still be trusted for positions?
+
+        It was taken when the user last spoke. A walkthrough step presented
+        a minute and three screens later used to be resolved against it, so
+        a control that shared a name with one from back then - "Save" in a
+        dialog and in the main window - got the arrow where the OLD one was
+        (APP-04). Now: only for a few seconds, only in the same window, and
+        never once a walkthrough step has ended (the screen was acted on).
+        """
+        if not self._pointables_at:
+            return False
+        if time.monotonic() - self._pointables_at > self.SNAPSHOT_TRUST_S:
+            return False
+        return active_window_title() == self._pointables_title
+
     def _match_snapshot(self, query: str):
         """Best match from this turn's control snapshot, or None.
 
@@ -2029,10 +2055,12 @@ class CompanionManager(QObject):
         walked for the screen context — no COM calls, no tree walk. Applies
         the same ambiguity margin as the UIA search so a coin-flip between two
         similar names defers to the slower, better resolvers instead of
-        guessing.
+        guessing. Only while the snapshot is fresh (_snapshot_fresh).
         """
         from types import SimpleNamespace
         from ai.hybrid_pointer import _score_match
+        if not self._snapshot_fresh():
+            return None
         best = None
         second = 0.0
         for cx, cy, name, ctype in (self._pointables or []):
@@ -2155,7 +2183,9 @@ class CompanionManager(QObject):
                 return None
             scale = self._dpi_scale()
             from ai.hybrid_pointer import nearest_in_direction
-            snapshot = self._pointables or None
+            # A stale snapshot is no snapshot: nearest_in_direction then walks
+            # the screen as it is now (APP-04).
+            snapshot = (self._pointables or None) if self._snapshot_fresh() else None
             nb = await asyncio.to_thread(
                 lambda: nearest_in_direction(
                     anchor.x * scale, anchor.y * scale, direction,
@@ -3314,6 +3344,9 @@ class CompanionManager(QObject):
                           stats["first_s"])
 
         elif kind == "step_ended":
+            # The screen was just acted on: the control snapshot from the
+            # question describes a screen that no longer exists (APP-04).
+            self._pointables_at = 0.0
             outcome = detail.get("outcome", "")
             step = plan.steps[idx] if plan and 0 <= idx < total else None
             watcher = getattr(step, "_watcher", None) if step is not None else None
