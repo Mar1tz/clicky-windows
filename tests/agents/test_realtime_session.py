@@ -239,3 +239,87 @@ def test_say_now_gives_up_rather_than_talking_over_her(monkeypatch):
 
     assert asyncio.run(conv.say_now("[it is done]", wait_s=0.2)) is False
     assert session.sent == []
+
+
+# -- GW-01: the runaway brake, in the shape the wire actually has ---------------------
+
+def _run_script(monkeypatch, script, handler_name="guide_step"):
+    """Drive the real pump with a scripted event stream; count tool runs."""
+    ran: list[str] = []
+
+    async def handler(args):
+        ran.append(handler_name)
+        return {"ok": True}
+
+    ScriptedSession.script = script
+    ScriptedSession.opened = []
+    monkeypatch.setattr(rt, "LiveSession", ScriptedSession)
+    monkeypatch.setattr(rt.PcmStreamPlayer, "stop", lambda self: None, raising=False)
+    conv = rt.RealtimeConversation(tools={handler_name: handler})
+
+    async def scenario():
+        await conv.connect("PROMPT")
+        for _ in range(300):
+            if conv._session is None:
+                break
+            await asyncio.sleep(0.01)
+
+    asyncio.run(scenario())
+    return ran, conv
+
+
+def test_a_tool_loop_with_turn_completes_between_calls_is_still_capped(monkeypatch):
+    """The 16:39 session, as the Live API delivers it: every tool round ends
+    with its own turn_complete. Field fix 5 refilled the budget on each one,
+    so the counter went 1, 0, 1, 0 and the brake fired zero times while the
+    model called guide_step 39 times in 24 seconds.
+
+    The test this replaces scripted nine tool calls with NO turn_completes
+    between them - not what the wire does - and so it passed."""
+    script = [rt_event("input_transcript", text="next")]
+    for _ in range(40):
+        script += [rt_event("tool_call", calls=[_call("guide_step")]),
+                   rt_event("turn_complete", produced_output=False)]
+    script += [rt_event("turn_complete", produced_output=True)]
+
+    ran, _conv = _run_script(monkeypatch, script)
+    assert len(ran) == rt.MAX_TOOL_ROUNDS, \
+        f"one request may make {rt.MAX_TOOL_ROUNDS} tool calls, not {len(ran)}"
+
+
+def test_a_question_after_a_tool_only_turn_gets_a_fresh_budget(monkeypatch):
+    """What Field fix 5 was actually for, kept: a turn that only called tools
+    never 'finishes', so its transcript was never cleared, and the old
+    first-fragment check missed the NEXT question entirely."""
+    script = []
+    for _ in range(8):                       # eight separate requests
+        script += [rt_event("input_transcript", text="do the thing"),
+                   rt_event("tool_call", calls=[_call("guide_step")]),
+                   rt_event("turn_complete", produced_output=False)]
+    ran, _conv = _run_script(monkeypatch, script)
+    assert len(ran) == 8, "eight requests, eight tool calls - none refused"
+
+
+def test_one_long_request_and_its_follow_up_are_budgeted_separately(monkeypatch):
+    script = [rt_event("input_transcript", text="first")]
+    for _ in range(10):
+        script += [rt_event("tool_call", calls=[_call("guide_step")]),
+                   rt_event("turn_complete", produced_output=False)]
+    script += [rt_event("input_transcript", text="second")]
+    for _ in range(3):
+        script += [rt_event("tool_call", calls=[_call("guide_step")]),
+                   rt_event("turn_complete", produced_output=False)]
+    ran, _conv = _run_script(monkeypatch, script)
+    assert len(ran) == rt.MAX_TOOL_ROUNDS + 3
+
+
+def test_the_brake_says_so_in_the_log(monkeypatch, caplog):
+    import logging
+    script = [rt_event("input_transcript", text="next")]
+    for _ in range(9):
+        script += [rt_event("tool_call", calls=[_call("guide_step")]),
+                   rt_event("turn_complete", produced_output=False)]
+    with caplog.at_level(logging.WARNING, logger="tora.realtime"):
+        _run_script(monkeypatch, script)
+    assert any("did not settle" in r.getMessage() for r in caplog.records), \
+        "a brake that fires in silence is how this went unnoticed for a day"

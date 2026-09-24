@@ -438,6 +438,15 @@ class RealtimeConversation:
         self._turn = Turn()
         self._speaking = False
         self._tool_rounds = 0
+        # True once a turn has ended, until the user speaks again. The user
+        # speaking across that boundary is what "a new request" means, and a
+        # new request is the only thing that refills the tool budget. Using
+        # "is this the first transcript of the turn" instead missed any
+        # question that followed a tool-only turn (the turn never finished,
+        # so its transcript was never cleared) - which is what Field fix 5
+        # papered over by resetting on every turn_complete, disabling the
+        # runaway brake entirely.
+        self._awaiting_user = True
 
     # ── Session ──────────────────────────────────────────────────────────────
 
@@ -650,6 +659,10 @@ class RealtimeConversation:
             await asyncio.sleep(0.15)
         if not self.ready or self.speaking:
             return False
+        # A volunteered turn is a request of its own; whatever it does with
+        # tools must not be charged to whatever came before it.
+        self._tool_rounds = 0
+        self._awaiting_user = False
         try:
             await self._session.send_text(note, turn_complete=True)
             return True
@@ -737,11 +750,12 @@ class RealtimeConversation:
                     return                      # superseded by a reconnect
 
                 if ev.kind == "input_transcript":
-                    if not self._turn.heard:
-                        # A new question: the tool budget starts again. Before
-                        # this, a long conversation quietly used up the six
-                        # rounds and Tora stopped being able to do anything.
+                    if self._awaiting_user:
+                        # The user speaking after a turn boundary is a new
+                        # request, and only a new request refills the tool
+                        # budget. See _awaiting_user in __init__.
                         self._tool_rounds = 0
+                        self._awaiting_user = False
                     self._turn.heard += ev.text
                     self._on_heard(ev.text)
 
@@ -781,9 +795,17 @@ class RealtimeConversation:
                 elif ev.kind == "turn_complete":
                     # A turn that produced only tool calls is not the answer;
                     # the answer is the turn that follows the tool results.
-                    # Either way the chain for this request has ended, so the
-                    # tool budget goes back to full.
-                    self._tool_rounds = 0
+                    #
+                    # This does NOT refill the tool budget. It used to (Field
+                    # fix 5), and on the Live API every tool round ends with
+                    # its own turn_complete - so the counter went 1, 0, 1, 0
+                    # and MAX_TOOL_ROUNDS could never trip. It fired zero
+                    # times in the whole log while the model called
+                    # guide_step 39 times in 24 seconds and walked off the end
+                    # of a walkthrough. The budget refills when the USER
+                    # speaks next (input_transcript) or when a spoken answer
+                    # finishes the request (_finish_turn).
+                    self._awaiting_user = True
                     if not ev.produced_output:
                         continue
                     self._finish_turn()
@@ -812,6 +834,7 @@ class RealtimeConversation:
         turn, self._turn = self._turn, Turn()
         self._speaking = False
         self._tool_rounds = 0
+        self._awaiting_user = True
         if turn.heard or turn.said:
             self._on_turn_end(turn)
 
