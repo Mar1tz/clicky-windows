@@ -80,6 +80,29 @@ def _finish_kind(done_by: str) -> str:
     return head.strip() or "unknown"
 
 
+def _duration(seconds: float) -> str:
+    """42 s · 1 min 42 s · 1 h 5 min - how long a walkthrough took."""
+    s = max(0, int(round(seconds)))
+    if s < 60:
+        return f"{s} s"
+    if s < 3600:
+        return f"{s // 60} min {s % 60} s" if s % 60 else f"{s // 60} min"
+    return f"{s // 3600} h {s % 3600 // 60} min"
+
+
+def _walkthrough_summary(goal: str, steps: int, seconds: float) -> str:
+    """The one line a finished walkthrough leaves on screen."""
+    goal = " ".join(str(goal or "").split()).rstrip(".") or "Walkthrough"
+    return (f"{goal[0].upper()}{goal[1:]} · {steps} step{'s' if steps != 1 else ''}"
+            f" · {_duration(seconds)}")
+
+
+# How long after a walkthrough finishes the live model is still told about
+# it - "what was the second step again?" comes right after the end, and the
+# steps were never in its conversation (they are Tora's own voice).
+FINISHED_CONTEXT_S = 300.0
+
+
 _TYPING_VERBS = ("type", "enter ", "write", "paste", "fill in", "input")
 _SUBMIT_WORDS = ("press enter", "hit enter", "press return", "hit return",
                  "and submit", "then submit")
@@ -359,6 +382,8 @@ class CompanionManager(QObject):
         self._guide_runner = None
         # A guide stopped part-way: (guide, step_index), so "continue" resumes.
         self._resume = None
+        # The last walkthrough to FINISH: (guide, monotonic time, saved).
+        self._guide_last = None
         # Prefetched step speech, per step index, filled while the previous
         # step is being performed so presenting is instant. Pointer
         # coordinates are deliberately NOT prefetched (see _prefetch_step);
@@ -1067,6 +1092,21 @@ class CompanionManager(QObject):
                 f"A guide is in progress: step {self._lesson_step_idx + 1} of "
                 f"{len(self._lesson_steps)}. If they say 'next', teach the "
                 f"following step only."
+            )
+        elif (self._guide_last is not None
+              and time.monotonic() - self._guide_last[1] < FINISHED_CONTEXT_S):
+            done, _, saved = self._guide_last
+            steps = "; ".join(f'{i + 1}. "{s.instruction[:80]}"'
+                              for i, s in enumerate(done.steps[:8]))
+            bits.append(
+                f'A walkthrough toward "{done.goal}" just finished, all '
+                f"{len(done.steps)} steps: {steps}."
+                # "It is saved" read as the user's WORK being saved ("your
+                # template has been saved to your journal") - say what is.
+                + (" The walkthrough's steps are saved in their Tora journal, "
+                   "so it can be gone through again." if saved else "")
+                + " It is over - answer questions about it from this, and "
+                "do not call guide_step."
             )
         waiting = self._pending_confirmation_line()
         if waiting:
@@ -2901,10 +2941,13 @@ class CompanionManager(QObject):
                 self.sig_point_release.emit()
             self._emit_state(AppState.IDLE)
 
-    async def _reply_local(self, msg: str):
-        """Show + speak a message that doesn't need an LLM round-trip."""
-        self.sig_response_chunk.emit(msg)
-        self.sig_response_done.emit(msg)
+    async def _reply_local(self, msg: str, *, shown: str = ""):
+        """Show + speak a message that doesn't need an LLM round-trip.
+
+        `shown`, when given, is displayed instead of `msg` - for when the
+        screen should say more than the voice (a walkthrough's summary)."""
+        self.sig_response_chunk.emit(shown or msg)
+        self.sig_response_done.emit(shown or msg)
         self._last_response = msg
         self._emit_state(AppState.SPEAKING)
         try:
@@ -2962,6 +3005,7 @@ class CompanionManager(QObject):
         from tutor_features.guide import GuideRunner
         self._stop_guide()
         self._resume = None
+        self._guide_last = None
         self._lesson_plan = guide
         self._lesson_steps = [st.instruction for st in guide.steps]
         self._lesson_step_idx = start_index
@@ -2980,6 +3024,7 @@ class CompanionManager(QObject):
             look_ahead=None,
             on_stuck=self._guide_stuck,
             on_event=self._guide_event,
+            on_finish=self._guide_finished,
             stuck_after_s=25.0,
             step_timeout_s=60.0,
             observer=__import__(
@@ -3126,6 +3171,49 @@ class CompanionManager(QObject):
             self._activity("")
             if self._state != AppState.IDLE:
                 self._emit_state(AppState.IDLE)
+
+    async def _guide_finished(self, ahead: bool) -> None:
+        """The walkthrough is complete: say so, show what was done, keep it.
+
+        Before GW-16 a finished walkthrough ended on one spoken line and
+        vanished - nothing on screen, nothing kept, and the live model never
+        knew it had happened. Now: a closing line, a one-line summary under
+        it, and the walkthrough saved to the journal (the journal already
+        keeps every answer Tora gives, unasked), so it turns up in "what did
+        I learn today" and its plan can be replayed.
+        """
+        plan = self._lesson_plan
+        if plan is None:
+            await self._reply_local("That's it - all done!")
+            return
+        stats = self._guide_stats
+        secs = time.monotonic() - stats["started"] if stats else 0.0
+        saved = self._save_walkthrough(plan, secs)
+        self._guide_last = (plan, time.monotonic(), saved)
+        spoken = ("Looks like you're already there - nicely done!" if ahead
+                  else "That's it - all done!")
+        if saved:
+            spoken += " I've saved the steps to your journal."
+        summary = _walkthrough_summary(plan.goal, len(plan.steps), secs)
+        await self._reply_local(spoken, shown=f"{spoken}\n✓ {summary}")
+
+    def _save_walkthrough(self, plan, secs: float) -> bool:
+        """Keep a finished walkthrough in the journal. Never raises: a
+        journal that cannot be written must not spoil the ending."""
+        if not self._journal_enabled:
+            return False
+        try:
+            title = active_window_title()
+            entry = journal.log_walkthrough(
+                plan.goal, [s.instruction for s in plan.steps],
+                plan=gemini_planner.guide_to_dict(plan),
+                app_key=app_key(title), window_title=title, seconds=secs)
+        except Exception:  # noqa: BLE001
+            _log.warning("could not save the walkthrough to the journal", exc_info=True)
+            return False
+        if entry > 0:
+            _log.info("walkthrough saved to the journal (entry %d)", entry)
+        return entry > 0
 
     async def _guide_stuck(self, idx: int) -> None:
         """Nothing has moved for a while and the step isn't done — help.

@@ -19,6 +19,7 @@ Spaced repetition uses the SM-2 lite algorithm:
 
 from __future__ import annotations
 
+import json
 import os
 import sqlite3
 import time
@@ -60,6 +61,15 @@ def _connect() -> sqlite3.Connection:
         "CREATE INDEX IF NOT EXISTS ix_entries_due "
         "ON entries (next_review_at) WHERE next_review_at IS NOT NULL"
     )
+    # The replayable plan behind a walkthrough entry. A table of its own so
+    # an existing journal needs no migration.
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS walkthroughs (
+            entry_id    INTEGER PRIMARY KEY,
+            plan_json   TEXT NOT NULL,
+            seconds     REAL
+        )
+    """)
     return conn
 
 
@@ -89,6 +99,58 @@ def log_qa(
              provider, model, next_review, tags),
         )
         return cur.lastrowid
+
+
+WALKTHROUGH_TAG = "walkthrough"
+
+
+def log_walkthrough(
+    goal: str,
+    steps: list[str],
+    *,
+    plan: Optional[dict] = None,
+    app_key: str = "",
+    window_title: str = "",
+    seconds: float = 0.0,
+) -> int:
+    """A finished walkthrough, kept like anything else Tora taught.
+
+    The goal becomes the question ("How do I export the video?") and the
+    numbered steps the answer, so it turns up in "what did I learn today"
+    and comes back for review like any other entry. The plan itself - the
+    planner's JSON, with the targets that were actually used - is stored
+    beside it, so the walkthrough can be replayed without planning again.
+    """
+    goal = " ".join(str(goal or "").split()).rstrip(".?!")
+    steps = [s.strip() for s in steps if s and s.strip()]
+    if not goal or not steps:
+        return -1
+    question = goal if goal.lower().startswith("how ") else (
+        f"How do I {goal[0].lower()}{goal[1:]}")
+    answer = "\n".join(f"{i}. {s}" for i, s in enumerate(steps, 1))
+    entry_id = log_qa(f"{question[0].upper()}{question[1:]}?", answer,
+                      app_key=app_key, window_title=window_title,
+                      tags=WALKTHROUGH_TAG)
+    if entry_id > 0 and plan:
+        with _connect() as conn:
+            conn.execute(
+                "INSERT OR REPLACE INTO walkthroughs (entry_id, plan_json, seconds) "
+                "VALUES (?, ?, ?)", (entry_id, json.dumps(plan), float(seconds)))
+    return entry_id
+
+
+def walkthrough_plan(entry_id: int) -> Optional[dict]:
+    """The stored plan for a walkthrough entry, or None."""
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT plan_json FROM walkthroughs WHERE entry_id = ?", (entry_id,)
+        ).fetchone()
+    if not row:
+        return None
+    try:
+        return json.loads(row[0])
+    except (TypeError, ValueError):
+        return None
 
 
 # ─── Query helpers ────────────────────────────────────────────────────────────
@@ -167,6 +229,8 @@ def summarise(entries: list[dict], header: str = "") -> str:
     for e in entries[:10]:
         when = datetime.fromtimestamp(e["created_at"]).strftime("%I:%M %p")
         q = e["question"][:80]
+        if WALKTHROUGH_TAG in (e.get("tags") or ""):
+            q += " (walkthrough)"
         lines.append(f"• {when} — {q}")
     if len(entries) > 10:
         lines.append(f"…and {len(entries) - 10} more.")

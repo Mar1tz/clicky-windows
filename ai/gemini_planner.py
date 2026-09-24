@@ -329,6 +329,56 @@ def _parse_condition(raw) -> StepCondition:
     )
 
 
+def guide_from_dict(data: dict, goal: str = "") -> Guide:
+    """A Guide from the planner's JSON shape - what the model returns, and
+    what guide_to_dict writes. One parser for both, so a saved walkthrough
+    comes back exactly as a fresh plan would."""
+    return Guide(
+        goal=data.get("goal") or goal,
+        preamble=data.get("preamble", ""),
+        feasible=bool(data.get("feasible", True)),
+        steps=[
+            Step(
+                instruction=s.get("instruction", ""),
+                target=s.get("target", "") if s.get("kind") != "wait" else "",
+                kind="wait" if s.get("kind") == "wait" else "action",
+                done_when=s.get("done_when", ""),
+                completion=_parse_condition(s.get("completion")),
+                expected=_parse_expected(s.get("expected_state")),
+                possible_actions=[
+                    a for a in (s.get("possible_actions") or []) if a
+                ][:4],
+            )
+            for s in data.get("steps", [])
+            if s.get("instruction")
+        ],
+    )
+
+
+def guide_to_dict(guide: Guide) -> dict:
+    """The planner's JSON shape for a Guide, so it can be stored and replayed
+    (GW-16 saves finished walkthroughs; GW-21 replays them). Targets are the
+    ones the walkthrough actually used - snapped to real control names."""
+    from dataclasses import asdict
+    return {
+        "goal": guide.goal,
+        "preamble": guide.preamble,
+        "feasible": guide.feasible,
+        "steps": [
+            {
+                "instruction": s.instruction,
+                "target": s.target,
+                "kind": s.kind,
+                "done_when": s.done_when,
+                "completion": asdict(s.completion),
+                "expected_state": asdict(s.expected),
+                "possible_actions": list(s.possible_actions),
+            }
+            for s in guide.steps
+        ],
+    }
+
+
 async def plan(
     goal: str,
     *,
@@ -400,26 +450,7 @@ async def plan(
     if not data:
         return Guide(goal=goal, feasible=False)
 
-    guide = Guide(
-        goal=data.get("goal") or goal,
-        preamble=data.get("preamble", ""),
-        feasible=bool(data.get("feasible", True)),
-        steps=[
-            Step(
-                instruction=s.get("instruction", ""),
-                target=s.get("target", "") if s.get("kind") != "wait" else "",
-                kind="wait" if s.get("kind") == "wait" else "action",
-                done_when=s.get("done_when", ""),
-                completion=_parse_condition(s.get("completion")),
-                expected=_parse_expected(s.get("expected_state")),
-                possible_actions=[
-                    a for a in (s.get("possible_actions") or []) if a
-                ][:4],
-            )
-            for s in data.get("steps", [])
-            if s.get("instruction")
-        ],
-    )
+    guide = guide_from_dict(data, goal=goal)
     split_compound_steps(guide, controls)
     if controls:
         snap_targets(guide, controls)

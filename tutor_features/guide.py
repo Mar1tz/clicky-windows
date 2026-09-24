@@ -73,6 +73,7 @@ class GuideRunner:
         look_ahead: Optional[Callable[[int], Awaitable[Optional[int]]]] = None,
         on_stuck: Optional[Callable[[int], Awaitable[None]]] = None,
         on_event: Optional[Callable[[str, dict], None]] = None,
+        on_finish: Optional[Callable[[bool], Awaitable[None]]] = None,
         observer=None,
         start_index: int = 0,
         poll_s: float = 0.3,
@@ -102,6 +103,10 @@ class GuideRunner:
         # "next", and until this existed none of it reached the log: 14
         # walkthroughs, 0 endings recorded, and every complaint was guesswork.
         self._on_event = on_event
+        # Called once when the walkthrough is completed (True if the user got
+        # there ahead of it). Finishing is an event, not a line: this is
+        # where the app says "done", shows what was done and keeps it.
+        self._on_finish = on_finish
         self._observer = observer
         self._shown_at = 0.0
         self._end_reason = ""
@@ -255,9 +260,7 @@ class GuideRunner:
                     if self._idx >= self.total - 1:
                         self._completed = True
                         self._end_reason = "the user got there ahead of the guide"
-                        await self._say_safe(
-                            "Looks like you're already there — nicely done!"
-                        )
+                        await self._finish(ahead=True)
                         break
                     self._idx += 1
                     await self._show(self._idx)
@@ -267,9 +270,7 @@ class GuideRunner:
                 if self._idx >= self.total:
                     self._completed = True
                     self._end_reason = "finished"
-                    await self._say_safe(
-                        "That's the last step — you're all done!"
-                    )
+                    await self._finish(ahead=False)
                     break
                 await self._show(self._idx)
         except asyncio.CancelledError:
@@ -430,6 +431,20 @@ class GuideRunner:
         start = time.monotonic()
         while self._is_busy() and (time.monotonic() - start) < timeout:
             await asyncio.sleep(0.15)
+
+    async def _finish(self, *, ahead: bool) -> None:
+        """The walkthrough is complete: close it. The app's on_finish owns
+        the ending when there is one (it saves the walkthrough and shows a
+        summary); without one - or if it fails - a plain line."""
+        if self._on_finish is not None:
+            await self._wait_idle()
+            try:
+                await self._on_finish(ahead)
+                return
+            except Exception:  # noqa: BLE001 - the ending must still be said
+                _log.debug("on_finish failed", exc_info=True)
+        await self._say_safe("Looks like you're already there — nicely done!" if ahead
+                             else "That's the last step — you're all done!")
 
     async def _say_safe(self, text: str) -> None:
         await self._wait_idle()
