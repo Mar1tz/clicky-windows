@@ -245,6 +245,7 @@ def test_the_tool_result_names_the_destination_and_says_stop_calling():
     companion = CompanionManager.__new__(CompanionManager)
     companion._guide_runner = runner
     companion._request_serial, companion._guide_moved_for = 1, -1
+    companion._heard_buf = []
 
     first = asyncio.run(companion._tool_guide_step({"action": "next"}))
     assert first["where"] == "now on step 2 of 2"
@@ -361,6 +362,7 @@ def test_one_thing_said_is_one_move_however_often_the_model_calls():
     companion = CompanionManager.__new__(CompanionManager)
     companion._guide_runner = runner
     companion._request_serial, companion._guide_moved_for = 1, -1
+    companion._heard_buf = []
 
     moves = 0
     for _ in range(12):
@@ -383,6 +385,7 @@ def test_stop_always_works_even_after_a_move():
     companion = CompanionManager.__new__(CompanionManager)
     companion._guide_runner = runner
     companion._request_serial, companion._guide_moved_for = 1, -1
+    companion._heard_buf = []
     asyncio.run(companion._tool_guide_step({"action": "next"}))
     out = asyncio.run(companion._tool_guide_step({"action": "stop"}))
     assert out["action"] == "stop" and runner._pending == "stop"

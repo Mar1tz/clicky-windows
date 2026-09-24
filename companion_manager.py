@@ -1028,10 +1028,14 @@ class CompanionManager(QObject):
                 f"{max(0, len(self._lesson_steps) - cur - 1)} left. Tora "
                 f"speaks and points at each step and advances on its own as "
                 f"the user completes it — do NOT read the steps and do NOT say "
-                f"'say next'. If they ask what they're doing or what's coming, "
-                f"answer from this context rather than starting over. If they "
-                f"say next / back / repeat / stop, call guide_step; otherwise "
-                f"just answer and the guide keeps running underneath.{cur_line}"
+                f"'say next'. Call guide_step ONLY for a command: next / done "
+                f"/ I did it / carry on (next), back, repeat / say that again, "
+                f"stop / cancel. Everything else they say mid-walkthrough is a "
+                f"question or a remark - answer it and leave the guide alone; "
+                f"it keeps running underneath. 'Okay' and 'got it' are not "
+                f"commands: it moves on by itself when the step is done. If "
+                f"they ask what they're doing or what's coming, answer from "
+                f"this context rather than starting over.{cur_line}"
             )
         elif self._resume:
             bits.append(
@@ -1481,6 +1485,14 @@ class CompanionManager(QObject):
             return {"error": "no guide is running"}
         if action not in ("next", "back", "repeat", "stop"):
             return {"error": "action must be next, back, repeat, stop or resume"}
+        # Check the model's reading against what the person actually said.
+        # Mid-walkthrough most speech is a question, and a question read as
+        # "next" moves the guide on without them. Stop is never gated: a
+        # refused stop is the worse mistake of the two.
+        checked = self._check_guide_move(action, runner)
+        if checked is not None:
+            return checked
+
         # One move per thing the user SAID. The runner also refuses a
         # second move before the new step has been spoken, but that window
         # is only as long as the speech: a model looping every 0.6 s would
@@ -1516,6 +1528,47 @@ class CompanionManager(QObject):
                            "speaking the new step now. Do NOT call guide_step "
                            "again for this.")
         return out
+
+    def _check_guide_move(self, action: str, runner) -> Optional[dict]:
+        """A reply refusing a move the person did not ask for, or None to go
+        ahead. See tutor_features/guide_intent.py for why this exists.
+
+        An empty transcript is never grounds for refusing - it can lag the
+        tool call, and blocking on missing evidence would make "next"
+        unreliable in exactly the case it has to work.
+        """
+        if action not in ("next", "back", "repeat"):
+            return None
+        heard = " ".join(self._heard_buf or []).strip()
+        if not heard:
+            return None
+        from tutor_features.guide_intent import guide_intent
+        intent = guide_intent(heard)
+        if intent == action:
+            return None
+        where = f"still on step {runner.index + 1} of {runner.total}"
+        if intent == "where":
+            plan = self._lesson_plan
+            idx = runner.index
+            if plan is not None and 0 <= idx < len(plan.steps) and plan.steps[idx].target:
+                self._submit(self._point_step_target(idx, plan.steps[idx]))
+            _log.info("guide_step %s refused: they asked where it is (%r)", action, heard[:60])
+            return {"ok": True, "moved": False, "where": where,
+                    "note": ("They asked WHERE it is, not to move on. The arrow is "
+                             "on it now - say where it is in a few words. Do not "
+                             "call guide_step.")}
+        _log.info("guide_step %s refused: %r is %s, not a %s", action, heard[:60],
+                  intent or "a question", action)
+        if intent == "ack":
+            note = ("They only acknowledged the step. The guide moves on by itself "
+                    "the moment they do it - say nothing, or a word at most.")
+        elif intent in ("next", "back", "repeat", "stop"):
+            note = (f"They said {intent}, not {action}. Call guide_step with "
+                    f"action {intent!r} instead, once.")
+        else:
+            note = ("They asked something - they did not ask to move on. Answer "
+                    "them; the walkthrough stays exactly where it is.")
+        return {"ok": True, "moved": False, "where": where, "note": note}
 
     async def _tool_point_at(self, args: dict) -> dict:
         """Put the pointer on something the user asked about.
