@@ -97,7 +97,13 @@ def test_no_action_may_default_its_direction():
                 continue          # a modifier changes HOW, not WHAT
             arg = signature.parameters.get(param.name)
             if arg is not None and arg.default is not inspect.Parameter.empty:
-                offenders.append(f"{action.key}({param.name}={arg.default!r})")
+                # The one allowed default: "" - "not given" - on a parameter
+                # that declares what stands in for it (Param.unless). It is
+                # never one of the choices, and bind() refuses a call that
+                # has neither.
+                if not (param.unless and arg.default == ""
+                        and arg.default not in param.choices):
+                    offenders.append(f"{action.key}({param.name}={arg.default!r})")
             if not param.required:
                 offenders.append(f"{action.key}: {param.name} is not required")
     assert not offenders, "a choice must be asked for, never assumed: " + "; ".join(offenders)

@@ -66,8 +66,11 @@ class WindowsOS:
                 return await system.track_changed(before)
             return None          # play/pause and stop cannot be read from a title
 
-        async def volume(direction: str, steps: int = 2, to_percent: int = 0) -> str:
-            # No default for `direction`: a lost argument must be an error,
+        async def volume(direction: str = "", steps: int = 2,
+                         to_percent: Optional[int] = None) -> str:
+            # `direction` may be absent ONLY because `to_percent` can stand in
+            # for it (Param.unless): bind() refuses a call with neither, so ""
+            # never means a choice. A lost argument must still be an error,
             # never the opposite action. See agents/control/args.py.
             #
             # By VALUE where the machine allows it. Tapping a key N times
@@ -87,19 +90,26 @@ class WindowsOS:
             try:
                 before = audio.level()
             except Unavailable:
+                if direction not in ("up", "down"):
+                    # Keys can only nudge. Tapping "down" for "set it to 60"
+                    # would be the opposite-action bug all over again.
+                    raise Refused("the volume here can only be nudged up or "
+                                  "down, not set to a number - say up or down")
                 system.tap("volume_up" if direction == "up" else "volume_down", steps)
                 return f"turned the volume {direction} {steps} notches"
 
-            if to_percent:
+            if to_percent is not None:
                 target = max(0, min(int(to_percent), 100)) / 100.0
-            else:
-                delta = 0.02 * steps
-                target = before + delta if direction == "up" else before - delta
+                return f"volume set to {audio.describe(audio.set_level(target))}"
+            if direction not in ("up", "down"):
+                raise Refused("say up, down, mute, or a percentage")
+            delta = 0.02 * steps
+            target = before + delta if direction == "up" else before - delta
             after = audio.set_level(target)
             return f"volume {direction} - now at {audio.describe(after)}"
 
-        async def verify_volume(direction: str, steps: int = 2,
-                                to_percent: int = 0) -> Optional[str]:
+        async def verify_volume(direction: str = "", steps: int = 2,
+                                to_percent: Optional[int] = None) -> Optional[str]:
             """What the volume IS now, read back from the device."""
             if direction == "mute":
                 try:
@@ -197,7 +207,7 @@ class WindowsOS:
             Action(self.app, "volume", "Turn the volume up or down, set it to a "
                    "percentage, or mute it.", volume, Tier.SYSTEM, Risk.REVERSIBLE,
                    (Param("direction", "up, down or mute", required=True,
-                          choices=("up", "down", "mute")),
+                          choices=("up", "down", "mute"), unless=("to_percent",)),
                     Param("steps", "How much, in small notches", type="integer"),
                     Param("to_percent", "Set it to exactly this, 0-100", type="integer")),
                    verify=verify_volume,

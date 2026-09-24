@@ -71,6 +71,11 @@ class Param:
     volume increase exactly this way. Set `modifier=True` for the rarer
     kind that only changes HOW something is done (an editor chat's `mode`),
     where a default is safe. test_control_arguments.py enforces the rule.
+
+    `unless` names arguments that make this one unnecessary: volume's
+    `direction` is required unless `to_percent` says exactly where to go
+    ("set the volume to 30 percent" has no direction, and was refused for
+    it). With neither, the call is still refused - nothing is assumed.
     """
     name: str
     description: str = ""
@@ -78,6 +83,7 @@ class Param:
     type: str = "string"
     choices: tuple[str, ...] = ()
     modifier: bool = False
+    unless: tuple[str, ...] = ()
 
 
 @dataclass

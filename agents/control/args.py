@@ -46,6 +46,31 @@ SYNONYMS: dict[str, str] = {
 _TRUE = {"true", "1", "yes", "y", "on"}
 _FALSE = {"false", "0", "no", "n", "off"}
 
+# What the live model calls an argument, for a parameter declared under
+# another name. Every entry is from the field log: `app_name` for `name`
+# eight times in two days, `path` for `folder`, `level` for `to_percent`,
+# `action` for `command`. Each was refused - after the user had already
+# approved - and the user heard nothing happen.
+#
+# This is not guessing. An alias only ever lands on the parameter it
+# names, only when the action declares that parameter, and never when the
+# action also has a parameter by the alias's own name.
+ALIASES: dict[str, tuple[str, ...]] = {
+    "name": ("app", "app_name", "application", "application_name", "program",
+             "program_name", "app_id"),
+    "folder": ("path", "folder_path", "folder_name", "directory", "dir",
+               "location"),
+    "to_percent": ("level", "percent", "percentage", "volume", "volume_level",
+                   "value", "target", "to"),
+    "command": ("action", "operation", "op", "cmd", "verb"),
+    "query": ("search", "search_query", "q", "song", "song_name", "track",
+              "track_name", "term", "what_to_play"),
+    "url": ("link", "address", "href", "uri"),
+    "title": ("window", "window_title", "window_name"),
+    "text": ("content", "message", "value_text"),
+    "page": ("setting", "settings_page", "section"),
+}
+
 
 def read_arguments(raw: Any) -> tuple[Optional[dict[str, Any]], str]:
     """Whatever the model sent, as a dict — or (None, why not).
@@ -128,6 +153,23 @@ class BindError(ValueError):
         self.expected = expected or []
 
 
+def _meant(name: str, known: dict[str, Param]) -> str:
+    """The one declared parameter an undeclared name can only mean, or ''.
+
+    Two ways, both unambiguous by construction:
+      * an entry in ALIASES for a parameter this action declares;
+      * the name contains exactly one declared parameter's name as a part
+        of it - `app_name` holds `name`, `folder_path` holds `folder`.
+    Anything that could mean two parameters means none of them.
+    """
+    flat = name.strip().lower().replace("-", "_").replace(" ", "_")
+    if flat in known:
+        return flat
+    parts = set(flat.split("_"))
+    candidates = {p for p in known if flat in ALIASES.get(p, ()) or p in parts}
+    return next(iter(candidates)) if len(candidates) == 1 else ""
+
+
 def _closest(name: str, known: Iterable[str]) -> str:
     """The most plausible parameter the caller meant, or ''."""
     import difflib
@@ -191,14 +233,26 @@ def bind(key: str, params: tuple[Param, ...], arguments: dict[str, Any]) -> dict
     Three rules, each of which was a bug before it was a rule:
 
       * an unrecognised name is refused, with the nearest real one
-        suggested — it used to be dropped, and the action ran on defaults;
+        suggested — it used to be dropped, and the action ran on defaults —
+        unless it can only mean one declared parameter (see _meant);
       * a value outside a declared `choices` set is refused after the
         synonym table has had a go — `choices` used to be decoration;
-      * a missing required argument is refused, naming what is missing.
+      * a missing required argument is refused, naming what is missing
+        (and what could stand in for it - see Param.unless).
     """
     known = {p.name: p for p in params}
     out: dict[str, Any] = {}
-    incoming = dict(arguments or {})
+    incoming: dict[str, Any] = {}
+    for name, value in dict(arguments or {}).items():
+        if name == _BARE or name in known:
+            incoming[name] = value
+            continue
+        meant = _meant(name, known)
+        if meant and (meant in (arguments or {}) or meant in incoming):
+            raise BindError(
+                f"{key} got '{name}' as well as another name for '{meant}'. "
+                f"Send '{meant}' once.", expected=describe(params))
+        incoming[meant or name] = value
 
     # A lone value ("down") belongs to the action's only required
     # parameter, if it has exactly one. Otherwise there is nothing to
@@ -236,9 +290,12 @@ def bind(key: str, params: tuple[Param, ...], arguments: dict[str, Any]) -> dict
             continue
         out[param.name] = _coerce(value, param)
 
-    missing = [p.name for p in params if p.required and p.name not in out]
+    missing = [p for p in params if p.required and p.name not in out
+               and not any(other in out for other in p.unless)]
     if missing:
-        raise BindError(
-            f"{key} needs {', '.join(missing)} and it was not given.",
-            expected=describe(params))
+        wanted = ", ".join(
+            p.name + (f" (or {' or '.join(p.unless)})" if p.unless else "")
+            for p in missing)
+        raise BindError(f"{key} needs {wanted} and it was not given.",
+                        expected=describe(params))
     return out

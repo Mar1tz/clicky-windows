@@ -1322,6 +1322,22 @@ class CompanionManager(QObject):
             return {"error": c.suggestions(app, action),
                     "actions": [a.describe() for a in c.actions(app=app)][:20]}
 
+        # Check the arguments BEFORE anyone is asked. They used to be checked
+        # only when the approved action ran, so a misnamed one meant the user
+        # said yes to something that then did nothing - 12 times in the field
+        # log ("app_name" for "name" eight of them). Refused here, the model
+        # hears why at once and calls again; the user is never involved.
+        from agents.control.args import BindError, bind
+        try:
+            arguments = bind(found.key, found.params, arguments)
+        except BindError as exc:
+            _log.info("desktop_action %s refused before approval: %s", found.key, exc)
+            return {"error": str(exc), "expected": exc.expected,
+                    "note": ("The user has not been asked anything. Call "
+                             "desktop_action again with the arguments named "
+                             "exactly as listed - or ask the user for what is "
+                             "missing.")}
+
         # A browser is the LAST way to do something an app can do itself.
         # The field log has "play Love Story" becoming an Edge tab pointed at
         # open.spotify.com/search, which is a web page, not a song playing.
