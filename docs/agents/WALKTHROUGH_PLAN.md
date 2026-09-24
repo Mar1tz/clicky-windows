@@ -280,7 +280,10 @@ next · back · repeat · skip · stop · pause · resume · "where is it" ·
 
 **GW-15 · A walkthrough survives a reconnect** — M
 *Symptom:* "could not resume the conversation" appears dozens of times a
-day; a fresh session only half-knows a guide is running.
+day; ~~a fresh session only half-knows a guide is running~~. **Measured
+by GW-15:** 15 in 112 opens. A blank session knew the goal, the step and
+the count, and restarted nothing (0 in 12). What no session knew, blank
+or resumed, was the steps already behind the user.
 *Done:* on a blank session the guide's state — goal, current step, what
 was already done — is re-announced, and the guide carries on unbroken.
 *Surface:* `companion_manager.py`.

@@ -1015,7 +1015,20 @@ class CompanionManager(QObject):
             cur_line = ""
             if plan is not None and 0 <= cur < len(plan.steps):
                 s = plan.steps[cur]
-                cur_line = f' The current step is: "{s.instruction}"'
+                if cur > 0:
+                    # Steps are spoken in Tora's own voice, not the live
+                    # model's, so they are in no conversation history -
+                    # resumed session or not. Asked "what have I done so
+                    # far?", the model made history up ("added your logo")
+                    # 6 times in 6 (GW-15 live check).
+                    first = max(0, cur - 3)
+                    behind = "; ".join(
+                        f'{i + 1}. "{plan.steps[i].instruction[:80]}"'
+                        for i in range(first, cur))
+                    more = f" (and {first} before those)" if first else ""
+                    cur_line = (f" Steps already behind them (done or skipped): "
+                                f"{behind}{more}")
+                cur_line += f' The current step is: "{s.instruction}"'
                 if s.target:
                     # "The arrow goes on X" read as an instruction: on a bare
                     # "okay" the model called point_at 4 times in 5. Saying
