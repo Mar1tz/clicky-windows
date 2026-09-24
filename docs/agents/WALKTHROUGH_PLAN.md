@@ -1,8 +1,10 @@
 # Walkthroughs: from "it sucks" to something people rely on
 
-**Status:** plan. Nothing here is built yet. Each milestone becomes its own
-spec in `milestones/GW-NN-*.md`, then one commit, one at a time, and the
-next one does not start until the last one is proven.
+**Status:** waves 1 and 2 are built and proven — GW-01, 02, 03, 04, 05,
+06, 07 — each recorded in `milestones/GW-NN-*.md`. GW-06 was narrowed after
+live plans showed its premise was wrong (see its doc). Waves 3–7 remain.
+One milestone, one commit, and the next does not start until the last is
+proven.
 
 **Written for:** the user choosing what to build first, and the session
 that builds it.
@@ -351,8 +353,8 @@ Tutor page. The number that says whether a change made it better.
 
 | wave | milestones | what changes for the person using it |
 |---|---|---|
-| **1** | GW-01, GW-02, GW-03, GW-04 | It stops racing to the end on its own. Every problem becomes visible. |
-| **2** | GW-05, GW-07, GW-06 | Steps point at things that exist, and there are enough of them. |
+| **1** ✅ | GW-01, GW-02, GW-03, GW-04 | It stops racing to the end on its own. Every problem becomes visible. |
+| **2** ✅ | GW-05, GW-07, GW-06 | Steps point at things that exist, one action each. |
 | **3** | GW-09, GW-10, GW-11, GW-12 | Steps finish when you finish them, without "say next". |
 | **4** | GW-13, GW-14, GW-15, GW-16 | You can talk to it mid-walkthrough without derailing it. |
 | **5** | GW-08, GW-17, GW-18, GW-19 | It feels instant: arrow with the first word, no pauses. |
