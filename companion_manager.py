@@ -60,6 +60,26 @@ _log = logging.getLogger("tora.manager")
 CONTEXT_REPEAT_TURNS = 6
 
 
+def _finish_kind(done_by: str) -> str:
+    """Which signal finished a step, from the watcher's done_by text.
+
+    "click on target" -> click; "vision: …" -> vision;
+    "expectation: typed_text (…)" -> typed_text. The last used to be counted
+    as just "expectation", which hid whether a step finished on a planner
+    signal, on the typed text or on its target disappearing - the thing
+    GW-11 exists to measure.
+    """
+    text = (done_by or "").strip()
+    if not text:
+        return "unknown"
+    if text.startswith("click"):
+        return "click"
+    head, _, rest = text.partition(":")
+    if head.strip() == "expectation" and rest.strip():
+        return rest.strip().split(" (")[0].split()[0]
+    return head.strip() or "unknown"
+
+
 _TYPING_VERBS = ("type", "enter ", "write", "paste", "fill in", "input")
 _SUBMIT_WORDS = ("press enter", "hit enter", "press return", "hit return",
                  "and submit", "then submit")
@@ -2864,7 +2884,7 @@ class CompanionManager(QObject):
                 stats["judged"] += judged
                 if outcome == "done":
                     stats["auto"] += 1
-                    key = how.split(":")[0].split(" (")[0].strip() or "unknown"
+                    key = _finish_kind(how)
                     stats["by"][key] = stats["by"].get(key, 0) + 1
                 elif outcome in ("next", "back", "repeat"):
                     stats["manual"] += 1
@@ -2884,12 +2904,16 @@ class CompanionManager(QObject):
             missed = (", %d not found" % stats["missed"]) if stats["missed"] else ""
             plan_s = stats.get("plan_s")
             planned = ("planned in %.1fs, " % plan_s) if plan_s is not None else ""
+            finished = stats["auto"] + stats["manual"]
+            by_vision = stats["by"].get("vision", 0)
+            share = (" (vision decided %d%%)" % round(100 * by_vision / finished)
+                     if finished else "")
             _log.info(
-                "guide ended (%s): %r - %d steps, %d finished by themselves (%s), "
+                "guide ended (%s): %r - %d steps, %d finished by themselves (%s)%s, "
                 "%d manual moves, %d vision checks, targets: %s%s, stuck %d, "
                 "nudged %d, %s%.0fs total",
                 detail.get("reason", "?"), stats["goal"][:50], stats["steps"],
-                stats["auto"], by, stats["manual"], stats["judged"],
+                stats["auto"], by, share, stats["manual"], stats["judged"],
                 targets or "none", missed, stats["stuck"], stats["nudged"],
                 planned, time.monotonic() - stats["started"])
             self._guide_stats = None

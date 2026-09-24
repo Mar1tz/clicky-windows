@@ -420,17 +420,8 @@ class StepWatcher:
             return self._finish()
 
         # 2. The planner's expectation, if it was false at step start.
-        if self._local_armed and self._local_check is not None \
-                and now - self._local_at >= LOCAL_EVERY_S:
-            self._local_at = now
-            try:
-                v = await asyncio.to_thread(self._local_check)
-                if getattr(v, "done", False):
-                    self.done_by = f"expectation: {getattr(v, 'method', '')} " \
-                                   f"({getattr(v, 'detail', '')})"
-                    return self._finish()
-            except Exception:
-                _log.debug("local check failed", exc_info=True)
+        if now - self._local_at >= LOCAL_EVERY_S and await self._local_done(now):
+            return self._finish()
 
         # 3. Something changed and settled -> ask the eyes, once.
         if self._judge_result is True:
@@ -446,10 +437,33 @@ class StepWatcher:
                     and now - self._stable_since >= self._settle_s
                     and self._judge_task is None
                     and now - self._judge_at >= self._judge_gap_s):
+                # Cheapest first. A settled change is exactly when the step's
+                # own signal is most likely to have just gone true - and the
+                # local check only runs every LOCAL_EVERY_S, so without this
+                # the vision model (settle 0.6 s) was often asked about a
+                # change a free UIA read would have confirmed 0.3 s later.
+                if await self._local_done(now):
+                    return self._finish()
                 why = fp.what_changed(self._base)
                 self._judge_at = now
                 self._judge_task = asyncio.create_task(self._ask(fp, why))
         return None
+
+    async def _local_done(self, now: float) -> bool:
+        """Run the step's own signal once. True if it says the step is done."""
+        if not (self._local_armed and self._local_check is not None):
+            return False
+        self._local_at = now
+        try:
+            v = await asyncio.to_thread(self._local_check)
+        except Exception:
+            _log.debug("local check failed", exc_info=True)
+            return False
+        if getattr(v, "done", False):
+            self.done_by = (f"expectation: {getattr(v, 'method', '')} "
+                            f"({getattr(v, 'detail', '')})")
+            return True
+        return False
 
     def _finish(self) -> bool:
         self._done = True
