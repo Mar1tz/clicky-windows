@@ -72,6 +72,7 @@ def _guide(heard: str, steps=3):
     mgr._lesson_plan = plan
     mgr._request_serial, mgr._guide_moved_for = 1, -1
     mgr._heard_buf = [heard] if heard else []
+    mgr._guide_stats = None
     pointed = []
 
     async def point(idx, step):

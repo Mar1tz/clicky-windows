@@ -26,20 +26,33 @@ from typing import Optional
 _WORDS = re.compile(r"[a-z']+")
 
 # Checked in this order: a sentence with "stop" in it is a stop even if it
-# also says "next", and "go back" is back even though it contains "go".
+# also says "next", "go back" is back even though it contains "go", and
+# "it's not working again" is a cry for help, not a request to hear the same
+# words a second time.
 _PHRASES: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("stop", ("stop", "cancel", "never mind", "nevermind", "quit", "end it",
               "that's enough", "thats enough", "forget it", "exit", "abort",
               "stop the guide", "stop the walkthrough")),
+    ("pause", ("pause", "pause it", "pause the guide", "pause the walkthrough",
+               "take a break", "let's take a break", "lets take a break")),
     ("back", ("go back", "back", "previous", "last step", "step back",
               "the one before")),
-    ("repeat", ("repeat", "again", "say that again", "what was that",
-                "come again", "pardon", "sorry what", "one more time",
-                "what did you say", "say it again")),
     ("where", ("where is it", "where's it", "where is that", "where's that",
                "where do i click", "where should i click", "i can't find",
                "i cant find", "can't see it", "cant see it", "show me where",
-               "point to it", "point at it", "where is the", "where's the")),
+               "point to it", "point at it", "where is the", "where's the",
+               "help me find", "i don't see it", "i dont see it")),
+    ("do_it", ("do it for me", "you do it", "just do it", "do that for me",
+               "click it for me", "press it for me", "do the rest",
+               "do it yourself")),
+    ("help", ("i'm stuck", "im stuck", "i am stuck", "stuck", "help",
+              "help me", "it's not working", "its not working",
+              "it doesn't work", "it doesnt work", "that didn't work",
+              "that didnt work", "i don't know how", "i dont know how",
+              "i don't get it", "i dont get it", "i'm lost", "im lost")),
+    ("repeat", ("repeat", "again", "say that again", "what was that",
+                "come again", "pardon", "sorry what", "one more time",
+                "what did you say", "say it again")),
     ("next", ("next", "next step", "done", "i did it", "did it", "i've done it",
               "ive done it", "finished", "i'm done", "im done", "move on",
               "carry on", "keep going", "go on", "continue", "skip", "skip it",
@@ -64,22 +77,26 @@ def _has_phrase(text: str, phrase: str) -> bool:
     return re.search(rf"(?:^| ){re.escape(phrase)}(?: |$)", text) is not None
 
 
-# "I'm not done yet" contains "done"; "don't stop" contains "stop". A move
-# or a stop is exactly the thing that must not happen on a misread, so any
-# of these anywhere in the sentence takes those two off the table. (Back,
-# repeat and where survive it: "I didn't hear that, say it again" is still
-# a repeat.)
+# "I'm not done yet" contains "done"; "don't stop" contains "stop". A move,
+# a stop or a pause is exactly the thing that must not happen on a misread,
+# so any of these anywhere in the sentence takes those off the table, and so
+# does "don't do it for me". (Back, repeat, where and help survive it: "I
+# didn't hear that, say it again" is still a repeat, and "it doesn't work"
+# is the very thing someone stuck says.) A negated command does not end the
+# reading - "I don't know how, do it for me" goes on to be a call for help.
 _NEGATIONS = ("not", "don't", "dont", "didn't", "didnt", "haven't", "havent",
               "hasn't", "hasnt", "isn't", "isnt", "wait", "hang on", "hold on",
               "not yet", "nope")
-_NEGATABLE = frozenset({"next", "stop"})
+_NEGATABLE = frozenset({"next", "stop", "pause", "do_it"})
 
 
 def guide_intent(heard: str) -> Optional[str]:
-    """next / back / repeat / stop / where, "ack", or None for anything else.
+    """next / back / repeat / stop / pause / where / help / do_it, "ack", or
+    None for anything else.
 
     None means the person said something that is not a walkthrough command
     — almost always a question. "ack" means they acknowledged the step.
+    "skip" reads as next: it is the same move.
     """
     text = _normalise(heard)
     if not text:
@@ -88,7 +105,7 @@ def guide_intent(heard: str) -> Optional[str]:
     for intent, phrases in _PHRASES:
         if any(_has_phrase(text, p) for p in phrases):
             if negated and intent in _NEGATABLE:
-                return None
+                continue
             return intent
     if text in _ACKS:
         return "ack"

@@ -1017,10 +1017,10 @@ class CompanionManager(QObject):
                 s = plan.steps[cur]
                 cur_line = f' The current step is: "{s.instruction}"'
                 if s.target:
-                    cur_line += (
-                        f' — if the user asks where to click, call point_at '
-                        f'with "{s.target}".'
-                    )
+                    # "The arrow goes on X" read as an instruction: on a bare
+                    # "okay" the model called point_at 4 times in 5. Saying
+                    # it is already there: 0 in 5 (GW-14 live check).
+                    cur_line += f" Tora's arrow is already on \"{s.target}\"."
             bits.append(
                 "A guided walkthrough is running"
                 + (f' toward: "{plan.goal}"' if getattr(plan, "goal", "") else "")
@@ -1028,19 +1028,26 @@ class CompanionManager(QObject):
                 f"{max(0, len(self._lesson_steps) - cur - 1)} left. Tora "
                 f"speaks and points at each step and advances on its own as "
                 f"the user completes it — do NOT read the steps and do NOT say "
-                f"'say next'. Call guide_step ONLY for a command: next / done "
-                f"/ I did it / carry on (next), back, repeat / say that again, "
-                f"stop / cancel. Everything else they say mid-walkthrough is a "
-                f"question or a remark - answer it and leave the guide alone; "
-                f"it keeps running underneath. 'Okay' and 'got it' are not "
-                f"commands: it moves on by itself when the step is done. If "
-                f"they ask what they're doing or what's coming, answer from "
-                f"this context rather than starting over.{cur_line}"
+                f"'say next'. Call guide_step ONLY for a command: next (done / "
+                f"I did it / carry on), skip, back, repeat (say that again), "
+                f"stop, pause, where (where is it / I can't find it), help "
+                f"(I'm stuck / it's not working), do_it (do it for me). "
+                f"Everything else they say mid-walkthrough is a question or a "
+                f"remark - answer it and leave the guide alone; it keeps "
+                f"running underneath. 'Okay' and 'got it' are not commands: it "
+                f"moves on by itself when the step is done. If they ask what "
+                f"they're doing or what's coming, answer from this context "
+                f"rather than starting over; for anything else on screen they "
+                f"ask about, point_at still works.{cur_line}"
             )
         elif self._resume:
+            stopped, at = self._resume
+            goal = getattr(stopped, "goal", "") or ""
             bits.append(
-                "A guide was paused part-way. If the user says 'continue' or "
-                "'resume the guide', call guide_step with action 'resume'."
+                "A walkthrough" + (f' toward "{goal}"' if goal else "")
+                + f" was stopped at step {at + 1} of {len(stopped.steps)}. If "
+                "the user asks to resume or continue THAT walkthrough, call "
+                "guide_step with action 'resume'."
             )
         elif self._lesson_steps:
             bits.append(
@@ -1474,22 +1481,52 @@ class CompanionManager(QObject):
         while not task.steps and time.monotonic() < deadline:
             await asyncio.sleep(0.05)
 
+    # Every walkthrough command, and the one thing each does (GW-14):
+    #   next    move on one step
+    #   skip    the same move - counted as a skip, not as the step done
+    #   back    the step before, said again (on step one: step one again)
+    #   repeat  this step, said again
+    #   stop    end it; the step it was on is kept for resume
+    #   pause   the same as stop, and the reply says how to pick it back up
+    #   resume  a stopped walkthrough picks up at its step; a running one
+    #           is left alone
+    #   where   point at this step's target again
+    #   help    point again, and the model explains it another way
+    #   do_it   until GW-20: say Tora can't yet, and point again
+    # where, help and do_it never move the guide.
+    _GUIDE_COMMANDS = ("next", "skip", "back", "repeat", "stop", "pause",
+                       "resume", "where", "help", "do_it")
+    _GUIDE_STAYS = ("where", "help", "do_it")
+
     async def _tool_guide_step(self, args: dict) -> dict:
-        action = str(args.get("action") or "").strip().lower()
-        if action == "resume":
-            if self.resume_guide():
-                return {"ok": True, "action": "resume"}
-            return {"error": "there is no paused guide to resume"}
+        action = str(args.get("action") or "").strip().lower().replace(" ", "_")
+        if action not in self._GUIDE_COMMANDS:
+            return {"error": "action must be one of: " + ", ".join(self._GUIDE_COMMANDS)}
         runner = self._guide_runner
-        if runner is None or not runner.running:
-            return {"error": "no guide is running"}
-        if action not in ("next", "back", "repeat", "stop"):
-            return {"error": "action must be next, back, repeat, stop or resume"}
+        running = runner if runner is not None and runner.running else None
+        if action == "resume":
+            return self._guide_resume(running)
+        if running is None:
+            return {"error": "no walkthrough is running"}
+        if action in self._GUIDE_STAYS:
+            return await self._guide_stay(action, runner)
+        if action in ("stop", "pause"):
+            # Never second-guessed: a refused stop is the worse mistake.
+            self._count_said(action)
+            runner.request(action)
+            if action == "pause":
+                return {"ok": True, "action": "pause",
+                        "note": ("The walkthrough is paused on the step it was "
+                                 "on. Say so in a few words, and that saying "
+                                 "'resume' picks it back up.")}
+            return {"ok": True, "action": "stop",
+                    "note": "The walkthrough is stopped. Say so in a few words."}
+
+        move = "next" if action == "skip" else action
         # Check the model's reading against what the person actually said.
         # Mid-walkthrough most speech is a question, and a question read as
-        # "next" moves the guide on without them. Stop is never gated: a
-        # refused stop is the worse mistake of the two.
-        checked = self._check_guide_move(action, runner)
+        # "next" moves the guide on without them.
+        checked = await self._check_guide_move(move, runner)
         if checked is not None:
             return checked
 
@@ -1499,15 +1536,14 @@ class CompanionManager(QObject):
         # still land a move every few seconds. What the user meant by one
         # "next" is one step, however many times the model calls this.
         serial = self._request_serial
-        if action in ("next", "back", "repeat") and self._guide_moved_for == serial:
+        on_first = runner.index <= 0
+        if self._guide_moved_for == serial:
             accepted = False
         else:
-            accepted = runner.request(action)
-            if accepted and action in ("next", "back", "repeat"):
+            accepted = runner.request(move)
+            if accepted:
                 self._guide_moved_for = serial
-        if action == "stop":
-            return {"ok": True, "action": "stop",
-                    "note": "The walkthrough is stopped. Say so in a few words."}
+                self._count_said(action)
 
         # Report where the guide is GOING, not where it was. This used to
         # read runner.index straight after request(), before the loop had
@@ -1516,8 +1552,13 @@ class CompanionManager(QObject):
         # next again. The field that was added to stop repeat calls was the
         # thing inviting them.
         heading, total = runner.heading, runner.total
-        where = ("the walkthrough is finishing - that was the last step"
-                 if heading >= total else f"now on step {heading + 1} of {total}")
+        if heading >= total:
+            where = "the walkthrough is finishing - that was the last step"
+        elif move == "back" and on_first:
+            where = (f"still on step 1 of {total} - it is the first step, so "
+                     f"Tora is saying it again")
+        else:
+            where = f"now on step {heading + 1} of {total}"
         out = {"ok": True, "action": action, "where": where,
                "note": ("Done - the move has happened and Tora is reading the "
                         "step aloud herself. Do NOT call guide_step again, and "
@@ -1529,7 +1570,7 @@ class CompanionManager(QObject):
                            "again for this.")
         return out
 
-    def _check_guide_move(self, action: str, runner) -> Optional[dict]:
+    async def _check_guide_move(self, move: str, runner) -> Optional[dict]:
         """A reply refusing a move the person did not ask for, or None to go
         ahead. See tutor_features/guide_intent.py for why this exists.
 
@@ -1537,38 +1578,112 @@ class CompanionManager(QObject):
         tool call, and blocking on missing evidence would make "next"
         unreliable in exactly the case it has to work.
         """
-        if action not in ("next", "back", "repeat"):
-            return None
         heard = " ".join(self._heard_buf or []).strip()
         if not heard:
             return None
         from tutor_features.guide_intent import guide_intent
         intent = guide_intent(heard)
-        if intent == action:
+        if intent == move:
             return None
-        where = f"still on step {runner.index + 1} of {runner.total}"
-        if intent == "where":
-            plan = self._lesson_plan
-            idx = runner.index
-            if plan is not None and 0 <= idx < len(plan.steps) and plan.steps[idx].target:
-                self._submit(self._point_step_target(idx, plan.steps[idx]))
-            _log.info("guide_step %s refused: they asked where it is (%r)", action, heard[:60])
-            return {"ok": True, "moved": False, "where": where,
-                    "note": ("They asked WHERE it is, not to move on. The arrow is "
-                             "on it now - say where it is in a few words. Do not "
-                             "call guide_step.")}
-        _log.info("guide_step %s refused: %r is %s, not a %s", action, heard[:60],
-                  intent or "a question", action)
+        if intent in self._GUIDE_STAYS:
+            # "Where is it?", "I'm stuck" or "do it for me", read as a move.
+            # Do what they asked instead - none of those moves the guide.
+            _log.info("guide_step %s refused: they said %s (%r)", move, intent, heard[:60])
+            out = await self._guide_stay(intent, runner)
+            asked = {"where": "WHERE it is", "help": "for HELP",
+                     "do_it": "Tora to DO it"}[intent]
+            out["note"] = f"They asked {asked}, not to move on. " + out["note"]
+            return out
+        _log.info("guide_step %s refused: %r is %s, not a %s", move, heard[:60],
+                  intent or "a question", move)
         if intent == "ack":
             note = ("They only acknowledged the step. The guide moves on by itself "
                     "the moment they do it - say nothing, or a word at most.")
-        elif intent in ("next", "back", "repeat", "stop"):
-            note = (f"They said {intent}, not {action}. Call guide_step with "
+        elif intent in ("next", "back", "repeat", "stop", "pause"):
+            note = (f"They said {intent}, not {move}. Call guide_step with "
                     f"action {intent!r} instead, once.")
         else:
             note = ("They asked something - they did not ask to move on. Answer "
                     "them; the walkthrough stays exactly where it is.")
-        return {"ok": True, "moved": False, "where": where, "note": note}
+        return {"ok": True, "moved": False,
+                "where": f"still on step {runner.index + 1} of {runner.total}",
+                "note": note}
+
+    async def _guide_stay(self, action: str, runner) -> dict:
+        """where / help / do_it: help with the step on screen without moving
+        off it. Tora only points; the live model does the talking, so there
+        is one voice and not two."""
+        plan = self._lesson_plan
+        idx = runner.index
+        step = plan.steps[idx] if plan is not None and 0 <= idx < len(plan.steps) else None
+        target = (getattr(step, "target", "") or "") if step is not None else ""
+        if target:
+            self._submit(self._point_step_target(idx, step))
+        self._count_said(action)
+        arrow = f'The arrow is going to "{target}". ' if target else ""
+        if action == "where":
+            note = arrow + ("Say where it is in a few words." if target else
+                            "This step has no one thing to point at - say in a "
+                            "few words where to look.")
+        elif action == "help":
+            # The runner's own offer of help, after a still minute, would be
+            # this help given twice.
+            runner.mark_helped()
+            other = self._step_alternative(step) if step is not None else ""
+            note = (f'They are stuck on: "{getattr(step, "instruction", "")}". '
+                    + arrow
+                    + (f'Another way to do it: "{other}". ' if other else "")
+                    + "Explain it one different way in one or two short "
+                    "sentences - do not just repeat the step.")
+        else:
+            # "Do it for me" is GW-20. Until then, say so plainly rather
+            # than pretend, and make doing it themselves as easy as it gets.
+            note = ("Tora cannot do steps for them yet. Say so in one short "
+                    "sentence" + (", and that the arrow is on exactly what to "
+                                   "use." if target else "."))
+        _log.info("guide step %d: %s - staying on it", idx + 1, action)
+        return {"ok": True, "moved": False,
+                "where": f"still on step {idx + 1} of {runner.total}",
+                "note": note + " Do not call guide_step again."}
+
+    def _guide_resume(self, running) -> dict:
+        """'resume': a stopped walkthrough picks up at the step it was on.
+
+        With one already running there is nothing to resume - restarting it
+        would only say its step again - so it is left alone.
+        """
+        if running is not None:
+            return {"ok": True, "moved": False,
+                    "where": f"still on step {running.index + 1} of {running.total}",
+                    "note": ("The walkthrough is already running - there is "
+                             "nothing to resume. Leave it be.")}
+        saved = self._resume
+        if not saved or not self.resume_guide():
+            return {"error": "there is no stopped walkthrough to resume"}
+        guide, idx = saved
+        self._count_said("resume")
+        return {"ok": True, "action": "resume",
+                "where": f"back on step {idx + 1} of {len(guide.steps)}",
+                "note": ("Tora picks it up there and says the step herself - "
+                         "say a few words at most, and do not read the step "
+                         "out.")}
+
+    def _count_said(self, command: str) -> None:
+        """Which commands people actually use. A step that draws "where is
+        it?" or "I'm stuck" is a badly planned step - GW-21 learns from it."""
+        stats = self._guide_stats
+        if stats is not None:
+            said = stats.setdefault("said", {})
+            said[command] = said.get(command, 0) + 1
+
+    @staticmethod
+    def _step_alternative(step) -> str:
+        """A genuinely different route to the step's end, if the planner gave
+        one - never a rewording of the instruction itself."""
+        for other in (getattr(step, "possible_actions", None) or []):
+            if other and other.lower() not in step.instruction.lower():
+                return other
+        return ""
 
     async def _tool_point_at(self, args: dict) -> dict:
         """Put the pointer on something the user asked about.
@@ -2024,8 +2139,9 @@ class CompanionManager(QObject):
                 "one out loud a second from now, and if you say it too they "
                 "hear the same instruction twice. 'Sure, let me walk you "
                 "through it.' and then stop talking. Do not say 'say next' "
-                "either — it advances by itself. If they later say "
-                "next/back/repeat/stop, call guide_step once."
+                "either — it advances by itself. If they later give a "
+                "walkthrough command (next, back, repeat, stop, pause, where, "
+                "help...), call guide_step once."
             ),
         }
 
@@ -2863,7 +2979,7 @@ class CompanionManager(QObject):
             "goal": guide.goal, "steps": len(guide.steps), "plan_s": None,
             "started": time.monotonic(), "auto": 0, "manual": 0, "by": {},
             "judged": 0, "targets": {}, "missed": 0, "stuck": 0, "nudged": 0,
-            "asked": 0,
+            "asked": 0, "said": {},
         }
         self._step_audio.clear()
         self._step_point.clear()
@@ -2962,14 +3078,16 @@ class CompanionManager(QObject):
             by_vision = stats["by"].get("vision", 0)
             share = (" (vision decided %d%%)" % round(100 * by_vision / finished)
                      if finished else "")
+            said = ", ".join("%s %d" % kv for kv in sorted((stats.get("said") or {}).items()))
             _log.info(
                 "guide ended (%s): %r - %d steps, %d finished by themselves (%s)%s, "
                 "%d manual moves, %d vision checks, targets: %s%s, stuck %d, "
-                "nudged %d, asked %d, %s%.0fs total",
+                "nudged %d, asked %d, commands: %s, %s%.0fs total",
                 detail.get("reason", "?"), stats["goal"][:50], stats["steps"],
                 stats["auto"], by, share, stats["manual"], stats["judged"],
                 targets or "none", missed, stats["stuck"], stats["nudged"],
-                stats.get("asked", 0), planned, time.monotonic() - stats["started"])
+                stats.get("asked", 0), said or "none", planned,
+                time.monotonic() - stats["started"])
             self._guide_stats = None
 
     def _guide_stopped(self, runner) -> None:
@@ -3016,12 +3134,9 @@ class CompanionManager(QObject):
         if step.target:
             self._submit(self._point_step_target(idx, step))
 
-        alternatives = [
-            a for a in (getattr(step, "possible_actions", None) or [])
-            if a and a.lower() not in step.instruction.lower()
-        ]
-        if alternatives:
-            msg = f"Or you can {alternatives[0][0].lower()}{alternatives[0][1:]}"
+        other = self._step_alternative(step)
+        if other:
+            msg = f"Or you can {other[0].lower()}{other[1:]}"
         elif step.target:
             msg = "It's right here."
         else:

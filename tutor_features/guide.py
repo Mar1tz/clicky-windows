@@ -49,7 +49,7 @@ from typing import Awaitable, Callable, Optional
 
 _log = logging.getLogger("tora.guide")
 
-Command = str   # "next" | "back" | "repeat" | "stop"
+Command = str   # "next" | "back" | "repeat" | "stop" | "pause"
 
 # Commands that move the guide. Each is allowed once per presented step.
 _MOVES = frozenset({"next", "back", "repeat"})
@@ -123,6 +123,9 @@ class GuideRunner:
         self._moved_at = -1
         self._heading: Optional[int] = None
         self._move_lock = threading.Lock()
+        # The presentation (a value of _shown) the user was already helped
+        # with - see mark_helped().
+        self._helped_at = -1
 
         self._start_index = max(0, start_index)
         self._idx = -1
@@ -158,7 +161,8 @@ class GuideRunner:
         self._task = asyncio.ensure_future(self._run())
 
     def request(self, command: Command) -> bool:
-        """Manual override from the user — next / back / repeat / stop.
+        """Manual override from the user — next / back / repeat / stop /
+        pause (a stop that is meant to be resumed).
 
         Safe to call from ANY thread, and it is: Esc arrives on the keyboard
         hook's thread and the tray menu on Qt's, while _wake belongs to the
@@ -176,7 +180,7 @@ class GuideRunner:
         two-step guide off its end. A timer is a guess about how fast the
         model retries; "has the new step been spoken yet" is a fact.
 
-        `stop` is never refused.
+        `stop` and `pause` are never refused.
         """
         if command in _MOVES:
             with self._move_lock:
@@ -200,6 +204,16 @@ class GuideRunner:
     def stop(self) -> None:
         self.request("stop")
 
+    def mark_helped(self) -> None:
+        """The user asked for help with the step on screen, and got it.
+
+        The runner offers help by itself when the screen sits still for a
+        while - straight after someone said "I'm stuck" and was helped, that
+        offer is the same help twice. It lapses when the next step is shown.
+        """
+        with self._move_lock:
+            self._helped_at = self._shown
+
     def _emit(self, kind: str, **detail) -> None:
         if self._on_event is None:
             return
@@ -215,7 +229,7 @@ class GuideRunner:
             # Let whatever announced the guide ("sure, let me walk you
             # through it") finish before the first step is spoken.
             await self._interruptible_sleep(self._present_delay_s)
-            if self._pending == "stop":
+            if self._pending in ("stop", "pause"):
                 return
             self._idx = min(self._start_index, self.total - 1)
             await self._show(self._idx)
@@ -224,8 +238,9 @@ class GuideRunner:
                 outcome = await self._await_step(self._guide.steps[self._idx])
                 self._emit("step_ended", index=self._idx, outcome=outcome,
                            secs=round(time.monotonic() - self._shown_at, 1))
-                if outcome == "stop":
-                    self._end_reason = "stopped by the user"
+                if outcome in ("stop", "pause"):
+                    self._end_reason = ("paused by the user" if outcome == "pause"
+                                        else "stopped by the user")
                     break
                 if outcome == "repeat":
                     await self._show(self._idx)
@@ -313,7 +328,7 @@ class GuideRunner:
 
     async def _await_step(self, step) -> str:
         """Wait until the step is done (or the user takes over). Returns the
-        outcome: done | next | back | repeat | stop."""
+        outcome: done | next | back | repeat | stop | pause."""
         # Arm only if the condition is currently NOT satisfied — otherwise we
         # cannot distinguish "the user did it" from "it already looked like
         # this", and firing would skip the step.
@@ -362,7 +377,8 @@ class GuideRunner:
             # waiting out the full timeout in silence.
             waiting = bool(getattr(step, "waiting", False))
             if (not helped and not waiting and self._on_stuck is not None
-                    and self._observer is not None):
+                    and self._observer is not None
+                    and self._helped_at != self._shown):
                 self._observer.poll()
                 if self._observer.idle_seconds() > self._stuck_after_s:
                     helped = True
@@ -382,8 +398,8 @@ class GuideRunner:
                 self._emit("nudged", index=self._idx,
                            waited=round(time.monotonic() - started, 1))
                 await self._say_safe(
-                    "Take your time. Say 'next' when you've done it, 'back' to "
-                    "hear it again, or 'stop' to finish here."
+                    "Take your time. Say 'next' when you've done it, 'repeat' "
+                    "to hear it again, or 'I'm stuck' and I'll help."
                 )
                 nudged = True
 
@@ -399,7 +415,7 @@ class GuideRunner:
     def _take_command(self) -> Optional[Command]:
         cmd, self._pending = self._pending, None
         self._wake.clear()
-        if cmd in ("next", "back", "repeat", "stop"):
+        if cmd in ("next", "back", "repeat", "stop", "pause"):
             return cmd
         return None
 

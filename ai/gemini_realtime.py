@@ -219,19 +219,23 @@ def tool_declarations() -> list[dict]:
         {
             "name": "guide_step",
             "description": (
-                "Control a guided walkthrough. Call this when the user says "
-                "'next' (skip ahead), 'back' (repeat the previous step), "
-                "'again'/'repeat' (say this step again), 'stop'/'cancel' (end "
-                "it), or 'continue'/'resume' (pick a paused guide back up). "
-                "The guide advances on its own otherwise — only call this when "
-                "the user asks."
+                "Control a guided walkthrough - ONLY when the user gives "
+                "one of these commands: next (done / I did it), skip, back "
+                "(the step before), repeat (say this step again), stop, "
+                "pause, resume (pick a stopped walkthrough back up), where "
+                "(they can't find it - Tora points again), help (they're "
+                "stuck - Tora points again and you explain it another way), "
+                "do_it (do it for me). A question is not a command: answer it "
+                "and leave the walkthrough alone - it advances on its own as "
+                "each step is done."
             ),
             "parameters": {
                 "type": "object",
                 "properties": {
                     "action": {
                         "type": "string",
-                        "enum": ["next", "back", "repeat", "stop", "resume"],
+                        "enum": ["next", "skip", "back", "repeat", "stop",
+                                 "pause", "resume", "where", "help", "do_it"],
                     },
                 },
                 "required": ["action"],
