@@ -149,7 +149,11 @@ _SYSTEM = """You plan hands-on computer tutorials for a voice tutor that
 speaks one step at a time and points at things on screen.
 
 Rules:
-  • Each step is ONE action the user performs. Never merge two clicks.
+  • Each step is ONE action the user performs. Never merge two clicks:
+    "Select your picture and click Choose picture" is TWO steps, because
+    the tutor points at one thing per step and watches for one thing to
+    happen. Typing and then pressing Enter IS one step ("Type youtube.com
+    and press Enter") - that is one intent, finished by one keypress.
   • Write instructions to be SPOKEN: no markdown, no numbering, no "click
     on the button labelled" padding. "Open the File menu." is a step.
   • target names a real UI element visible on screen when the step begins,
@@ -390,6 +394,7 @@ async def plan(
             if s.get("instruction")
         ],
     )
+    split_compound_steps(guide, controls)
     if controls:
         snap_targets(guide, controls)
     return guide
@@ -443,6 +448,70 @@ def repair_first_step(guide: Guide, controls: Optional[list[str]],
         _log.info("step 1 signals already true before it began, dropped: %s",
                   ", ".join(dropped))
     return dropped
+
+
+# Verbs that aim at one thing on screen. A step that joins two of these
+# with "and" is two steps glued together: the tutor can only point at one of
+# them and can only watch for one of them to finish.
+_POINTING_VERBS = ("click", "select", "choose", "tap", "open", "pick", "check",
+                   "tick", "toggle", "switch on", "switch off", "turn on",
+                   "turn off", "drag")
+
+
+def _starts_pointing(clause: str) -> bool:
+    low = clause.strip().lower()
+    return any(low == v or low.startswith(v + " ") for v in _POINTING_VERBS)
+
+
+def split_compound_steps(guide: Guide, controls: Optional[list[str]] = None
+                         ) -> list[int]:
+    """Split "Select your picture and click Choose picture" into two steps.
+
+    Measured on real plans: most are already one action per step, and the
+    few that are not glue two POINTING actions on two different things with
+    "and". Those are split, and nothing else is - "Type youtube.com and
+    press Enter" is one intent and stays one step.
+
+    The second half keeps the step's target and its outcome signals (the
+    planner wrote them for the end of the step). The first half gets a
+    target only if it names a control that is really on screen; its finish
+    line is then the second half's target appearing (see
+    CompanionManager._make_step_watcher). Returns the indexes that were
+    split, counted in the ORIGINAL plan.
+    """
+    import re
+
+    names = {c.lower(): c for c in (controls or [])}
+    out: list[Step] = []
+    split: list[int] = []
+    for i, step in enumerate(guide.steps):
+        text = (step.instruction or "").strip()
+        parts = re.split(r"\s*,?\s+and then\s+|\s*,?\s+and\s+", text, maxsplit=1)
+        if len(parts) != 2 or not all(_starts_pointing(p) for p in parts):
+            out.append(step)
+            continue
+        first_text, second_text = parts
+        first_text = first_text.rstrip(" .,") + "."
+        second_text = second_text[:1].upper() + second_text[1:]
+        if not second_text.endswith((".", "!", "?")):
+            second_text += "."
+        first_target = ""
+        low_first = first_text.lower()
+        for low, real in names.items():
+            if low and low in low_first and real != step.target:
+                first_target = real
+                break
+        out.append(Step(instruction=first_text, target=first_target))
+        out.append(Step(instruction=second_text, target=step.target,
+                        done_when=step.done_when, completion=step.completion,
+                        expected=step.expected,
+                        possible_actions=step.possible_actions))
+        split.append(i)
+    if split:
+        guide.steps = out
+        _log.info("split %d compound step(s) into two each: %s", len(split),
+                  ", ".join(str(i + 1) for i in split))
+    return split
 
 
 def snap_targets(guide: Guide, controls: list[str]) -> list[tuple[int, str, str]]:
