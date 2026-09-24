@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
+from typing import Optional
 
 from ai import gemini
 from ai.gemini import Models
@@ -153,6 +154,12 @@ Rules:
     on the button labelled" padding. "Open the File menu." is a step.
   • target names a real UI element visible on screen when the step begins,
     exactly as it is labelled. Use "" when the step has no on-screen target.
+  • When you are given the list of controls that are on screen RIGHT NOW,
+    that list is the truth, not the screenshot. Any step that acts on the
+    current screen MUST use a name from it, copied character for character
+    ("Check for Updates..." not "Check for updates"). A step that acts on
+    something that only appears after an earlier step (a menu item inside a
+    menu that is not open yet) may name it as the app would label it.
   • done_when is what the user will SEE when the step worked, so the tutor
     can confirm before moving on.
   • completion is how a PROGRAM detects the step is done, so the tutor can
@@ -298,6 +305,7 @@ async def plan(
     *,
     screenshot_b64: str = "",
     window_title: str = "",
+    controls: Optional[list[str]] = None,
     timeout: float = 60.0,
     fast: bool = True,
 ) -> Guide:
@@ -320,6 +328,14 @@ async def plan(
     ask = f"Goal: {goal}"
     if window_title:
         ask += f'\nThe user is currently in: "{window_title}"'
+    if controls:
+        # The app's own names for what is on screen, read from the
+        # accessibility tree (UC-04). Without this the planner named targets
+        # by reading pixels, the pointer then searched for that guess, and
+        # when the guess was not exactly the app's label it missed - 52
+        # times across fourteen walkthroughs, each one a vision call.
+        ask += ("\nControls on screen right now (use these exact names): "
+                + " | ".join(controls[:MAX_CONTROLS]))
     # Naming the starting state is what stops the planner describing it back
     # as the "outcome" of step one — the defect that made every first step
     # look finished before the user had touched anything.
@@ -355,7 +371,7 @@ async def plan(
     if not data:
         return Guide(goal=goal, feasible=False)
 
-    return Guide(
+    guide = Guide(
         goal=data.get("goal") or goal,
         preamble=data.get("preamble", ""),
         feasible=bool(data.get("feasible", True)),
@@ -374,3 +390,55 @@ async def plan(
             if s.get("instruction")
         ],
     )
+    if controls:
+        snap_targets(guide, controls)
+    return guide
+
+
+# How many control names the planner is shown. A window can expose hundreds;
+# past this many the list costs more prompt than it saves pointer misses.
+MAX_CONTROLS = 120
+# How close a planned target must be to a real control name to be corrected
+# to it. High on purpose: a later step may legitimately name something that
+# is not on screen yet, and "correcting" that to a different control that
+# happens to share a word would point at the wrong thing.
+SNAP_MIN_SCORE = 0.85
+
+
+def snap_targets(guide: Guide, controls: list[str]) -> list[tuple[int, str, str]]:
+    """Correct each step's target to the app's exact label where it is
+    clearly meant. Returns (step index, planned, corrected) for each change.
+
+    The model reads "Check for Updates..." off a screenshot and writes
+    "Check for updates"; the pointer's exact match then fails and it falls
+    through to the vision model. When the planned name is unmistakably one
+    of the real ones, use the real one.
+    """
+    try:
+        from ai.hybrid_pointer import _score_match
+    except Exception:  # noqa: BLE001 - no pointer module, nothing to snap with
+        return []
+    names = [c for c in dict.fromkeys(controls) if c and c.strip()]
+    lowered = {n.lower(): n for n in names}
+    changed: list[tuple[int, str, str]] = []
+    for i, step in enumerate(guide.steps):
+        target = (step.target or "").strip()
+        if not target or target in names:
+            continue
+        exact = lowered.get(target.lower())
+        if exact:
+            changed.append((i, target, exact))
+            step.target = exact
+            continue
+        best, best_score = "", 0.0
+        for name in names:
+            score = _score_match(target, name, "")
+            if score > best_score:
+                best, best_score = name, score
+        if best and best_score >= SNAP_MIN_SCORE:
+            changed.append((i, target, best))
+            step.target = best
+    if changed:
+        _log.info("planner targets corrected to the app's own labels: %s",
+                  "; ".join(f"step {i + 1} {a!r} -> {b!r}" for i, a, b in changed))
+    return changed

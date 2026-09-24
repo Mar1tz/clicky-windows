@@ -1943,18 +1943,37 @@ class CompanionManager(QObject):
             ),
         }
 
-    async def _plan_guide(self, goal: str, shot: str, title: str):
+    async def _plan_guide(self, goal: str, shot: str, title: str,
+                          controls: Optional[list[str]] = None):
         """Fast plan, falling back to the careful model if it is unusable."""
         guide = await gemini_planner.plan(
-            goal, screenshot_b64=shot, window_title=title, fast=True,
+            goal, screenshot_b64=shot, window_title=title,
+            controls=controls, fast=True,
         )
         if not guide:
             _log.info("fast plan unusable for %r — retrying with the pro model",
                       goal[:60])
             guide = await gemini_planner.plan(
-                goal, screenshot_b64=shot, window_title=title, fast=False,
+                goal, screenshot_b64=shot, window_title=title,
+                controls=controls, fast=False,
             )
         return guide
+
+    @staticmethod
+    def _foreground_controls(title: str) -> list[str]:
+        """The names of the controls in the window the user is in, as the app
+        itself labels them. 0.2-0.4 s (UC-04); nothing is uploaded."""
+        if not title:
+            return []
+        try:
+            from agents.control import uia
+            rows = uia.controls(title, limit=160)
+        except Exception:  # noqa: BLE001 - no tree, no list; the plan still works
+            _log.debug("could not read the controls of %r", title, exc_info=True)
+            return []
+        names = [str(r.get("name") or "").strip() for r in rows
+                 if r.get("enabled", True)]
+        return [n for n in dict.fromkeys(names) if n and len(n) <= 80]
 
     async def _plan_and_start_guide(self, goal: str) -> None:
         """Plan in the background, then hand the guide to the runner.
@@ -1975,7 +1994,10 @@ class CompanionManager(QObject):
         self._activity("planning")
         planning_started = time.monotonic()
         try:
-            guide = await self._plan_guide(goal, shot, title)
+            controls = await asyncio.to_thread(self._foreground_controls, title)
+            _log.info("planning %r against %d on-screen controls", goal[:60],
+                      len(controls))
+            guide = await self._plan_guide(goal, shot, title, controls)
         finally:
             # Planning happens after show_me_how has already returned, so the
             # tool wrapper cannot cover it — clear it here or the island sticks.
