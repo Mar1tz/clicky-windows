@@ -102,7 +102,7 @@ def test_every_named_control_becomes_something_that_can_be_asked_for(control):
     c, _ = control
     names = {a.name for a in c.actions(app="notepad")}
     assert names == {"click_save", "toggle_word_wrap", "set_text_editor",
-                     "read_ln_1_col_1"}
+                     "read_ln_1_col_1", "read_text"}
 
 
 def test_a_control_that_is_greyed_out_is_not_offered(control):
@@ -212,3 +212,55 @@ def test_a_window_full_of_rows_does_not_flood_the_model():
         windows=[{"hwnd": 1, "title": "Big", "exe": "big.exe", "app": "big"}],
         controls=lambda *a, **k: many)
     assert len(p.actions("big")) == MAX_ACTIONS
+
+
+# ── a packaged app is not its host process ───────────────────────────────────
+
+def test_a_store_app_is_named_by_its_title_not_its_host():
+    """Calculator, Mail, Camera and Photos all run inside
+    ApplicationFrameHost.exe. Taking the executable would call every one of
+    them "applicationframehost" — so all of them were dropped, and the apps
+    UC-02 had just made openable could not then be used."""
+    from agents.control.providers.windows_ui import _app_id
+
+    assert _app_id("ApplicationFrameHost.exe", "Calculator") == "calculator"
+    assert _app_id("ApplicationFrameHost.exe", "Inbox - Mail") == "mail"
+    assert _app_id("brave.exe", "Google - Brave") == "brave", "normal apps unchanged"
+    assert _app_id("", "Photos") == "photos"
+
+
+def test_the_app_id_matches_the_one_the_launcher_gives():
+    """Both providers have to call it the same thing, or the launcher can
+    open an app that the window provider then cannot act on."""
+    from agents.control.providers.launcher import _slug as launcher_slug
+    from agents.control.providers.windows_ui import _app_id
+
+    assert _app_id("ApplicationFrameHost.exe", "Calculator") == launcher_slug("Calculator")
+
+
+# ── reading the answer back ──────────────────────────────────────────────────
+
+def test_any_app_can_be_asked_what_it_says(control):
+    """Calculator renames its display control to "Display is 25", so the
+    action derived from that name changes every time the number does and
+    nothing can address it. Reading the window's labels is stable and needs
+    no knowledge of Calculator."""
+    c, _ = control
+    out = run(c.run("notepad", "read_text"))
+    assert out.ok and "Ln 1, Col 1" in out.message
+
+
+def test_reading_what_it_says_never_asks(control):
+    c, _ = control
+    assert c.find("notepad", "read_text").risk is Risk.PASSIVE
+
+
+# ── an app nobody has ────────────────────────────────────────────────────────
+
+def test_asking_about_an_unknown_app_returns_nothing_not_everything(control):
+    """An empty filter used to mean "no filter", so asking what Photoshop
+    could do listed every action of every app — which the model reads as
+    Photoshop's."""
+    c, _ = control
+    assert c.actions(app="photoshop") == []
+    assert c.actions(app="notepad"), "an app that IS here still answers"

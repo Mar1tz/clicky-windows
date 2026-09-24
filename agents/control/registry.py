@@ -157,6 +157,12 @@ class AppControl:
     def actions(self, app: str = "", query: str = "") -> list[Action]:
         self._build()
         want = self.resolve_app(app) if app else ""
+        if app and not want:
+            # Asked about an app nobody has. Returning every action of every
+            # app - which is what an empty filter did - is worse than
+            # returning nothing: the model reads it as "here is what that
+            # app can do" and picks one belonging to something else.
+            return []
         q = (query or "").strip().lower()
         pool = list(self._actions.values())
         if want:

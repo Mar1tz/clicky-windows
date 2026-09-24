@@ -139,11 +139,33 @@ def _process_name(hwnd: int) -> str:
     return ""
 
 
-def _app_id(exe: str) -> str:
-    """"brave.exe" -> "brave"; "ApplicationFrameHost.exe" -> ""."""
+# Processes that host somebody else's window. A packaged app's frame
+# belongs to ApplicationFrameHost, so its executable says nothing about
+# which app it is - and dropping those windows made every Store app
+# invisible: Calculator, Mail, Camera, Photos, Clock.
+_HOST_PROCESSES = {"applicationframehost", "runtimebroker", "shellexperiencehost"}
+
+
+def _title_tail(title: str) -> str:
+    """"Downloads - File Explorer" -> "File Explorer". Usually the app."""
+    text = str(title or "").strip()
+    return text.rsplit(" - ", 1)[-1].strip() if " - " in text else text
+
+
+def _app_id(exe: str, title: str = "") -> str:
+    """Which app a window belongs to.
+
+    Normally the executable: "brave.exe" -> "brave". Executable names do
+    not change with the machine's language, which is what makes this work
+    the same everywhere.
+
+    A window hosted by ApplicationFrameHost is the exception - the frame is
+    Windows', the app is inside it - so there the title is all we have, and
+    its tail is the app's own name.
+    """
     stem = os.path.splitext(exe)[0].lower()
-    if not stem or stem in ("applicationframehost", "explorer" if False else ""):
-        return ""
+    if stem in _HOST_PROCESSES or not stem:
+        return _slug(_title_tail(title))
     return _slug(stem)
 
 
@@ -161,10 +183,10 @@ def open_windows() -> list[dict[str, Any]]:
         except (TypeError, ValueError):
             continue
         exe = _process_name(hwnd)
-        app = _app_id(exe)
+        title = str(w.get("title") or "")
+        app = _app_id(exe, title)
         if app:
-            out.append({"hwnd": hwnd, "title": str(w.get("title") or ""),
-                        "exe": exe, "app": app})
+            out.append({"hwnd": hwnd, "title": title, "exe": exe, "app": app})
     return out
 
 
@@ -191,7 +213,7 @@ class WindowsUIProvider:
             # - File Explorer" — and is what a person would say, so it earns
             # a place as an alias. The executable stays the id.
             title = w["title"]
-            tail = title.rsplit(" - ", 1)[-1].strip() if " - " in title else title
+            tail = _title_tail(title)
             aliases = tuple(a for a in {tail, os.path.splitext(w["exe"])[0]}
                             if a and _slug(a) != app)
             out[app] = AppProfile(app=app, display_name=tail or app,
@@ -211,8 +233,8 @@ class WindowsUIProvider:
             log.debug("could not read the controls of %r", title, exc_info=True)
             return []
 
-        out: list[Action] = []
-        seen: set[str] = set()
+        out: list[Action] = [self._read_text(app, title)]
+        seen: set[str] = {out[0].name}
         for row in found:
             name = str(row.get("name") or "").strip()
             kind = str(row.get("type") or "")
@@ -227,6 +249,32 @@ class WindowsUIProvider:
                 if len(out) >= MAX_ACTIONS:
                     return out
         return out
+
+    def _read_text(self, app: str, title: str) -> Action:
+        """"What does it say?" — for any app, without knowing the app.
+
+        Every window has labels, and after doing something the answer is
+        usually sitting in one of them. Calculator renames its display
+        control to "Display is 25", so the action derived from its name
+        changes every time the number does; a caller cannot address that.
+        Reading the window's text instead is stable, needs no per-app
+        knowledge, and is the generic form of "did that work?".
+        """
+        reader, window = self._controls, title
+
+        async def run() -> str:
+            rows = reader(window, limit=MAX_ACTIONS * 3)
+            words = [str(r.get("name") or "").strip() for r in rows
+                     if str(r.get("type") or "") in _READ_ONLY_TYPES]
+            words = [w for w in dict.fromkeys(words) if w]
+            if not words:
+                return f"nothing readable in {window!r}"
+            return f"{window}: " + " | ".join(words[:20])
+
+        return Action(app, "read_text", f"Read the text showing in {window[:40]!r}.",
+                      run, Tier.UI_BACKGROUND, Risk.PASSIVE,
+                      needs_app_running=True,
+                      examples=(f"what does {app} say?",))
 
     # -- one control, one action ---------------------------------------------
 
