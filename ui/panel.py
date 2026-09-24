@@ -323,11 +323,13 @@ class CompanionPanel(QWidget):
         self._response_label.setText(text)
 
     def set_guide_progress(self, current: int, total: int, instruction: str = ""):
-        """Show 'Guide · 3/10' while a walkthrough runs; hide it when total=0."""
-        if total <= 0:
+        """Show 'Guide · 3/10' while a walkthrough runs; hide it when total=0.
+        A negative total means the plan is still being written: 'Guide · 1'."""
+        if total == 0:
             self._guide_label.setVisible(False)
             return
-        self._guide_label.setText(f"Guide · {current}/{total}")
+        self._guide_label.setText(f"Guide · {current}/{total}" if total > 0
+                                  else f"Guide · {current}")
         if instruction:
             self._guide_label.setToolTip(instruction)
         self._guide_label.setVisible(True)

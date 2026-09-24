@@ -1,16 +1,16 @@
 """
-The guide planner — gemini-3.1-pro-preview.
+The guide planner.
 
 When the user says "show me how to export this" the live model does not try
-to improvise a five-step tutorial mid-sentence. It calls plan_guide, and this
-breaks the goal into ordered steps, each with the thing on screen to aim at
-and the condition that means the step is finished.
+to improvise a five-step tutorial mid-sentence. It calls show_me_how, and
+this breaks the goal into ordered steps, each with the thing on screen to aim
+at and the signals that mean the step is finished.
 
-It is deliberate rather than quick — the pro model thinks, and on a real goal
-with a screenshot attached that has been measured between about ten and
-twenty seconds. That is why the tool description tells the live model to say
-"let me work that out" before calling it: the user hears something immediately
-and the silence is explained.
+The fast vision model plans on the critical path (3.6-4.3 s for a whole
+plan); the pro model, measured at ten to twenty seconds, is only the fallback
+when the fast plan is unusable. And the plan is streamed (GW-08): step one is
+complete about 1.9 s in, and the walkthrough starts on it while the rest is
+still being written - see _stream_plan.
 
 The steps come back structured, so "next" can be answered from memory without
 another model call, and each step knows what it was pointing at.
@@ -18,9 +18,11 @@ another model call, and each step knows what it was pointing at.
 
 from __future__ import annotations
 
+import json
 import logging
+import re
 from dataclasses import dataclass
-from typing import Optional
+from typing import Callable, Optional
 
 from ai import gemini
 from ai.gemini import Models
@@ -387,6 +389,7 @@ async def plan(
     controls: Optional[list[str]] = None,
     timeout: float = 60.0,
     fast: bool = True,
+    on_first_step: Optional[Callable[[Guide], None]] = None,
 ) -> Guide:
     """Break `goal` into steps. Returns an empty Guide when it cannot.
 
@@ -397,6 +400,10 @@ async def plan(
     conditions. Seventeen seconds of silence before a guide starts is not a
     better guide — it is a broken one. The pro model stays available via
     fast=False as the fallback when the quick plan comes back unusable.
+
+    With `on_first_step` (fast plans only) the plan is streamed and step one
+    is handed over the moment it exists - see _stream_plan. The returned
+    Guide is always the whole plan, step one included.
     """
     if not goal.strip():
         return Guide(goal=goal, feasible=False)
@@ -429,18 +436,23 @@ async def plan(
         _log.debug("could not read the foreground process", exc_info=True)
     parts.append(gemini.text_part(ask))
 
+    contents = [{"role": "user", "parts": parts}]
     try:
-        data = await gemini.generate_json(
-            Models.VISION_FAST if fast else Models.PLANNER,
-            [{"role": "user", "parts": parts}],
-            _SCHEMA,
-            system=_SYSTEM,
-            max_tokens=6144,
-            # Unbounded pro thinking starved the plan itself (see
-            # gemini_vision._DEEP_THINK for the same defect and fix).
-            think=0 if fast else 2048,
-            timeout=timeout,
-        )
+        if on_first_step is not None and fast:
+            data = await _stream_plan(contents, goal, controls, on_first_step,
+                                      timeout)
+        else:
+            data = await gemini.generate_json(
+                Models.VISION_FAST if fast else Models.PLANNER,
+                contents,
+                _SCHEMA,
+                system=_SYSTEM,
+                max_tokens=6144,
+                # Unbounded pro thinking starved the plan itself (see
+                # gemini_vision._DEEP_THINK for the same defect and fix).
+                think=0 if fast else 2048,
+                timeout=timeout,
+            )
     except Exception as e:
         # str(TimeoutError()) is '' — the log said 'planner failed: ' and
         # nothing else. Name the type.
@@ -455,6 +467,112 @@ async def plan(
     if controls:
         snap_targets(guide, controls)
     return guide
+
+
+_STEPS_KEY = re.compile(r'"steps"\s*:\s*\[')
+
+
+def _complete_steps(text: str) -> list[dict]:
+    """Every step object that has fully arrived in a plan still streaming in.
+
+    Walks the "steps" array counting braces outside strings, so a "{" inside
+    an instruction does not end a step early.
+    """
+    m = _STEPS_KEY.search(text)
+    if not m:
+        return []
+    out: list[dict] = []
+    depth, in_str, esc, start = 0, False, False, -1
+    for j in range(m.end(), len(text)):
+        c = text[j]
+        if in_str:
+            if esc:
+                esc = False
+            elif c == "\\":
+                esc = True
+            elif c == '"':
+                in_str = False
+        elif c == '"':
+            in_str = True
+        elif c == "{":
+            if depth == 0:
+                start = j
+            depth += 1
+        elif c == "}":
+            depth -= 1
+            if depth == 0 and start >= 0:
+                try:
+                    out.append(json.loads(text[start:j + 1]))
+                except ValueError:
+                    pass
+                start = -1
+        elif c == "]" and depth == 0:
+            break
+    return out
+
+
+def _partial_string(text: str, key: str) -> str:
+    """A string field from a JSON object that has not finished arriving."""
+    m = re.search(rf'"{key}"\s*:\s*"((?:[^"\\]|\\.)*)"', text)
+    if not m:
+        return ""
+    try:
+        return json.loads(f'"{m.group(1)}"')
+    except ValueError:
+        return ""
+
+
+async def _stream_plan(contents: list, goal: str, controls: Optional[list[str]],
+                       on_first_step, timeout: float) -> Optional[dict]:
+    """The plan, streamed. `on_first_step` gets a one-step Guide the moment
+    step one has fully arrived, so the walkthrough can start while the rest
+    is still being written.
+
+    Measured (GW-08, the fast model, live): step one is complete 1.8-1.9 s
+    in, the whole plan 3.0-4.0 s. Waiting for all of it took 3.6-4.3 s
+    before anything could happen. A stream that breaks after step one keeps
+    every step that closed; one that breaks before it raises, and the
+    caller falls back as it always has.
+    """
+    text = ""
+    announced = False
+    try:
+        async for piece in gemini.stream(
+                Models.VISION_FAST, contents, system=_SYSTEM, max_tokens=6144,
+                temperature=0.2, think=0, schema=_SCHEMA, timeout=timeout):
+            text += piece
+            if announced:
+                continue
+            steps = _complete_steps(text)
+            if not steps:
+                continue
+            announced = True
+            if re.search(r'"feasible"\s*:\s*false', text):
+                continue            # it says it cannot be done: start nothing
+            first = guide_from_dict(
+                {"goal": _partial_string(text, "goal") or goal, "steps": steps[:1]},
+                goal=goal)
+            if not first.steps:
+                continue
+            split_compound_steps(first, controls)
+            if controls:
+                snap_targets(first, controls)
+            try:
+                on_first_step(first)
+            except Exception:  # noqa: BLE001 - the plan still has to finish
+                _log.warning("starting the walkthrough from step one failed",
+                             exc_info=True)
+    except Exception as e:
+        if not announced:
+            raise
+        _log.warning("plan stream broke after step one: %s %s", type(e).__name__, e)
+    data = gemini.parse_json_lenient(text) if text else None
+    if data is None and text:
+        steps = _complete_steps(text)
+        if steps:
+            data = {"goal": _partial_string(text, "goal") or goal,
+                    "feasible": True, "steps": steps}
+    return data
 
 
 # How many control names the planner is shown. A window can expose hundreds;

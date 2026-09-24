@@ -384,6 +384,9 @@ class CompanionManager(QObject):
         self._resume = None
         # The last walkthrough to FINISH: (guide, monotonic time, saved).
         self._guide_last = None
+        # A guide whose plan is still streaming in (GW-08): step one is
+        # running, the rest has not arrived. None otherwise.
+        self._plan_in_progress = None
         # Prefetched step speech, per step index, filled while the previous
         # step is being performed so presenting is instant. Pointer
         # coordinates are deliberately NOT prefetched (see _prefetch_step);
@@ -1059,11 +1062,18 @@ class CompanionManager(QObject):
                     # "okay" the model called point_at 4 times in 5. Saying
                     # it is already there: 0 in 5 (GW-14 live check).
                     cur_line += f" Tora's arrow is already on \"{s.target}\"."
+            if plan is not None and plan is self._plan_in_progress:
+                # "Step 1 of 1, 0 left" while the plan streams in would tell
+                # the model this is the last step (GW-08).
+                count = (f" — step {cur + 1} (the rest of the plan is still "
+                         f"being written). Tora ")
+            else:
+                count = (f" — step {cur + 1} of {len(self._lesson_steps)}, "
+                         f"{max(0, len(self._lesson_steps) - cur - 1)} left. Tora ")
             bits.append(
                 "A guided walkthrough is running"
                 + (f' toward: "{plan.goal}"' if getattr(plan, "goal", "") else "")
-                + f" — step {cur + 1} of {len(self._lesson_steps)}, "
-                f"{max(0, len(self._lesson_steps) - cur - 1)} left. Tora "
+                + count +
                 f"speaks and points at each step and advances on its own as "
                 f"the user completes it — do NOT read the steps and do NOT say "
                 f"'say next'. Call guide_step ONLY for a command: next (done / "
@@ -1550,6 +1560,9 @@ class CompanionManager(QObject):
     _GUIDE_COMMANDS = ("next", "skip", "back", "repeat", "stop", "pause",
                        "resume", "where", "help", "do_it")
     _GUIDE_STAYS = ("where", "help", "do_it")
+    # Also set in __init__; the class default keeps every reader safe on a
+    # manager that has not run it.
+    _plan_in_progress = None
 
     async def _tool_guide_step(self, args: dict) -> dict:
         action = str(args.get("action") or "").strip().lower().replace(" ", "_")
@@ -1605,7 +1618,10 @@ class CompanionManager(QObject):
         # next again. The field that was added to stop repeat calls was the
         # thing inviting them.
         heading, total = runner.heading, runner.total
-        if heading >= total:
+        if heading >= total and runner.writing:
+            where = (f"moving on to step {heading + 1} - it is still being "
+                     f"planned and Tora will say it the moment it is ready")
+        elif heading >= total:
             where = "the walkthrough is finishing - that was the last step"
         elif move == "back" and on_first:
             where = (f"still on step 1 of {total} - it is the first step, so "
@@ -2182,7 +2198,13 @@ class CompanionManager(QObject):
         if not goal:
             return {"error": "no goal given"}
 
-        self._submit(self._plan_and_start_guide(goal))
+        self._submit(self._plan_and_start_guide(goal, time.monotonic()))
+        # Step one is said in a few seconds: have Tora's voice's output
+        # running by then, not opened when she starts to speak (GW-08).
+        try:
+            self._get_tts().warm()
+        except Exception:  # noqa: BLE001 - a head start, never a blocker
+            _log.debug("could not warm the voice output", exc_info=True)
         return {
             "started": True,
             "instruction": (
@@ -2199,13 +2221,25 @@ class CompanionManager(QObject):
         }
 
     async def _plan_guide(self, goal: str, shot: str, title: str,
-                          controls: Optional[list[str]] = None):
-        """Fast plan, falling back to the careful model if it is unusable."""
+                          controls: Optional[list[str]] = None,
+                          on_first_step=None):
+        """Fast plan, falling back to the careful model if it is unusable.
+
+        With `on_first_step` the fast plan is streamed (GW-08). Once step
+        one has started a walkthrough there is no falling back: a different
+        plan would not follow on from the step already being done."""
+        started: list = []
+
+        def first(partial) -> None:
+            started.append(partial)
+            on_first_step(partial)
+
         guide = await gemini_planner.plan(
             goal, screenshot_b64=shot, window_title=title,
             controls=controls, fast=True,
+            on_first_step=first if on_first_step is not None else None,
         )
-        if not guide:
+        if not guide and not started:
             _log.info("fast plan unusable for %r — retrying with the pro model",
                       goal[:60])
             guide = await gemini_planner.plan(
@@ -2230,40 +2264,74 @@ class CompanionManager(QObject):
                  if r.get("enabled", True)]
         return [n for n in dict.fromkeys(names) if n and len(n) <= 80]
 
-    async def _plan_and_start_guide(self, goal: str) -> None:
-        """Plan in the background, then hand the guide to the runner.
+    async def _plan_and_start_guide(self, goal: str,
+                                    asked_at: Optional[float] = None) -> None:
+        """Plan in the background, and start the walkthrough the moment its
+        first step exists.
 
         Uses the FAST planner on the critical path — measured 3.8 s against
         17.6 s for the pro model, for a plan that was actually more granular.
         The pro model is kept as the fallback for when the quick plan comes
         back unusable, rather than as the thing everyone waits on.
-        """
-        shot = ""
-        if not (self._privacy_guard and is_sensitive_window(active_window_title())):
-            screens = await self._capture_shots(max_width=1024)
-            if screens:
-                active = self._active_shot(screens) or screens[0]
-                shot = active.base64_jpeg
 
+        GW-08: the plan is streamed, and the walkthrough starts on step one
+        while the rest is still being written - step one is complete about
+        1.9 s in, where the whole plan took 3.6-4.3 s. The screenshot and the
+        control walk, which both have to happen first, run side by side.
+        """
+        asked_at = asked_at or time.monotonic()
         title = active_window_title()
         self._activity("planning")
         planning_started = time.monotonic()
+        started: list = []
+        controls: list[str] = []
+        process = ""
+
+        def first_step(partial) -> None:
+            gemini_planner.repair_first_step(partial, controls, title, process)
+            self._activity("")
+            self._plan_in_progress = partial
+            started.append(partial)
+            _log.info("guide step one ready %.1fs after it was asked for "
+                      "(the rest is still being planned)",
+                      time.monotonic() - asked_at)
+            self._start_guide(partial, asked_at=asked_at)
+            # Only the voice has to wait for "sure, let me walk you through
+            # it" to end. The arrow goes up now, and step one's speech starts
+            # downloading, so it plays the moment that answer is over.
+            self._submit(self._prefetch_step(0))
+            if partial.steps[0].target:
+                self._submit(self._point_first_step(partial, asked_at))
+
+        guide = None
         try:
-            controls = await asyncio.to_thread(self._foreground_controls, title)
+            shot, controls = await asyncio.gather(
+                self._planning_shot(),
+                asyncio.to_thread(self._foreground_controls, title))
+            try:
+                from tutor import active_process_name
+                process = active_process_name() or ""
+            except Exception:  # noqa: BLE001
+                process = ""
             _log.info("planning %r against %d on-screen controls", goal[:60],
                       len(controls))
-            guide = await self._plan_guide(goal, shot, title, controls)
-            if guide:
-                try:
-                    from tutor import active_process_name
-                    process = active_process_name() or ""
-                except Exception:  # noqa: BLE001
-                    process = ""
+            guide = await self._plan_guide(goal, shot, title, controls,
+                                           on_first_step=first_step)
+            if guide and not started:
                 gemini_planner.repair_first_step(guide, controls, title, process)
         finally:
             # Planning happens after show_me_how has already returned, so the
             # tool wrapper cannot cover it — clear it here or the island sticks.
-            self._activity("")
+            # (Once step one is up the walkthrough owns the island.)
+            if not started:
+                self._activity("")
+            plan_s = time.monotonic() - planning_started
+            if started:
+                # Always, even on an error: a runner told the plan is still
+                # being written would otherwise wait for it.
+                self._plan_written(started[0], guide, plan_s, goal)
+        if started:
+            return
         if not guide:
             await self._reply_local(
                 guide.preamble
@@ -2271,12 +2339,53 @@ class CompanionManager(QObject):
             )
             return
 
-        plan_s = time.monotonic() - planning_started
         _log.info("guide ready: %d steps for %r (planned in %.1fs)",
                   len(guide.steps), goal[:60], plan_s)
-        self._start_guide(guide)
+        self._start_guide(guide, asked_at=asked_at)
         if self._guide_stats is not None:
             self._guide_stats["plan_s"] = plan_s
+
+    async def _planning_shot(self) -> str:
+        """The screenshot the planner sees, or "" for a sensitive window."""
+        if self._privacy_guard and is_sensitive_window(active_window_title()):
+            return ""
+        screens = await self._capture_shots(max_width=1024)
+        if not screens:
+            return ""
+        return (self._active_shot(screens) or screens[0]).base64_jpeg
+
+    def _plan_written(self, partial, full, plan_s: float, goal: str) -> None:
+        """The rest of a streamed plan has arrived: add it behind the steps
+        already running.
+
+        The steps the walkthrough started with are the SAME objects the
+        runner is using - a watcher hangs off the one on screen - so only
+        what is new is appended. That holds whether or not it is still
+        running: a stopped walkthrough keeps its guide for "resume".
+        """
+        self._plan_in_progress = None
+        new = list(full.steps[len(partial.steps):]) if full else []
+        partial.steps.extend(new)
+        if not full:
+            _log.warning("the rest of the plan for %r did not arrive - the "
+                         "walkthrough has only its first step", goal[:60])
+        _log.info("guide ready: %d steps for %r (planned in %.1fs; it started "
+                  "on step one while the rest was written)",
+                  len(partial.steps), goal[:60], plan_s)
+        runner = self._guide_runner
+        if runner is None or self._lesson_plan is not partial:
+            return
+        self._lesson_steps = [s.instruction for s in partial.steps]
+        if self._guide_stats is not None:
+            self._guide_stats["steps"] = len(partial.steps)
+            self._guide_stats["plan_s"] = plan_s
+        runner.plan_written()
+        idx = runner.index
+        if 0 <= idx < len(partial.steps):
+            self.sig_guide_progress.emit(idx + 1, len(partial.steps),
+                                         partial.steps[idx].instruction)
+        # The next step's speech is ready by the time it is needed.
+        self._submit(self._prefetch_step(idx + 1))
 
     async def _tool_search(self, args: dict) -> dict:
         query = str(args.get("query") or "").strip()
@@ -3000,7 +3109,8 @@ class CompanionManager(QObject):
 
     # ── Autonomous guide ──────────────────────────────────────────────────────
 
-    def _start_guide(self, guide, *, start_index: int = 0) -> None:
+    def _start_guide(self, guide, *, start_index: int = 0,
+                     asked_at: Optional[float] = None) -> None:
         """Begin walking the user through a planned guide, hands-free."""
         from tutor_features.guide import GuideRunner
         self._stop_guide()
@@ -3010,6 +3120,9 @@ class CompanionManager(QObject):
         self._lesson_steps = [st.instruction for st in guide.steps]
         self._lesson_step_idx = start_index
         self._lesson_nagged = False
+        # Started from a plan still being written (GW-08): the runner waits
+        # for more steps rather than finishing when it runs out.
+        writing = guide is self._plan_in_progress
 
         runner = GuideRunner(
             guide,
@@ -3031,20 +3144,27 @@ class CompanionManager(QObject):
                 "ai.verification", fromlist=["StateObserver"]
             ).StateObserver(),
             start_index=start_index,
+            writing=writing,
+            # The pause lets "sure, let me walk you through it" begin before
+            # step one; _wait_idle then holds the step until it has ended.
+            # From a streamed plan step one comes ~2 s after that answer
+            # started, so the pause is only a margin.
+            present_delay_s=0.3 if writing else 0.8,
         )
         self._guide_runner = runner
         self._guide_stats = {
             "goal": guide.goal, "steps": len(guide.steps), "plan_s": None,
             "started": time.monotonic(), "auto": 0, "manual": 0, "by": {},
             "judged": 0, "targets": {}, "missed": 0, "stuck": 0, "nudged": 0,
-            "asked": 0, "said": {},
+            "asked": 0, "said": {}, "asked_at": asked_at, "arrow_s": None,
+            "first_s": None, "first_word_s": None,
         }
-        self._step_audio.clear()
+        self._drop_step_audio()
         self._step_point.clear()
-        # Start generating step one's speech NOW, while the model is still
-        # saying "sure, let me walk you through it" — so the first step lands
-        # without the ~4 s synthesis pause.
-        self._submit(self._prefetch_step(start_index))
+        # Step one's speech is NOT prefetched: it streams when presented,
+        # first word in ~0.9 s (GW-08). Prefetching it as well synthesised
+        # the same line twice whenever the prefetch had not finished in
+        # time - which, at 3.3-4.1 s a line, was usually.
         self._submit(runner.start())
 
     def resume_guide(self) -> bool:
@@ -3059,6 +3179,16 @@ class CompanionManager(QObject):
         runner = self._guide_runner
         if runner is not None:
             runner.stop()
+
+    def _note_first_word(self) -> None:
+        """The first sound of a walkthrough's first step went out. What the
+        person actually waits for is this, not the step being "shown"."""
+        stats = self._guide_stats
+        asked_at = (stats or {}).get("asked_at")
+        if asked_at and stats.get("first_word_s") is None:
+            stats["first_word_s"] = time.monotonic() - asked_at
+            _log.info("guide step one heard %.1fs after it was asked for",
+                      stats["first_word_s"])
 
     def _note_target(self, idx: int, target: str, found, secs: float) -> None:
         """Which tier found a step's target, and how long it took.
@@ -3095,7 +3225,15 @@ class CompanionManager(QObject):
 
         if kind == "step_shown":
             text = plan.steps[idx].instruction if plan and 0 <= idx < total else ""
-            _log.info("guide step %d/%d shown: %s", idx + 1, total, text[:70])
+            writing = plan is not None and plan is self._plan_in_progress
+            _log.info("guide step %d/%s shown: %s", idx + 1,
+                      "?" if writing else total, text[:70])
+            asked_at = (stats or {}).get("asked_at")
+            if asked_at and stats.get("first_s") is None:
+                # The number GW-08 is judged by: asked -> first step up.
+                stats["first_s"] = time.monotonic() - asked_at
+                _log.info("guide step one up %.1fs after it was asked for",
+                          stats["first_s"])
 
         elif kind == "step_ended":
             outcome = detail.get("outcome", "")
@@ -3132,6 +3270,12 @@ class CompanionManager(QObject):
             missed = (", %d not found" % stats["missed"]) if stats["missed"] else ""
             plan_s = stats.get("plan_s")
             planned = ("planned in %.1fs, " % plan_s) if plan_s is not None else ""
+            # asked -> step one: its arrow, its presentation, its first word
+            firsts = ", ".join("%s %.1fs" % (name, stats[key]) for name, key in (
+                ("arrow", "arrow_s"), ("up", "first_s"), ("heard", "first_word_s"))
+                if stats.get(key) is not None)
+            if firsts:
+                planned += "step one: %s, " % firsts
             finished = stats["auto"] + stats["manual"]
             by_vision = stats["by"].get("vision", 0)
             share = (" (vision decided %d%%)" % round(100 * by_vision / finished)
@@ -3160,7 +3304,7 @@ class CompanionManager(QObject):
             self._lesson_plan = None
             self._lesson_steps = []
             self._lesson_step_idx = 0
-            self._step_audio.clear()
+            self._drop_step_audio()
             self._step_point.clear()
             try:
                 from tutor_features.step_watch import _clicks
@@ -3262,7 +3406,11 @@ class CompanionManager(QObject):
         if plan is None or not (0 <= idx < len(plan.steps)):
             return ""
         step = plan.steps[idx]
-        line = f"Step {idx + 1} of {len(plan.steps)}: {step.instruction}"
+        if plan is self._plan_in_progress:
+            # How many steps there are is not known yet (GW-08).
+            line = f"Step {idx + 1}: {step.instruction}"
+        else:
+            line = f"Step {idx + 1} of {len(plan.steps)}: {step.instruction}"
         if getattr(step, "waiting", False):
             # Say that nothing needs doing and that Tora will speak up - or a
             # person sits there wondering whether they missed an instruction.
@@ -3271,25 +3419,35 @@ class CompanionManager(QObject):
             line = "That's finished. " + line
         return line
 
-    async def _prefetch_step(self, idx: int) -> None:
-        """Generate the next step's SPEECH in advance.
+    def _drop_step_audio(self) -> None:
+        """Forget prepared step speech, and stop what is still downloading."""
+        for prepared in self._step_audio.values():
+            try:
+                prepared.cancel()
+            except Exception:  # noqa: BLE001
+                pass
+        self._step_audio.clear()
 
-        Synthesising a line takes ~4 s, so doing it at the moment the step is
-        due meant the user sat through a long silence first. Doing it while the
-        previous step is still being performed makes presenting the next one
-        instant. Speech is safe to prepare early because the words do not
+    async def _prefetch_step(self, idx: int) -> None:
+        """Start the step's SPEECH downloading in advance.
+
+        Synthesising a line takes seconds, so doing it at the moment the step
+        is due meant the user sat through a long silence first. Doing it while
+        the previous step is still being performed makes presenting the next
+        one instant. Speech is safe to prepare early because the words do not
         depend on what is on screen — unlike the pointer target, see below.
+
+        It is a SpeechBuffer (GW-08): playable before it has all arrived, so
+        a step that comes up sooner than expected starts from what is there
+        instead of being synthesised a second time.
         """
         plan = self._lesson_plan
         if plan is None or not (0 <= idx < len(plan.steps)):
             return
         if idx not in self._step_audio:
             try:
-                pcm, rate = await self._get_tts().synthesize(
-                    _speakable(self._step_line(idx))
-                )
-                if pcm:
-                    self._step_audio[idx] = (pcm, rate)
+                self._step_audio[idx] = self._get_tts().prepare(
+                    _speakable(self._step_line(idx)))
             except Exception:
                 _log.debug("step audio prefetch failed", exc_info=True)
         # NOTE: only the SPEECH is prefetched, never the pointer coordinates.
@@ -3328,7 +3486,11 @@ class CompanionManager(QObject):
         # Get the step AFTER this one ready while this one is being spoken.
         self._submit(self._prefetch_step(idx + 1))
 
-        self.sig_guide_progress.emit(idx + 1, len(plan.steps), step.instruction)
+        # A negative total is "at least this many, more coming": the plan is
+        # still being written (GW-08). _plan_written sends the real count.
+        writing = plan is self._plan_in_progress
+        self.sig_guide_progress.emit(idx + 1, -(idx + 1) if writing else len(plan.steps),
+                                     step.instruction)
 
         # Resolve and point NOW, against the screen as it actually is. This is
         # deliberately not prefetched — see _prefetch_step.
@@ -3340,12 +3502,12 @@ class CompanionManager(QObject):
         self._last_response = msg
         self._emit_state(AppState.SPEAKING)
         try:
-            cached = self._step_audio.pop(idx, None)
-            if cached is not None:
-                from audio.playback import play_pcm_async
-                await play_pcm_async(cached[0], cached[1])
+            prepared = self._step_audio.pop(idx, None)
+            if prepared is not None:
+                await prepared.play(on_start=self._note_first_word)
             else:
-                await self._get_tts().speak(_speakable(msg))
+                await self._get_tts().speak(_speakable(msg),
+                                            on_start=self._note_first_word)
         except Exception:
             pass
         self._emit_state(AppState.IDLE)
@@ -4154,13 +4316,30 @@ class CompanionManager(QObject):
             local_check=local,
         )
 
-    async def _point_step_target(self, idx: int, step) -> None:
+    async def _point_first_step(self, guide, asked_at: float) -> None:
+        """Step one's arrow, the moment step one exists (GW-08).
+
+        Step one acts on the screen as it is now, so this is the screen its
+        target is on - unlike later steps, whose targets are resolved when
+        they come up (see _prefetch_step). It is pointed at again when the
+        step is said; that second look is ~5 ms and also arms its watcher."""
+        step = guide.steps[0]
+        await self._point_step_target(0, step, note=False)
+        stats = self._guide_stats
+        if (0 in self._step_point and self._lesson_plan is guide
+                and stats is not None and stats.get("arrow_s") is None):
+            stats["arrow_s"] = time.monotonic() - asked_at
+            _log.info("guide step one pointed at %.1fs after it was asked for",
+                      stats["arrow_s"])
+
+    async def _point_step_target(self, idx: int, step, *, note: bool = True) -> None:
         """Point at a guide step's target and tell its watcher the bounds,
         so a click inside them counts as the step being done."""
         started = time.monotonic()
         ok = await self._point_to(step.target, hold=False)
         found = self._last_found if ok else None
-        self._note_target(idx, step.target, found, time.monotonic() - started)
+        if note:
+            self._note_target(idx, step.target, found, time.monotonic() - started)
         if found is None:
             return
         self._step_point[idx] = found

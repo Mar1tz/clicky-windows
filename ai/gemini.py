@@ -184,6 +184,26 @@ async def warm_up() -> bool:
 
 # ── REST ─────────────────────────────────────────────────────────────────────
 
+# A pooled HTTP/2 connection the server has already closed fails the next
+# request on it with a protocol error - "Invalid input RECV_PING in state
+# CLOSED". The pool drops that connection, so one immediate retry gets a
+# fresh one. Seen in the field on the planner (21 September), where it
+# turned a two-second first step into the pro model's 10-20 s fallback.
+# Timeouts are not retried: that would double a wait that was already long.
+_STALE_CONNECTION = (httpx.ProtocolError, httpx.NetworkError)
+
+
+async def _post(url: str, body: dict, timeout: float) -> httpx.Response:
+    try:
+        return await client().post(url, params={"key": api_key()}, json=body,
+                                   timeout=timeout)
+    except _STALE_CONNECTION as e:
+        _log.info("retrying once on a fresh connection after %s: %s",
+                  type(e).__name__, e)
+        return await client().post(url, params={"key": api_key()}, json=body,
+                                   timeout=timeout)
+
+
 def _url(model: str, method: str) -> str:
     return f"{API_ROOT}/models/{model}:{method}"
 
@@ -241,12 +261,7 @@ async def generate(
     if tools:
         body["tools"] = tools
 
-    r = await client().post(
-        _url(model, "generateContent"),
-        params={"key": api_key()},
-        json=body,
-        timeout=timeout,
-    )
+    r = await _post(_url(model, "generateContent"), body, timeout)
     if r.status_code != 200:
         raise GeminiError(r.status_code, r.text, model)
     return r.json()
@@ -322,47 +337,117 @@ async def stream(
     max_tokens: int = 1024,
     temperature: float = 0.7,
     think: Optional[int] = None,
+    schema: Optional[dict] = None,
     timeout: float = 120.0,
 ) -> AsyncIterator[str]:
-    """Server-sent-events streaming. Yields text as it arrives."""
+    """Server-sent-events streaming. Yields text as it arrives.
+
+    With `schema`, the text is JSON constrained to it, arriving in pieces -
+    which is how a walkthrough's first step can be used before the rest of
+    the plan has been written (GW-08)."""
     gen: dict[str, Any] = {
         "maxOutputTokens": max_tokens,
         "temperature": temperature,
     }
     gen.update(thinking(think, model))
+    if schema is not None:
+        gen["responseMimeType"] = "application/json"
+        gen["responseSchema"] = schema
     body: dict[str, Any] = {"contents": contents, "generationConfig": gen}
     if system:
         body["systemInstruction"] = {"parts": [{"text": system}]}
 
-    async with client().stream(
-        "POST",
-        _url(model, "streamGenerateContent"),
-        params={"key": api_key(), "alt": "sse"},
-        json=body,
-        timeout=timeout,
-    ) as resp:
-        if resp.status_code != 200:
-            raise GeminiError(resp.status_code, (await resp.aread()).decode(), model)
-        async for line in resp.aiter_lines():
-            if not line.startswith("data: "):
-                continue
-            data = line[6:].strip()
-            if not data or data == "[DONE]":
-                continue
-            try:
-                obj = json.loads(data)
-            except json.JSONDecodeError:
-                continue
-            for cand in obj.get("candidates", []):
-                for part in cand.get("content", {}).get("parts", []):
-                    # Gemini 3 streams its reasoning as parts flagged
-                    # "thought". Those are not the answer and must never be
-                    # spoken or shown — only the real text is yielded.
-                    if part.get("thought"):
+    async for obj in _sse(model, body, timeout):
+        for cand in obj.get("candidates", []):
+            for part in cand.get("content", {}).get("parts", []):
+                # Gemini 3 streams its reasoning as parts flagged
+                # "thought". Those are not the answer and must never be
+                # spoken or shown — only the real text is yielded.
+                if part.get("thought"):
+                    continue
+                text = part.get("text", "")
+                if text:
+                    yield text
+
+
+async def _sse(model: str, body: dict, timeout: float) -> AsyncIterator[dict]:
+    """The JSON objects of a streamGenerateContent reply, as they arrive.
+
+    A dead pooled connection (see _STALE_CONNECTION) is retried once - but
+    only if nothing has arrived yet: a stream that has started cannot be
+    replayed without saying its first part twice.
+    """
+    for attempt in (1, 2):
+        started = False
+        try:
+            async with client().stream(
+                "POST",
+                _url(model, "streamGenerateContent"),
+                params={"key": api_key(), "alt": "sse"},
+                json=body,
+                timeout=timeout,
+            ) as resp:
+                if resp.status_code != 200:
+                    raise GeminiError(resp.status_code,
+                                      (await resp.aread()).decode(), model)
+                async for line in resp.aiter_lines():
+                    if not line.startswith("data: "):
                         continue
-                    text = part.get("text", "")
-                    if text:
-                        yield text
+                    data = line[6:].strip()
+                    if not data or data == "[DONE]":
+                        continue
+                    try:
+                        obj = json.loads(data)
+                    except json.JSONDecodeError:
+                        continue
+                    started = True
+                    yield obj
+            return
+        except _STALE_CONNECTION as e:
+            if started or attempt == 2:
+                raise
+            _log.info("retrying the stream once on a fresh connection after "
+                      "%s: %s", type(e).__name__, e)
+
+
+async def stream_audio(
+    model: str,
+    contents: list,
+    *,
+    voice: str,
+    max_tokens: int = 8192,
+    temperature: float = 1.0,
+    timeout: float = 60.0,
+) -> AsyncIterator[tuple[bytes, int]]:
+    """Speech from the TTS model as it is generated: (pcm16, rate) pieces.
+
+    Measured (GW-08): the first piece arrives in about 0.9 s and the whole
+    line in about 2.1 s. Asked for in one piece, the same line took 3.3-4.1 s
+    before a single sound could be played.
+    """
+    import base64
+    import re as _re
+
+    body: dict[str, Any] = {
+        "contents": contents,
+        "generationConfig": {
+            "maxOutputTokens": max_tokens,
+            "temperature": temperature,
+            "responseModalities": ["AUDIO"],
+            "speechConfig": {
+                "voiceConfig": {"prebuiltVoiceConfig": {"voiceName": voice}}
+            },
+        },
+    }
+    async for obj in _sse(model, body, timeout):
+        for cand in obj.get("candidates", []):
+            for part in cand.get("content", {}).get("parts", []):
+                blob = part.get("inlineData") or part.get("inline_data")
+                if not blob or not blob.get("data"):
+                    continue
+                mime = blob.get("mimeType") or blob.get("mime_type") or ""
+                m = _re.search(r"rate=(\d+)", mime)
+                yield base64.b64decode(blob["data"]), int(m.group(1)) if m else 24000
 
 
 async def embed(
@@ -391,12 +476,7 @@ async def embed(
             for t in texts
         ]
     }
-    r = await client().post(
-        _url(Models.EMBED, "batchEmbedContents"),
-        params={"key": api_key()},
-        json=body,
-        timeout=timeout,
-    )
+    r = await _post(_url(Models.EMBED, "batchEmbedContents"), body, timeout)
     if r.status_code != 200:
         raise GeminiError(r.status_code, r.text, Models.EMBED)
     return [e.get("values", []) for e in r.json().get("embeddings", [])]

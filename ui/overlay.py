@@ -343,12 +343,13 @@ class CursorOverlay(QWidget):
         self._activity_text = message or ""
 
     def set_guide_progress(self, current: int, total: int, label: str = ""):
-        """Step N of M for the island. total<=0 hides it."""
-        was_running = self._guide_total > 0
+        """Step N of M for the island. total == 0 hides it; a negative total
+        means the plan is still being written, and shows "Step N" alone."""
+        was_running = self._guide_total != 0
         self._guide_cur = int(current)
         self._guide_total = int(total)
         self._guide_label = label or ""
-        if was_running and self._guide_total <= 0:
+        if was_running and self._guide_total == 0:
             # Guide just ended. Anything it drew was exempt from expiry while
             # it ran; give it a short grace period and then let it fade, so a
             # finished walkthrough does not leave marks on the desktop.
@@ -375,8 +376,9 @@ class CursorOverlay(QWidget):
             elif age > 3.5:
                 head = f"{head.rstrip('.… ')} — still going…"
         sub = ""
-        if self._guide_total > 0:
-            sub = f"Step {self._guide_cur} of {self._guide_total}"
+        if self._guide_total != 0:
+            sub = (f"Step {self._guide_cur} of {self._guide_total}"
+                   if self._guide_total > 0 else f"Step {self._guide_cur}")
             if self._guide_label:
                 sub += f" · {self._guide_label}"
         if not head and not sub:
@@ -499,7 +501,7 @@ class CursorOverlay(QWidget):
         # every drawing used to persist until the next question — which is why
         # arrows and circles piled up on screen long after they were relevant.
         if shape.get("ttl") is None:
-            shape["ttl"] = None if self._guide_total > 0 else ANNOTATION_TTL_S
+            shape["ttl"] = None if self._guide_total != 0 else ANNOTATION_TTL_S
         self._draw_queue_end = start + dur + SHAPE_GAP_SECONDS
         self._annotations.append(shape)
 

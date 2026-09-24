@@ -13,6 +13,7 @@ Three ways in, depending on where the audio came from:
                      the rest of the sentence; this opens the output device
                      once and feeds frames into it as they land, so the first
                      word is heard about a second before the last one exists.
+                     The TTS voice streams through it too (GW-08).
 
   play_mp3_async()   compressed audio, decoded via PyAV.
 
@@ -48,6 +49,12 @@ def stop_audio() -> None:
 def _arm_audio() -> None:
     """Reset the stop flag at the start of a new playback."""
     _stop_event.clear()
+
+
+def playback_stopped() -> bool:
+    """True once stop_audio() has cut the current playback - for a streamed
+    voice to stop downloading what nobody will hear."""
+    return _stop_event.is_set()
 
 
 def decode_mp3_to_pcm(mp3_bytes: bytes) -> tuple[np.ndarray, int]:
@@ -161,6 +168,14 @@ class PcmStreamPlayer:
         # after shows its text but says nothing." Clearing it here fixes it.
         _arm_audio()
         self._done.clear()
+        self.open()
+
+    def open(self) -> None:
+        """Open the device without touching the stop flag - to have it
+        running before there is anything to say. A new stream only starts
+        asking for audio 0.24 s after it is opened (0.97 s for the first one
+        after launch, on this machine's MME output), and that delay used to
+        come before every line (GW-08). Until fed, it plays silence."""
         if self._stream is not None:
             return
         try:
@@ -171,6 +186,10 @@ class PcmStreamPlayer:
             self._stream.start()
         except Exception:
             self._stream = None
+
+    @property
+    def is_open(self) -> bool:
+        return self._stream is not None
 
     def _callback(self, outdata, frames, time_info, status) -> None:
         need = frames * 2      # int16 mono

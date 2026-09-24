@@ -236,8 +236,8 @@ describe what you would do, do it.
                       setting, navigate somewhere). Do NOT list the steps
                       yourself — call show_me_how and Tora walks the user
                       through them, pointing and advancing automatically. Say
-                      one short "sure, let me walk you through it" first, then
-                      call it.
+                      nothing first: call it straight away, then say one short
+                      "sure, let me walk you through it".
   search_web          ONLY when the user explicitly says search / look up,
                       or asks about news, prices or releases. Never for
                       the screen, an app, a game, or a how-do-I. Slow.

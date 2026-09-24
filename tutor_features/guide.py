@@ -81,6 +81,7 @@ class GuideRunner:
         step_timeout_s: float = 35.0,
         stuck_after_s: float = 15.0,
         present_delay_s: float = 0.8,
+        writing: bool = False,
     ):
         self._guide = guide
         self._speak_step = speak_step
@@ -131,6 +132,11 @@ class GuideRunner:
         # The presentation (a value of _shown) the user was already helped
         # with - see mark_helped().
         self._helped_at = -1
+        # The plan is still being written (GW-08): step one started the
+        # moment it existed, and the rest is appended to the guide's steps as
+        # it arrives. Until plan_written(), running out of steps means "wait",
+        # not "finished".
+        self._writing = writing
 
         self._start_index = max(0, start_index)
         self._idx = -1
@@ -209,6 +215,24 @@ class GuideRunner:
     def stop(self) -> None:
         self.request("stop")
 
+    @property
+    def writing(self) -> bool:
+        """True while the rest of the plan is still being written."""
+        return self._writing
+
+    def plan_written(self) -> None:
+        """The rest of the plan has been appended to the guide's steps (or
+        there is no more). Safe from any thread, like request()."""
+        self._writing = False
+        loop = self._loop
+        if loop is not None and loop.is_running():
+            try:
+                loop.call_soon_threadsafe(self._wake.set)
+                return
+            except RuntimeError:
+                pass
+        self._wake.set()
+
     def mark_helped(self) -> None:
         """The user asked for help with the step on screen, and got it.
 
@@ -267,6 +291,12 @@ class GuideRunner:
                     continue
                 # "done" or "next"
                 self._idx += 1
+                if self._idx >= self.total and self._writing:
+                    cmd = await self._wait_for_plan()
+                    if cmd is not None:
+                        self._end_reason = ("paused by the user" if cmd == "pause"
+                                            else "stopped by the user")
+                        break
                 if self._idx >= self.total:
                     self._completed = True
                     self._end_reason = "finished"
@@ -405,6 +435,19 @@ class GuideRunner:
                 nudged = True
 
             await self._interruptible_sleep(self._poll_s)
+
+    async def _wait_for_plan(self, timeout: float = 30.0) -> Optional[Command]:
+        """The steps that exist are done and the rest of the plan has not
+        arrived. Wait for it. A stop or pause still ends the walkthrough (it
+        is returned); a move has nothing to move to yet and is dropped - kept,
+        it would skip the step that is about to arrive."""
+        deadline = time.monotonic() + timeout
+        while self._writing and self._idx >= self.total and time.monotonic() < deadline:
+            cmd = self._take_command()
+            if cmd in ("stop", "pause"):
+                return cmd
+            await self._interruptible_sleep(0.1)
+        return None
 
     async def _check_quiet(self, step) -> Optional[bool]:
         try:

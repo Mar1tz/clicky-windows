@@ -199,11 +199,11 @@ def tool_declarations() -> list[dict]:
             "name": "show_me_how",
             "description": (
                 "Start a guided walkthrough of a multi-step task — 'how do I "
-                "export/install/configure/set up…'. Returns INSTANTLY, so "
-                "call it and immediately say one short sentence confirming "
-                "you'll walk them through it. Tora then speaks and points "
-                "at each step and advances on its own as they go — you do NOT "
-                "read the steps yourself."
+                "export/install/configure/set up…'. Returns INSTANTLY: call "
+                "it FIRST, before saying anything, then say one short "
+                "sentence confirming you'll walk them through it. Tora then "
+                "speaks and points at each step and advances on its own as "
+                "they go — you do NOT read the steps yourself."
             ),
             "parameters": {
                 "type": "object",
