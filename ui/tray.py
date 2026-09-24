@@ -552,6 +552,31 @@ class TrayManager(QObject):
         """Rebuild so the Model submenu reflects the newly-active provider."""
         self._build_menu()
 
+    # switch name -> (the handler a click calls, the menu action it ticks)
+    _SWITCH_HANDLERS = {
+        "web_search":    ("_toggle_search", "_search_action"),
+        "wake_word":     ("_toggle_wake", "_wake_action"),
+        "auto_advance":  ("_toggle_auto_advance", "_adv_action"),
+        "slow_mode":     ("_toggle_slow", "_slow_action"),
+        "quiz_mode":     ("_toggle_quiz", "_quiz_action"),
+        "privacy_guard": ("_toggle_privacy", "_privacy_action"),
+        "code_mode":     ("_toggle_code", "_code_action"),
+        "ocr":           ("_toggle_ocr", "_ocr_action"),
+        "journal":       ("_toggle_journal", "_journal_action"),
+    }
+
+    def apply_switch(self, name: str, on: bool) -> None:
+        """Change a switch exactly as clicking it in this menu would.
+
+        The app window's switches come through here (ui/app_bridge.py), so
+        the menu's tick, its label and the manager behind it all follow -
+        the tray and the app cannot disagree about what is on."""
+        handler, action = self._SWITCH_HANDLERS[name]
+        act = getattr(self, action, None)
+        if act is not None:
+            act.setChecked(bool(on))       # toggled, not triggered: no double
+        getattr(self, handler)(bool(on))
+
     def set_account_problem(self, kind: str, words: str) -> None:
         """Google is refusing the account ("billing" / "key"), or ("", "")
         has stopped. A warning at the top of the menu while it lasts, and

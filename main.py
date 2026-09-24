@@ -295,10 +295,11 @@ def main():
     def _open_app():
         try:
             if "w" not in app_window:
+                from ui.app_bridge import AppBridge
                 from ui.app_window import ToraApp
-                w = ToraApp()
-                manager.sig_state_changed.connect(
-                    lambda s: w.set_state(s.name))
+                # Everything the window reads comes from these, and every
+                # change it makes goes down the tray's own path (APP-10).
+                w = ToraApp(AppBridge(manager, tray, panel))
                 app_window["w"] = w
             app_window["w"].open_at()
         except Exception as exc:          # noqa: BLE001 - never kill the tray

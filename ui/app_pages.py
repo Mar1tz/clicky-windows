@@ -35,13 +35,24 @@ from ui.app_widgets import (
 
 
 class Page(QWidget):
-    """Title, one line of explanation, optional buttons, then a scrolling body."""
+    """Title, one line of explanation, optional buttons, then a scrolling body.
+
+    A LIVE page (APP-10) reads everything it shows from the bridge and is
+    rebuilt each time it is shown or something it shows changes: its
+    header buttons go in build_actions (once), its content in build (every
+    refresh). A page that is not live yet builds once, as the M29 drafts do.
+    """
 
     HEADING = "Page"
     LEDE = ""
+    LIVE = False
 
-    def __init__(self):
+    def __init__(self, bridge=None):
         super().__init__()
+        if bridge is None:
+            from ui.app_bridge import AppBridge
+            bridge = AppBridge()
+        self.bridge = bridge
         # See ToraApp: a QWidget subclass paints no stylesheet background
         # without this, and a page sits directly on the translucent window.
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
@@ -68,11 +79,23 @@ class Page(QWidget):
 
         self.body = PageBody()
         outer.addWidget(self.body, 1)
+        self.build_actions()
         self.build()
         self.body.finish()
 
+    def build_actions(self) -> None:
+        """The header buttons - built once. Live pages override this."""
+
     def build(self) -> None:          # pragma: no cover - overridden
         pass
+
+    def refresh(self) -> None:
+        """Rebuild the body from what is true now (live pages only)."""
+        if not self.LIVE:
+            return
+        self.body.clear()
+        self.build()
+        self.body.finish()
 
     def action(self, text: str, kind: str = "ghost"):
         b = button(text, kind)
@@ -84,42 +107,74 @@ class Page(QWidget):
 
 class HomePage(Page):
     HEADING = "Tora"
-    LEDE = "Press Ctrl+Win and talk. She can see your screen, point at things, and put agents to work."
+    LEDE = "Talk to her. She can see your screen, point at things, and put agents to work."
+    LIVE = True
+
+    _STATE_WORDS = {"listening": "Listening…", "thinking": "Thinking…",
+                    "speaking": "Speaking…"}
+
+    def build_actions(self) -> None:
+        self.action("Open panel").clicked.connect(self.bridge.show_panel)
 
     def build(self) -> None:
-        self.action("Open panel")
-        self.action("Ask something", "primary")
+        br = self.bridge
+        state, problem = br.state(), br.problem()
+        ambient = br.listening() == "ambient"
 
         hero = Card()
         row = QHBoxLayout()
         row.setSpacing(16)
-        row.addWidget(Dot(T.OK, 12, glow=True), 0, Qt.AlignmentFlag.AlignVCenter)
+        busy = state in self._STATE_WORDS
+        row.addWidget(Dot(T.STATE_COLOUR.get(state, T.OK) if busy else
+                          (T.OK if ambient else T.TEXT_DIM), 12, glow=busy or ambient),
+                      0, Qt.AlignmentFlag.AlignVCenter)
         text = QVBoxLayout()
         text.setSpacing(3)
-        text.addWidget(label("Listening for “Tora”", "cardTitle"))
-        text.addWidget(label("Ambient mode · Realme Buds · wake word on",
-                             "faint"))
+        headline = self._STATE_WORDS.get(state) or (
+            "Listening for “Tora”" if ambient else f"Hold {br.hotkey() or 'the hotkey'} and talk")
+        text.addWidget(label(headline, "cardTitle"))
+        facts = [br.mic_name() or "no microphone found",
+                 "wake word on" if ambient else "wake word off"]
+        text.addWidget(label(" · ".join(facts), "faint"))
         row.addLayout(text, 1)
-        row.addWidget(Pill("Connected", T.OK, dot=True))
+        if problem == "billing":
+            row.addWidget(Pill("Out of Gemini credit", T.DANGER, dot=True))
+        elif problem == "key":
+            row.addWidget(Pill("API key refused", T.DANGER, dot=True))
+        elif br.live():
+            row.addWidget(Pill("Connected", T.OK, dot=True))
+        else:
+            row.addWidget(Pill("Not connected", T.WARN, dot=True))
         hero.body.addLayout(row)
         self.body.add(hero)
 
+        agents, today, walk = br.agents(), br.today(), br.walkthrough()
         self.body.add_layout(columns(
-            Metric("2", "agents working", T.ACCENT),
-            Metric("18", "open exceptions", T.WARN),
-            Metric("$0.79", "spent today"),
-            Metric("41", "questions answered"),
+            Metric(str(len(agents)), "agents working", T.ACCENT if agents else T.TEXT),
+            Metric(str(today["walkthroughs"]), "walkthroughs today"),
+            Metric(str(today["questions"]), "questions today"),
+            Metric(str(today["due"]), "due for review", T.WARN if today["due"] else T.TEXT),
         ))
 
-        work = Card("Happening now", "Everything running in the background.",
-                    action=button("See all"))
-        work.add(Row("Application Builder", "Step 4 of 10 · Creating Navbar.tsx",
-                     dot=T.ACCENT, trailing=Pill("Running", T.ACCENT), first=True))
-        work.add(Row("Month-end · ABC Manufacturing",
-                     "Bank reconciliation · 62 of 140 lines matched",
-                     dot=T.ACCENT, trailing=Pill("Running", T.ACCENT)))
-        work.add(Row("Invoice inbox watch", "Waiting for new files in Inbox\\Bank",
-                     dot=T.TEXT_FAINT, trailing=Pill("Idle", T.TEXT_FAINT)))
+        work = Card("Happening now", "Walkthroughs and agents, while they work.")
+        first = True
+        if walk is not None:
+            where = (f"Step {walk['step']} of {walk['total']}" if walk["total"]
+                     else f"Step {walk['step']}")
+            if walk["instruction"]:
+                where += f" · {walk['instruction']}"
+            work.add(Row(f"Walkthrough · {walk['goal'] or 'guided steps'}", where,
+                         dot=T.ACCENT, trailing=Pill("Running", T.ACCENT), first=first))
+            first = False
+        for a in agents:
+            doing = a["doing"] or (f"Step {a['step']} of {a['total']}" if a["total"] else "Working")
+            work.add(Row(a["title"], doing, dot=T.ACCENT,
+                         trailing=Pill(f"{round(a['progress'] * 100)}%", T.ACCENT), first=first))
+            first = False
+        if first:
+            work.add(Row("Nothing running right now",
+                         "Ask “show me how to…” for a walkthrough, or give her a job to do.",
+                         first=True))
         self.body.add(work)
 
         start = Card("Try asking", "Out loud — no clicking required.")

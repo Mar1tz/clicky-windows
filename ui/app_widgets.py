@@ -83,7 +83,10 @@ class Dot(QWidget):
         super().__init__()
         self._colour = QColor(colour)
         self._glow = glow
-        self.setFixedSize(size + (6 if glow else 0), size + (6 if glow else 0))
+        # The halo is twice the dot across. The widget used to be only 6 px
+        # bigger than the dot, so the halo was clipped into a square.
+        side = size * 2 if glow else size
+        self.setFixedSize(side, side)
         self._size = size
 
     def set_colour(self, colour: str) -> None:
@@ -126,10 +129,14 @@ class Pill(QFrame):
         self._label = QLabel(text)
         self._label.setStyleSheet(
             f"color: {colour}; font-size: 11px; font-weight: 600;"
-            " background: transparent;")
+            " background: transparent; border: none;")
         lay.addWidget(self._label)
+        # Scoped to this frame by name: a bare "QFrame" selector also matched
+        # the QLabel inside (a QLabel IS a QFrame), which drew a second,
+        # square border inside every pill.
+        self.setObjectName("pill")
         self.setStyleSheet(
-            f"QFrame {{ background: {_alpha(colour, 0.10)};"
+            f"QFrame#pill {{ background: {_alpha(colour, 0.10)};"
             f" border: 1px solid {_alpha(colour, 0.30)};"
             f" border-radius: 11px; }}")
 
@@ -390,6 +397,19 @@ class PageBody(QScrollArea):
     def finish(self) -> None:
         """Push everything to the top."""
         self.column.addStretch(1)
+
+    def clear(self) -> None:
+        """Empty the column, for a page that rebuilds from live data."""
+        def drop(layout) -> None:
+            while layout.count():
+                item = layout.takeAt(0)
+                widget = item.widget()
+                if widget is not None:
+                    widget.setParent(None)
+                    widget.deleteLater()
+                elif item.layout() is not None:
+                    drop(item.layout())
+        drop(self.column)
 
 
 def columns(*widgets: QWidget, spacing: int = T.GAP) -> QHBoxLayout:

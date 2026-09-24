@@ -30,7 +30,7 @@ from __future__ import annotations
 
 from typing import Optional
 
-from PyQt6.QtCore import QPoint, QSize, Qt, pyqtSignal
+from PyQt6.QtCore import QPoint, QSize, Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import QIcon
 from PyQt6.QtWidgets import (
     QButtonGroup, QFrame, QHBoxLayout, QLabel, QPushButton, QStackedWidget,
@@ -69,8 +69,21 @@ class ToraApp(QWidget):
 
     page_changed = pyqtSignal(str)
 
-    def __init__(self):
+    # A burst of changes (a walkthrough step, an agent event, a state flip)
+    # redraws the page once, not once per event.
+    REFRESH_MS = 150
+
+    def __init__(self, bridge=None):
         super().__init__()
+        from ui.app_bridge import AppBridge
+        # The one door into the running app (APP-10). Without one the window
+        # still opens - it just has nothing live to show.
+        self.bridge = bridge if bridge is not None else AppBridge()
+        self._refresh_timer = QTimer(self)
+        self._refresh_timer.setSingleShot(True)
+        self._refresh_timer.setInterval(self.REFRESH_MS)
+        self._refresh_timer.timeout.connect(self._refresh_now)
+        self.bridge.changed.connect(self._on_changed)
         self.setWindowTitle("Tora")
         self.setObjectName("appRoot")
         # A NATIVE window frame, not a hand-rolled one. The first draft was
@@ -169,7 +182,8 @@ class ToraApp(QWidget):
         sl.addWidget(self._state_label, 1)
         lay.addWidget(status)
         lay.addSpacing(8)
-        lay.addWidget(label("Hold  Ctrl + Win  to talk", "faint"))
+        hotkey = self.bridge.hotkey() or "Ctrl + Win"
+        lay.addWidget(label(f"Hold  {hotkey}  to talk", "faint"))
         return bar
 
     # ── navigation ───────────────────────────────────────────────────────────
@@ -183,7 +197,7 @@ class ToraApp(QWidget):
         if key not in self._pages:
             for k, _text, _glyph, cls, _sec in PAGES:
                 if k == key:
-                    widget = cls()
+                    widget = cls(self.bridge)
                     self._pages[key] = widget
                     self._stack.addWidget(widget)
                     # A page builds its labels before it is parented here, so
@@ -195,6 +209,10 @@ class ToraApp(QWidget):
                     break
             else:
                 return
+        else:
+            # Shown again: a live page shows what is true now, not what was
+            # true the last time someone looked.
+            self._pages[key].refresh()
         self._stack.setCurrentWidget(self._pages[key])
         button = self._buttons.get(key)
         if button is not None and not button.isChecked():
@@ -208,6 +226,17 @@ class ToraApp(QWidget):
         name = (state_name or "idle").lower()
         self._state_dot.set_colour(T.STATE_COLOUR.get(name, T.TEXT_FAINT))
         self._state_label.setText(name.capitalize())
+
+    def _on_changed(self, topic: str) -> None:
+        if topic == "state":
+            self.set_state(self.bridge.state())
+        self._refresh_timer.start()          # restarts: one redraw per burst
+
+    def _refresh_now(self) -> None:
+        """Redraw the page on screen, if it is live and anyone can see it."""
+        page = self._stack.currentWidget()
+        if page is not None and self.isVisible() and getattr(page, "LIVE", False):
+            page.refresh()
 
     # ── behaviour ────────────────────────────────────────────────────────────
 
