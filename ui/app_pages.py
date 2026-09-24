@@ -46,6 +46,10 @@ class Page(QWidget):
     HEADING = "Page"
     LEDE = ""
     LIVE = False
+    # The bridge topics that redraw this page WHILE it is on screen. Empty:
+    # it refreshes only when opened - right for a page with something to
+    # type into, which a redraw would wipe mid-sentence.
+    TOPICS: frozenset = frozenset()
 
     def __init__(self, bridge=None):
         super().__init__()
@@ -109,6 +113,7 @@ class HomePage(Page):
     HEADING = "Tora"
     LEDE = "Talk to her. She can see your screen, point at things, and put agents to work."
     LIVE = True
+    TOPICS = frozenset({"state", "account", "agents", "guide", "switches"})
 
     _STATE_WORDS = {"listening": "Listening…", "thinking": "Thinking…",
                     "speaking": "Speaking…"}
@@ -400,42 +405,60 @@ class JournalPage(Page):
 
 class TutorPage(Page):
     HEADING = "Tutor"
-    LEDE = "How Tora teaches: how much she explains, how fast she moves, and what she is allowed to look at."
+    LEDE = "How Tora teaches: how she paces a walkthrough, what she looks at, and what she always keeps in mind."
+    LIVE = True
+
+    def _toggle(self, card: Card, name: str, heading: str, sub: str, *, first=False) -> None:
+        row = ToggleRow(heading, sub, self.bridge.switch(name), first=first)
+        row.switch.toggled.connect(lambda on, n=name: self.bridge.set_switch(n, on))
+        card.add(row)
 
     def build(self) -> None:
         how = Card("Teaching style")
-        for i, (name, sub, on) in enumerate((
-            ("Slow mode", "Shorter steps, more checking in. For someone new to the machine.", False),
-            ("Advance by itself", "Move to the next step when she sees you do it, without waiting for “next”.", True),
-            ("Quiz mode", "Ask a question back at the end, so it sticks.", False),
-            ("Code mode", "Notice when you are in an editor and explain like a developer.", True),
-            ("Answer in my language", "Reply in whatever language you speak to her in.", True),
-        )):
-            how.add(ToggleRow(name, sub, on, first=(i == 0)))
+        self._toggle(how, "slow_mode", "Slow mode",
+                     "A calmer pace on screen. For someone new to the machine.", first=True)
+        self._toggle(how, "auto_advance", "Advance by itself",
+                     "Move on when she sees the step done, without waiting for “next”.")
+        self._toggle(how, "quiz_mode", "Quiz mode",
+                     "Ask a question back, so it sticks. Lasts until Tora restarts.")
+        self._toggle(how, "code_mode", "Code mode",
+                     "Notice when you are in an editor and explain like a developer.")
         self.body.add(how)
 
         eyes = Card("Eyes on screen")
-        eyes.add(ToggleRow("Privacy guard",
-                           "Never send a screenshot when a password manager, "
-                           "banking page or private window is in front.",
-                           True, first=True))
-        eyes.add(ToggleRow("Read text on screen (OCR)",
-                           "Find things by the words on them when the app does "
-                           "not expose its controls. Runs on this machine.",
-                           True))
-        eyes.add(ToggleRow("Web search",
-                           "Look things up for news, prices and releases.", True))
+        self._toggle(eyes, "privacy_guard", "Privacy guard",
+                     "Never send a screenshot when a password manager, banking "
+                     "page or private window is in front.", first=True)
+        self._toggle(eyes, "ocr", "Read text on screen (OCR)",
+                     "Read fine print when you ask her to. Runs on this machine.")
+        self._toggle(eyes, "web_search", "Web search",
+                     "Look things up for news, prices and releases.")
         self.body.add(eyes)
 
-        scope = Card("What she may see",
-                     "Applies to every screenshot, every look and every agent.")
-        row = QHBoxLayout()
-        row.setSpacing(10)
-        row.addWidget(Select("The window in front", "This monitor",
-                             "Every monitor", width=230))
-        row.addWidget(label("Everything else is never captured.", "faint"), 1)
-        scope.body.addLayout(row)
-        self.body.add(scope)
+        # The tray's "Instructions for Tora…" - standing orders she keeps in
+        # mind on every answer. Saved through the tray's own signal.
+        rules = Card("Instructions for Tora",
+                     "Kept in mind on every answer - “only help with Excel”, "
+                     "“keep answers very short”.")
+        from PyQt6.QtWidgets import QPlainTextEdit
+        box = QPlainTextEdit(self.bridge.instructions())
+        box.setPlaceholderText("Nothing yet - she helps with anything.")
+        box.setFixedHeight(84)
+        rules.body.addWidget(box)
+        foot = QHBoxLayout()
+        foot.setSpacing(10)
+        saved = label("", "faint")
+        save = button("Save instructions", "primary")
+
+        def _save() -> None:
+            self.bridge.set_instructions(box.toPlainText())
+            saved.setText("Saved - used from the next answer.")
+
+        save.clicked.connect(_save)
+        foot.addWidget(save)
+        foot.addWidget(saved, 1)
+        rules.body.addLayout(foot)
+        self.body.add(rules)
 
 
 # ── Voice & models ────────────────────────────────────────────────────────────
@@ -489,60 +512,84 @@ class VoicePage(Page):
 class SettingsPage(Page):
     HEADING = "Settings"
     LEDE = "The rails. What Tora may touch, what runs without asking, and how she hears you."
+    LIVE = True
 
     def build(self) -> None:
-        rails = Card("Agent rails",
-                     "Agents may only ever write inside the workspace.")
-        # Read from the machine, never hard-coded: this ships to other
-        # people's PCs, and one developer's home folder baked into the
-        # settings page is how a product announces it was never tested
-        # anywhere else.
-        import os
-        ws = QLineEdit(os.path.join(os.path.expanduser("~"), "Documents",
-                                    "Tora Projects"))
-        ws.setReadOnly(True)
-        pick = QWidget()
-        pl = QHBoxLayout(pick)
-        pl.setContentsMargins(0, 0, 0, 0)
-        pl.setSpacing(8)
-        pl.addWidget(ws, 1)
-        pl.addWidget(button("Change"))
-        rails.body.addWidget(label("Workspace", "faint"))
-        rails.body.addWidget(pick)
-        rails.body.addWidget(spacer(6))
+        br = self.bridge
 
-        auto = Select("Safe only", "Safe and low risk", "Up to medium risk",
-                      "Ask me every time", width=250)
-        auto.setCurrentIndex(1)
-        rails.add(Row("Runs without asking",
-                      "Anything above this level stops and waits for you.",
-                      trailing=auto))
-        rails.add(ToggleRow("Show me the plan first",
-                            "Nothing runs until you have read the steps.", True))
-        rails.add(ToggleRow("Confirm every click on my desktop",
-                            "Opening an app, pressing a media key, typing into "
-                            "a window — always ask.", True))
+        # The workforce's own settings widget - the one "Agent settings…" in
+        # the tray opens: workspace, what runs without asking, plan first,
+        # how many at once. It saves to config AND applies to the running
+        # agents, so it is embedded rather than re-implemented (APP-11).
+        rails = Card("Agent rails", "Agents may only ever write inside the workspace.")
+        wf = br.workforce()
+        if wf is not None:
+            from PyQt6.QtWidgets import QLabel, QPushButton
+            from agents.ui.settings import AgentSettingsDialog
+            embedded = AgentSettingsDialog(wf)
+            # Inside a page its own title repeats the card's, and its Close
+            # would hide it and leave an empty card.
+            for b in embedded.findChildren(QPushButton):
+                if b.text().strip().lower() == "close":
+                    b.hide()
+            for lbl in embedded.findChildren(QLabel):
+                if lbl.text().strip() == "Agent settings":
+                    lbl.hide()
+            rails.body.addWidget(embedded)
+        else:
+            rails.add(Row("The agents did not start",
+                          "Nothing here can be changed until they do - see "
+                          "tora.log for why.", dot=T.WARN, first=True))
         self.body.add(rails)
 
+        allowed = Card("Desktop actions you allowed",
+                       "Everything else on your desktop asks first, every time.")
+        grants = br.grants()
+        for i, key in enumerate(grants):
+            forget = button("Forget")
+            row = Row(key, "Runs without asking", dot=T.WARN, trailing=forget,
+                      first=(i == 0))
+            forget.clicked.connect(lambda _c=False, k=key, r=row: (br.forget_grant(k), r.hide()))
+            allowed.add(row)
+        if not grants:
+            allowed.add(Row("Nothing is allowed without asking",
+                            "Say “always allow” in a confirmation to add one.",
+                            first=True))
+        self.body.add(allowed)
+
         mic = Card("Microphone")
-        dev = Select("Realme Buds Air 5 Pro (Hands-Free)", "Microphone Array",
-                     "System default", width=290)
+        devices = br.mics()
+        dev = Select(*(name + ("  (system default)" if default else "")
+                       for _i, name, default in devices) or ("No microphone found",),
+                     width=420)
+        current = br.mic_index()
+        indexes = [i for i, _n, _d in devices]
+        chosen = (indexes.index(current) if current in indexes else
+                  next((k for k, (_i, _n, d) in enumerate(devices) if d), 0))
+        dev.setCurrentIndex(chosen)
+        dev.currentIndexChanged.connect(
+            lambda k: br.set_mic(indexes[k]) if 0 <= k < len(indexes) else None)
         mic.add(Row("Input device", trailing=dev, first=True))
-        mic.add(ToggleRow("Always listening",
-                          "Wake on “Tora”. Off means she only hears you while "
-                          "the hotkey is held.", True))
-        hk = QLineEdit("Ctrl + Win")
-        hk.setFixedWidth(160)
-        mic.add(Row("Hold to talk", trailing=hk))
+        listen = ToggleRow("Always listening",
+                           "Wake on “Tora”. Off means she only hears you while "
+                           "the hotkey is held.", br.switch("wake_word"))
+        listen.switch.toggled.connect(lambda on: br.set_switch("wake_word", on))
+        mic.add(listen)
+        mic.add(Row("Hold to talk", br.hotkey() or "not set",
+                    trailing=label("set in .env as TORA_HOTKEY", "faint")))
         self.body.add(mic)
 
-        panel = Card("Appearance")
-        panel.add(ToggleRow("Show the floating panel", "", True, first=True))
-        panel.add(ToggleRow("Draw on screen while explaining",
-                            "Arrows, circles and labels over what she is "
-                            "talking about.", True))
-        panel.add(ToggleRow("Start Tora when Windows starts", "", False))
-        self.body.add(panel)
+        look = Card("Tora on this PC")
+        panel = ToggleRow("Show the floating panel",
+                          "The small window with the conversation in it.",
+                          br.panel_visible(), first=True)
+        panel.switch.toggled.connect(br.set_panel_visible)
+        look.add(panel)
+        start = ToggleRow("Start Tora when Windows starts",
+                          "For you only - no admin rights needed.", br.autostart())
+        start.switch.toggled.connect(br.set_autostart)
+        look.add(start)
+        self.body.add(look)
 
 
 # ── Setup ─────────────────────────────────────────────────────────────────────

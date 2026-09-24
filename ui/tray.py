@@ -104,6 +104,8 @@ class TrayManager(QObject):
         self._is_recording = False
         # "billing" / "key" while Google is refusing the account (APP-02).
         self._account_problem = ""
+        # The input device Tora listens on; None = the system default.
+        self._active_mic_index = cfg.mic_device_index
 
         self._build_menu()
         self._tray.activated.connect(self._on_activated)
@@ -456,8 +458,16 @@ class TrayManager(QObject):
                 label += "  (system default)"
             act = mic_menu.addAction(label)
             act.setCheckable(True)
-            act.setChecked(idx == getattr(self, "_active_mic_index", default_idx))
-            act.triggered.connect(lambda checked, i=idx: self.on_set_mic_device.emit(i))
+            active = self._active_mic_index
+            act.setChecked(idx == (default_idx if active is None else active))
+            act.triggered.connect(lambda checked, i=idx: self.pick_mic(i))
+
+    def pick_mic(self, index: int) -> None:
+        """Listen on this input device. The menu ticks it from now on - it
+        used to go on ticking the system default whatever was picked."""
+        self._active_mic_index = int(index)
+        self._build_menu()
+        self.on_set_mic_device.emit(int(index))
 
     def _on_activated(self, reason):
         if reason == QSystemTrayIcon.ActivationReason.DoubleClick:

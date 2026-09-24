@@ -165,12 +165,12 @@ def qss() -> str:
         font-size: 12px; font-weight: 600; padding: 2px;
     }}
 
-    QLineEdit, QComboBox {{
+    QLineEdit, QComboBox, QPlainTextEdit {{
         background: {SURFACE_SUNK}; border: 1px solid {BORDER};
         border-radius: {RADIUS_SMALL}px; padding: 7px 10px;
         selection-background-color: {ACCENT};
     }}
-    QLineEdit:focus, QComboBox:focus {{ border-color: {ACCENT_EDGE}; }}
+    QLineEdit:focus, QComboBox:focus, QPlainTextEdit:focus {{ border-color: {ACCENT_EDGE}; }}
     QComboBox::drop-down {{ border: none; width: 22px; }}
     /* The chevron is painted by ui.app_widgets.Select. Every CSS way of
        drawing one collapses to a dash inside Qt's down-arrow subcontrol, and

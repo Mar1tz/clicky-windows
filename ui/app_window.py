@@ -83,6 +83,7 @@ class ToraApp(QWidget):
         self._refresh_timer.setSingleShot(True)
         self._refresh_timer.setInterval(self.REFRESH_MS)
         self._refresh_timer.timeout.connect(self._refresh_now)
+        self._pending_topics: set[str] = set()
         self.bridge.changed.connect(self._on_changed)
         self.setWindowTitle("Tora")
         self.setObjectName("appRoot")
@@ -230,12 +231,16 @@ class ToraApp(QWidget):
     def _on_changed(self, topic: str) -> None:
         if topic == "state":
             self.set_state(self.bridge.state())
+        self._pending_topics.add(topic)
         self._refresh_timer.start()          # restarts: one redraw per burst
 
     def _refresh_now(self) -> None:
-        """Redraw the page on screen, if it is live and anyone can see it."""
+        """Redraw the page on screen - if it is live, anyone can see it, and
+        what changed is something it shows (Page.TOPICS)."""
+        topics, self._pending_topics = self._pending_topics, set()
         page = self._stack.currentWidget()
-        if page is not None and self.isVisible() and getattr(page, "LIVE", False):
+        if (page is not None and self.isVisible() and getattr(page, "LIVE", False)
+                and set(getattr(page, "TOPICS", ())) & topics):
             page.refresh()
 
     # ── behaviour ────────────────────────────────────────────────────────────

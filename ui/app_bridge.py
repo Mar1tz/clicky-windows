@@ -159,6 +159,69 @@ class AppBridge(QObject):
             self.tray.apply_switch(name, bool(on))
         self.changed.emit("switches")
 
+    # ── settings (APP-11) ────────────────────────────────────────────────────
+
+    def instructions(self) -> str:
+        """The standing instructions Tora follows ("only help with Excel")."""
+        from config import cfg
+        return cfg.custom_instructions or ""
+
+    def set_instructions(self, text: str) -> None:
+        if self.tray is not None:
+            self.tray.on_set_custom_instructions.emit((text or "").strip())
+
+    def mics(self) -> list[tuple[int, str, bool]]:
+        """Every input device: (index, name, is the system default)."""
+        try:
+            import sounddevice as sd
+            default = sd.default.device[0]
+            return [(i, str(d.get("name", "")), i == default)
+                    for i, d in enumerate(sd.query_devices())
+                    if d.get("max_input_channels", 0) > 0]
+        except Exception:  # noqa: BLE001
+            return []
+
+    def mic_index(self) -> Optional[int]:
+        """The device Tora listens on; None = the system default."""
+        from config import cfg
+        return cfg.mic_device_index
+
+    def set_mic(self, index: int) -> None:
+        if self.tray is not None and hasattr(self.tray, "pick_mic"):
+            self.tray.pick_mic(index)
+
+    def panel_visible(self) -> bool:
+        try:
+            return bool(self.panel is not None and self.panel.isVisible())
+        except Exception:  # noqa: BLE001
+            return False
+
+    def set_panel_visible(self, on: bool) -> None:
+        if self.tray is not None:
+            (self.tray.on_show_panel if on else self.tray.on_hide_panel).emit()
+
+    def autostart(self) -> bool:
+        from ui import autostart
+        return autostart.enabled()
+
+    def set_autostart(self, on: bool) -> bool:
+        from ui import autostart
+        return autostart.set_enabled(on)
+
+    def grants(self) -> list[str]:
+        """Desktop actions the user said to always allow (DC-16)."""
+        wf = self.workforce()
+        try:
+            return list(wf.desktop_grants()) if wf is not None else []
+        except Exception:  # noqa: BLE001
+            return []
+
+    def forget_grant(self, key: str) -> None:
+        wf = self.workforce()
+        if wf is not None:
+            wf.revoke_desktop_action(key)
+        self.changed.emit("grants")
+
     # ── doing ────────────────────────────────────────────────────────────────
 
     def show_panel(self) -> None:
