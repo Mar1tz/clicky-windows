@@ -299,6 +299,59 @@ class ArmedExpectation:
         return best
 
 
+class TargetGone:
+    """A step's finish line of last resort: the thing it pointed at is gone,
+    from the same window it was in.
+
+    Used only when every signal the planner gave was already true when the
+    step began (the log line "every expectation signal was already true").
+    Clicking a menu item closes the menu; confirming a dialog closes the
+    dialog - in both, the target disappearing IS the step being done.
+
+    Two guards keep it honest. It arms only if the target is on screen when
+    the step starts, so "gone" is a real transition and not a name the
+    planner got wrong. And it never fires if a different window has come to
+    the front: control_exists() reads the FOREGROUND window, so switching to
+    another app would otherwise look exactly like the target vanishing.
+    Failing safe matters more here than catching every case - the click on
+    the target and the screen-change check still run alongside it.
+    """
+
+    def __init__(self, target: str) -> None:
+        self.target = (target or "").strip()
+        self.window = ""
+        self.armed = False
+
+    def arm(self) -> list[str]:
+        from ai import guide_state
+        self.window = active_window_title() or ""
+        try:
+            self.armed = bool(self.target) and guide_state.control_exists(self.target)
+        except Exception:  # noqa: BLE001 - cannot tell, so do not arm
+            self.armed = False
+        return ["target_gone"] if self.armed else []
+
+    @property
+    def muted(self) -> set[str]:
+        return set() if self.armed else {"target_gone"}
+
+    def __call__(self) -> Verdict:
+        if not self.armed:
+            return Verdict(confidence=0.0, method="none", detail="not armed")
+        if (active_window_title() or "") != self.window:
+            return Verdict(confidence=0.0, method="none",
+                           detail="a different window is in front")
+        from ai import guide_state
+        try:
+            present = guide_state.control_exists(self.target)
+        except Exception:  # noqa: BLE001
+            return Verdict(confidence=0.0, method="none", detail="could not look")
+        if present:
+            return Verdict(confidence=0.0, method="none", detail="still there")
+        return Verdict(confidence=ADVANCE, method="target_gone",
+                       detail=f"{self.target!r} is gone")
+
+
 # ── Is anything happening at all? ────────────────────────────────────────────
 
 @dataclass

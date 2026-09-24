@@ -1998,6 +1998,13 @@ class CompanionManager(QObject):
             _log.info("planning %r against %d on-screen controls", goal[:60],
                       len(controls))
             guide = await self._plan_guide(goal, shot, title, controls)
+            if guide:
+                try:
+                    from tutor import active_process_name
+                    process = active_process_name() or ""
+                except Exception:  # noqa: BLE001
+                    process = ""
+                gemini_planner.repair_first_step(guide, controls, title, process)
         finally:
             # Planning happens after show_me_how has already returned, so the
             # tool wrapper cannot cover it — clear it here or the island sticks.
@@ -3788,10 +3795,12 @@ class CompanionManager(QObject):
             # rest. A plain check returns "done" on step one of every guide
             # that names the app the user is already sitting in.
             local = verification.ArmedExpectation(expected)
+        target = (getattr(step, "target", "") or "").strip()
         return StepWatcher(
             step.instruction,
             judge=gemini_vision.judge_step,
             dpi_scale=self._dpi_scale(),
+            fallback_check=verification.TargetGone(target) if target else None,
             local_check=local,
         )
 

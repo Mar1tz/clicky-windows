@@ -405,6 +405,46 @@ MAX_CONTROLS = 120
 SNAP_MIN_SCORE = 0.85
 
 
+def repair_first_step(guide: Guide, controls: Optional[list[str]],
+                      window_title: str = "", process: str = "") -> list[str]:
+    """Drop step one's signals that are already true on the screen it starts
+    from. Returns the signals dropped, as "kind=value".
+
+    Step one is the only step whose starting screen is known at plan time,
+    so it is the only one that can be repaired before it is spoken. Later
+    steps are armed signal by signal when they start (ArmedExpectation).
+
+    Only what is PROVABLY true is dropped: a control that is in the list, a
+    title that matches, the process in front. A name missing from the list
+    is not proof it is absent - the list is capped and the walk is bounded -
+    so control_gone is never "repaired" on that evidence.
+    """
+    if not guide.steps:
+        return []
+    exp = getattr(guide.steps[0], "expected", None)
+    if exp is None:
+        return []
+    names = set(controls or [])
+    dropped: list[str] = []
+
+    def drop(kind: str) -> None:
+        dropped.append(f"{kind}={getattr(exp, kind)}")
+        setattr(exp, kind, "")
+
+    if exp.control_appears and exp.control_appears in names:
+        drop("control_appears")
+    title = (window_title or "").lower()
+    if exp.window_title and title and exp.window_title.lower() in title:
+        drop("window_title")
+    if exp.process and process and \
+            exp.process.lower().removesuffix(".exe") == process.lower().removesuffix(".exe"):
+        drop("process")
+    if dropped:
+        _log.info("step 1 signals already true before it began, dropped: %s",
+                  ", ".join(dropped))
+    return dropped
+
+
 def snap_targets(guide: Guide, controls: list[str]) -> list[tuple[int, str, str]]:
     """Correct each step's target to the app's exact label where it is
     clearly meant. Returns (step index, planned, corrected) for each change.

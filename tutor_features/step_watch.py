@@ -271,11 +271,15 @@ class StepWatcher:
         dpi_scale: float = 1.0,
         local_check: Optional[Callable[[], object]] = None,
         target_bbox: Optional[tuple[float, float, float, float]] = None,
+        fallback_check: Optional[Callable[[], object]] = None,
     ) -> None:
         self.instruction = instruction
         self._judge = judge
         self._scale = dpi_scale or 1.0
         self._local_check = local_check
+        # Used only if nothing in local_check survives arming - see
+        # ai.verification.TargetGone.
+        self._fallback_check = fallback_check
         self.target_bbox = target_bbox          # logical px; may be set later
 
         self._base: Optional[Fingerprint] = None
@@ -323,6 +327,9 @@ class StepWatcher:
         # The planner's expectation is only useful if it can go false -> true.
         # An ArmedExpectation mutes the individual signals that are already
         # true and keeps the rest; anything else is all-or-nothing.
+        if self._local_check is None:
+            await self._arm_fallback("the step has no signal of its own")
+            return
         if self._local_check is not None:
             arm = getattr(self._local_check, "arm", None)
             if callable(arm):
@@ -335,11 +342,15 @@ class StepWatcher:
                     _log.info("watching %s (%s already true at step start)",
                               ", ".join(kept), ", ".join(sorted(muted)) or "nothing")
                     self._local_armed = True
-                else:
-                    _log.info("every expectation signal (%s) was already true at "
-                              "step start — watching clicks and the screen instead",
-                              ", ".join(sorted(muted)) or "none given")
-                    self._local_check = None
+                    return
+                self._local_check = None
+                if await self._arm_fallback(
+                        "every expectation signal (%s) was already true at step "
+                        "start" % (", ".join(sorted(muted)) or "none given")):
+                    return
+                _log.info("every expectation signal (%s) was already true at "
+                          "step start — watching clicks and the screen instead",
+                          ", ".join(sorted(muted)) or "none given")
                 return
             try:
                 v = await asyncio.to_thread(self._local_check)
@@ -352,6 +363,22 @@ class StepWatcher:
                 self._local_check = None
             else:
                 self._local_armed = True
+
+    async def _arm_fallback(self, why: str) -> bool:
+        """Swap in the last-resort finish line, if it can arm. True if it did."""
+        fallback = self._fallback_check
+        if fallback is None:
+            return False
+        try:
+            kept = await asyncio.to_thread(fallback.arm)
+        except Exception:  # noqa: BLE001
+            kept = []
+        if not kept:
+            return False
+        _log.info("%s — watching the target disappear instead", why)
+        self._local_check = fallback
+        self._local_armed = True
+        return True
 
     def end(self) -> None:
         t, self._judge_task = self._judge_task, None
