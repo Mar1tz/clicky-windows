@@ -325,7 +325,8 @@ def tool_declarations() -> list[dict]:
                 "for things that genuinely live on the web. "
                 "If you are not sure an app can do something, call action='list' FIRST "
                 "and read what it offers; do not assume it cannot and fall back to a "
-                "browser. The user confirms anything that acts."
+                "browser. Anything that acts may first need the user's yes - the "
+                "result says when it does."
             ),
             "parameters": {
                 "type": "object",

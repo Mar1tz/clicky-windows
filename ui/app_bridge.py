@@ -223,6 +223,26 @@ class AppBridge(QObject):
         from ui import autostart
         return autostart.set_enabled(on)
 
+    def auto_approve(self) -> bool:
+        """Settings > Approvals: do agents and desktop actions go ahead
+        without the approval box? The running workforce says; without one,
+        what will apply when it starts."""
+        wf = self.workforce()
+        if wf is not None:
+            return bool(getattr(wf, "auto_approve", False))
+        from config import cfg
+        return cfg.switch("auto_approve")
+
+    def set_auto_approve(self, on: bool) -> None:
+        """Saved for every launch, and applied to the running agents now -
+        the next approval an agent would have asked for goes ahead."""
+        from config import cfg
+        cfg.set_switch("auto_approve", bool(on))
+        wf = self.workforce()
+        if wf is not None and hasattr(wf, "set_auto_approve"):
+            wf.set_auto_approve(bool(on))
+        self.changed.emit("switches")
+
     def grants(self) -> list[str]:
         """Desktop actions the user said to always allow (DC-16)."""
         wf = self.workforce()

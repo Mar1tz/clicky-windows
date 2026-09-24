@@ -97,6 +97,11 @@ journal with an honest review; the workforce's own panel with every task's
 plan and activity; the packs that really exist and their switches; the
 Accounting pack's own dashboard.
 
+**APP-14 · Approve automatically** — done (asked for on 24 Sep). One switch
+in Settings > Approvals: agents and voice desktop actions go ahead without
+the box; payments, filings, sending/posting/deleting and plan-first still
+ask.
+
 ### Part 3 — the rest (7–9, then the walkthrough plan)
 
 **APP-20 · The wake word is always heard** — why 1 in ~N transcriptions

@@ -66,6 +66,15 @@ def _configured(name: str, fallback):
         return fallback
 
 
+def _switched_on(name: str) -> bool:
+    """One of config's saved switches; off when config is absent."""
+    try:
+        from config import cfg
+        return bool(cfg.switch(name))
+    except Exception:
+        return False
+
+
 def has_live_provider(router) -> bool:
     """True when something other than the mock is registered.
 
@@ -88,6 +97,7 @@ def build_agent_manager(
     max_auto_risk: Optional[RiskLevel] = None,
     require_plan_approval: Optional[bool] = None,
     max_concurrent: Optional[int] = None,
+    auto_approve: Optional[bool] = None,
     offline: bool = False,
 ) -> AgentManager:
     """Build the workforce. Anything left as None comes from the user's
@@ -118,6 +128,8 @@ def build_agent_manager(
         require_plan_approval = bool(_configured("agent_plan_approval", False))
     if max_concurrent is None:
         max_concurrent = int(_configured("agent_max_concurrent", 3))
+    if auto_approve is None:
+        auto_approve = _switched_on("auto_approve")
     from agents.manager.limits import TaskLimits
     limits = TaskLimits(wall_clock_s=float(_configured("agent_wall_clock_s", 1800)),
                         max_tokens=int(_configured("agent_max_tokens", 300000)))
@@ -168,6 +180,7 @@ def build_agent_manager(
         max_concurrent=max_concurrent,
         decomposer=decomposer,
         limits=limits,
+        auto_approve=auto_approve,
     )
     attach_extensions(mgr, in_memory=in_memory, base_dir=None if in_memory else os.path.dirname(task_db))
     return mgr

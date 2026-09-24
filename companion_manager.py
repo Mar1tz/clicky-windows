@@ -1338,9 +1338,11 @@ class CompanionManager(QObject):
         This is the fast path - no task, no agent, no plan - because a
         person asking for the next song is not asking for a project. It
         still confirms: anything that acts shows the approval dialog, and
-        the user can wave through that one action for good.
+        the user can wave through that one action for good - or all of them
+        with Settings > Approvals, which still never covers an action that
+        sends, posts, pays or deletes (Risk.SENSITIVE).
         """
-        from agents.control import control
+        from agents.control import Risk, control
         from agents.control.args import read_arguments
 
         app = str(args.get("app") or "").strip()
@@ -1420,7 +1422,8 @@ class CompanionManager(QObject):
             future = mgr.request_confirmation(reason, tool_name="desktop_action",
                                               arguments={"app": found.app, "action": found.name,
                                                          **arguments},
-                                              grant_key=f"app_action:{found.key}")
+                                              grant_key=f"app_action:{found.key}",
+                                              may_auto_approve=found.risk < Risk.SENSITIVE)
             if not future.done():
                 # DO NOT WAIT HERE. The live model is blocked until a tool
                 # returns, so awaiting the dialog meant Tora went silent for

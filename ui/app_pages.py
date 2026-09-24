@@ -885,6 +885,25 @@ class SettingsPage(Page):
     def build(self) -> None:
         br = self.bridge
 
+        # APP-14. One switch for "stop asking me": the field log had 71
+        # approval boxes in three days and not one "no". What it still asks
+        # about is said on the page, because a switch like this is only
+        # safe when its edges are plain.
+        approvals = Card("Approvals", "When Tora and her agents stop to ask you first.")
+        auto = ToggleRow("Approve automatically",
+                         "Agents and the desktop actions you ask for go ahead without the "
+                         "approval box - files, commands, the browser, your mouse and "
+                         "keyboard - whatever “Run without asking” below says.",
+                         br.auto_approve(), first=True)
+        auto.switch.toggled.connect(br.set_auto_approve)
+        approvals.add(auto)
+        approvals.add(label("Still asks, every time: anything that pays, files a return, "
+                            "sends, posts or deletes for others to see. A plan still waits "
+                            "for you while “Show me the plan before anything runs” is on. "
+                            "Esc takes your mouse and keyboard back. What an agent runs "
+                            "this way is marked in its task's activity.", "faint", wrap=True))
+        self.body.add(approvals)
+
         # The workforce's own settings widget - the one "Agent settings…" in
         # the tray opens: workspace, what runs without asking, plan first,
         # how many at once. It saves to config AND applies to the running

@@ -457,6 +457,9 @@ class Config:
         "code_mode":     ("TORA_CODE_MODE", True),
         "journal":       ("TORA_JOURNAL", True),
         "ocr":           ("TORA_OCR", True),
+        # Settings > Approvals (APP-14): agents and desktop actions go ahead
+        # without the approval box. Off until the user turns it on.
+        "auto_approve":  ("TORA_AGENT_AUTO_APPROVE", False),
     }
 
     def switch(self, name: str) -> bool:

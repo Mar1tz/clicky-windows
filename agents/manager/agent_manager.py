@@ -129,6 +129,7 @@ class AgentManager:
         classify_timeout: float = 15.0,
         decomposer: Optional["Decomposer"] = None,
         limits: Optional["TaskLimits"] = None,
+        auto_approve: bool = False,
     ):
         self.tools = tools
         self.router = router
@@ -142,6 +143,9 @@ class AgentManager:
         self.events = events or EventBus()
         self.runtime = runtime or AgentRuntime()
         self.default_policy = default_policy or PermissionPolicy()
+        # Settings > Approvals: every yes a single click could give is given
+        # without asking. See _auto_approves for what never is.
+        self.auto_approve = bool(auto_approve)
         from .limits import TaskLimits
         self.limits = limits or TaskLimits()
         # Plugged in by bootstrap (agents/extensions, agents/manager/scheduler).
@@ -866,6 +870,32 @@ class AgentManager:
         with self._lock:
             return set(self._grants.get(task_id, ()))
 
+    def set_auto_approve(self, on: bool) -> None:
+        """Settings > Approvals. Logged either way: when something ran
+        without asking, the log says who allowed it and since when."""
+        on = bool(on)
+        if on == self.auto_approve:
+            return
+        self.auto_approve = on
+        self.events.emit(EventKind.LOG,
+                         "Approving automatically: agents and desktop actions go ahead "
+                         "without asking" if on else "Asking again before risky actions",
+                         level="warn" if on else "info", data={"auto_approve": on})
+
+    def _auto_approves(self, req: ApprovalRequest) -> bool:
+        """Is this one of the yeses auto-approve gives?
+
+        Every approval one click could give - an agent's file, command,
+        browser or mouse-and-keyboard step, a pack's change to its books -
+        but never:
+          * a SENSITIVE call: money leaving, a filing. It needs a word typed
+            by a person, and a setting is not a person typing it;
+          * a plan, while "Show me the plan before anything runs" is on -
+            that is its own, more particular, request to be asked.
+        """
+        return (self.auto_approve and not req.sensitive
+                and req.call.tool_name != "approve_plan")
+
     def pending_approvals(self) -> list[ApprovalRequest]:
         with self._lock:
             return [req for req, _ in self._approvals.values()]
@@ -930,17 +960,26 @@ class AgentManager:
 
     def request_confirmation(self, reason: str, *, tool_name: str = "desktop_action",
                              arguments: Optional[dict[str, Any]] = None, grant_key: str = "",
-                             timeout: float = 180.0) -> "Future[bool]":
+                             timeout: float = 180.0,
+                             may_auto_approve: bool = False) -> "Future[bool]":
         """Ask the person about ONE action, through the same dialog agents
         use, without inventing a task for it. This is what lets voice say
         "next song" and have it confirmed in half a second.
 
         Returns a Future: True approved, False denied or timed out. An
-        action the user has already waved through resolves immediately.
+        action the user has already waved through resolves immediately -
+        and so does one the caller says auto-approve may cover, while it is
+        on. The caller knows what the action is; the default is to ask.
         """
         from concurrent.futures import Future
         fut: "Future[bool]" = Future()
         if self.desktop_granted(grant_key):
+            fut.set_result(True)
+            return fut
+        if may_auto_approve and self.auto_approve:
+            self.events.emit(EventKind.APPROVAL_RESOLVED, "approved automatically",
+                             data={"approved": True, "auto": True, "tool": tool_name,
+                                   "reason": reason, "grant_key": grant_key})
             fut.set_result(True)
             return fut
         req = ApprovalRequest(task_id="", agent_id="", call=ToolCall(tool_name, dict(arguments or {})),
@@ -969,6 +1008,15 @@ class AgentManager:
                 self.events.emit(EventKind.APPROVAL_RESOLVED, "approved (granted for this task)",
                                  task_id=task.id, agent_id=task.agent_id,
                                  data={"request_id": req.id, "approved": True, "granted": True})
+                return True
+            if self._auto_approves(req):
+                # Nobody was asked, so the task's own log is where anyone
+                # can see what ran on auto-approve, and why it would have asked.
+                self.events.emit(EventKind.APPROVAL_RESOLVED,
+                                 f"approved automatically: {req.call.tool_name}",
+                                 task_id=task.id, agent_id=task.agent_id,
+                                 data={"request_id": req.id, "approved": True, "auto": True,
+                                       "tool": req.call.tool_name, "reason": req.reason})
                 return True
             loop = asyncio.get_running_loop()
             fut: asyncio.Future = loop.create_future()

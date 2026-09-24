@@ -83,11 +83,16 @@ def test_quiz_mode_is_never_brought_back_by_a_restart():
 
 def test_the_manager_starts_as_it_was_left(tmp_path, monkeypatch):
     import inspect
+    from agents import bootstrap
     from companion_manager import CompanionManager
 
-    src = inspect.getsource(CompanionManager.__init__)
+    # Each saved switch is read where its owner starts: the companion's in
+    # its __init__, the workforce's (auto_approve, APP-14) when it is built.
+    starts = (inspect.getsource(CompanionManager.__init__)
+              + inspect.getsource(bootstrap.build_agent_manager))
     for name in SWITCHES:
-        assert f'cfg.switch("{name}")' in src, f"{name} is not read at start"
+        assert (f'cfg.switch("{name}")' in starts
+                or f'_switched_on("{name}")' in starts), f"{name} is not read at start"
 
 
 def test_the_tray_shows_what_was_saved(qapp, tmp_path, monkeypatch):
