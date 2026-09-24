@@ -436,6 +436,46 @@ class Config:
         os.environ["TORA_AGENT_MAX_CONCURRENT"] = str(count)
         self._write_env("TORA_AGENT_MAX_CONCURRENT", str(count))
 
+    # ── Switches (APP-03) ────────────────────────────────────────────────
+    #
+    # The tray's tutor and privacy switches were only ever held in memory,
+    # so every launch put privacy guard, OCR, web search, slow mode and the
+    # rest back to their defaults - whatever the user had chosen. They are
+    # saved here the way the voice and the mic mode already are.
+    #
+    # Quiz mode is deliberately not one of them: it is something you start,
+    # not a preference, and restoring it would open the next session with a
+    # quiz nobody asked for.
+
+    # name -> (env var, default). Unannotated on purpose: Config is a
+    # dataclass, and an annotated dict here would become a field.
+    SWITCHES = {
+        "web_search":    ("TORA_WEB_SEARCH", True),
+        "slow_mode":     ("TORA_SLOW_MODE", False),
+        "auto_advance":  ("TORA_AUTO_ADVANCE", True),
+        "privacy_guard": ("TORA_PRIVACY_GUARD", True),
+        "code_mode":     ("TORA_CODE_MODE", True),
+        "journal":       ("TORA_JOURNAL", True),
+        "ocr":           ("TORA_OCR", True),
+    }
+
+    def switch(self, name: str) -> bool:
+        """A saved switch's value, or its default."""
+        env, default = self.SWITCHES[name]
+        raw = os.environ.get(env, "").strip().lower()
+        if raw in ("1", "true", "on", "yes"):
+            return True
+        if raw in ("0", "false", "off", "no"):
+            return False
+        return default
+
+    def set_switch(self, name: str, on: bool) -> None:
+        """Change a switch now, and for every launch after this one."""
+        env, _ = self.SWITCHES[name]
+        value = "1" if on else "0"
+        os.environ[env] = value
+        self._write_env(env, value)
+
     # ── Microphone mode ──────────────────────────────────────────────────
 
     def ambient_mic(self) -> bool:

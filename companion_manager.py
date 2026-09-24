@@ -308,7 +308,7 @@ class CompanionManager(QObject):
         self._state: AppState = AppState.IDLE
         self._history: List[Message] = []
         self._current_model: Optional[str] = None
-        self._web_search_enabled = True
+        self._web_search_enabled = cfg.switch("web_search")
         self._loop: Optional[asyncio.AbstractEventLoop] = None
 
         # Providers (lazy)
@@ -396,7 +396,7 @@ class CompanionManager(QObject):
         self._step_point: dict = {}
         # Tray switch. Off = steps only advance on 'next'. The detector is
         # new (tutor_features/step_watch.py); this is the escape hatch.
-        self._guide_auto_advance: bool = True
+        self._guide_auto_advance: bool = cfg.switch("auto_advance")
         self._last_found = None        # what _point_to last resolved
         # True while the overlay has been told to hold its pointer dwell.
         self._pointing_held = False
@@ -421,14 +421,14 @@ class CompanionManager(QObject):
         # (session epoch, last screen line sent, turns since it was spelled
         # out) — see _context_head.
         self._ctx_memo: tuple[int, str, int] = (-1, "", 0)
-        # Toggles
-        self._slow_mode = False
-        self._quiz_mode = False
-        self._privacy_guard = True
-        self._code_mode_auto = True       # auto-detect IDE windows
+        # Toggles - as the user last left them (config.SWITCHES, APP-03)
+        self._slow_mode = cfg.switch("slow_mode")
+        self._quiz_mode = False            # started on purpose, never restored
+        self._privacy_guard = cfg.switch("privacy_guard")
+        self._code_mode_auto = cfg.switch("code_mode")   # auto-detect IDE windows
         self._multilang = False            # English-only; kept for the tray toggle
-        self._journal_enabled = True       # log every Q&A to SQLite
-        self._ocr_enabled = True           # use Tesseract for fine print
+        self._journal_enabled = cfg.switch("journal")    # log every Q&A to SQLite
+        self._ocr_enabled = cfg.switch("ocr")            # read fine print on request
         self._last_response = ""           # for "say it again" voice command
         self._attached_docs: list[tuple[str, str]] = []   # (filename, text)
 
@@ -4272,7 +4272,10 @@ class CompanionManager(QObject):
         cfg.custom_instructions = text.strip()
         try:
             from dotenv import set_key
-            env_path = Path(__file__).parent / ".env"
+            # cfg.env_path(), not this file's folder: in the packaged app
+            # that is _internal\, and the setting was saved where nothing
+            # ever reads it (APP-03).
+            env_path = cfg.env_path()
             if not env_path.exists():
                 env_path.touch()
             escaped = text.strip().replace("\n", "\\n")
@@ -4306,7 +4309,7 @@ class CompanionManager(QObject):
         cfg.response_language = code
         try:
             from dotenv import set_key
-            env_path = Path(__file__).parent / ".env"
+            env_path = cfg.env_path()          # see set_custom_instructions
             if not env_path.exists():
                 env_path.touch()
             set_key(str(env_path), "RESPONSE_LANGUAGE", code)
@@ -4333,7 +4336,8 @@ class CompanionManager(QObject):
             self.sig_error.emit(f"Could not start mic: {e}")
 
     def set_web_search(self, enabled: bool):
-        self._web_search_enabled = enabled
+        self._web_search_enabled = bool(enabled)
+        cfg.set_switch("web_search", bool(enabled))
 
     def set_wake_word(self, enabled: bool):
         """Tray toggle — switches between always-listening and hotkey-only.
@@ -4347,11 +4351,13 @@ class CompanionManager(QObject):
         self._listener.set_ambient(enabled)
 
     def set_slow_mode(self, enabled: bool):
-        self._slow_mode = enabled
+        self._slow_mode = bool(enabled)
+        cfg.set_switch("slow_mode", bool(enabled))
 
     def set_guide_auto_advance(self, enabled: bool):
         """Tray: detect step completion automatically, or wait for 'next'."""
         self._guide_auto_advance = bool(enabled)
+        cfg.set_switch("auto_advance", bool(enabled))
         _log.info("guide auto-advance %s", "on" if enabled else "off")
 
     def _make_step_watcher(self, step, next_target: str = ""):
@@ -4481,7 +4487,8 @@ class CompanionManager(QObject):
             self._emit_state(AppState.IDLE)
 
     def set_privacy_guard(self, enabled: bool):
-        self._privacy_guard = enabled
+        self._privacy_guard = bool(enabled)
+        cfg.set_switch("privacy_guard", bool(enabled))
 
     @property
     def slow_mode(self) -> bool:  return self._slow_mode
@@ -4608,16 +4615,21 @@ class CompanionManager(QObject):
     # ── Toggle setters for the rest of the new features ──────────────────────
 
     def set_code_mode_auto(self, enabled: bool):
-        self._code_mode_auto = enabled
+        self._code_mode_auto = bool(enabled)
+        cfg.set_switch("code_mode", bool(enabled))
 
     def set_multilang(self, enabled: bool):
+        # Tora is English-only: nothing reads this. The tray no longer shows
+        # the switch (APP-03); the method stays for main.py's wiring.
         self._multilang = enabled
 
     def set_journal(self, enabled: bool):
-        self._journal_enabled = enabled
+        self._journal_enabled = bool(enabled)
+        cfg.set_switch("journal", bool(enabled))
 
     def set_ocr_enabled(self, enabled: bool):
-        self._ocr_enabled = enabled
+        self._ocr_enabled = bool(enabled)
+        cfg.set_switch("ocr", bool(enabled))
 
     # ── Stop / cancel ─────────────────────────────────────────────────────────
 

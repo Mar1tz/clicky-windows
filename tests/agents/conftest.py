@@ -45,6 +45,18 @@ def _grants_stay_in_the_sandbox(tmp_path, monkeypatch):
     # Same rule, same reason: the launcher caches the machine's app list, and
     # a test must not write it into the user's profile or read theirs.
     monkeypatch.setenv("TORA_APPS_CACHE", str(tmp_path / "installed_apps.json"))
+    # And the .env: it holds the user's real API keys, and saved switches
+    # (APP-03) are written into it. No test may touch the real one - every
+    # write goes to this test's own copy, and the switches start from their
+    # defaults, not from whatever the developer last clicked.
+    try:
+        import config as config_module
+        monkeypatch.setattr(config_module.Config, "env_path",
+                            staticmethod(lambda: tmp_path / ".env"))
+        for env, _default in config_module.Config.SWITCHES.values():
+            monkeypatch.delenv(env, raising=False)
+    except Exception:  # noqa: BLE001 - a suite without the app still runs
+        pass
 
 
 def pytest_configure(config):

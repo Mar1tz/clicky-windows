@@ -80,7 +80,7 @@ class TrayManager(QObject):
         self._tray.setToolTip(
             f"Tora - AI Companion\nPress {cfg.hotkey} and just talk"
         )
-        self._search_enabled = True
+        self._search_enabled = cfg.switch("web_search")
         # How many agents are working, shown next to the Agents… item.
         self._agents_running = 0
         # Mirrors the persisted mic mode — off by default, so Tora only
@@ -92,14 +92,15 @@ class TrayManager(QObject):
             self._custom_instructions = _cfg.custom_instructions
         except Exception:
             self._custom_instructions = ""
-        self._slow_enabled = False
-        self._auto_advance = True
+        # As the user last left them - the menu must show what the manager
+        # actually does, and both now start from the saved values (APP-03).
+        self._slow_enabled = cfg.switch("slow_mode")
+        self._auto_advance = cfg.switch("auto_advance")
         self._quiz_enabled = False
-        self._privacy_enabled = True
-        self._code_enabled = True
-        self._multilang_enabled = True
-        self._journal_enabled = True
-        self._ocr_enabled = True
+        self._privacy_enabled = cfg.switch("privacy_guard")
+        self._code_enabled = cfg.switch("code_mode")
+        self._journal_enabled = cfg.switch("journal")
+        self._ocr_enabled = cfg.switch("ocr")
         self._is_recording = False
         # "billing" / "key" while Google is refusing the account (APP-02).
         self._account_problem = ""
@@ -290,13 +291,8 @@ class TrayManager(QObject):
         code_action.triggered.connect(self._toggle_code)
         self._code_action = code_action
 
-        ml_action = tutor_menu.addAction(
-            "Multilingual: ON" if self._multilang_enabled else "Multilingual: OFF"
-        )
-        ml_action.setCheckable(True)
-        ml_action.setChecked(self._multilang_enabled)
-        ml_action.triggered.connect(self._toggle_multilang)
-        self._ml_action = ml_action
+        # No "Multilingual" switch: Tora is English-only and nothing ever
+        # read it - it said "ON" and did nothing (APP-03).
 
         ocr_action = tutor_menu.addAction(
             "OCR Fallback: ON" if self._ocr_enabled else "OCR Fallback: OFF"
@@ -517,13 +513,6 @@ class TrayManager(QObject):
             "Code Mode (auto): ON" if checked else "Code Mode (auto): OFF"
         )
         self.on_toggle_code_mode.emit(checked)
-
-    def _toggle_multilang(self, checked: bool):
-        self._multilang_enabled = checked
-        self._ml_action.setText(
-            "Multilingual: ON" if checked else "Multilingual: OFF"
-        )
-        self.on_toggle_multilang.emit(checked)
 
     def _toggle_ocr(self, checked: bool):
         self._ocr_enabled = checked
