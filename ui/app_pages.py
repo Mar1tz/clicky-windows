@@ -465,45 +465,70 @@ class TutorPage(Page):
 
 class VoicePage(Page):
     HEADING = "Voice & models"
-    LEDE = "Which model answers, which voice speaks, and where the requests go."
+    LEDE = "Which voice speaks, how she talks, which model does each job, and where agent requests go."
+    LIVE = True
+
+    # What each model role is FOR, in words (gemini.Models.all_roles).
+    _ROLES = (("realtime", "Conversation", "Hears you and answers, live"),
+              ("vision_fast", "Quick look · walkthrough planner", "Fast; plans step one first"),
+              ("vision_deep", "Careful look", "Slower, much better at detail"),
+              ("planner", "Careful planner", "Only when the quick plan fails"),
+              ("stt", "Transcription", "Wake word, and the classic route"),
+              ("tts", "Tora's own voice", "Walkthrough steps and local replies"),
+              ("embed", "Memory", "Finding what she remembers"))
+
+    def build_actions(self) -> None:
+        self.action("Refresh model list").clicked.connect(self.bridge.refresh_models)
 
     def build(self) -> None:
-        self.action("Refresh model list")
+        br = self.bridge
 
         voice = Card("Voice")
-        for name, value in (("Spoken voice", "Zephyr"),
-                            ("Conversation", "gemini-3.8-live"),
-                            ("Wake word", "gemini-3.5-transcribe-live")):
-            voice.add(Row(name, trailing=Select(value, width=270),
-                          first=name == "Spoken voice"))
+        voices = br.voices()
+        pick = Select(*voices, width=240)
+        if br.voice() in voices:
+            pick.setCurrentIndex(voices.index(br.voice()))
+        pick.currentIndexChanged.connect(
+            lambda k: br.set_voice(voices[k]) if 0 <= k < len(voices) else None)
+        voice.add(Row("Spoken voice", "Both routes use it; the live session restarts to switch.",
+                      trailing=pick, first=True))
+        routes = ("realtime", "cascade")
+        route = Select("Live - answers in about a second",
+                       "Classic - transcribe, think, then speak", width=320)
+        route.setCurrentIndex(routes.index(br.route()) if br.route() in routes else 0)
+        route.currentIndexChanged.connect(
+            lambda k: br.set_route(routes[k]) if 0 <= k < 2 else None)
+        voice.add(Row("Conversation", trailing=route))
         self.body.add(voice)
 
-        models = Card("Models", "One job each — the fast one looks, the careful "
-                                "one thinks, the planner writes the steps.")
-        for job, model, note in (
-            ("Quick look at the screen", "gemini-3.8-flash", "~1 s"),
-            ("Careful look", "gemini-3.1-pro", "~3 s, much better"),
-            ("Walkthrough planner", "gemini-3.8-flash", "3.8 s"),
-            ("Agents", "claude-sonnet-4.6", "via OmniRoute"),
-        ):
-            models.add(Row(job, note, trailing=Select(model, width=230),
-                           first=job.startswith("Quick")))
+        models = Card("Models", "One job each. Set in .env; the list refreshes itself weekly.")
+        roles = br.models()
+        for i, (role, job, why) in enumerate(self._ROLES):
+            if role in roles:
+                models.add(Row(job, why, trailing=label(roles[role], "dim"), first=(i == 0)))
         self.body.add(models)
 
-        ends = Card("Endpoints", "Where agent requests go.",
-                    action=button("Add endpoint", "primary"))
-        for name, url, on in (
-            ("OmniRoute", "https://api.omniroute.ai/v1", True),
-            ("OpenAI", "https://api.openai.com/v1", False),
-            ("Local (Ollama)", "http://127.0.0.1:11434/v1", False),
-        ):
-            trail = QWidget()
-            tl = QHBoxLayout(trail)
-            tl.setContentsMargins(0, 0, 0, 0)
-            tl.setSpacing(8)
-            tl.addWidget(button("Test"))
-            tl.addWidget(Switch(on))
-            ends.add(Row(name, url, trailing=trail, first=name == "OmniRoute"))
+        # The workforce's own endpoint editor - the same one "Connected
+        # accounts…" opens: add, test and remove OpenAI-compatible endpoints
+        # and route agents to them. It applies to the live agents on Save.
+        ends = Card("Agent endpoints", "Where the agents' requests go.")
+        wf = br.workforce()
+        if wf is not None:
+            from PyQt6.QtWidgets import QLabel, QPushButton
+            from agents.ui.accounts import ConnectedAccountsDialog
+            embedded = ConnectedAccountsDialog(wf)
+            for b in embedded.findChildren(QPushButton):
+                if b.text().strip().lower() == "close":
+                    b.hide()
+            for lbl in embedded.findChildren(QLabel):
+                if lbl.objectName() == "title":
+                    lbl.hide()
+            embedded.setMinimumHeight(420)
+            ends.body.addWidget(embedded)
+        else:
+            ends.add(Row("The agents did not start",
+                         "Endpoints can be set once they do - see tora.log.",
+                         dot=T.WARN, first=True))
         self.body.add(ends)
 
 
@@ -598,44 +623,51 @@ class SetupPage(Page):
     HEADING = "Setup"
     LEDE = "Keys, first-run checks and a report you can send when something is wrong."
 
+    LIVE = True
+    TOPICS = frozenset({"state", "account", "agents"})
+
+    _LEVEL = {"ok": T.OK, "warn": T.WARN, "bad": T.DANGER}
+
     def build(self) -> None:
-        keys = Card("API keys", "Stored in .env on this machine. Never in the app.")
-        for name, state, colour in (
-            ("Google · Gemini", "Connected", T.OK),
-            ("OmniRoute · agents", "Connected", T.OK),
-            ("Tavily · web search", "Not set — using the free search", T.TEXT_FAINT),
-        ):
-            field = QLineEdit("••••••••••••••••••••")
-            field.setEchoMode(QLineEdit.EchoMode.Password)
-            field.setFixedWidth(220)
-            trail = QWidget()
-            tl = QHBoxLayout(trail)
-            tl.setContentsMargins(0, 0, 0, 0)
-            tl.setSpacing(8)
-            tl.addWidget(field)
-            tl.addWidget(button("Test"))
-            keys.add(Row(name, state, dot=colour, trailing=trail,
-                         first=name.startswith("Google")))
+        br = self.bridge
+        change = button("Change keys…", "primary")
+        change.clicked.connect(br.open_keys)
+        keys = Card("API keys", "Stored in .env on this machine - never shown here.",
+                    action=change)
+        problem = br.problem()
+        for i, k in enumerate(br.keys()):
+            if not k["set"]:
+                state, colour = ("Not set - Tora cannot answer without it"
+                                 if k["env"] == "GOOGLE_API_KEY" else
+                                 "Not set - web search uses the free engine"), (
+                    T.DANGER if k["env"] == "GOOGLE_API_KEY" else T.TEXT_FAINT)
+            elif k["env"] == "GOOGLE_API_KEY" and problem == "key":
+                state, colour = f"Set (…{k['tail']}) but Google refused it", T.DANGER
+            elif k["env"] == "GOOGLE_API_KEY" and problem == "billing":
+                state, colour = f"Set (…{k['tail']}) - but the credits have run out", T.DANGER
+            else:
+                state, colour = (f"Set · ends in {k['tail']}" if k["tail"] else "Set"), T.OK
+            keys.add(Row(k["label"], state, dot=colour, first=(i == 0)))
         self.body.add(keys)
 
-        checks = Card("Diagnostics", "What is working right now.")
-        for name, state, colour in (
-            ("Microphone", "Realme Buds Air 5 Pro · 16 kHz", T.OK),
-            ("Live session", "Open · gemini-3.8-live", T.OK),
-            ("Agent workforce", "Ready · 6 workers · 1 extension", T.OK),
-            ("Screen capture", "3 monitors · DPI 1.5, 1.0, 1.0", T.OK),
-            ("Local OCR", "RapidOCR ready", T.OK),
-        ):
-            checks.add(Row(name, state, dot=colour,
-                           first=name == "Microphone"))
+        checks = Card("Diagnostics", "What is working right now. Nothing here goes online.")
+        for i, (name, detail, level) in enumerate(br.diagnostics()):
+            checks.add(Row(name, detail, dot=self._LEVEL.get(level, T.TEXT_FAINT),
+                           first=(i == 0)))
         self.body.add(checks)
 
         foot = QHBoxLayout()
         foot.setSpacing(10)
-        foot.addWidget(button("Run the setup wizard again"))
-        foot.addWidget(button("Save diagnostics report", "primary"))
+        wizard = button("Run the setup wizard again")
+        wizard.clicked.connect(br.run_setup)
+        foot.addWidget(wizard)
+        report = button("Save diagnostics report", "primary")
+        report.clicked.connect(br.save_report)
+        foot.addWidget(report)
         foot.addStretch(1)
-        foot.addWidget(button("Quit Tora", "danger"))
+        quit_ = button("Quit Tora", "danger")
+        quit_.clicked.connect(br.quit)
+        foot.addWidget(quit_)
         wrap = QWidget()
         wrap.setLayout(foot)
         self.body.add(wrap)

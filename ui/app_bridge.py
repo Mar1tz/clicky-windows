@@ -222,6 +222,110 @@ class AppBridge(QObject):
             wf.revoke_desktop_action(key)
         self.changed.emit("grants")
 
+    # ── voice & models (APP-12) ──────────────────────────────────────────────
+
+    def voices(self) -> tuple[str, ...]:
+        from audio.tts.gemini_tts import VOICES
+        return tuple(VOICES)
+
+    def voice(self) -> str:
+        from config import cfg
+        return cfg.voice or ""
+
+    def set_voice(self, name: str) -> None:
+        if self.tray is not None and hasattr(self.tray, "pick_voice"):
+            self.tray.pick_voice(name)
+
+    def route(self) -> str:
+        """"realtime" (the live session) or "cascade"."""
+        from config import cfg
+        return "realtime" if cfg.realtime() else "cascade"
+
+    def set_route(self, mode: str) -> None:
+        if self.tray is not None and hasattr(self.tray, "pick_route"):
+            self.tray.pick_route(mode)
+
+    def models(self) -> dict[str, str]:
+        """Which model does each job, by role."""
+        from ai.gemini import Models
+        return Models.all_roles()
+
+    def refresh_models(self) -> None:
+        if self.tray is not None:
+            self.tray.on_refresh_models.emit()
+
+    # ── setup (APP-12) ───────────────────────────────────────────────────────
+
+    def keys(self) -> list[dict]:
+        """Each API key: its name, whether it is set, and its last four
+        characters - never the key itself."""
+        from config import cfg
+        out = []
+        for env, (_attr, label) in cfg.API_KEY_FIELDS.items():
+            value = cfg.get_api_key(env) or ""
+            out.append({"env": env, "label": label, "set": bool(value),
+                        "tail": value[-4:] if len(value) >= 8 else ""})
+        return out
+
+    def open_keys(self) -> None:
+        if self.tray is not None:
+            self.tray.on_api_keys.emit()
+
+    def diagnostics(self) -> list[tuple[str, str, str]]:
+        """What is working right now: (name, detail, "ok" / "warn" / "bad").
+        All local - nothing here makes a request."""
+        from ai.gemini import Models
+        from config import cfg
+        rows = []
+        mic = self.mic_name()
+        rows.append(("Microphone", mic or "No input device found", "ok" if mic else "bad"))
+        problem = self.problem()
+        if problem:
+            rows.append(("Live session", "Refused - out of Gemini credit" if problem == "billing"
+                         else "Refused - the API key", "bad"))
+        elif self.live():
+            rows.append(("Live session", f"Open · {Models.REALTIME}", "ok"))
+        elif not cfg.has_key():
+            rows.append(("Live session", "No Google API key", "bad"))
+        else:
+            rows.append(("Live session", "Closed - it opens with the next question", "warn"))
+        wf = self.workforce()
+        if wf is not None:
+            try:
+                n = len(wf.list_agents(active_only=True))
+                rows.append(("Agent workforce", f"Ready · {n} working now", "ok"))
+            except Exception:  # noqa: BLE001
+                rows.append(("Agent workforce", "Ready", "ok"))
+        else:
+            rows.append(("Agent workforce", "Did not start - see tora.log", "bad"))
+        try:
+            from PyQt6.QtWidgets import QApplication
+            screens = QApplication.screens()
+            scales = ", ".join(f"{round(s.devicePixelRatio() * 100)}%" for s in screens)
+            rows.append(("Screens", f"{len(screens)} · scale {scales}", "ok" if screens else "bad"))
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            import importlib.util
+            ocr = importlib.util.find_spec("rapidocr_onnxruntime") is not None
+        except Exception:  # noqa: BLE001
+            ocr = False
+        rows.append(("Local OCR", "RapidOCR ready" if ocr else
+                     "Not installed - reading fine print is off", "ok" if ocr else "warn"))
+        return rows
+
+    def run_setup(self) -> None:
+        if self.tray is not None:
+            self.tray.on_run_setup.emit()
+
+    def save_report(self) -> None:
+        if self.tray is not None:
+            self.tray.on_diagnostics.emit()
+
+    def quit(self) -> None:
+        if self.tray is not None:
+            self.tray.on_quit.emit()
+
     # ── doing ────────────────────────────────────────────────────────────────
 
     def show_panel(self) -> None:

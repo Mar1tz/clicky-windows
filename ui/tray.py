@@ -189,9 +189,7 @@ class TrayManager(QObject):
             act = route_menu.addAction(
                 f"● {blurb}" if providers["conversation"] == mode else f"   {blurb}"
             )
-            act.triggered.connect(
-                lambda _=False, m=mode: self.on_set_conversation_mode.emit(m)
-            )
+            act.triggered.connect(lambda _=False, m=mode: self.pick_route(m))
         route_menu.addSeparator()
         note = route_menu.addAction(
             f"realtime: {providers['realtime_model']}"
@@ -205,9 +203,7 @@ class TrayManager(QObject):
             act = voice_menu.addAction(
                 f"● {name}" if name == providers["voice"] else f"   {name}"
             )
-            act.triggered.connect(
-                lambda _=False, n=name: self.on_set_voice.emit(n)
-            )
+            act.triggered.connect(lambda _=False, n=name: self.pick_voice(n))
 
         # ── Which model reads the screen ──────────────────────────────────
         models_menu = menu.addMenu("Models")
@@ -461,6 +457,18 @@ class TrayManager(QObject):
             active = self._active_mic_index
             act.setChecked(idx == (default_idx if active is None else active))
             act.triggered.connect(lambda checked, i=idx: self.pick_mic(i))
+
+    def pick_voice(self, name: str) -> None:
+        """Speak in this voice. The menu is rebuilt after the change, so its
+        "Voice: …" title and dot show the new one - they used to go on
+        showing the old voice until something else rebuilt the menu."""
+        self.on_set_voice.emit(name)
+        self._build_menu()
+
+    def pick_route(self, mode: str) -> None:
+        """Talk over this route ("realtime" / "cascade"), then show it."""
+        self.on_set_conversation_mode.emit(mode)
+        self._build_menu()
 
     def pick_mic(self, index: int) -> None:
         """Listen on this input device. The menu ticks it from now on - it
