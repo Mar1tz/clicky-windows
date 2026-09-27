@@ -4,7 +4,7 @@ Every tool is READ or DRAFT: the pack keeps the channel's own notes, files
 and numbers, and never uploads, publishes or emails a brand. Publishing
 becomes a POST tool when a platform connection exists (catalogue gate 2).
 
-READ   studio_overview, list_videos, list_deals, check_deals, channel_stats
+READ   studio_overview, list_videos, list_sponsor_deals, check_sponsor_deals, channel_stats
 DRAFT  add_video_idea, save_script, build_shot_list, chapters_from_script, write_upload_details,
        set_video_stage, add_sponsor_deal, set_deal_status, import_channel_stats
 """
@@ -56,17 +56,17 @@ def list_videos(s: Studio, a: dict[str, Any]) -> Out:
     return Out(f"{len(rows)} video(s)" + (":\n" + "\n".join(lines) if lines else "."), {"videos": rows})
 
 
-@TOOLS.tool("list_deals", "Sponsor deals: open, or one status.", Level.READ,
+@TOOLS.tool("list_sponsor_deals", "Sponsor deals: open, or one status.", Level.READ,
             {"status": {"type": "string", "enum": ["open", *DEAL_STATES]}})
-def list_deals(s: Studio, a: dict[str, Any]) -> Out:
+def list_sponsor_deals(s: Studio, a: dict[str, Any]) -> Out:
     rows = s.deals(a.get("status", ""))
     lines = [f"#{d['id']} {d['brand']}: {d['deliverable']} - {d['status']}" + (f", due {d['due']}" if d["due"] else "")
              + (f", fee {d['fee']:g}" if d["fee"] else "") for d in rows]
     return Out(f"{len(rows)} deal(s)" + (":\n" + "\n".join(lines) if lines else "."), {"deals": rows})
 
 
-@TOOLS.tool("check_deals", "Agreed sponsor deals that are late or due within a week.", Level.READ, {"as_of": DATE})
-def check_deals(s: Studio, a: dict[str, Any]) -> Out:
+@TOOLS.tool("check_sponsor_deals", "Agreed sponsor deals that are late or due within a week.", Level.READ, {"as_of": DATE})
+def check_sponsor_deals(s: Studio, a: dict[str, Any]) -> Out:
     due = s.deals_due(a.get("as_of", ""))
     findings = [finding(f"{d['brand']}: '{d['deliverable']}' is {d['days_late']} day(s) late",
                         action="deliver it, or tell the brand the new date", entity=d["brand"]) for d in due["late"]]
@@ -197,7 +197,7 @@ TEMPLATE = AgentTemplate(
 
 
 def weekly_review(meta: dict[str, Any]) -> list:
-    return [step("The pipeline", "studio_overview"), step("Sponsor deals due", "check_deals"),
+    return [step("The pipeline", "studio_overview"), step("Sponsor deals due", "check_sponsor_deals"),
             step("What the numbers say", "channel_stats")]
 
 
@@ -259,6 +259,7 @@ class CreatorExtension(PackExtension):
     ROLE = "the producer for a video creator"
     ACTIONS = [("Weekly review", "weekly_review")]
     NOTES = "Every tool is READ or DRAFT: nothing is uploaded, published or sent from this pack."
+    EXAMPLES = [('run my weekly channel review', 'weekly_review'), ('please prep the upload details for Why your logo looks cheap', 'prep_upload'), ('add a video idea about kerning', ''), ('log a sponsor deal with Canva', '')]
 
     def context_line(self, s: Studio) -> str:
         o = s.overview()

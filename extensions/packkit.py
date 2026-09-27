@@ -333,6 +333,7 @@ class PackExtension(IAgentExtension):
         DEFAULTS      settings used when the folder is first set up
         ROLE          "the producer of a video channel" - for the worker prompt
         ACTIONS       [(button label, workflow id)] on the dashboard
+        EXAMPLES      [(request, workflow id or "")] this pack must win with every pack on
 
     and implement snapshot(store) for the dashboard and context_line(store)
     for prompts. Settings `auto_<workflow id>` = True schedule that workflow.
@@ -349,6 +350,7 @@ class PackExtension(IAgentExtension):
     ROLE = "an assistant"
     ACTIONS: list[tuple[str, str]] = []
     NOTES = ""
+    EXAMPLES: list[tuple[str, str]] = []     # (request, workflow id or "") - must route here with every pack on
 
     def __init__(self) -> None:
         self.stores = StoreCache(self.STORE)

@@ -63,3 +63,20 @@ def test_a_pack_dashboard_draws_on_a_fresh_folder(tmp_path, pack):
             for timer in widget.findChildren(QTimer):
                 timer.stop()
             widget.deleteLater()
+
+
+def test_with_every_pack_on_each_request_still_reaches_its_own_pack(tmp_path):
+    """A pack's rules must not take another pack's requests: "check my shop"
+    is the store's even when Sales, which checks pipelines, is on too."""
+    m = build_agent_manager(workspace_root=str(tmp_path), in_memory=True, offline=True)
+    for pack in PACKS:
+        m.extensions.enable(pack)
+    checked = 0
+    for pack in PACKS:
+        for text, workflow in getattr(m.extensions.get(pack), "EXAMPLES", []):
+            intent = m.extensions.match_intent(text)
+            assert intent is not None, f"{pack}: {text!r} reaches no pack"
+            assert intent.metadata["extension"] == pack, f"{text!r} went to {intent.metadata['extension']}, not {pack}"
+            assert intent.metadata.get("workflow", "") == workflow, (pack, text)
+            checked += 1
+    assert checked >= 20

@@ -200,6 +200,7 @@ class SalesExtension(PackExtension):
     ROLE = "a sales assistant"
     ACTIONS = [("Pipeline", "morning_pipeline"), ("Forecast", "weekly_forecast")]
     NOTES = "Every tool is READ or DRAFT; follow-up emails are drafts in Outbox."
+    EXAMPLES = [('check my pipeline', 'morning_pipeline'), ('run the sales forecast', 'weekly_forecast'), ('log a call with Priya', ''), ('add a new deal for Contoso', ''), ('draft a follow-up email to Priya', '')]
 
     def context_line(self, s: CRM) -> str:
         p = s.pipeline()

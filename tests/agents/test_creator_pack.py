@@ -123,11 +123,11 @@ def test_sponsor_deals_late_and_due_are_flagged(mgr):
     _run(mgr, "add_sponsor_deal", brand="Squarespace", deliverable="Pinned comment", due=(today + timedelta(days=3)).isoformat())
     _run(mgr, "add_sponsor_deal", brand="Notion", deliverable="Maybe", status="pitched",
          due=(today - timedelta(days=9)).isoformat())
-    r = _run(mgr, "check_deals")
+    r = _run(mgr, "check_sponsor_deals")
     assert r.output.startswith("1 late, 1 due this week")
     assert [f["title"] for f in r.data["findings"]] == ["Canva: '60-second integration' is 2 day(s) late"]
     assert _run(mgr, "set_deal_status", deal_id=1, status="delivered").ok
-    assert _run(mgr, "check_deals").data["findings"] == []
+    assert _run(mgr, "check_sponsor_deals").data["findings"] == []
     assert not _run(mgr, "set_deal_status", deal_id=1, status="done").ok
 
 

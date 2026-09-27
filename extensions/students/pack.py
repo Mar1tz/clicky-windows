@@ -243,6 +243,7 @@ class StudentsExtension(PackExtension):
     ROLE = "a study coach for a student"
     ACTIONS = [("Today", "daily_study"), ("Rebuild plan", "revision_plan")]
     NOTES = "Every tool is READ or DRAFT. Nothing is submitted, and no tool writes work that is handed in."
+    EXAMPLES = [('please make me a revision plan', 'revision_plan'), ("show me today's study", 'daily_study'), ('make flashcards from my biology notes', ''), ('add my chemistry exam on 12 November', ''), ('format my reference list in Harvard', '')]
 
     def context_line(self, s: StudyDesk) -> str:
         o = s.overview()

@@ -52,6 +52,9 @@ INTENT_RULES = [
 
 class FreelancerExtension(IAgentExtension):
     manifest = ExtensionManifest.load(HERE)
+    EXAMPLES = [("run my weekly admin", "weekly_admin"), ("chase my late payers", "weekly_admin"),
+                ("please prepare my year-end pack", "year_end"), ("log 3 hours for Acme", ""),
+                ("invoice Acme for my hours", ""), ("write a quote for Bloom", "")]
 
     def __init__(self) -> None:
         self.businesses = BusinessCache()
