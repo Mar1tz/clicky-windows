@@ -271,10 +271,12 @@ def test_the_real_packs_are_listed_and_switch_on(qapp, wf):
     texts = _texts(page)
     assert "Accounting" in texts and "Freelancer" in texts and "Legal" not in texts, "only packs that exist"
     assert any("QuickBooks" in t for t in texts), "integrations by name, not id"
-    for i, pack in enumerate(("accounting", "freelancer")):         # listed by id
+    packs = [p["id"] for p in wf.extensions.available()]                # listed by id, one card each
+    assert len(page.findChildren(Switch)) == len(packs)
+    for i, pack in enumerate(packs):
         page.findChildren(Switch)[i].setChecked(True)
         _settle(qapp)
-        assert [p for p in ("accounting", "freelancer") if wf.extensions.is_enabled(p)] == [pack]
+        assert [p for p in packs if wf.extensions.is_enabled(p)] == [pack]
         assert "On" in _texts(page) and _buttons(page, "Open dashboard")
         page.findChildren(Switch)[i].setChecked(False)
         _settle(qapp)

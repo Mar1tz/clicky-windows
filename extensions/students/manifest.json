@@ -1,0 +1,20 @@
+{
+  "id": "students",
+  "name": "Students",
+  "version": "1.0",
+  "description": "A study coach: a revision plan that fits before each exam, flashcards on spaced repetition, notes, reference lists in APA or Harvard, and every deadline in view. It helps you learn; it never writes work you hand in.",
+  "capabilities": ["revision_plan", "deadlines", "flashcards", "notes", "references"],
+  "required_tools": ["files"],
+  "optional_integrations": ["anki", "onenote", "zotero"],
+  "activation_phrases": [
+    "i'm a student", "i am a student", "i'm at university", "i'm at uni", "i'm studying for", "i have exams",
+    "i'm in college", "i am in college", "revising for my exams", "i'm doing my degree"
+  ],
+  "offer": [
+    "A revision plan that fits before each exam",
+    "Flashcards on spaced repetition, exportable to Anki",
+    "Reference lists in APA 7 or Harvard",
+    "Every deadline in view",
+    "Notes from your own material"
+  ]
+}
