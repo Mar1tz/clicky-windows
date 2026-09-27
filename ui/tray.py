@@ -369,7 +369,7 @@ class TrayManager(QObject):
     def hide_icon(self):
         """Remove the tray icon from the notification area. MUST run before
         app.quit(): killing the process without Shell_NotifyIcon(NIM_DELETE)
-        leaves a ghost icon in the tray until hovered (GitHub issue #2)."""
+        leaves a ghost icon in the tray until hovered."""
         try:
             self._tray.hide()
         except Exception:

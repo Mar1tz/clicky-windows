@@ -9,7 +9,7 @@ from dotenv import load_dotenv
 # Where the user-editable .env lives. In the PyInstaller build, __file__ is
 # inside the bundle's _internal\ directory but users (and the installer) put
 # .env next to Tora.exe at the install root — reading _HERE from __file__
-# there meant .env edits were silently ignored (GitHub issue #3).
+# there meant .env edits were silently ignored.
 if getattr(sys, "frozen", False):
     _HERE = Path(sys.executable).parent
 else:

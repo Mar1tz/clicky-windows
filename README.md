@@ -3,7 +3,7 @@
 > **An AI teaching companion that lives next to your cursor.**
 > Ask it anything about your screen — it points, explains, and guides you step-by-step, like a real tutor sitting beside you.
 
-Tora is a Windows port of [farzaa/clicky](https://github.com/farzaa/clicky) (originally macOS/SwiftUI). Built with **Python 3.11+ and PyQt6**, runs fully in the background, and talks to you in real time over Google's Gemini Live API.
+Built with **Python 3.11+ and PyQt6**, runs fully in the background, and talks to you in real time over Google's Gemini Live API.
 
 ---
 
@@ -236,10 +236,10 @@ Place skill files in `~/.tora/skills/` — Tora auto-loads them on startup.
 - A working microphone
 - A free [Gemini API key](https://aistudio.google.com/app/apikey)
 
-### 1. Clone
+### 1. Get the code
+Open a terminal in the project folder:
 ```bash
-git clone https://github.com/Bitshank-2338/clicky-windows.git
-cd tora-windows
+cd path\to\heytora
 ```
 
 ### 2. Install dependencies
@@ -590,54 +590,10 @@ tora-windows/
 
 ---
 
-## Contributing
-
-Tora is open to contributors from **anywhere in the world**. Whether you're a student who uses it every day, a developer who wants to add a feature, or someone who speaks a language we haven't supported yet — you're welcome here.
-
-### Ways to contribute
-- 🐛 **Bug reports** — open an [Issue](https://github.com/Bitshank-2338/clicky-windows/issues) with steps to reproduce
-- 💡 **Feature ideas** — open an Issue tagged `enhancement`
-- 🌐 **Translations** — add your language to `tutor_features/multilang.py`
-- 🔌 **New LLM / STT / TTS providers** — follow the pattern in `ai/base_provider.py`
-- 🛠️ **Skills** — share your custom voice-trigger skills in a PR
-- 📚 **Docs** — better explanations, screenshots, GIFs
-
-### How to send a pull request
-
-```bash
-# 1. Fork on GitHub, then clone your fork
-git clone https://github.com/YOUR_USERNAME/clicky-windows.git
-cd tora-windows
-
-# 2. Create a branch
-git checkout -b feat/your-feature-name
-
-# 3. Make your changes, then commit
-git add .
-git commit -m "feat: describe what you added"
-
-# 4. Push + open a PR against main
-git push origin feat/your-feature-name
-```
-
-### Code style
-- Python 3.11+ — type hints encouraged, `async/await` for I/O
-- Keep providers self-contained in `ai/`, `audio/stt/`, `audio/tts/`
-- New features belong in `tutor_features/` — one file per feature
-- All cross-thread UI updates go through `pyqtSignal` — no direct widget calls from threads
-- Test locally with `python main.py` before opening a PR
-
-### First-time contributor?
-Look for Issues tagged **`good first issue`** — small, well-scoped tasks that don't require deep knowledge of the codebase. Just comment "I'll take this" and we'll help you get started.
-
----
-
 ## Credits
-- Original concept & macOS app: [farzaa/clicky](https://github.com/farzaa/clicky)
-- Windows port: Shashank Singh
 - Models: [Google Gemini](https://ai.google.dev/) — the Live API for the conversation, plus flash/pro for vision, TTS for the fallback voice, and embeddings for memory
-- Pointing: Windows UI Automation via [uiautomation](https://github.com/yinkaisheng/Python-UIAutomation-for-Windows), OCR via [RapidOCR](https://github.com/RapidAI/RapidOCR)
-- Free web search: DuckDuckGo via [ddgs](https://github.com/deedy5/ddgs) + [Tavily](https://tavily.com)
+- Pointing: Windows UI Automation via [uiautomation](https://pypi.org/project/uiautomation/), OCR via [RapidOCR](https://pypi.org/project/rapidocr-onnxruntime/)
+- Free web search: DuckDuckGo via [ddgs](https://pypi.org/project/ddgs/) + [Tavily](https://tavily.com)
 
 ---
 

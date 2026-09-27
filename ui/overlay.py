@@ -600,8 +600,8 @@ class CursorOverlay(QWidget):
         for s in QApplication.screens():
             geo = geo.united(s.geometry())
         # Leave a 2px gap at the bottom edge: a topmost window covering the
-        # full screen suppresses Windows' auto-hide taskbar hover trigger
-        # (GitHub issue #4). The buddy just never renders in those 2 rows.
+        # full screen suppresses Windows' auto-hide taskbar hover trigger.
+        # The buddy just never renders in those 2 rows.
         geo.setBottom(geo.bottom() - 2)
         self.setGeometry(geo)
 

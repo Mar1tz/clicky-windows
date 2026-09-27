@@ -18,7 +18,7 @@ def _ensure_std_streams() -> None:
     transcription, so the very first activation died with
     "'NoneType' object has no attribute 'write'". The model then never
     cached, so it failed again on every subsequent attempt, and the toast
-    showed only the bare message with no traceback (GitHub issue #15).
+    showed only the bare message with no traceback.
 
     Runs at import time, ahead of the heavy imports below, so library code
     that writes while loading is covered too.
@@ -62,7 +62,7 @@ STATE_TO_CURSOR_MODE = {
 def _setup_logging():
     """Rotating runtime log at %LOCALAPPDATA%\\Tora\\tora.log — the #1
     ask from bug reports: with no log file, 'stuck on Listening' class issues
-    were undiagnosable (GitHub issue #6)."""
+    were undiagnosable."""
     import logging
     from logging.handlers import RotatingFileHandler
 

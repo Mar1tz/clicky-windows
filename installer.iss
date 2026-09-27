@@ -13,8 +13,7 @@
 
 #define MyAppName        "Tora"
 #define MyAppVersion     "1.4.4"
-#define MyAppPublisher   "Shashank Singh"
-#define MyAppURL         "https://github.com/Bitshank-2338/clicky-windows"
+#define MyAppPublisher   "HeyTora"
 #define MyAppExeName     "Tora.exe"
 
 [Setup]
@@ -22,8 +21,6 @@ AppId={{9A4E3F2C-7B1D-4A8F-9C6E-3D7F1B5E9A0C}
 AppName={#MyAppName}
 AppVersion={#MyAppVersion}
 AppPublisher={#MyAppPublisher}
-AppPublisherURL={#MyAppURL}
-AppSupportURL={#MyAppURL}
 DefaultDirName={autopf}\{#MyAppName}
 DefaultGroupName={#MyAppName}
 DisableProgramGroupPage=yes

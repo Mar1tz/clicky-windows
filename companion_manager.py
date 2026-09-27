@@ -768,7 +768,7 @@ class CompanionManager(QObject):
                 f.result()
             except Exception as e:
                 # A swallowed exception here used to leave the UI stuck on
-                # "Listening..." forever (GitHub issue #6). Surface it and
+                # "Listening..." forever. Surface it and
                 # always return to idle.
                 _log.exception("background task failed: %s", e)
                 try:
