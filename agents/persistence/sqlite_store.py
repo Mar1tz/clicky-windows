@@ -64,9 +64,9 @@ create table if not exists agents (
 
 
 def default_db_path() -> str:
-    """%LOCALAPPDATA%/Tora/agents.db (falls back to ~/.tora on non-Windows)."""
+    """%LOCALAPPDATA%/HeyTora/agents.db (falls back to ~/.tora on non-Windows)."""
     base = os.environ.get("LOCALAPPDATA") or os.path.join(os.path.expanduser("~"), ".tora")
-    return os.path.join(base, "Tora", "agents.db")
+    return os.path.join(base, "HeyTora", "agents.db")
 
 
 class SQLiteTaskStore(TaskStore):

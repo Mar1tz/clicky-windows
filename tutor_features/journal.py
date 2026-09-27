@@ -2,7 +2,7 @@
 Knowledge Journal + Spaced Repetition.
 
 Every Q&A Tora has gets logged to a SQLite db at:
-    %LOCALAPPDATA%\\Tora\\journal.db
+    %LOCALAPPDATA%\\HeyTora\\journal.db
 
 Voice queries that surface this:
     "what did I learn today"            → today's entries

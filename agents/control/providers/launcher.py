@@ -11,7 +11,7 @@ Two things shape the implementation.
 
 **It costs 1.4 seconds.** Far too slow for the catalogue rebuild that runs
 every minute, so the list is scanned once and kept in
-`%LOCALAPPDATA%\\Tora\\installed_apps.json`. A cold first run pays for it;
+`%LOCALAPPDATA%\\HeyTora\\installed_apps.json`. A cold first run pays for it;
 everything after reads a file. It is refreshed when it is a day old, which
 is about how often somebody installs something.
 

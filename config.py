@@ -1,4 +1,5 @@
 import os
+import re
 import shutil
 import sys
 from dataclasses import dataclass, field
@@ -23,51 +24,107 @@ for _name in (".env", ".env.local"):
         load_dotenv(_p, override=True)
 
 
-_LEGACY_MIGRATED = False
+APP_DIR_NAME = "HeyTora"
+# What the data folder was called before, newest first. Whatever is still in
+# one is moved into HeyTora's the first time HeyTora starts.
+LEGACY_DIR_NAMES = ("Tora", "Clicky")
+# A log file that had the old app's name keeps the current one.
+_LEGACY_FILE_NAMES = {"clicky.log": "tora.log"}
+# SQLite keeps unsaved changes beside the database; the three move together.
+_SQLITE_SIDE = re.compile(r"-(wal|shm|journal)$")
+
+_DATA_DIR: Optional[Path] = None
+# What settling the folder did - logged once logging exists (main.py).
+MIGRATION_NOTES: list[str] = []
 
 
-def _migrate_legacy_data(target: Path) -> None:
-    """Move anything left in the old Clicky folder into the Tora one.
+def _appdata_base() -> Path:
+    """%LOCALAPPDATA%. Tests put it in their own temp folder (conftest)."""
+    return Path(os.environ.get("LOCALAPPDATA") or os.path.expanduser("~"))
 
-    File-by-file rather than renaming the whole directory, because the new
-    folder usually already exists by the time this runs (a log file is created
-    early in startup), and a plain rename would then silently do nothing —
-    leaving the user's journal, memory and setup flag stranded under the old
-    name. Existing files in the new folder always win; nothing is overwritten.
+
+def _merge_into(old: Path, target: Path) -> tuple[int, int]:
+    """Move what `target` lacks out of `old`. Returns (moved, kept).
+
+    A file the new folder already has wins - nothing is overwritten. A
+    database moves with its -wal/-shm/-journal or not at all: the -wal holds
+    changes not yet written into the database (a megabyte of them in the
+    agents' memory on 24 Sep), and a database moved without it has lost
+    them. If any part of one will not move, the parts that did go back.
     """
-    global _LEGACY_MIGRATED
-    if _LEGACY_MIGRATED:
-        return
-    _LEGACY_MIGRATED = True
-    legacy = target.parent / "Clicky"
-    if not legacy.is_dir() or legacy == target:
-        return
-    for src in legacy.iterdir():
-        if not src.is_file():
+    families: dict[str, list[Path]] = {}
+    for src in old.iterdir():
+        families.setdefault(_SQLITE_SIDE.sub("", src.name), []).append(src)
+    moved = kept = 0
+    for members in families.values():
+        dests = [target / _LEGACY_FILE_NAMES.get(m.name, m.name) for m in members]
+        if any(d.exists() for d in dests):
+            kept += len(members)
             continue
-        name = "tora.log" if src.name == "clicky.log" else src.name
-        dst = target / name
-        if dst.exists():
-            continue
+        done: list[tuple[Path, Path]] = []
         try:
-            shutil.move(str(src), str(dst))
-        except Exception:
-            pass
+            for src, dst in zip(members, dests):
+                shutil.move(str(src), str(dst))
+                done.append((src, dst))
+            moved += len(members)
+        except OSError:
+            for src, dst in reversed(done):
+                try:
+                    shutil.move(str(dst), str(src))
+                except OSError:
+                    pass
+            kept += len(members)
+    try:
+        old.rmdir()                     # only when everything left it
+    except OSError:
+        pass
+    return moved, kept
+
+
+def _settle_data_dir(base: Path) -> Path:
+    """The folder this run uses, after moving an old one into it.
+
+    The usual case is a single rename of the old folder: everything moves or
+    nothing does. When the old app is still running its files are locked, so
+    the rename fails - and then this run uses the OLD folder, rather than
+    splitting the journal, the agents' history and their memory across two.
+    The move is tried again next start.
+    """
+    target = base / APP_DIR_NAME
+    for name in LEGACY_DIR_NAMES:
+        old = base / name
+        if old == target or not old.is_dir():
+            continue
+        if not target.exists():
+            try:
+                old.rename(target)
+                MIGRATION_NOTES.append(f"moved {old} to {target}")
+                for was, now in _LEGACY_FILE_NAMES.items():
+                    if (target / was).exists() and not (target / now).exists():
+                        (target / was).rename(target / now)
+                continue
+            except OSError as exc:
+                MIGRATION_NOTES.append(f"{old} is in use ({exc}) - using it this run, "
+                                       f"moving it next start")
+                return old
+        moved, kept = _merge_into(old, target)
+        if moved or kept:
+            MIGRATION_NOTES.append(f"from {old}: moved {moved} item(s), "
+                                   f"kept {kept} the new folder already had or could not move")
+    target.mkdir(parents=True, exist_ok=True)
+    return target
 
 
 def data_dir() -> Path:
-    r"""%LOCALAPPDATA%\Tora — journal, memory, model cache, logs, flags.
+    r"""%LOCALAPPDATA%\HeyTora - journal, memory, the agents' history, logs, flags.
 
-    Carries the old Clicky folder's contents across on first use. Without
-    this the rename would silently orphan everything the user had built up:
-    their knowledge journal, what Tora remembers about them, and the setup
-    flag (so they would be shown the first-run wizard all over again).
+    Decided once per run (see _settle_data_dir), so every part of the app
+    agrees on it even when an old folder could not be moved yet.
     """
-    base = os.environ.get("LOCALAPPDATA") or os.path.expanduser("~")
-    d = Path(base) / "Tora"
-    d.mkdir(parents=True, exist_ok=True)
-    _migrate_legacy_data(d)
-    return d
+    global _DATA_DIR
+    if _DATA_DIR is None:
+        _DATA_DIR = _settle_data_dir(_appdata_base())
+    return _DATA_DIR
 
 
 def _env(name: str, default: str = "") -> str:

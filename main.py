@@ -60,7 +60,7 @@ STATE_TO_CURSOR_MODE = {
 
 
 def _setup_logging():
-    """Rotating runtime log at %LOCALAPPDATA%\\Tora\\tora.log — the #1
+    """Rotating runtime log at %LOCALAPPDATA%\\HeyTora\\tora.log — the #1
     ask from bug reports: with no log file, 'stuck on Listening' class issues
     were undiagnosable."""
     import logging
@@ -88,6 +88,10 @@ def _setup_logging():
         logging.getLogger("tora").info(
             "=== HeyTora starting (python %s) ===", sys.version.split()[0]
         )
+        # What moving the old Tora data folder did, if anything (config).
+        import config
+        for note in config.MIGRATION_NOTES:
+            logging.getLogger("tora").info("data folder: %s", note)
         if scrubbed:
             logging.getLogger("tora").info(
                 "redacted %d line(s) of earlier logs that contained credentials", scrubbed)
@@ -387,8 +391,8 @@ def main():
     # Journal folder
     def _open_journal():
         import os, subprocess
-        base = os.environ.get("LOCALAPPDATA") or os.path.expanduser("~")
-        path = os.path.join(base, "Tora")
+        from config import data_dir
+        path = str(data_dir())
         try:
             os.startfile(path)
         except Exception:

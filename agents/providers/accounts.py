@@ -22,7 +22,7 @@ from agents.core import ConnectedAccount
 
 def _default_path() -> str:
     base = os.environ.get("APPDATA") or os.path.expanduser("~")
-    return os.path.join(base, "Tora", "agent_accounts.json")
+    return os.path.join(base, "HeyTora", "agent_accounts.json")
 
 
 class AccountStore:

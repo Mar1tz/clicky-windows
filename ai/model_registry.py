@@ -3,7 +3,7 @@ Live model discovery for the model dropdown.
 
 GET /v1beta/models tells us what this key can actually call, which is better
 than a hardcoded list that goes stale every time Google ships something. The
-result is cached to %LOCALAPPDATA%\\Tora\\models_gemini.json for 7 days —
+result is cached to %LOCALAPPDATA%\\HeyTora\\models_gemini.json for 7 days —
 short enough that a new release shows up within the week, long enough that
 startup is not making a network call it does not need.
 

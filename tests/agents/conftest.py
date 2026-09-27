@@ -97,3 +97,18 @@ def _no_real_keyboard_hooks(monkeypatch):
                             lambda combo, on_press: (lambda: None))
     except Exception:  # noqa: BLE001
         pass
+
+
+@pytest.fixture(autouse=True)
+def _data_folder_in_the_sandbox(tmp_path, monkeypatch):
+    r"""config.data_dir() is %LOCALAPPDATA%\HeyTora, and settling it MOVES an
+    old Tora folder into it. Run against the real profile, the first test to
+    ask for it would move the user's journal and agents' history. Every test
+    gets its own LocalAppData instead, decided afresh."""
+    try:
+        import config
+        monkeypatch.setattr(config, "_appdata_base", lambda: tmp_path / "LocalAppData")
+        monkeypatch.setattr(config, "_DATA_DIR", None)
+        monkeypatch.setattr(config, "MIGRATION_NOTES", [])
+    except Exception:  # noqa: BLE001 - a suite without the app still runs
+        pass

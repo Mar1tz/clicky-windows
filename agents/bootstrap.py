@@ -21,17 +21,24 @@ from agents.manager import AgentManager, ProviderDecomposer, TemplateDecomposer
 
 log = logging.getLogger("agents.bootstrap")
 
-APP_DIR_NAME = "Tora"
+APP_DIR_NAME = "HeyTora"
 
 # The settings page stores a name; the policy needs the enum.
 RISK_BY_NAME = {r.value: r for r in RiskLevel}
 
 
 def data_dir() -> str:
-    base = os.environ.get("LOCALAPPDATA") or os.path.expanduser("~")
-    path = os.path.join(base, APP_DIR_NAME)
-    os.makedirs(path, exist_ok=True)
-    return path
+    """The app's data folder. The app's config decides it - including moving
+    the pre-HeyTora one - so the agents' history always sits beside the
+    journal; without config (library use) it is %LOCALAPPDATA%\\HeyTora."""
+    try:
+        from config import data_dir as app_data_dir
+        return str(app_data_dir())
+    except Exception:       # config is optional for library use
+        base = os.environ.get("LOCALAPPDATA") or os.path.expanduser("~")
+        path = os.path.join(base, APP_DIR_NAME)
+        os.makedirs(path, exist_ok=True)
+        return path
 
 
 def default_workspace_root() -> str:
