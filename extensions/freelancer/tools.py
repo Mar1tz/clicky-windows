@@ -14,7 +14,7 @@ POST   issue_invoice, record_payment, post_expenses
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Awaitable, Callable, Optional
+from typing import Any, Callable, Optional
 
 from agents.core import ToolContext, ToolResult
 from agents.tools.base import Tool, make_spec
@@ -142,7 +142,7 @@ def list_unbilled_time(b: Business, a: dict[str, Any]) -> Out:
         h, v = by.setdefault(e["client"], [0.0, 0.0])
         by[e["client"]] = [h + e["hours"], v + e["value"]]
     lines = [f"{c}: {h:g} h, {_m(b, v)}" for c, (h, v) in sorted(by.items())]
-    return Out(f"Unbilled: " + ("; ".join(lines) if lines else "nothing."), {"entries": rows})
+    return Out("Unbilled: " + ("; ".join(lines) if lines else "nothing."), {"entries": rows})
 
 
 @tool("list_quotes", "Quotes by status: open, accepted or all.", ActionLevel.READ,
