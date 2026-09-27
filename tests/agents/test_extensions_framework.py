@@ -120,6 +120,9 @@ def test_intent_routes_to_the_template_with_skills_and_context(mgr):
     # a question never becomes a pack task
     assert mgr.extensions.match_intent("what does it mean to make a red toy?") is None
     assert mgr.extensions.match_intent("can you make a red toy") is not None, "a polite command is still a command"
+    assert mgr.extensions.match_intent("do you make a red toy?") is None
+    assert mgr.extensions.match_intent("do I make a red toy") is None
+    assert mgr.extensions.match_intent("do make a red toy") is not None, "'do' before a request is a command"
 
 
 def test_state_persists_and_restore_re_enables(tmp_path):

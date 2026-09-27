@@ -534,8 +534,11 @@ class ExtensionRegistry:
             events.emit(EventKind.LOG, message, data={"extension": ext_id, **data})
 
 
+# "do" opens a question only before a person ("do you...", "do I need..."); "do my
+# paperwork" and "do the bookkeeping" are requests.
 _QUESTION = re.compile(r"^\s*(?:what|how|why|when|where|who|which|whose|explain|tell\s+me\s+about|is|are|was|"
-                       r"were|does|do|did|should|would\s+it|could\s+it|can\s+it)\b", re.I)
+                       r"were|does|do(?=\s+(?:you|i|we|they|he|she|it|u)\b)|did|should|would\s+it|could\s+it|"
+                       r"can\s+it)\b", re.I)
 
 
 def _template_planner(planner: Any) -> Any:

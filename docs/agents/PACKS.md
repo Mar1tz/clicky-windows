@@ -24,6 +24,7 @@ each pack:
 | Students (`students`) | Revision plan, SM-2 flashcards, APA/Harvard references, deadlines | none above DRAFT | Today's study, build the revision plan | "make me a revision plan" | [STUDENTS.md](STUDENTS.md) |
 | Sales CRM (`sales`) | Contacts, a pipeline with a weighted forecast, follow-ups, quiet deals, email drafts | none above DRAFT | Morning pipeline, weekly forecast | "check my pipeline" | below |
 | Online store (`store`) | Stock cover and reorders, purchase orders, margins, unshipped orders, returns, listings | none above DRAFT | Morning orders, weekly restock | "check my shop" | below |
+| Trades (`trades`) | Quotes from a price list, a diary with no double bookings, parts lists, job invoices, certificate renewals | Issue an invoice, record a payment (POST) | Evening office, parts for the week | "do my paperwork" | below |
 
 ## Sales CRM
 
@@ -69,3 +70,24 @@ each pack:
   * WooCommerce product export;
   * Shopify order export, one row per line item. Importing the same
     export twice counts nothing twice.
+
+## Trades
+
+* **Pricing:** parts cost plus `markup_pct` (20), labour at `labour_rate`
+  (60/h), a `callout` fee, extras, then `vat_pct`. Prices come only from
+  the price list, which can be imported from a supplier's CSV. A part name
+  that matches two items is asked about.
+* **Diary:** a booking from a quote takes the quote's hours. A clash is
+  refused and names the job in the way. Free slots are worked out within
+  `day_start`-`day_end` (08:00-17:00). Booking a quote accepts it; a
+  declined quote cannot be booked.
+* **Parts lists:** one CSV per supplier for the jobs booked in the next 7
+  days, with which job each part is for.
+* **Invoices:** built from the job's quote with the hours actually worked
+  and any extras, one per job. Issuing (POST) numbers it, sets the due date
+  from `terms_days`, and writes the PDF and an `.eml` draft. Payments
+  (POST) may be partial.
+* **Certificates:** each has a number of months it lasts; the due date
+  handles month ends and leap days. Those due within 30 days, or overdue,
+  are flagged, and the reminder is an `.eml` draft.
+* **Needs:** `requires: ["accounting"]` for its PDF writer.
