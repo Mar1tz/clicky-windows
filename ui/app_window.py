@@ -1,4 +1,4 @@
-"""One window for the whole of Tora.
+"""One window for the whole of HeyTora.
 
 Everything Tora can do currently lives in its own floating window, reached
 through the tray menu: Agents, Agent settings, Extensions, Dashboard, API
@@ -7,7 +7,7 @@ Each was easy to add and, together, they are impossible to find — there is
 no one place that shows what the product actually is.
 
 This is that place: a navigation rail on the left, one page at a time on the
-right, and no pop-ups. Opened from the tray with "Open Tora app".
+right, and no pop-ups. Opened from the tray with "Open HeyTora".
 
     ┌────────────┬──────────────────────────────────────────┐
     │  TORA      │  Agents                        [Stop all]│
@@ -84,7 +84,7 @@ class ToraApp(QWidget):
         self._refresh_timer.timeout.connect(self._refresh_now)
         self._pending_topics: set[str] = set()
         self.bridge.changed.connect(self._on_changed)
-        self.setWindowTitle("Tora")
+        self.setWindowTitle("HeyTora")
         self.setObjectName("appRoot")
         # A NATIVE window frame, not a hand-rolled one. The first draft was
         # frameless and translucent so the corners could be rounded; on a
@@ -146,7 +146,7 @@ class ToraApp(QWidget):
                        Qt.AlignmentFlag.AlignVCenter)
         words = QVBoxLayout()
         words.setSpacing(0)
-        words.addWidget(label("TORA", "wordmark"))
+        words.addWidget(label("HEYTORA", "wordmark"))
         words.addWidget(label("YOUR COMPUTER, EXPLAINED", "wordmarkSub"))
         mark.addLayout(words)
         mark.addStretch(1)
@@ -219,7 +219,7 @@ class ToraApp(QWidget):
         if button is not None and not button.isChecked():
             button.setChecked(True)
         heading = next((t for k, t, *_ in PAGES if k == key), "")
-        self.setWindowTitle(f"Tora  ·  {heading}")
+        self.setWindowTitle(f"HeyTora  ·  {heading}")
         self.page_changed.emit(key)
 
     def set_state(self, state_name: str) -> None:

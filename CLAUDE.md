@@ -1,4 +1,4 @@
-# CLAUDE.md — Tora (clicky-windows)
+# CLAUDE.md — HeyTora (repo folder: clicky-windows-main)
 
 Windows desktop AI companion: PyQt6 UI, asyncio on daemon threads, Gemini
 Live for voice/vision, `companion_manager.py` as the hub. We are adding an

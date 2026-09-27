@@ -3,7 +3,7 @@ API Keys dialog.
 
 Packaged installs had no way to enter an API key — config only ever read
 .env, so a user had to find the install folder and hand-edit a file next to
-Tora.exe. This dialog is that missing surface: paste a key, hit Save, and
+HeyTora.exe. This dialog is that missing surface: paste a key, hit Save, and
 it applies immediately and persists.
 
 The Google key is not optional. Nothing in Tora works without it: it is the
@@ -79,7 +79,7 @@ class ApiKeysDialog(QDialog):
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("Tora — API Keys")
+        self.setWindowTitle("HeyTora — API Keys")
         self.setModal(False)
         self.setMinimumSize(560, 560)
         self.setStyleSheet(STYLE)
@@ -99,8 +99,8 @@ class ApiKeysDialog(QDialog):
         root.addWidget(title)
 
         subtitle = QLabel(
-            "Tora runs on Google's Gemini models. Paste a key from AI "
-            "Studio below — it is saved next to Tora.exe and applies "
+            "HeyTora runs on Google's Gemini models. Paste a key from AI "
+            "Studio below — it is saved next to HeyTora.exe and applies "
             "straight away, no restart."
         )
         subtitle.setObjectName("subtitle")

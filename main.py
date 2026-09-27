@@ -1,5 +1,5 @@
 """
-Tora for Windows — Entry Point.
+HeyTora for Windows — Entry Point.
 Boots Qt, spawns overlay+panel+tray, starts ambient mic listener, binds hotkey.
 """
 
@@ -86,7 +86,7 @@ def _setup_logging():
         scrubbed = logsafe.scrub_logs(log_dir)
         logsafe.install(root)
         logging.getLogger("tora").info(
-            "=== Tora starting (python %s) ===", sys.version.split()[0]
+            "=== HeyTora starting (python %s) ===", sys.version.split()[0]
         )
         if scrubbed:
             logging.getLogger("tora").info(
@@ -213,8 +213,11 @@ def main():
     )
     app = QApplication(sys.argv)
     app.setQuitOnLastWindowClosed(False)
-    app.setApplicationName("Tora")
-    app.setApplicationDisplayName("Tora - AI Companion")
+    app.setApplicationName("HeyTora")
+    app.setApplicationDisplayName("HeyTora - AI Companion")
+    # A "start with Windows" set before the rename lives under the old name.
+    from ui import autostart
+    autostart.migrate_legacy()
 
     # ── Core components ───────────────────────────────────────────────────────
     manager = CompanionManager()
@@ -269,7 +272,7 @@ def main():
     _log_hint = _data_dir() / "tora.log"
     manager.sig_error.connect(
         lambda e: tray.show_notification(
-            "Tora error", f"{e}\n\nFull details: {_log_hint}"
+            "HeyTora error", f"{e}\n\nFull details: {_log_hint}"
         )
     )
     # Out of credit / a refused key (APP-02): a warning in the tray menu and
@@ -308,7 +311,7 @@ def main():
         except Exception as exc:          # noqa: BLE001 - never kill the tray
             import logging as _lg
             _lg.getLogger("tora").exception("could not open the app window")
-            tray.show_notification("Tora", f"Couldn't open the app: {exc}")
+            tray.show_notification("HeyTora", f"Couldn't open the app: {exc}")
 
     tray.on_open_app.connect(_open_app)
 
@@ -463,7 +466,7 @@ def main():
         except Exception:
             providers_d = {}
         report = []
-        report.append(f"Tora diagnostics — {datetime.datetime.now().isoformat()}")
+        report.append(f"HeyTora diagnostics — {datetime.datetime.now().isoformat()}")
         report.append(f"Python: {sys.version.split()[0]}")
         report.append(f"Platform: {platform.platform()}")
         report.append(f"Active LLM: {providers_d.get('llm', '?')}")
@@ -526,7 +529,7 @@ def main():
     providers = cfg.describe()
     _hk = "+".join(p.strip().capitalize() for p in cfg.hotkey.split("+"))
     tray.show_notification(
-        "Tora is running",
+        "HeyTora is running",
         (f"Say 'Tora' or press {_hk}  |  LLM: {providers['llm']}"
          if cfg.ambient_mic() else
          f"Press {_hk}, ask your question, and Tora answers when you stop "

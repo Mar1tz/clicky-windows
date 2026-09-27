@@ -1,12 +1,12 @@
 @echo off
 REM ────────────────────────────────────────────────────────────────────
-REM Tora Windows — one-click build script
+REM HeyTora Windows — one-click build script
 REM
-REM Produces:  dist\Tora\Tora.exe   (portable folder)
-REM            Setup-Tora.exe         (if Inno Setup is installed)
+REM Produces:  dist\HeyTora\HeyTora.exe   (portable folder)
+REM            Setup-HeyTora.exe         (if Inno Setup is installed)
 REM
 REM Usage:  build.bat           ← builds portable folder only
-REM         build.bat installer ← also builds Setup-Tora.exe
+REM         build.bat installer ← also builds Setup-HeyTora.exe
 REM ────────────────────────────────────────────────────────────────────
 
 setlocal enabledelayedexpansion
@@ -14,7 +14,7 @@ cd /d "%~dp0"
 
 echo.
 echo ================================================================
-echo   Tora for Windows — Build
+echo   HeyTora for Windows — Build
 echo ================================================================
 echo.
 
@@ -52,7 +52,7 @@ if exist dist rmdir /s /q dist
 
 REM ── 4. Run PyInstaller ─────────────────────────────────────────────
 echo [3/4] Building with PyInstaller (this takes 2-5 min)...
-python -m PyInstaller tora.spec --clean --noconfirm
+python -m PyInstaller heytora.spec --clean --noconfirm
 if errorlevel 1 (
     echo.
     echo [ERROR] Build failed. Check the output above.
@@ -61,14 +61,14 @@ if errorlevel 1 (
 
 REM ── 5. Copy .env.example and LICENSE into the dist folder ─────────
 echo [4/4] Bundling docs and env template...
-copy /y ".env.example" "dist\Tora\.env.example" >nul
-copy /y "LICENSE"       "dist\Tora\LICENSE"      >nul
-copy /y "README.md"     "dist\Tora\README.md"    >nul
+copy /y ".env.example" "dist\HeyTora\.env.example" >nul
+copy /y "LICENSE"       "dist\HeyTora\LICENSE"      >nul
+copy /y "README.md"     "dist\HeyTora\README.md"    >nul
 
 echo.
 echo ================================================================
 echo   Portable build complete!
-echo   Run:  dist\Tora\Tora.exe
+echo   Run:  dist\HeyTora\HeyTora.exe
 echo ================================================================
 echo.
 
@@ -88,7 +88,7 @@ if /i "%1"=="installer" (
         iscc installer.iss
     )
     echo.
-    echo Installer: dist\Setup-Tora.exe
+    echo Installer: dist\Setup-HeyTora.exe
 )
 
 endlocal

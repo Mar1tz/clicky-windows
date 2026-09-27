@@ -1,4 +1,4 @@
-# Tora for Windows — Setup Guide
+# HeyTora for Windows — Setup Guide
 
 ## Prerequisites
 
@@ -10,7 +10,7 @@ That's the whole list. Nothing to install locally, no models to download.
 ## Install
 
 ```bash
-cd tora-windows
+cd heytora
 pip install -r requirements.txt
 ```
 

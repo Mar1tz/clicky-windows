@@ -8,7 +8,7 @@ from dotenv import load_dotenv
 
 # Where the user-editable .env lives. In the PyInstaller build, __file__ is
 # inside the bundle's _internal\ directory but users (and the installer) put
-# .env next to Tora.exe at the install root — reading _HERE from __file__
+# .env next to HeyTora.exe at the install root — reading _HERE from __file__
 # there meant .env edits were silently ignored.
 if getattr(sys, "frozen", False):
     _HERE = Path(sys.executable).parent
@@ -537,7 +537,7 @@ class Config:
     # ── API key management ───────────────────────────────────────────────
     #
     # Keys used to be .env-only, which meant a packaged install had no way to
-    # enter one short of hand-editing a file next to Tora.exe. These back
+    # enter one short of hand-editing a file next to HeyTora.exe. These back
     # the Settings → API Keys dialog.
 
     # env var name → (dataclass attribute, human label)
@@ -548,7 +548,7 @@ class Config:
 
     @staticmethod
     def env_path() -> Path:
-        """The .env Tora reads and writes — next to Tora.exe when frozen."""
+        """The .env HeyTora reads and writes — next to HeyTora.exe when frozen."""
         return _HERE / ".env"
 
     def get_api_key(self, env_var: str) -> str:

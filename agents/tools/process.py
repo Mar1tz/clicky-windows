@@ -71,7 +71,7 @@ def truncate(text: str, limit: int = OUTPUT_CAP) -> str:
 
 def python_executable() -> str:
     """The interpreter to run scripts / pip with. Inside the PyInstaller
-    bundle sys.executable is Tora.exe, so fall back to the PATH."""
+    bundle sys.executable is HeyTora.exe, so fall back to the PATH."""
     if getattr(sys, "frozen", False):
         return shutil.which("python") or shutil.which("py") or "python"
     return sys.executable

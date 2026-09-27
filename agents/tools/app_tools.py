@@ -130,6 +130,8 @@ def _pid_of(hwnd) -> int:
 # Qt stamps every Tora window title with the application display name, so
 # a title check catches Tora windows from ANY process - the demo and the
 # test suite run a workforce outside the app, next to a running Tora.
+# The app is HeyTora now ("HeyTora - AI Companion"), which still ends in this:
+# one suffix recognises both the new name and a window from before it.
 APP_TITLE_SUFFIX = "Tora - AI Companion"
 
 

@@ -62,7 +62,7 @@ class SetupWizard(QDialog):
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("Tora Setup")
+        self.setWindowTitle("HeyTora Setup")
         self.setModal(False)
         self.setMinimumSize(600, 420)
         self.setStyleSheet("""
@@ -105,7 +105,7 @@ class SetupWizard(QDialog):
         layout.setContentsMargins(32, 28, 32, 24)
         layout.setSpacing(14)
 
-        self.title = QLabel("Welcome to Tora")
+        self.title = QLabel("Welcome to HeyTora")
         self.title.setObjectName("title")
         layout.addWidget(self.title)
 
@@ -162,7 +162,7 @@ class SetupWizard(QDialog):
         hk = _pretty_hotkey()
 
         if step == "welcome":
-            self.title.setText("Welcome to Tora")
+            self.title.setText("Welcome to HeyTora")
             self.subtitle.setText(
                 f"Tora sits next to your cursor, watches your screen and "
                 f"talks you through whatever you're doing.\n\n"
@@ -175,7 +175,7 @@ class SetupWizard(QDialog):
         elif step == "key":
             self.title.setText("One key, and you're done")
             self.subtitle.setText(
-                "Tora runs on Google's Gemini models — the conversation, "
+                "HeyTora runs on Google's Gemini models — the conversation, "
                 "reading your screen, hearing you and speaking back are all "
                 "Gemini.\n\n"
                 "Get a free key from Google AI Studio and paste it in. "

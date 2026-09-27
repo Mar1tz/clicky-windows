@@ -1,4 +1,4 @@
-# Tora for Windows 🔵
+# HeyTora for Windows 🔵
 
 > **An AI teaching companion that lives next to your cursor.**
 > Ask it anything about your screen — it points, explains, and guides you step-by-step, like a real tutor sitting beside you.
@@ -33,7 +33,7 @@ One free [Gemini API key](https://aistudio.google.com/app/apikey) and you're run
 │          (floats beside your real cursor)   │
 │                                             │
 │  ┌───────────────────────────┐              │
-│  │  Tora  [Gemini]       —   │  ← panel     │
+│  │  HeyTora [Gemini]     —   │  ← panel     │
 │  │  ● Thinking…              │              │
 │  │  "The search bar is       │              │
 │  │   right here ↗"           │              │
@@ -89,7 +89,7 @@ The blue triangle sits **35 px right / 25 px below** your real cursor. When you 
 
 ### ⚡ One Model Per Job
 
-Every part of Tora runs on the Gemini model that suits it, and the model ids
+Every part of HeyTora runs on the Gemini model that suits it, and the model ids
 are all overridable in `.env`.
 
 | Where | Model | What it does |
@@ -133,10 +133,10 @@ background. Force it with `TORA_CONVERSATION=cascade` to compare.
 - Ask **"what did we cover this week?"** → weekly digest
 - **SM-2 spaced repetition** — Tora reminds you to review topics at optimal intervals (1 → 3 → 7 → 14 → 30 → 60 → 120 days)
 - Say **"quiz me on what I should review"** → flashcard session from your journal
-- Journal stored at `%LOCALAPPDATA%\Tora\journal.db`
+- Journal stored at `%LOCALAPPDATA%\HeyTora\journal.db`
 
 ### 📄 Document Context (Drag & Drop)
-- Drag a **PDF, DOCX, TXT, MD, CSV, or code file** onto the Tora panel
+- Drag a **PDF, DOCX, TXT, MD, CSV, or code file** onto the HeyTora panel
 - It is embedded once with `gemini-embedding-001`; each question then pulls
   back only the passages that relate to it, instead of the whole file
 - Or use **Tray → Journal → Attach document…** for a file picker
@@ -161,21 +161,13 @@ background. Force it with `TORA_CONVERSATION=cascade` to compare.
 | **Quiz Mode** | Tora asks *you* questions instead of answering; evaluates in one sentence |
 | **Privacy Guard** | Skips the screenshot when a password manager / banking window is detected |
 | **Code Mode (auto)** | Code-specialist prompt when an IDE is active |
-| **Multilingual** | Auto-detects language, replies in kind, switches TTS voice |
 | **OCR Fallback** | Runs Tesseract on screenshots when fine text is mentioned |
-
-### 🌍 Multilingual Auto-Detect
-- Detects query language via `langdetect` + Unicode script heuristics
-- Responds in the same language automatically — and in the same voice, since
-  every Gemini voice speaks every language
-- 15+ languages supported: EN, HI, FR, DE, ES, PT, AR, ZH, JA, KO, RU, IT, NL, PL, TR
-- Toggle: **Tray → Tutor Mode → Multilingual**
 
 ### 🎬 Lesson Recording (MP4 + Transcript)
 - Records the screen at 8 fps as an MP4 alongside a Markdown transcript of all Q&A
 - Start: **Tray → Lesson Recording → Start recording**
-- Stop: tray menu → produces `lesson_YYYY-MM-DD_HH-MM.mp4` + `lesson_YYYY-MM-DD_HH-MM_transcript.md`
-- Saved to `%LOCALAPPDATA%\Tora\recordings\`
+- Stop: tray menu → produces `lesson.mp4` + `transcript.md`
+- Saved to `Documents\Tora Lessons\<date and time>\`
 
 ### 🖊️ Whiteboard Annotations
 Tora can draw directly on your screen as it explains:
@@ -252,7 +244,7 @@ pip install -r requirements.txt
 **Installed a release build?** You don't need to touch a file — open the tray
 icon → **Setup & Diagnostics → API Keys…**, paste your key, and hit Save. The
 first-run wizard offers the same screen and checks the key works. Keys are
-written to `.env` next to `Tora.exe` for you.
+written to `.env` next to `HeyTora.exe` for you.
 
 **Running from source?** Create `.env` in the project root (copy from
 `.env.example`):
@@ -277,13 +269,13 @@ Every model id is overridable too — see `.env.example` for the full list.
 ```bash
 python main.py
 ```
-A blue dot appears in your system tray. Tora is now running.
+A blue dot appears in your system tray. HeyTora is now running.
 
 ---
 
 ## Cost
 
-Tora is free software; the models are Google's. A [Gemini API
+HeyTora is free software; the models are Google's. A [Gemini API
 key](https://aistudio.google.com/app/apikey) has a free tier that covers
 ordinary use, and the design keeps the expensive calls rare:
 
@@ -309,14 +301,14 @@ python assets/make_icon.py
 
 # 2. Build
 pip install pyinstaller
-pyinstaller tora.spec --clean --noconfirm
+pyinstaller heytora.spec --clean --noconfirm
 
 # 3. Distribute
-# → dist/Tora/  (entire folder)
+# → dist/HeyTora/  (entire folder)
 # → or build Setup.exe with Inno Setup using installer.iss
 ```
 
-`dist/Tora/Tora.exe` runs on any Windows machine without Python installed. Include a `.env` file next to the exe with your API keys, or set them as system environment variables.
+`dist/HeyTora/HeyTora.exe` runs on any Windows machine without Python installed. Include a `.env` file next to the exe with your API keys, or set them as system environment variables.
 
 See [BUILD.md](BUILD.md) for full packaging instructions, including the Inno Setup installer.
 
@@ -447,7 +439,7 @@ overlay.point_at(logical_x, logical_y)  ← correct position on any screen
 ## File Structure
 
 ```
-tora-windows/
+heytora/
 ├── main.py                      # entry point — boots Qt, wires all signals
 ├── companion_manager.py         # async orchestrator + state machine
 ├── config.py                    # env loading, model roles, prompts
@@ -507,7 +499,7 @@ tora-windows/
 │
 ├── .env                         # your API key (not committed)
 ├── requirements.txt             # all Python dependencies
-├── tora.spec                  # PyInstaller build spec
+├── heytora.spec               # PyInstaller build spec
 ├── installer.iss                # Inno Setup installer script
 ├── build.bat                    # one-click build script
 ├── BUILD.md                     # full build + packaging guide
@@ -550,7 +542,7 @@ tora-windows/
 **Tora hears me but says nothing**
 → Almost always the key. **Tray → Setup & Diagnostics → API Keys…** — the
   first-run wizard checks it; run **Setup again** from the tray to re-check
-→ Look in `%LOCALAPPDATA%\Tora\tora.log` for a `Gemini 4xx` line —
+→ Look in `%LOCALAPPDATA%\HeyTora\tora.log` for a `Gemini 4xx` line —
   it carries Google's actual reason
 
 **Answers take seconds instead of half a one**
@@ -561,16 +553,11 @@ tora-windows/
   front exposes no accessibility names (some games, some Electron apps) and
   Tora is falling back to looking
 
-**Tora mixes languages in its replies**
-→ Set a fixed reply language: **Tray → Reply language**
-→ Pin the transcription language too if you speak a code-mixed language:
-  **Tray → Speech recognition**
-
 **Pointing at wrong location**
 → Windows accessibility names come first; check the control has one (most
   do). Canvas apps fall back to OCR, then to the vision model
 → Multi-monitor: the DPI scale is read per monitor — mixed scales work, but
-  a monitor added while Tora is running needs a restart
+  a monitor added while HeyTora is running needs a restart
 
 **Esc doesn't stop audio**
 → Make sure `sounddevice` is installed (`pip install sounddevice`)

@@ -78,7 +78,7 @@ class TrayManager(QObject):
         self._tray = QSystemTrayIcon()
         self._tray.setIcon(self._icons["idle"])
         self._tray.setToolTip(
-            f"Tora - AI Companion\nPress {cfg.hotkey} and just talk"
+            f"HeyTora - AI Companion\nPress {cfg.hotkey} and just talk"
         )
         self._search_enabled = cfg.switch("web_search")
         # How many agents are working, shown next to the Agents… item.
@@ -142,7 +142,7 @@ class TrayManager(QObject):
 
         # The single-window app. First in the list because it is meant to
         # become the way in; the individual windows below still work.
-        app_action = menu.addAction("Open Tora app")
+        app_action = menu.addAction("Open HeyTora")
         app_action.triggered.connect(self.on_open_app)
         menu.addSeparator()
 
@@ -359,7 +359,7 @@ class TrayManager(QObject):
 
         menu.addSeparator()
 
-        quit_action = menu.addAction("Quit Tora")
+        quit_action = menu.addAction("Quit HeyTora")
         quit_action.triggered.connect(self.on_quit)
 
         self._tray.setContextMenu(menu)

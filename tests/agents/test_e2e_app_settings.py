@@ -173,7 +173,7 @@ def test_the_real_microphones_are_offered_and_one_can_be_picked(qapp):
 @pytest.mark.parametrize("heading, action", [
     ("Always listening", ("switch", "wake_word", True)),
     ("Show the floating panel", ("panel", True)),
-    ("Start Tora when Windows starts", ("autostart", True)),
+    ("Start HeyTora when Windows starts", ("autostart", True)),
 ])
 def test_the_settings_switches_are_real(qapp, heading, action):
     from ui.app_pages import SettingsPage
@@ -267,3 +267,29 @@ def test_forgetting_a_grant_revokes_it_in_the_workforce(qapp):
     assert bridge.grants() == ["a.b"]
     bridge.forget_grant("a.b")
     assert revoked == ["a.b"]
+
+
+def test_start_with_windows_set_before_the_rename_is_carried_over(monkeypatch):
+    """The entry was named "Tora" before the app became HeyTora. Left alone,
+    the switch would read off while the old entry went on starting the old
+    exe at every sign-in."""
+    from ui import autostart
+    registry = {"Tora": '"C:\Old\Tora.exe"'}
+    monkeypatch.setattr(autostart, "_read_value", lambda name=autostart.VALUE: registry.get(name, ""))
+    monkeypatch.setattr(autostart, "_write_value",
+                        lambda v, name=autostart.VALUE: registry.__setitem__(name, v))
+    monkeypatch.setattr(autostart, "_delete_value", lambda name=autostart.VALUE: registry.pop(name, None))
+    assert autostart.migrate_legacy() is True
+    assert registry == {"HeyTora": autostart.command()}, "one entry, the new name, this exe"
+    assert autostart.enabled() is True
+    assert autostart.migrate_legacy() is False, "once"
+
+
+def test_nothing_to_carry_over_changes_nothing(monkeypatch):
+    from ui import autostart
+    registry = {}
+    monkeypatch.setattr(autostart, "_read_value", lambda name=autostart.VALUE: registry.get(name, ""))
+    monkeypatch.setattr(autostart, "_write_value",
+                        lambda v, name=autostart.VALUE: registry.__setitem__(name, v))
+    monkeypatch.setattr(autostart, "_delete_value", lambda name=autostart.VALUE: registry.pop(name, None))
+    assert autostart.migrate_legacy() is False and registry == {}

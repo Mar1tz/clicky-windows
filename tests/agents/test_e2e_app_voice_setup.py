@@ -186,7 +186,7 @@ def test_the_diagnostics_are_the_real_ones(qapp):
 
 @pytest.mark.parametrize("button, action", [
     ("Change keys…", ("keys",)), ("Run the setup wizard again", ("wizard",)),
-    ("Save diagnostics report", ("report",)), ("Quit Tora", ("quit",))])
+    ("Save diagnostics report", ("report",)), ("Quit HeyTora", ("quit",))])
 def test_every_setup_button_does_what_the_trays_does(qapp, button, action):
     from ui.app_pages import SetupPage
 

@@ -1,12 +1,12 @@
 # -*- mode: python ; coding: utf-8 -*-
 """
-PyInstaller spec for Tora Windows.
+PyInstaller spec for HeyTora Windows.
 
 Build:
-    pyinstaller tora.spec --clean --noconfirm
+    pyinstaller heytora.spec --clean --noconfirm
 
 Output:
-    dist/Tora/Tora.exe           ← distribute this whole folder
+    dist/HeyTora/HeyTora.exe           ← distribute this whole folder
 
 We use --onedir (not --onefile) because:
   • onnxruntime and OpenCV ship large native DLLs that onefile extracts to
@@ -115,7 +115,7 @@ a = Analysis(
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    # Shave size: Tora never uses these heavy libs.
+    # Shave size: HeyTora never uses these heavy libs.
     excludes=[
         "matplotlib", "scipy", "pandas", "tkinter",
         "notebook", "jupyter", "IPython",
@@ -131,7 +131,7 @@ exe = EXE(
     a.scripts,
     [],
     exclude_binaries=True,
-    name="Tora",
+    name="HeyTora",
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
@@ -152,5 +152,5 @@ coll = COLLECT(
     strip=False,
     upx=False,
     upx_exclude=[],
-    name="Tora",
+    name="HeyTora",
 )

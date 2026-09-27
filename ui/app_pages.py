@@ -120,7 +120,7 @@ class Page(QWidget):
 # ── Home ──────────────────────────────────────────────────────────────────────
 
 class HomePage(Page):
-    HEADING = "Tora"
+    HEADING = "HeyTora"
     LEDE = "Talk to her. She can see your screen, point at things, and put agents to work."
     LIVE = True
     TOPICS = frozenset({"state", "account", "agents", "guide", "switches"})
@@ -433,7 +433,7 @@ class ExtensionsPage(Page):
         if not packs:
             card = Card()
             card.add(Row("No packs found",
-                         "Packs live in the extensions folder next to Tora.", first=True))
+                         "Packs live in the extensions folder next to HeyTora.", first=True))
             self.body.add(card)
             return
         for info in packs:
@@ -537,7 +537,7 @@ class AccountingPage(Page):
         if info is None:
             card = Card()
             card.add(Row("The Accounting pack is not installed",
-                         "It lives in the extensions folder next to Tora.", first=True))
+                         "It lives in the extensions folder next to HeyTora.", first=True))
             self.body.add(card)
             return
         card = Card("Accounting is off", info.get("description") or "")
@@ -956,13 +956,13 @@ class SettingsPage(Page):
                     trailing=label("set in .env as TORA_HOTKEY", "faint")))
         self.body.add(mic)
 
-        look = Card("Tora on this PC")
+        look = Card("HeyTora on this PC")
         panel = ToggleRow("Show the floating panel",
                           "The small window with the conversation in it.",
                           br.panel_visible(), first=True)
         panel.switch.toggled.connect(br.set_panel_visible)
         look.add(panel)
-        start = ToggleRow("Start Tora when Windows starts",
+        start = ToggleRow("Start HeyTora when Windows starts",
                           "For you only - no admin rights needed.", br.autostart())
         start.switch.toggled.connect(br.set_autostart)
         look.add(start)
@@ -1017,7 +1017,7 @@ class SetupPage(Page):
         report.clicked.connect(br.save_report)
         foot.addWidget(report)
         foot.addStretch(1)
-        quit_ = button("Quit Tora", "danger")
+        quit_ = button("Quit HeyTora", "danger")
         quit_.clicked.connect(br.quit)
         foot.addWidget(quit_)
         wrap = QWidget()

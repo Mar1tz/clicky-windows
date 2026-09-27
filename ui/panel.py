@@ -166,7 +166,7 @@ class CompanionPanel(QWidget):
 
         # Header
         header = QHBoxLayout()
-        title = QLabel("Tora")
+        title = QLabel("HeyTora")
         title.setObjectName("title")
         title.setFont(FONT_TITLE)
         header.addWidget(title)
