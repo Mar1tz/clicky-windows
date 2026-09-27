@@ -25,6 +25,7 @@ each pack:
 | Sales CRM (`sales`) | Contacts, a pipeline with a weighted forecast, follow-ups, quiet deals, email drafts | none above DRAFT | Morning pipeline, weekly forecast | "check my pipeline" | below |
 | Online store (`store`) | Stock cover and reorders, purchase orders, margins, unshipped orders, returns, listings | none above DRAFT | Morning orders, weekly restock | "check my shop" | below |
 | Trades (`trades`) | Quotes from a price list, a diary with no double bookings, parts lists, job invoices, certificate renewals | Issue an invoice, record a payment (POST) | Evening office, parts for the week | "do my paperwork" | below |
+| Payroll (`payroll`) | A small employer's pay run: gross pay, imported deductions, reviewer checks, payslips, bank file, journal, leave | Finalise a pay run (POST) | Pay run check (the 20th) | "check the pay run" | below |
 
 ## Sales CRM
 
@@ -91,3 +92,29 @@ each pack:
   handles month ends and leap days. Those due within 30 days, or overdue,
   are flagged, and the reminder is an `.eml` draft.
 * **Needs:** `requires: ["accounting"]` for its PDF writer.
+
+## Payroll
+
+* **Tax and social security:** never worked out, because they are each
+  country's law. They come from the payroll software's export
+  (`import_deductions`: tax / income tax / PAYE, NI / social security /
+  UIF, pension, other) or are typed in.
+* **Gross pay:** salary / 12, or (hours + overtime x
+  `overtime_multiplier`) x rate. Timesheet rows for one person add up.
+* **Pension:** `pension_pct` of gross, recomputed when gross changes
+  unless a pension amount was typed in.
+* **Checks:**
+  * blocking: net pay below zero, no bank account, two people paid into
+    one account, an hourly rate under `minimum_hourly`;
+  * to look at: gross moved more than `variance_pct` (10%) since last
+    month's final run, starters, leavers, hourly staff with no hours, no
+    deductions imported, salaried starters or leavers part-way through a
+    month (pro rata).
+* **Finalising (POST):** refused while a blocking problem stands. It
+  writes payslip PDFs, a bank payment CSV to upload, and a balanced
+  journal CSV. A final run cannot change.
+* **Leave:** earned month by month from the leave year's start (or the
+  start date), less days taken.
+* **With Accounting on too:** "payroll" also matches Accounting's
+  payroll review, which is for accountants. The first pack switched on
+  wins, so "pay run" is the Payroll pack's own phrase.
