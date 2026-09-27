@@ -327,7 +327,9 @@ installed), bank feeds where available.
 ## 14. Building the next pack (Legal, Sales, HR…)
 
 1. `extensions/<id>/manifest.json`: id, name, capabilities, activation
-   phrases, "offer" bullets.
+   phrases, "offer" bullets, and `requires`: packs whose code this one
+   imports (Freelancer uses Accounting's ledger). A required pack need not
+   be switched on, only present; if it is missing, enabling says so.
 2. `extensions/<id>/__init__.py`: `create_extension()` returning your
    `IAgentExtension` subclass.
 3. Tools: plain `agents.tools.base.Tool` subclasses, `spec.category = "<id>"`,

@@ -39,6 +39,7 @@ class ExtensionManifest:
     capabilities: list[str] = field(default_factory=list)
     required_tools: list[str] = field(default_factory=list)
     optional_integrations: list[str] = field(default_factory=list)
+    requires: list[str] = field(default_factory=list)       # packs whose code this one uses
     activation_phrases: list[str] = field(default_factory=list)
     offer: list[str] = field(default_factory=list)          # "This adds: ..." bullets
 

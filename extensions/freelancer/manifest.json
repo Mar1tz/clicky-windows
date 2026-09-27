@@ -1,0 +1,23 @@
+{
+  "id": "freelancer",
+  "name": "Freelancer",
+  "version": "1.0",
+  "description": "A back office for one person: hours, quotes, invoices, late payers, receipts, a tax set-aside on every payment and a year-end pack for the accountant. Drafts first; nothing reaches your books without a yes, and nothing is sent for you.",
+  "capabilities": ["time_tracking", "quotes", "invoicing", "collections", "expenses", "tax_set_aside", "year_end"],
+  "required_tools": ["files"],
+  "requires": ["accounting"],
+  "optional_integrations": ["gmail", "outlook"],
+  "activation_phrases": [
+    "i am a freelancer", "i'm a freelancer", "i freelance", "i am self-employed", "i'm self-employed",
+    "i am self employed", "i'm self employed", "i work for myself", "i am a contractor", "i'm a contractor",
+    "i'm a sole trader", "i am a sole trader"
+  ],
+  "offer": [
+    "Time tracking and quotes",
+    "Invoices from your hours",
+    "Reminders drafted for late payers",
+    "Receipts into your books",
+    "Tax set aside from every payment",
+    "A year-end pack for your accountant"
+  ]
+}

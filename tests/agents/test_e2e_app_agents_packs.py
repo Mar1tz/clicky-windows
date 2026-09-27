@@ -269,17 +269,16 @@ def test_the_real_packs_are_listed_and_switch_on(qapp, wf):
 
     page = ExtensionsPage(_bridge(wf))
     texts = _texts(page)
-    assert "Accounting" in texts and "Legal" not in texts, "only packs that exist"
+    assert "Accounting" in texts and "Freelancer" in texts and "Legal" not in texts, "only packs that exist"
     assert any("QuickBooks" in t for t in texts), "integrations by name, not id"
-    (switch,) = page.findChildren(Switch)
-    switch.setChecked(True)
-    _settle(qapp)
-    assert wf.extensions.is_enabled("accounting")
-    assert "On" in _texts(page) and _buttons(page, "Open dashboard")
-    (switch,) = page.findChildren(Switch)
-    switch.setChecked(False)
-    _settle(qapp)
-    assert not wf.extensions.is_enabled("accounting")
+    for i, pack in enumerate(("accounting", "freelancer")):         # listed by id
+        page.findChildren(Switch)[i].setChecked(True)
+        _settle(qapp)
+        assert [p for p in ("accounting", "freelancer") if wf.extensions.is_enabled(p)] == [pack]
+        assert "On" in _texts(page) and _buttons(page, "Open dashboard")
+        page.findChildren(Switch)[i].setChecked(False)
+        _settle(qapp)
+        assert not wf.extensions.is_enabled(pack)
 
 
 def test_open_dashboard_goes_to_the_accounting_page(qapp, wf):

@@ -156,6 +156,15 @@ class ExtensionRegistry:
 
     # -- lifecycle ------------------------------------------------------------------------
 
+    def missing_requirements(self, ext_id: str) -> list[str]:
+        """Packs this one builds on that are not in the extensions folder.
+        A pack may use another's code (Freelancer keeps its money in the
+        Accounting pack's ledger) without that pack being switched on."""
+        need = self.manifest(ext_id).requires
+        if any(r not in self._manifests for r in need):
+            self.discover()
+        return [r for r in need if r not in self._manifests]
+
     def install(self, ext_id: str) -> ExtensionManifest:
         m = self.manifest(ext_id)
         with self._lock:
@@ -175,6 +184,10 @@ class ExtensionRegistry:
         with self._lock:
             if ext_id in self._enabled:
                 return self._enabled[ext_id]
+            missing = self.missing_requirements(ext_id)
+            if missing:
+                raise ValueError(f"{self.manifest(ext_id).name} needs the {', '.join(missing)} pack, "
+                                 "which is not installed")
             self.install(ext_id)
             ext = self._factories[ext_id]()
             ctx = self._context(ext_id)
