@@ -327,6 +327,7 @@ def main():
     tray.on_toggle_slow_mode.connect(manager.set_slow_mode)
     tray.on_toggle_slow_mode.connect(overlay.set_slow_mode)
     overlay.set_slow_mode(cfg.switch("slow_mode"))    # as it was left (APP-03)
+    overlay.set_style("new" if cfg.switch("new_overlay") else "classic")
     tray.on_toggle_auto_advance.connect(manager.set_guide_auto_advance)
     tray.on_toggle_quiz_mode.connect(manager.set_quiz_mode)
     tray.on_toggle_privacy.connect(manager.set_privacy_guard)

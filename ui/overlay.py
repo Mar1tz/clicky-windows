@@ -2,7 +2,7 @@
 Tora's blue buddy cursor — faithful port of the original macOS overlay.
 
 Matches tora-main/leanring-buddy/OverlayWindow.swift:
-  - Flat solid blue equilateral triangle (#3380FF), 16×16, rotated -35°
+  - Flat solid blue equilateral triangle (overlay_theme.CLASSIC_BLUE), 16×16, rotated -35°
   - Sits at (+35, +25) relative to the real cursor
   - Soft blue drop shadow (radius ~8)
   - States cross-fade in place:
@@ -25,6 +25,7 @@ from PyQt6.QtGui import (
     QPainter, QColor, QPen, QBrush, QPainterPath, QCursor, QFont,
 )
 
+from ui import overlay_theme as theme
 from ui.caption import CaptionIsland
 
 
@@ -43,13 +44,13 @@ TRI_SIZE = 16
 # Swift: .rotationEffect(.degrees(-35))
 TRI_ROTATION_DEG = -35.0
 
-# #3380FF
-CURSOR_BLUE = QColor(0x33, 0x80, 0xFF)
+# The classic look's blue, from the one place it is defined (ui/overlay_theme).
+CURSOR_BLUE = theme.color(theme.CLASSIC_BLUE)
 
 # Teaching-annotation palette. The LLM picks colors by name; default is the
 # Tora blue. Chosen for contrast on both light and dark content.
 ANNOT_COLORS = {
-    "blue":   QColor(0x33, 0x80, 0xFF),
+    "blue":   QColor(CURSOR_BLUE),
     "red":    QColor(0xFF, 0x45, 0x55),
     "green":  QColor(0x2E, 0xCC, 0x71),
     "yellow": QColor(0xFF, 0xD5, 0x4F),
@@ -251,6 +252,10 @@ class CursorOverlay(QWidget):
         # Slow mode — doubles flight + dwell so Tora feels more like a teacher
         self._slow_mode: bool = False
 
+        # Which look: "classic" (today's) or "new" (the redesign, OD-01..09).
+        # Settings > Overlay switches it; classic until the new look is signed off.
+        self._style: str = theme.STYLE_CLASSIC
+
         # ── AI status island ────────────────────────────────────────────────
         # What the assistant is doing right now, in the user's words, plus
         # where they are in a guide. The rule this exists to enforce: if the
@@ -298,8 +303,12 @@ class CursorOverlay(QWidget):
         self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
         self._cover_all_monitors()
 
+        # Where the user's pointer is. A callable so the preview can script it
+        # (ui/overlay_preview.py) without touching the real one.
+        self._pointer_pos = QCursor.pos
+
         # Seed position so we don't flash at (0, 0)
-        qp = QCursor.pos()
+        qp = self._pointer_pos()
         self._display_pos = QPointF(qp.x() + OFFSET_X, qp.y() + OFFSET_Y)
 
         # 60 FPS
@@ -482,6 +491,19 @@ class CursorOverlay(QWidget):
         """Doubles flight + dwell duration so students can track the motion."""
         self._slow_mode = enabled
 
+    def set_style(self, style: str):
+        """"classic" or "new" - the cursor, the step label and the caption
+        island all switch together."""
+        if style not in theme.STYLES:
+            raise ValueError(f"style is one of {', '.join(theme.STYLES)}")
+        self._style = style
+        self._caption.set_style(style)
+        self.update()
+
+    @property
+    def style(self) -> str:
+        return self._style
+
     def set_point_hold(self, hold: bool):
         """Called by manager when TTS starts (True) / ends (False).
         While held, dwell never auto-expires — the buddy stays on the element
@@ -617,7 +639,7 @@ class CursorOverlay(QWidget):
         self._ring = None
 
     def _tick(self):
-        qp = QCursor.pos()
+        qp = self._pointer_pos()
         real = QPointF(qp.x(), qp.y())
 
         # ── Caption island ── before the flight machine: it returns early in

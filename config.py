@@ -517,6 +517,9 @@ class Config:
         # Settings > Approvals (APP-14): agents and desktop actions go ahead
         # without the approval box. Off until the user turns it on.
         "auto_approve":  ("TORA_AGENT_AUTO_APPROVE", False),
+        # Settings > Overlay: the redesigned island, cursor and step chip
+        # (OD-01..09). Off - the classic look - until the new one is signed off.
+        "new_overlay":   ("TORA_NEW_OVERLAY", False),
     }
 
     def switch(self, name: str) -> bool:

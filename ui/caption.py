@@ -43,10 +43,13 @@ from PyQt6.QtGui import (
     QFont, QFontInfo, QFontMetricsF, QLinearGradient,
 )
 
+from ui import overlay_theme as theme
+
 
 # ── Tunables ─────────────────────────────────────────────────────────────────
-# Duplicated from overlay.py on purpose: this module must not import ui.*
-CAP_BLUE = QColor(0x33, 0x80, 0xFF)
+# From the tokens module, which holds values only - so importing it pulls in
+# no widget code, which is what this module must avoid.
+CAP_BLUE = theme.color(theme.CLASSIC_BLUE)
 
 CAP_TOP_MARGIN   = 12.0     # floats below the edge; Windows has no notch
 CAP_PAD_X        = 20.0
@@ -146,6 +149,7 @@ class CaptionIsland:
         self._h2 = 2 * self._lh + CAP_LINE_GAP + 2 * CAP_PAD_Y
 
         self.needs_screen: bool = False
+        self._style = theme.STYLE_CLASSIC      # the redesign's look is "new" (OD-01..09)
 
         # Text pipeline
         self._pending = ""              # raw chars not yet split into words
@@ -606,6 +610,17 @@ class CaptionIsland:
         if needed > self._tw + CAP_W_DEADBAND:
             steps = math.ceil((needed - CAP_W_MIN) / CAP_W_QUANTUM)
             self._tw = min(self._max_w, CAP_W_MIN + max(0, steps) * CAP_W_QUANTUM)
+
+    def set_style(self, style: str) -> None:
+        """"classic" (today's look) or "new" (the redesign). Takes effect on the
+        next answer; one already on screen keeps the look it opened with."""
+        if style not in theme.STYLES:
+            raise ValueError(f"style is one of {', '.join(theme.STYLES)}")
+        self._style = style
+
+    @property
+    def style(self) -> str:
+        return self._style
 
     def set_screen_width(self, width: float) -> None:
         """Called once per episode by the overlay after the monitor is locked.
