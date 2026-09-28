@@ -309,3 +309,150 @@ def test_the_new_island_does_not_breathe_or_bloom(qapp, monkeypatch):
         p.end()
         assert bool(blooms) is breathes, style
         monkeypatch.undo()
+
+
+# -- OD-04: the step chip ------------------------------------------------------------------------------------
+
+@pytest.mark.parametrize("instruction, target, current, total, shown", [
+    ("Click Export.", "Export", 2, 5, "2/5 Click Export"),
+    ("Double-click the project folder.", "Projects", 1, 3, "1/3 Double-click Projects"),
+    ("Right-click the photo.", "Photo", 2, 3, "2/3 Right-click Photo"),
+    ("Type your name in the Name box.", "Name", 3, 5, "3/5 Type your name"),
+    ('Type "hello world" into the box.', "Message", 3, 5, "3/5 Type hello world"),
+    ("Press Ctrl+S to save.", "Save", 4, 5, "4/5 Press Ctrl+S"),
+    ("Press ctrl + shift + n for a new window.", "", 1, 2, "1/2 Press Ctrl+Shift+N"),
+    ("Hit Enter.", "", 5, 5, "5/5 Press Enter"),
+    ("Choose Save as from the menu.", "Save as", 2, 6, "2/6 Choose Save as"),
+    ("Select the Export option.", "Export", 1, 2, "1/2 Choose Export"),
+    ("Scroll down to the bottom.", "", 3, 7, "3/7 Scroll down"),
+    ("Open the File menu.", "File", 1, -1, "1 Open File"),
+    ("", "Export", 0, 0, "Export"),
+    ("Look at the chart.", "Chart", 4, 5, "4/5 Chart"),
+])
+def test_the_chip_says_the_action_and_the_thing(instruction, target, current, total, shown):
+    from ui.overlay_chip import chip_for
+    assert chip_for(instruction, target, current=current, total=total).text == shown
+
+
+def test_the_chip_never_shows_a_password_and_stays_short():
+    from ui import overlay_theme as t
+    from ui.overlay_chip import chip_for
+    c = chip_for('Type "hunter2" as your password.', "Password", current=2, total=4)
+    assert c.text == "2/4 Type your password" and "hunter2" not in c.text
+    long = chip_for("Click the button labelled Download all attachments as a zip file.",
+                    "Download all attachments as a zip file", current=2, total=5)
+    assert len(" ".join(w for _k, w in long.parts)) <= t.CHIP_MAX_CHARS and long.text.endswith("…")
+    assert not chip_for("", "", current=0, total=0), "nothing known: no chip at all"
+
+
+def _new_step(overlay, instruction="Click Export.", label="Export", at=(600.0, 300.0)):
+    overlay.set_style("new")
+    _at_rest(overlay)
+    overlay.set_guide_progress(2, 5, instruction)
+    overlay.guide_point(at[0], at[1], label)
+    overlay._fly_t0 -= 5.0
+    overlay._tick()
+    overlay._arrived_at -= 1.0
+
+
+def test_only_one_label_is_drawn_in_the_new_look(overlay, monkeypatch):
+    from ui import overlay_paint
+    drawn = []
+    monkeypatch.setattr(type(overlay), "_draw_bubble", lambda self, *a: drawn.append("bubble"))
+    monkeypatch.setattr(type(overlay), "_draw_island", lambda self, *a: drawn.append("card"))
+    real_chip = overlay_paint.draw_chip
+    monkeypatch.setattr(overlay_paint, "draw_chip", lambda *a, **k: (drawn.append("chip"), real_chip(*a, **k)))
+    _new_step(overlay)
+    _grab(overlay, 500, 250, 300, 120)
+    assert drawn == ["chip"]
+    assert overlay._chip.text == "2/5 Click Export"
+
+
+def test_no_random_phrase_when_the_name_is_unknown(overlay):
+    from ui.overlay import POINTER_PHRASES
+    overlay.set_style("new")
+    _at_rest(overlay)
+    overlay.point_at(600.0, 300.0, "")
+    assert overlay._bubble_text not in POINTER_PHRASES and not overlay._chip
+    overlay.set_style("classic")
+    overlay.point_at(600.0, 300.0, "")
+    assert overlay._bubble_text in POINTER_PHRASES, "the classic look keeps its phrases until OD-09"
+
+
+def test_the_chip_dims_while_you_talk(overlay):
+    _new_step(overlay)
+    assert overlay._chip_alpha() == pytest.approx(1.0)
+    overlay.set_mode("listening")
+    from ui import overlay_theme as t
+    assert overlay._chip_alpha() == pytest.approx(t.DIM_WHILE_TALKING)
+
+
+# -- OD-05: where the chip goes -------------------------------------------------------------------------------
+
+LAYOUTS = {
+    "one laptop at 125%": [(0, 0, 1536, 824)],
+    "two side by side, one left of primary": [(-1920, 0, 1920, 1040), (0, 0, 2560, 1400)],
+    "a small screen and a portrait one above it": [(0, 0, 1280, 680), (1280, -200, 1080, 1880)],
+}
+
+
+def _grid(r):
+    xs = [r.left() + 2, r.left() + 40, r.center().x(), r.right() - 40, r.right() - 2]
+    ys = [r.top() + 2, r.top() + 30, r.center().y(), r.bottom() - 30, r.bottom() - 2]
+    return [(x, y) for x in xs for y in ys]
+
+
+@pytest.mark.parametrize("layout", list(LAYOUTS))
+@pytest.mark.parametrize("width", [70.0, 150.0, 290.0])
+def test_the_chip_never_covers_the_target_and_stays_on_its_screen(layout, width):
+    from PyQt6.QtCore import QPointF, QRectF, QSizeF
+
+    from ui import overlay_paint, overlay_theme as t
+    from ui.overlay_chip import EDGE, place_chip, target_ring
+    for sx, sy, sw, sh in LAYOUTS[layout]:
+        screen = QRectF(sx, sy, sw, sh)
+        island = QRectF(screen.center().x() - 220, screen.top() + t.ISLAND_TOP, 440, t.ISLAND_H2)
+        for x, y in _grid(screen):
+            tip = QPointF(x, y)
+            ring = target_ring(tip)
+            arrow = overlay_paint.arrow_box(tip)
+            chip = place_chip(ring, QSizeF(width, t.CHIP_H), screen, [island, arrow])
+            where = f"{layout}: target {x:.0f},{y:.0f}, chip {chip}"
+            assert screen.adjusted(EDGE, EDGE, -EDGE, -EDGE).contains(chip), "off its screen - " + where
+            assert not chip.intersects(ring), "over the target - " + where
+            assert not chip.intersects(island), "over the island - " + where
+
+
+def test_the_chip_prefers_the_right_then_the_left():
+    from PyQt6.QtCore import QPointF, QRectF, QSizeF
+
+    from ui.overlay_chip import place_chip, target_ring
+    screen = QRectF(0, 0, 1920, 1040)
+    size = QSizeF(150, 28)
+    middle = target_ring(QPointF(900, 500))
+    assert place_chip(middle, size, screen).left() > middle.right()
+    edge = target_ring(QPointF(1900, 500))
+    assert place_chip(edge, size, screen).right() < edge.left()
+
+
+def test_the_targets_bounds_become_the_new_ring_and_the_chip_keeps_clear(overlay):
+    from PyQt6.QtCore import QRectF
+    _new_step(overlay)
+    button = QRectF(555, 286, 90, 28)                  # "Export", as Windows reports it
+    overlay.add_shape({"kind": "rect", "color": "blue", "role": "target",
+                       "x1": 551, "y1": 282, "x2": 649, "y2": 318})     # as _highlight pads it
+    assert overlay._annotations == [], "the new look draws its own ring, not a second one"
+    assert overlay._target_bounds == button
+    assert not overlay._chip_rect.intersects(button.adjusted(-4, -4, 4, 4)), "the chip clears the whole button"
+    overlay.set_style("classic")
+    overlay.add_shape({"kind": "rect", "color": "blue", "role": "target",
+                       "x1": 551, "y1": 282, "x2": 649, "y2": 318})
+    assert len(overlay._annotations) == 1, "classic draws it as before"
+
+
+def test_the_highlight_is_marked_as_the_target():
+    import inspect
+
+    from companion_manager import CompanionManager
+    src = inspect.getsource(CompanionManager._highlight)
+    assert src.count('"role": "target"') == 2

@@ -2303,16 +2303,19 @@ class CompanionManager(QObject):
         """
         bbox = getattr(found, "bbox", None)
         try:
+            # role "target": the overlay's new look (OD-05) draws its own ring
+            # from these bounds and keeps its step chip clear of them; the
+            # classic look draws the shape as before.
             if bbox:
                 l, t, r, b = bbox
                 pad = 4.0
                 self.sig_draw.emit({
-                    "kind": "rect", "color": "blue",
+                    "kind": "rect", "color": "blue", "role": "target",
                     "x1": l - pad, "y1": t - pad, "x2": r + pad, "y2": b + pad,
                 })
             else:
                 self.sig_draw.emit({
-                    "kind": "circle", "color": "blue",
+                    "kind": "circle", "color": "blue", "role": "target",
                     "x": float(found.x), "y": float(found.y), "r": 32.0,
                 })
         except Exception:

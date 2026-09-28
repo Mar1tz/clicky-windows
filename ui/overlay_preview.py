@@ -63,9 +63,16 @@ def scenes(stage: Stage) -> list[Scene]:
             ov.caption_chunk(word + " ")
         ov.caption_done()
 
+    def target(ov, xy: tuple[float, float]) -> None:
+        # What the app sends after pointing when Windows knows the control's
+        # bounds (CompanionManager._highlight): here, the pretend button's.
+        ov.add_shape({"kind": "rect", "color": "blue", "role": "target", "x1": xy[0] - 49, "y1": xy[1] - 18,
+                      "x2": xy[0] + 49, "y2": xy[1] + 18})
+
     def step(ov, n: int, total: int, instruction: str, xy: tuple[float, float], label: str) -> None:
         ov.set_guide_progress(n, total, instruction)
         ov.guide_point(xy[0], xy[1], label)
+        target(ov, xy)
 
     return [
         Scene("idle", "resting beside the pointer", lambda ov, s: None, 0.8),
@@ -75,7 +82,8 @@ def scenes(stage: Stage) -> list[Scene]:
                                                          ov.set_activity("finding", "Looking for the Export button")), 1.0),
         Scene("speaking-short", "a one-line answer", lambda ov, s: speak(ov, "Sure - it's in the File menu."), 2.2),
         Scene("speaking-long", "a long answer", lambda ov, s: speak(ov, LONG_ANSWER), 4.5),
-        Scene("pointing", "pointing while explaining", lambda ov, s: ov.point_at(ex[0], ex[1], "Export"), 2.4,
+        Scene("pointing", "pointing while explaining", lambda ov, s: (ov.point_at(ex[0], ex[1], "Export"),
+                                                                    target(ov, ex)), 2.4,
               (ex[0], ex[1], "Export")),
         Scene("guide-step", "a walkthrough step", lambda ov, s: step(ov, 2, 5, "Click Export.", ex, "Export"), 0.9,
               (ex[0], ex[1], "Export")),

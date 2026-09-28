@@ -12,8 +12,8 @@ from __future__ import annotations
 
 import math
 
-from PyQt6.QtCore import QPointF, QRectF, Qt
-from PyQt6.QtGui import QBrush, QPainter, QPainterPath, QPen
+from PyQt6.QtCore import QPointF, QRectF, QSizeF, Qt
+from PyQt6.QtGui import QBrush, QFont, QFontMetricsF, QPainter, QPainterPath, QPen
 
 from ui import overlay_theme as t
 
@@ -101,6 +101,20 @@ def draw_target_ring(p: QPainter, centre: QPointF, progress: float) -> None:
     p.restore()
 
 
+def draw_target_bounds(p: QPainter, bounds: QRectF, progress: float) -> None:
+    """Round a target whose bounds Windows reported: a rounded rectangle RING_PAD
+    outside it, drawing in the same way as the round ring, then still."""
+    u = max(0.0, min(1.0, progress))
+    ease = 1.0 - (1.0 - u) ** 3
+    grow = 4.0 * (1.0 - ease)
+    r = bounds.adjusted(-t.RING_PAD - grow, -t.RING_PAD - grow, t.RING_PAD + grow, t.RING_PAD + grow)
+    p.save()
+    p.setPen(QPen(t.color(t.ACCENT, ease), t.RING_W))
+    p.setBrush(Qt.BrushStyle.NoBrush)
+    p.drawRoundedRect(r, 6.0, 6.0)
+    p.restore()
+
+
 def ease_out(u: float) -> float:
     """The new look's one motion curve: quick away, gentle arrival, no overshoot."""
     u = max(0.0, min(1.0, u))
@@ -110,3 +124,83 @@ def ease_out(u: float) -> float:
 def explain_move_s(distance: float) -> float:
     """How long a move takes while Tora explains: 0.9 s near, 1.4 s across a screen."""
     return max(t.EXPLAIN_MOVE_MIN_S, min(t.EXPLAIN_MOVE_MAX_S, t.EXPLAIN_MOVE_MIN_S + distance / 2400.0))
+
+
+# -- the step chip (OD-04) ------------------------------------------------------------------------------
+
+_KEY_PAD = 5.0
+_PART_GAP = 5.0
+_fonts: dict[str, QFont] = {}
+
+
+def _font(kind: str) -> QFont:
+    if kind not in _fonts:
+        _fonts.update(text=t.font(t.CHIP_TEXT_PX, QFont.Weight.Medium),
+                      strong=t.font(t.CHIP_TEXT_PX, QFont.Weight.DemiBold),
+                      key=t.font(t.BADGE_TEXT_PX, QFont.Weight.DemiBold),
+                      badge=t.font(t.BADGE_TEXT_PX, QFont.Weight.DemiBold))
+    return _fonts[kind]
+
+
+def _part_w(kind: str, words: str) -> float:
+    w = QFontMetricsF(_font(kind)).horizontalAdvance(words)
+    return w + 2 * _KEY_PAD if kind == "key" else w
+
+
+def chip_size(chip) -> QSizeF:
+    """The chip's size for its words: padding, the badge, each part."""
+    w = 2 * t.CHIP_PAD_X
+    if chip.badge:
+        w += QFontMetricsF(_font("badge")).horizontalAdvance(chip.badge) + 12.0 + 8.0
+    parts = list(chip.parts)
+    for i, (kind, words) in enumerate(parts):
+        w += _part_w(kind, words)
+        if i:
+            w += _PART_GAP
+    return QSizeF(round(w), t.CHIP_H)
+
+
+def draw_chip(p: QPainter, rect: QRectF, chip, alpha: float = 1.0) -> None:
+    """One solid chip: the step badge, then the action and the thing, keys as caps."""
+    if alpha <= 0.01 or not chip:
+        return
+    p.save()
+    p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+    p.setRenderHint(QPainter.RenderHint.TextAntialiasing, True)
+    # one soft shadow, then the body and its 1 px border
+    p.setPen(Qt.PenStyle.NoPen)
+    p.setBrush(QBrush(t.color(t.SHADOW, t.SHADOW_A * 0.55 * alpha)))
+    p.drawRoundedRect(rect.translated(0, 2.0), t.CHIP_R, t.CHIP_R)
+    p.setBrush(QBrush(t.color(t.SURFACE, t.SURFACE_A * alpha)))
+    p.setPen(QPen(t.color(t.BORDER, alpha), 1.0))
+    p.drawRoundedRect(rect.adjusted(0.5, 0.5, -0.5, -0.5), t.CHIP_R, t.CHIP_R)
+    x, cy = rect.left() + t.CHIP_PAD_X, rect.center().y()
+    if chip.badge:
+        bw = QFontMetricsF(_font("badge")).horizontalAdvance(chip.badge) + 12.0
+        badge = QRectF(x, cy - t.BADGE_H / 2, bw, t.BADGE_H)
+        p.setBrush(QBrush(t.color(t.ACCENT, t.ACCENT_SOFT_A * alpha)))
+        p.setPen(QPen(t.color(t.ACCENT, 0.55 * alpha), 1.0))
+        p.drawRoundedRect(badge.adjusted(0.5, 0.5, -0.5, -0.5), t.BADGE_R, t.BADGE_R)
+        p.setFont(_font("badge"))
+        p.setPen(t.color(t.TEXT, alpha))
+        p.drawText(badge, Qt.AlignmentFlag.AlignCenter, chip.badge)
+        x += bw + 8.0
+    for i, (kind, words) in enumerate(chip.parts):
+        if i:
+            x += _PART_GAP
+        w = _part_w(kind, words)
+        if kind == "key":
+            cap = QRectF(x, cy - 9.0, w, 18.0)
+            p.setBrush(Qt.BrushStyle.NoBrush)
+            p.setPen(QPen(t.color(t.TEXT_DIM, 0.8 * alpha), 1.0))
+            p.drawRoundedRect(cap.adjusted(0.5, 0.5, -0.5, -0.5), t.KEYCAP_R, t.KEYCAP_R)
+            p.setFont(_font("key"))
+            p.setPen(t.color(t.TEXT, alpha))
+            p.drawText(cap, Qt.AlignmentFlag.AlignCenter, words)
+        else:
+            p.setFont(_font(kind))
+            p.setPen(t.color(t.TEXT if kind == "strong" else t.TEXT_DIM, alpha))
+            p.drawText(QRectF(x, rect.top(), w + 2.0, rect.height()),
+                       Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, words)
+        x += w
+    p.restore()

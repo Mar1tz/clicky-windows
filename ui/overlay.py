@@ -28,6 +28,7 @@ from PyQt6.QtGui import (
 from ui import overlay_paint as paint
 from ui import overlay_theme as theme
 from ui.caption import CaptionIsland
+from ui.overlay_chip import Chip, chip_for, place_chip, target_ring
 
 
 MODE_IDLE      = "idle"
@@ -265,6 +266,13 @@ class CursorOverlay(QWidget):
         # Settings > Overlay switches it; classic until the new look is signed off.
         self._style: str = theme.STYLE_CLASSIC
 
+        # The new look's one label, beside the target (OD-04/05): its words,
+        # the target's name they were built from, and where it sits (global px).
+        self._chip: Chip = Chip()
+        self._chip_target: str = ""
+        self._chip_rect: Optional[QRectF] = None
+        self._target_bounds: Optional[QRectF] = None   # the element itself, when Windows reports it
+
         # Drawing only when something can have changed (OD-02).
         self._repaint_pending: bool = True
         self._arrived_at: float = 0.0
@@ -362,7 +370,13 @@ class CursorOverlay(QWidget):
         over until it is done."""
         self._hold_dwell = True
         self._locked_pos = QPointF(x, y)
-        self._bubble_text = label or random.choice(POINTER_PHRASES)
+        self._target_bounds = None                   # its bounds follow, if known
+        if self._style == theme.STYLE_CLASSIC:
+            self._bubble_text = label or random.choice(POINTER_PHRASES)
+        else:
+            self._bubble_text = ""
+            self._set_chip(x, y, chip_for(self._guide_label, label, current=self._guide_cur,
+                                          total=self._guide_total), label)
         self._bubble_scale = 0.5
         self._bubble_alpha = 0.0
         self._ring = (x, y, 26.0)
@@ -384,7 +398,13 @@ class CursorOverlay(QWidget):
         # Buddy's tip should sit on the target pixel. The triangle is drawn
         # centred on _display_pos, so we just plant _display_pos there.
         self._locked_pos = QPointF(x, y)
-        self._bubble_text = label or random.choice(POINTER_PHRASES)
+        self._target_bounds = None
+        if self._style == theme.STYLE_CLASSIC:
+            self._bubble_text = label or random.choice(POINTER_PHRASES)
+        else:
+            # Outside a walkthrough the chip is the target's name, or nothing.
+            self._bubble_text = ""
+            self._set_chip(x, y, chip_for("", label), label)
         self._bubble_scale = 0.5
         self._bubble_alpha = 0.0
         # Halo ring around the actual target pixel
@@ -392,6 +412,35 @@ class CursorOverlay(QWidget):
         self._ring_phase = 0.0
         self._lock_timer.stop()   # dwell controlled by phase machine, not timer
         self._begin_flight(self._display_pos, self._locked_pos, _PHASE_FLYING)
+
+    def _set_chip(self, x: float, y: float, chip: Chip, label: str) -> None:
+        """Words for the chip, and its place: beside the target on the
+        target's own monitor, clear of the island and the arrow (OD-05).
+        Placed once per step so it never wanders while you read it."""
+        self._chip = chip
+        self._chip_target = label or ""
+        self._place_chip()
+
+    def _place_chip(self) -> None:
+        self._chip_rect = None
+        self._repaint_pending = True
+        if not self._chip or self._locked_pos is None:
+            return
+        tip = QPointF(self._locked_pos)
+        scr = (QApplication.screenAt(QPoint(int(tip.x()), int(tip.y()))) or self.screen()
+               or QApplication.primaryScreen())
+        screen = QRectF(scr.availableGeometry())
+        island = QRectF(screen.center().x() - theme.ISLAND_W_MAX / 2, screen.top() + theme.ISLAND_TOP,
+                        theme.ISLAND_W_MAX, theme.ISLAND_H2)
+        self._chip_rect = place_chip(target_ring(tip, self._target_bounds), paint.chip_size(self._chip),
+                                     screen, [island, paint.arrow_box(tip)])
+
+    def _chip_alpha(self) -> float:
+        """Fades in once the arrow has landed; dims while you are talking."""
+        if not self._chip or self._flight_phase != _PHASE_DWELLING:
+            return 0.0
+        a = paint.ease_out((time.monotonic() - self._arrived_at) / theme.FADE_S)
+        return a * (theme.DIM_WHILE_TALKING if self._mode == MODE_LISTENING else 1.0)
 
     def set_activity(self, key: str, message: str):
         """Show what the assistant is doing ("" clears it)."""
@@ -407,6 +456,12 @@ class CursorOverlay(QWidget):
         self._guide_cur = int(current)
         self._guide_total = int(total)
         self._guide_label = label or ""
+        if (getattr(self, "_style", theme.STYLE_CLASSIC) == theme.STYLE_NEW
+                and getattr(self, "_locked_pos", None) is not None and getattr(self, "_chip_target", "")):
+            # The count changed under a step already on screen (the plan finished writing).
+            self._set_chip(self._locked_pos.x(), self._locked_pos.y(),
+                           chip_for(self._guide_label, self._chip_target, current=self._guide_cur,
+                                    total=self._guide_total), self._chip_target)
         if was_running and self._guide_total == 0:
             # Guide just ended. Anything it drew was exempt from expiry while
             # it ran; give it a short grace period and then let it fade, so a
@@ -561,6 +616,16 @@ class CursorOverlay(QWidget):
         Shapes animate in arrival order: each waits for the previous stroke
         to finish, like a hand drawing on a board.
         """
+        if shape.get("role") == "target" and self._style == theme.STYLE_NEW:
+            # The ring round what Tora points at. The new look draws its own
+            # (OD-03) - from these bounds - and keeps the chip clear of them.
+            if shape.get("kind") == "rect":
+                pad = theme.RING_PAD
+                self._target_bounds = QRectF(QPointF(shape["x1"], shape["y1"]),
+                                             QPointF(shape["x2"], shape["y2"])).normalized().adjusted(
+                                                 pad, pad, -pad, -pad)
+                self._place_chip()
+            return
         now = time.monotonic()
         start = max(now, self._draw_queue_end)
         shape = dict(shape)
@@ -681,6 +746,10 @@ class CursorOverlay(QWidget):
         self._rotation_deg = TRI_ROTATION_DEG
         self._hold_dwell = False
         self._ring = None
+        self._chip = Chip()
+        self._chip_target = ""
+        self._chip_rect = None
+        self._target_bounds = None
         self._repaint_pending = True
 
     def _animating(self) -> bool:
@@ -869,8 +938,11 @@ class CursorOverlay(QWidget):
             elif self._flight_phase == _PHASE_DWELLING:
                 # The new ring draws in once the arrow has landed, then is still.
                 rx, ry, _r = self._ring
-                paint.draw_target_ring(p, QPointF(rx - self.x(), ry - self.y()),
-                                       (time.monotonic() - self._arrived_at) / theme.RING_IN_S)
+                progress = (time.monotonic() - self._arrived_at) / theme.RING_IN_S
+                if self._target_bounds is not None:
+                    paint.draw_target_bounds(p, self._target_bounds.translated(-self.x(), -self.y()), progress)
+                else:
+                    paint.draw_target_ring(p, QPointF(rx - self.x(), ry - self.y()), progress)
 
         # Whiteboard annotations — drawn under the buddy too
         if self._annotations:
@@ -894,10 +966,16 @@ class CursorOverlay(QWidget):
             # idle, speaking, pointing
             self._draw_triangle(p, cx, cy)
 
-        if self._locked_pos is not None and self._bubble_text:
+        chip_up = (self._style == theme.STYLE_NEW and self._chip_rect is not None
+                   and self._flight_phase == _PHASE_DWELLING)
+        if chip_up:
+            paint.draw_chip(p, self._chip_rect.translated(-self.x(), -self.y()), self._chip, self._chip_alpha())
+        elif self._locked_pos is not None and self._bubble_text:
             self._draw_bubble(p, cx, cy, self._bubble_text)
 
-        self._draw_island(p, cx, cy)
+        # Never a chip and a card at once: in the new look the chip is the label.
+        if not chip_up:
+            self._draw_island(p, cx, cy)
 
         # Top caption — last, so its save/restore is never leaked into
         # by another pass's pen or clip.
