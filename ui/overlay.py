@@ -211,6 +211,14 @@ RETURN_DURATION  = 1.4
 # there. So it arrives in a blink and stays until the step changes.
 GUIDE_FLY_S = 0.35
 
+# OD-02: at rest the overlay draws nothing. It still looks for the pointer,
+# 20 times a second, and goes back to 60 frames the moment anything moves.
+FRAME_MS = 16
+IDLE_POLL_MS = 50
+# New look: after landing on a target, the label and ring settle in this long
+# and then the frame is still - no breathing while you read.
+ARRIVAL_S = 0.5
+
 # Pointing state machine
 _PHASE_FOLLOW    = "follow"
 _PHASE_FLYING    = "flying"
@@ -255,6 +263,13 @@ class CursorOverlay(QWidget):
         # Which look: "classic" (today's) or "new" (the redesign, OD-01..09).
         # Settings > Overlay switches it; classic until the new look is signed off.
         self._style: str = theme.STYLE_CLASSIC
+
+        # Drawing only when something can have changed (OD-02).
+        self._repaint_pending: bool = True
+        self._arrived_at: float = 0.0
+        self._follow_error: float = 0.0
+        self._last_island = None
+        self._cap_was_active: bool = False
 
         # ── AI status island ────────────────────────────────────────────────
         # What the assistant is doing right now, in the user's words, plus
@@ -311,10 +326,10 @@ class CursorOverlay(QWidget):
         qp = self._pointer_pos()
         self._display_pos = QPointF(qp.x() + OFFSET_X, qp.y() + OFFSET_Y)
 
-        # 60 FPS
+        # 60 FPS while anything moves; a slow look for the pointer at rest
         self._tick_timer = QTimer(self)
         self._tick_timer.timeout.connect(self._tick)
-        self._tick_timer.start(16)
+        self._tick_timer.start(FRAME_MS)
 
         # Release bubble / pointing
         self._lock_timer = QTimer(self)
@@ -325,6 +340,13 @@ class CursorOverlay(QWidget):
 
     def set_mode(self, mode: str):
         self._mode = mode
+        self._repaint_pending = True
+
+    def _follow_offset(self) -> tuple[float, float]:
+        """Where the buddy sits relative to your pointer."""
+        if self._style == theme.STYLE_CLASSIC:
+            return float(OFFSET_X), float(OFFSET_Y)
+        return theme.FOLLOW_DX, theme.FOLLOW_DY
 
     def set_audio_level(self, rms: float):
         # Match Swift easing: eased = pow(min(rms*2.85, 1), 0.76)
@@ -498,6 +520,7 @@ class CursorOverlay(QWidget):
             raise ValueError(f"style is one of {', '.join(theme.STYLES)}")
         self._style = style
         self._caption.set_style(style)
+        self._repaint_pending = True
         self.update()
 
     @property
@@ -521,6 +544,7 @@ class CursorOverlay(QWidget):
             self._dwell_until = 0.0   # expires this tick → triggers return
         # Fade ring on next paint
         self._ring = None
+        self._repaint_pending = True
 
     # ── Teaching annotations ─────────────────────────────────────────────────
 
@@ -571,6 +595,7 @@ class CursorOverlay(QWidget):
         self._annotations = []
         self._draw_queue_end = 0.0
         self._last_tip = None
+        self._repaint_pending = True
 
     def _active_stroke_tip(self):
         """Pen tip of the currently-animating shape, or None. The buddy
@@ -637,6 +662,45 @@ class CursorOverlay(QWidget):
         self._rotation_deg = TRI_ROTATION_DEG
         self._hold_dwell = False
         self._ring = None
+        self._repaint_pending = True
+
+    def _animating(self) -> bool:
+        """True while something on screen moves, so frames are needed."""
+        if self._flight_phase in (_PHASE_FLYING, _PHASE_RETURNING):
+            return True
+        if self._flight_phase == _PHASE_DWELLING:
+            # The classic buddy breathes on the target; the new one lands and is still.
+            return (self._style == theme.STYLE_CLASSIC
+                    or time.monotonic() - self._arrived_at < ARRIVAL_S)
+        if self._annotations or self._last_tip is not None:
+            return True
+        if self._mode in (MODE_LISTENING, MODE_THINKING):
+            return True
+        if self._caption.active():
+            return True
+        lines = self._island_lines()
+        if lines is not None or self._island_alpha > 0.02:
+            if self._style == theme.STYLE_CLASSIC:
+                return True                          # its dot pulses
+            if abs((1.0 if lines else 0.0) - self._island_alpha) > 0.02:
+                return True                          # fading in or out
+        return (self._follow_error > 0.3
+                or abs(self._vel.x()) + abs(self._vel.y()) > 0.1)
+
+    def _frame(self) -> None:
+        """End of a tick: draw only if something can have changed, and let the
+        timer slow down when nothing moves (OD-02)."""
+        busy = self._animating()
+        lines = self._island_lines()
+        if lines != self._last_island:               # its words changed
+            self._last_island = lines
+            self._repaint_pending = True
+        if busy or self._repaint_pending:
+            self._repaint_pending = False
+            self.update()
+        want = FRAME_MS if busy else IDLE_POLL_MS
+        if self._tick_timer.interval() != want:
+            self._tick_timer.setInterval(want)
 
     def _tick(self):
         qp = self._pointer_pos()
@@ -654,6 +718,9 @@ class CursorOverlay(QWidget):
                 cap.tick(time.monotonic(), self._cap_screen, self.x(), self.y())
             except Exception:
                 cap.clear()
+        if self._cap_was_active and not cap.active():
+            self._repaint_pending = True             # erase the last of it
+        self._cap_was_active = cap.active()
 
         # ── Pointing phase machine ──
         if self._flight_phase in (_PHASE_FLYING, _PHASE_RETURNING):
@@ -684,6 +751,7 @@ class CursorOverlay(QWidget):
             if lp >= 1.0:
                 if self._flight_phase == _PHASE_FLYING:
                     self._flight_phase = _PHASE_DWELLING
+                    self._arrived_at = time.monotonic()
                     if self._hold_dwell:
                         self._dwell_until = float("inf")
                     else:
@@ -694,24 +762,27 @@ class CursorOverlay(QWidget):
                 else:  # RETURNING
                     self._release_lock()
             self._phase += 0.10
-            self.update()
+            self._frame()
             return
 
         if self._flight_phase == _PHASE_DWELLING:
-            # Gentle breathing pulse while the LLM explains
-            breathe = 1.0 + 0.05 * math.sin(self._phase * 1.4)
-            self._flight_scale = breathe
+            if self._style == theme.STYLE_CLASSIC:
+                # Gentle breathing pulse while the LLM explains
+                self._flight_scale = 1.0 + 0.05 * math.sin(self._phase * 1.4)
+            else:
+                self._flight_scale = 1.0             # calm: it has arrived
             self._bubble_alpha = min(1.0, self._bubble_alpha + 0.05)
             self._bubble_scale = self._bubble_scale + (1.0 - self._bubble_scale) * 0.15
             # Stay planted on the element
             self._display_pos = QPointF(self._locked_pos.x(), self._locked_pos.y())
             if time.monotonic() >= self._dwell_until:
-                cursor_target = QPointF(real.x() + OFFSET_X, real.y() + OFFSET_Y)
+                dx, dy = self._follow_offset()
+                cursor_target = QPointF(real.x() + dx, real.y() + dy)
                 self._begin_flight(self._display_pos, cursor_target, _PHASE_RETURNING)
                 # Fade bubble out during return
                 self._bubble_alpha = 0.0
             self._phase += 0.10
-            self.update()
+            self._frame()
             return
 
         # ── Drawing mode: buddy rides the pen tip of the active stroke, and
@@ -732,11 +803,12 @@ class CursorOverlay(QWidget):
             )
             self._vel = QPointF(0, 0)
             self._phase += 0.10
-            self.update()
+            self._frame()
             return
 
         # ── Normal cursor-follow spring ──
-        target = QPointF(real.x() + OFFSET_X, real.y() + OFFSET_Y)
+        dx, dy = self._follow_offset()
+        target = QPointF(real.x() + dx, real.y() + dy)
         stiffness, damping = 0.28, 0.62
 
         # Spring
@@ -749,11 +821,14 @@ class CursorOverlay(QWidget):
             self._display_pos.y() + self._vel.y(),
         )
 
+        self._follow_error = math.hypot(target.x() - self._display_pos.x(),
+                                        target.y() - self._display_pos.y())
+
         self._phase += 0.10
         self._spin_phase += 0.14  # ~0.8s per rev @ 60fps matches Swift
         self._ring_phase += 0.08
 
-        self.update()
+        self._frame()
 
     # ── Painting ──────────────────────────────────────────────────────────────
 
@@ -842,17 +917,18 @@ class CursorOverlay(QWidget):
         p.setBrush(Qt.BrushStyle.NoBrush)
         p.drawRoundedRect(QRectF(x, y, w, h), 11, 11)
 
-        # Breathing sparkle — the proof-of-life
+        # Breathing sparkle — the proof-of-life (a still dot in the new look)
         t = time.monotonic()
         pulse = 0.55 + 0.45 * math.sin(t * 3.4)
         dot = QColor(CURSOR_BLUE)
         dot.setAlpha(int(255 * a))
-        halo = QColor(CURSOR_BLUE)
-        halo.setAlpha(int(90 * a * pulse))
         dcx, dcy = x + pad_x - 1, y + pad_y + fm_h.height() / 2
         p.setPen(Qt.PenStyle.NoPen)
-        p.setBrush(QBrush(halo))
-        p.drawEllipse(QPointF(dcx, dcy), 6.5 * pulse + 2.5, 6.5 * pulse + 2.5)
+        if self._style == theme.STYLE_CLASSIC:
+            halo = QColor(CURSOR_BLUE)
+            halo.setAlpha(int(90 * a * pulse))
+            p.setBrush(QBrush(halo))
+            p.drawEllipse(QPointF(dcx, dcy), 6.5 * pulse + 2.5, 6.5 * pulse + 2.5)
         p.setBrush(QBrush(dot))
         p.drawEllipse(QPointF(dcx, dcy), 3.2, 3.2)
 
@@ -1024,15 +1100,16 @@ class CursorOverlay(QWidget):
         rx, ry, base_r = self._ring
         rx -= self.x()
         ry -= self.y()
-        pulse = (math.sin(self._ring_phase) + 1) / 2   # 0..1
+        classic = self._style == theme.STYLE_CLASSIC
+        pulse = (math.sin(self._ring_phase) + 1) / 2 if classic else 0.0   # 0..1
         r = base_r + pulse * 6
-        # Outer halo
-        glow = QColor(CURSOR_BLUE)
-        glow.setAlpha(60)
-        pen = QPen(glow, 4)
-        p.setPen(pen)
         p.setBrush(Qt.BrushStyle.NoBrush)
-        p.drawEllipse(QPointF(rx, ry), r + 3, r + 3)
+        # Outer halo (classic look only)
+        if classic:
+            glow = QColor(CURSOR_BLUE)
+            glow.setAlpha(60)
+            p.setPen(QPen(glow, 4))
+            p.drawEllipse(QPointF(rx, ry), r + 3, r + 3)
         # Crisp inner ring
         inner = QColor(CURSOR_BLUE)
         inner.setAlpha(190)
@@ -1064,13 +1141,14 @@ class CursorOverlay(QWidget):
         p.save()
         p.translate(cx, cy)
 
-        # Glow — drawn unrotated so it's a round halo
-        glow = QColor(CURSOR_BLUE)
-        for i, (r_mul, alpha) in enumerate(((2.2, 35), (1.6, 55), (1.15, 85))):
-            glow.setAlpha(alpha)
-            p.setBrush(QBrush(glow))
-            p.setPen(Qt.PenStyle.NoPen)
-            p.drawEllipse(QPointF(0, 0), size * r_mul * 0.5, size * r_mul * 0.5)
+        # Glow — drawn unrotated so it's a round halo. Classic look only.
+        if self._style == theme.STYLE_CLASSIC:
+            glow = QColor(CURSOR_BLUE)
+            for i, (r_mul, alpha) in enumerate(((2.2, 35), (1.6, 55), (1.15, 85))):
+                glow.setAlpha(alpha)
+                p.setBrush(QBrush(glow))
+                p.setPen(Qt.PenStyle.NoPen)
+                p.drawEllipse(QPointF(0, 0), size * r_mul * 0.5, size * r_mul * 0.5)
 
         p.rotate(self._rotation_deg)
         p.scale(self._flight_scale, self._flight_scale)
@@ -1088,13 +1166,14 @@ class CursorOverlay(QWidget):
         spacing = 2.0
         total_w = bar_count * bar_w + (bar_count - 1) * spacing
 
-        # Glow behind bars
-        glow = QColor(CURSOR_BLUE)
-        for r_mul, a in ((2.0, 40), (1.3, 70)):
-            glow.setAlpha(a)
-            p.setBrush(QBrush(glow))
-            p.setPen(Qt.PenStyle.NoPen)
-            p.drawEllipse(QPointF(cx, cy), 10 * r_mul, 10 * r_mul)
+        # Glow behind bars (classic look only)
+        if self._style == theme.STYLE_CLASSIC:
+            glow = QColor(CURSOR_BLUE)
+            for r_mul, a in ((2.0, 40), (1.3, 70)):
+                glow.setAlpha(a)
+                p.setBrush(QBrush(glow))
+                p.setPen(Qt.PenStyle.NoPen)
+                p.drawEllipse(QPointF(cx, cy), 10 * r_mul, 10 * r_mul)
 
         p.setBrush(QBrush(CURSOR_BLUE))
         p.setPen(Qt.PenStyle.NoPen)
@@ -1113,13 +1192,14 @@ class CursorOverlay(QWidget):
         diameter = 14.0
         rect = QRectF(cx - diameter / 2, cy - diameter / 2, diameter, diameter)
 
-        # Glow
-        glow = QColor(CURSOR_BLUE)
-        for r_mul, a in ((2.0, 40), (1.3, 70)):
-            glow.setAlpha(a)
-            p.setBrush(QBrush(glow))
-            p.setPen(Qt.PenStyle.NoPen)
-            p.drawEllipse(QPointF(cx, cy), diameter * r_mul * 0.5, diameter * r_mul * 0.5)
+        # Glow (classic look only)
+        if self._style == theme.STYLE_CLASSIC:
+            glow = QColor(CURSOR_BLUE)
+            for r_mul, a in ((2.0, 40), (1.3, 70)):
+                glow.setAlpha(a)
+                p.setBrush(QBrush(glow))
+                p.setPen(Qt.PenStyle.NoPen)
+                p.drawEllipse(QPointF(cx, cy), diameter * r_mul * 0.5, diameter * r_mul * 0.5)
 
         pen = QPen(CURSOR_BLUE, 2.5)
         pen.setCapStyle(Qt.PenCapStyle.RoundCap)
@@ -1158,10 +1238,11 @@ class CursorOverlay(QWidget):
         glow = QColor(CURSOR_BLUE)
         glow.setAlpha(int(90 * self._bubble_alpha))
 
-        # Glow
-        p.setBrush(QBrush(glow))
+        # Glow (classic look only)
         p.setPen(Qt.PenStyle.NoPen)
-        p.drawRoundedRect(QRectF(box_x - 4, box_y - 4, tw + 8, th + 8), 9, 9)
+        if self._style == theme.STYLE_CLASSIC:
+            p.setBrush(QBrush(glow))
+            p.drawRoundedRect(QRectF(box_x - 4, box_y - 4, tw + 8, th + 8), 9, 9)
 
         # Pill
         p.setBrush(QBrush(bg))

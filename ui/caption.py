@@ -382,7 +382,8 @@ class CaptionIsland:
 
             a = self._alpha
             r = min(rect.height() / 2.0, CAP_RADIUS_MAX)
-            self._draw_bloom(p, rect, r, a)
+            if self._style == theme.STYLE_CLASSIC:
+                self._draw_bloom(p, rect, r, a)
             self._draw_shadow(p, rect, r, a)
             self._draw_body(p, rect, r, a)
             self._draw_indicator(p, rect, a, self._now)
@@ -469,7 +470,7 @@ class CaptionIsland:
         self._clip = QRectF(screen.x() - ox, screen.y() - oy,
                             screen.width(), screen.height())
         scale = min(1.03, 0.84 + 0.16 * p)
-        if self._state in ("live", "linger"):
+        if self._state in ("live", "linger") and self._style == theme.STYLE_CLASSIC:
             scale *= 1.0 + 0.0015 * math.sin(self._now * 1.7)   # felt, not seen
         self._scale = scale
         # Opaque by p≈0.74: the fade finishes well before the motion settles,
@@ -709,18 +710,19 @@ class CaptionIsland:
         p.drawPath(body)
 
         # Specular rim: a uniform rim looks like a border, a graded one looks
-        # like an edge catching light.
-        rim = QLinearGradient(0, 0, 0, h)
-        rim.setColorAt(0.00, QColor(255, 255, 255, int(0.17 * 255 * a)))
-        rim.setColorAt(0.38, QColor(255, 255, 255, int(0.02 * 255 * a)))
-        rim.setColorAt(0.82, QColor(255, 255, 255, int(0.015 * 255 * a)))
-        rim.setColorAt(1.00, QColor(255, 255, 255, int(0.055 * 255 * a)))
+        # like an edge catching light. Classic look only.
         p.setBrush(Qt.BrushStyle.NoBrush)
-        p.setPen(QPen(QBrush(rim), 1.0))
-        inner = self._body_path(w - 1.0, h - 1.0, max(1.0, r - 0.5))
-        p.translate(0.5, 0.5)
-        p.drawPath(inner)
-        p.translate(-0.5, -0.5)
+        if self._style == theme.STYLE_CLASSIC:
+            rim = QLinearGradient(0, 0, 0, h)
+            rim.setColorAt(0.00, QColor(255, 255, 255, int(0.17 * 255 * a)))
+            rim.setColorAt(0.38, QColor(255, 255, 255, int(0.02 * 255 * a)))
+            rim.setColorAt(0.82, QColor(255, 255, 255, int(0.015 * 255 * a)))
+            rim.setColorAt(1.00, QColor(255, 255, 255, int(0.055 * 255 * a)))
+            p.setPen(QPen(QBrush(rim), 1.0))
+            inner = self._body_path(w - 1.0, h - 1.0, max(1.0, r - 0.5))
+            p.translate(0.5, 0.5)
+            p.drawPath(inner)
+            p.translate(-0.5, -0.5)
 
         # Outer hairline: the only thing that keeps dark glass from dissolving
         # into a white wallpaper.
@@ -740,7 +742,8 @@ class CaptionIsland:
         block_cx = x0 + CAP_IND_W / 2.0
         p.setPen(Qt.PenStyle.NoPen)
 
-        if e > 0.02:
+        classic = self._style == theme.STYLE_CLASSIC
+        if e > 0.02 and classic:
             halo = QColor(CAP_BLUE)
             halo.setAlpha(int(60 * e * a))
             p.setBrush(QBrush(halo))
@@ -752,12 +755,14 @@ class CaptionIsland:
         fill.setColorAt(1.0, QColor(46, 111, 232, int(235 * a)))
 
         if merge > 0.98:
-            # At rest: the same 3.4 rad/s pulse as the cursor island's sparkle.
-            rr = 4.0 + 0.55 * math.sin(now * 3.4)
-            halo = QColor(CAP_BLUE)
-            halo.setAlpha(int(0.18 * 255 * a))
-            p.setBrush(QBrush(halo))
-            p.drawEllipse(QPointF(block_cx, cy), 2.2 * rr, 2.2 * rr)
+            # At rest: the same 3.4 rad/s pulse as the cursor island's sparkle
+            # (a still dot in the new look).
+            rr = 4.0 + 0.55 * math.sin(now * 3.4) if classic else 4.0
+            if classic:
+                halo = QColor(CAP_BLUE)
+                halo.setAlpha(int(0.18 * 255 * a))
+                p.setBrush(QBrush(halo))
+                p.drawEllipse(QPointF(block_cx, cy), 2.2 * rr, 2.2 * rr)
             p.setBrush(QBrush(fill))
             p.drawEllipse(QPointF(block_cx, cy), rr, rr)
             return

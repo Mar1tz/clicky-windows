@@ -92,3 +92,127 @@ def test_the_preview_renders_every_state_in_both_looks_without_a_window(qapp, tm
     assert len(paths) == 2 * len(REQUIRED) * len(BACKDROPS)
     assert all(Path(p).stat().st_size > 2000 for p in paths)
     assert {p.split("-", 2)[2].rsplit("-", 1)[0] for p in map(lambda x: Path(x).name, paths)} == REQUIRED
+
+
+# -- OD-02: quiet when idle ---------------------------------------------------------------------------------
+
+def _spy_updates(overlay):
+    """Count redraw requests; the overlay asks for one with self.update()."""
+    calls = []
+    overlay.update = lambda *a: calls.append(1)
+    return calls
+
+
+def _at_rest(overlay, x=500, y=400):
+    from PyQt6.QtCore import QPoint, QPointF
+    overlay._pointer_pos = lambda: QPoint(x, y)
+    dx, dy = overlay._follow_offset()
+    overlay._display_pos = QPointF(x + dx, y + dy)
+    overlay._vel = QPointF(0, 0)
+
+
+@pytest.mark.parametrize("style", ["classic", "new"])
+def test_nothing_redraws_at_rest_and_the_timer_slows(overlay, style):
+    from PyQt6.QtCore import QPoint
+    from ui.overlay import FRAME_MS, IDLE_POLL_MS
+    overlay.set_style(style)
+    _at_rest(overlay)
+    overlay._tick()                                    # the style change itself is drawn once
+    calls = _spy_updates(overlay)
+    for _ in range(120):                               # two seconds of ticks
+        overlay._tick()
+    assert calls == [] and overlay._tick_timer.interval() == IDLE_POLL_MS
+    overlay._pointer_pos = lambda: QPoint(700, 420)    # you move the mouse
+    overlay._tick()
+    assert calls and overlay._tick_timer.interval() == FRAME_MS
+
+
+def test_listening_and_thinking_keep_drawing(overlay):
+    _at_rest(overlay)
+    overlay._tick()
+    calls = _spy_updates(overlay)
+    for mode in ("listening", "thinking"):
+        overlay.set_mode(mode)
+        calls.clear()
+        overlay._tick()
+        overlay._tick()
+        assert len(calls) == 2, mode
+
+
+def test_a_new_look_arrow_stops_drawing_once_it_has_arrived(overlay):
+    overlay.set_style("new")
+    _at_rest(overlay)
+    overlay.guide_point(600.0, 300.0, "Export")
+    overlay._fly_t0 -= 5.0                             # the flight is over
+    overlay._tick()
+    assert overlay._flight_phase == "dwelling"
+    overlay._arrived_at -= 5.0                         # and so is its arrival
+    calls = _spy_updates(overlay)
+    for _ in range(30):
+        overlay._tick()
+    assert calls == [] and overlay._flight_scale == 1.0, "no breathing on the target"
+
+
+def test_the_classic_look_still_breathes_on_the_target(overlay):
+    overlay.set_style("classic")
+    _at_rest(overlay)
+    overlay.guide_point(600.0, 300.0, "Export")
+    overlay._fly_t0 -= 5.0
+    overlay._tick()
+    calls = _spy_updates(overlay)
+    for _ in range(10):
+        overlay._tick()
+    assert len(calls) == 10, "classic stays exactly as it was until OD-09"
+
+
+def _painted_outside(overlay, radius):
+    """Pixels the overlay paints more than `radius` px from the cursor's anchor."""
+    from PyQt6.QtCore import QRect
+    c = overlay._display_pos
+    img = overlay.grab(QRect(int(c.x() - overlay.x()) - 40, int(c.y() - overlay.y()) - 40, 80, 80)).toImage()
+    dpr = img.devicePixelRatio()
+    n = 0
+    for y in range(img.height()):
+        for x in range(img.width()):
+            if img.pixelColor(x, y).alpha() > 8 and ((x / dpr - 40) ** 2 + (y / dpr - 40) ** 2) ** 0.5 > radius:
+                n += 1
+    return n
+
+
+def test_the_new_look_has_no_glow(overlay):
+    for style in ("classic", "new"):
+        overlay.set_style(style)
+        _at_rest(overlay)
+        overlay.set_mode("idle")
+        overlay._tick()
+    overlay.set_style("classic")
+    _at_rest(overlay)
+    assert _painted_outside(overlay, 13) > 0, "the classic triangle has its halo"
+    overlay.set_style("new")
+    _at_rest(overlay)
+    assert _painted_outside(overlay, 13) == 0, "the new look paints nothing round the cursor"
+
+
+def test_the_new_island_does_not_breathe_or_bloom(qapp, monkeypatch):
+    from PyQt6.QtCore import QRectF
+    from PyQt6.QtGui import QImage, QPainter
+
+    from ui.caption import CaptionIsland
+    for style, breathes in (("classic", True), ("new", False)):
+        cap = CaptionIsland()
+        cap.set_style(style)
+        cap._state, cap._p, cap._energy = "live", 1.0, 1.0
+        scales = set()
+        for now in (0.1, 0.5, 0.9, 1.3):
+            cap._now = now
+            cap._geometry(QRectF(0, 0, 1920, 1040), 0.0, 0.0)
+            scales.add(round(cap._scale, 6))
+        assert (len(scales) > 1) is breathes, style
+        blooms = []
+        monkeypatch.setattr(CaptionIsland, "_draw_bloom", lambda self, *a: blooms.append(1))
+        img = QImage(1920, 200, QImage.Format.Format_ARGB32)
+        p = QPainter(img)
+        cap.draw(p)
+        p.end()
+        assert bool(blooms) is breathes, style
+        monkeypatch.undo()
