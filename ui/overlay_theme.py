@@ -84,6 +84,7 @@ ISLAND_IN_S = 0.20
 STEP_MOVE_S = 0.35
 EXPLAIN_MOVE_MIN_S = 0.9
 EXPLAIN_MOVE_MAX_S = 1.4
+RETURN_MOVE_S = 0.5               # back to your pointer when the step or the explanation ends
 RING_IN_S = 0.15
 LINGER_S = 1.5
 DIM_WHILE_TALKING = 0.6           # the chip, while you are speaking

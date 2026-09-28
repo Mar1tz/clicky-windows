@@ -179,18 +179,111 @@ def _painted_outside(overlay, radius):
     return n
 
 
+def _grab(overlay, x, y, w, h):
+    from PyQt6.QtCore import QRect
+    img = overlay.grab(QRect(int(x - overlay.x()), int(y - overlay.y()), w, h)).toImage()
+    return img, img.devicePixelRatio()
+
+
 def test_the_new_look_has_no_glow(overlay):
-    for style in ("classic", "new"):
-        overlay.set_style(style)
-        _at_rest(overlay)
-        overlay.set_mode("idle")
-        overlay._tick()
+    from ui import overlay_paint
     overlay.set_style("classic")
     _at_rest(overlay)
+    overlay.set_mode("idle")
     assert _painted_outside(overlay, 13) > 0, "the classic triangle has its halo"
     overlay.set_style("new")
     _at_rest(overlay)
-    assert _painted_outside(overlay, 13) == 0, "the new look paints nothing round the cursor"
+    box = overlay_paint.arrow_box(overlay._display_pos)
+    img, dpr = _grab(overlay, box.x() - 30, box.y() - 30, int(box.width()) + 60, int(box.height()) + 60)
+    stray = [(x, y) for y in range(img.height()) for x in range(img.width())
+             if img.pixelColor(x, y).alpha() > 8
+             and not box.adjusted(-1, -1, 1, 1).contains(box.x() - 30 + x / dpr, box.y() - 30 + y / dpr)]
+    assert stray == [], "the new look paints nothing outside the arrow itself"
+
+
+# -- OD-03: the arrow -----------------------------------------------------------------------------------------
+
+def _is_accent(c) -> bool:
+    return c.alpha() > 200 and c.blue() > 200 and c.red() < 90 and 100 < c.green() < 170
+
+
+@pytest.mark.parametrize("where", [(0.31, 0.29), (0.63, 0.57)])
+def test_the_tip_lands_on_the_target_pixel(overlay, where):
+    # Inside whatever screen this run has: the real one (at its scaling), or
+    # the 800 x 800 offscreen one another test module switches Qt to.
+    g = overlay.geometry()
+    target = (int(g.x() + g.width() * where[0]), int(g.y() + g.height() * where[1]))
+    overlay.set_style("new")
+    _at_rest(overlay)
+    overlay.guide_point(float(target[0]), float(target[1]), "Export")
+    overlay._fly_t0 -= 5.0
+    overlay._tick()
+    overlay._ring = None                              # look at the arrow alone
+    assert (overlay._display_pos.x(), overlay._display_pos.y()) == target, "the tip's anchor is the target"
+    from ui import overlay_theme as t
+    img, dpr = _grab(overlay, target[0] - 10, target[1] - 10, 40, 40)
+    # Blue-dominant pixels, the anti-aliased tip included: at 125% scaling the
+    # very tip is a blend of the fill and the white outline.
+    blue = [((x + 0.5) / dpr - 10, (y + 0.5) / dpr - 10) for y in range(img.height()) for x in range(img.width())
+            if img.pixelColor(x, y).alpha() > 100 and img.pixelColor(x, y).blue() > img.pixelColor(x, y).red() + 80]
+    tip = min(blue, key=lambda q: q[0] + q[1])
+    assert (tip[0] ** 2 + tip[1] ** 2) ** 0.5 <= t.OUTLINE_W, f"the tip is {tip} from the target"
+    assert min(q[0] for q in blue) >= -1.0 and min(q[1] for q in blue) >= -1.0, "nothing blue beyond the tip"
+
+
+def test_the_classic_triangle_does_not_point_with_its_tip(overlay):
+    """What OD-03 fixes: the classic triangle's centre lands on the target."""
+    overlay.set_style("classic")
+    _at_rest(overlay)
+    overlay.guide_point(600.0, 300.0, "Export")
+    overlay._fly_t0 -= 5.0
+    overlay._tick()
+    overlay._ring = None
+    img, dpr = _grab(overlay, 580, 280, 40, 40)
+    blue = [(x / dpr - 20, y / dpr - 20) for y in range(img.height()) for x in range(img.width())
+            if img.pixelColor(x, y).alpha() > 200 and img.pixelColor(x, y).blue() > 200]
+    assert min(q[1] for q in blue) < -5, "part of it sits well above the target"
+
+
+def test_new_moves_are_straight_quick_and_do_not_spin(overlay):
+    from ui import overlay_theme as t
+    overlay.set_style("new")
+    overlay.set_slow_mode(False)
+    _at_rest(overlay, 100, 100)
+    overlay.point_at(1300.0, 100.0, "Save")                      # while Tora explains
+    assert t.EXPLAIN_MOVE_MIN_S <= overlay._fly_duration <= t.EXPLAIN_MOVE_MAX_S
+    s, e, c = overlay._fly_start_pos, overlay._fly_end_pos, overlay._fly_control
+    assert (c.x(), c.y()) == ((s.x() + e.x()) / 2, (s.y() + e.y()) / 2), "a straight line, no arc"
+    overlay._fly_t0 -= overlay._fly_duration / 2
+    overlay._tick()
+    assert overlay._flight_scale == 1.0 and overlay._rotation_deg == pytest.approx(-35.0)
+    d = overlay._display_pos
+    cross = (e.x() - s.x()) * (d.y() - s.y()) - (e.y() - s.y()) * (d.x() - s.x())
+    assert abs(cross) < 1e-6 * (e.x() - s.x()) ** 2 + 1e-3, "on the straight line, not up and over"
+    assert s.x() < d.x() < e.x()
+    overlay.guide_point(700.0, 500.0, "Export")                  # a walkthrough step
+    assert overlay._fly_duration == pytest.approx(t.STEP_MOVE_S)
+    overlay._fly_t0 -= 5.0
+    overlay._tick()
+    overlay.guide_release()
+    overlay._tick()
+    assert overlay._flight_phase == "returning" and overlay._fly_duration == pytest.approx(t.RETURN_MOVE_S)
+
+
+def test_the_new_ring_draws_in_and_then_is_still(overlay):
+    overlay.set_style("new")
+    _at_rest(overlay)
+    overlay.guide_point(600.0, 300.0, "Export")
+    overlay._fly_t0 -= 5.0
+    overlay._tick()
+    overlay._arrived_at -= 1.0                                   # well after landing
+    first, dpr = _grab(overlay, 570, 270, 60, 60)
+    overlay._tick()
+    second, _ = _grab(overlay, 570, 270, 60, 60)
+    ring = [(x, y) for y in range(first.height()) for x in range(first.width())
+            if _is_accent(first.pixelColor(x, y)) and ((x / dpr - 30) ** 2 + (y / dpr - 30) ** 2) ** 0.5 > 12]
+    assert ring, "a ring round the target"
+    assert first == second, "and it does not pulse"
 
 
 def test_the_new_island_does_not_breathe_or_bloom(qapp, monkeypatch):

@@ -25,6 +25,7 @@ from PyQt6.QtGui import (
     QPainter, QColor, QPen, QBrush, QPainterPath, QCursor, QFont,
 )
 
+from ui import overlay_paint as paint
 from ui import overlay_theme as theme
 from ui.caption import CaptionIsland
 
@@ -615,6 +616,24 @@ class CursorOverlay(QWidget):
                       duration: Optional[float] = None):
         dx, dy = end.x() - start.x(), end.y() - start.y()
         dist = math.hypot(dx, dy)
+        if self._style == theme.STYLE_NEW:
+            # The new look moves in a straight line and eases out: 0.35 s for a
+            # step, 0.9-1.4 s while explaining, 0.5 s home. No arc, no spin.
+            if duration is not None:
+                dur = duration * (2.0 if self._slow_mode else 1.0)
+            elif phase == _PHASE_RETURNING:
+                dur = theme.RETURN_MOVE_S
+            else:
+                dur = paint.explain_move_s(dist) * (1.7 if self._slow_mode else 1.0)
+            self._fly_control = QPointF((start.x() + end.x()) / 2, (start.y() + end.y()) / 2)
+            self._fly_start_pos = QPointF(start.x(), start.y())
+            self._fly_end_pos = QPointF(end.x(), end.y())
+            self._fly_t0 = time.monotonic()
+            self._fly_duration = dur
+            self._flight_phase = phase
+            self._vel = QPointF(0, 0)
+            self._repaint_pending = True
+            return
         if duration is not None:
             # Walkthrough pace (LG-02): a fixed blink, doubled in slow mode.
             dur = duration * (2.0 if self._slow_mode else 1.0)
@@ -726,8 +745,10 @@ class CursorOverlay(QWidget):
         if self._flight_phase in (_PHASE_FLYING, _PHASE_RETURNING):
             elapsed = time.monotonic() - self._fly_t0
             lp = min(1.0, elapsed / max(0.001, self._fly_duration))
-            # Smoothstep easing — gentle start and end, teacher-friendly
-            t = lp * lp * (3.0 - 2.0 * lp)
+            classic = self._style == theme.STYLE_CLASSIC
+            # Smoothstep easing — gentle start and end, teacher-friendly.
+            # The new look eases out: quick away, gentle arrival.
+            t = lp * lp * (3.0 - 2.0 * lp) if classic else paint.ease_out(lp)
             omt = 1.0 - t
             bx = omt * omt * self._fly_start_pos.x() \
                  + 2 * omt * t * self._fly_control.x() \
@@ -741,9 +762,10 @@ class CursorOverlay(QWidget):
                   + 2 * t * (self._fly_end_pos.x() - self._fly_control.x())
             tgy = 2 * omt * (self._fly_control.y() - self._fly_start_pos.y()) \
                   + 2 * t * (self._fly_end_pos.y() - self._fly_control.y())
-            self._rotation_deg = math.degrees(math.atan2(tgy, tgx)) + 90.0
-            # Swoop scale pulse at midpoint
-            self._flight_scale = 1.0 + math.sin(lp * math.pi) * 0.25
+            if classic:
+                self._rotation_deg = math.degrees(math.atan2(tgy, tgx)) + 90.0
+                # Swoop scale pulse at midpoint
+                self._flight_scale = 1.0 + math.sin(lp * math.pi) * 0.25
             # Bubble eases in during the flight
             if self._flight_phase == _PHASE_FLYING:
                 self._bubble_alpha = min(1.0, lp * 1.4)
@@ -795,8 +817,10 @@ class CursorOverlay(QWidget):
             self._last_tip = None   # lesson over — resume cursor follow
         hold = tip or self._last_tip
         if hold is not None:
-            # Strong pull toward the pen tip — smooth but keeps up with it
-            tx, ty = hold[0] + 6, hold[1] + 6
+            # Strong pull toward the pen tip — smooth but keeps up with it.
+            # The new arrow's tip IS the pen; the classic triangle sits beside it.
+            k = 6 if self._style == theme.STYLE_CLASSIC else 0
+            tx, ty = hold[0] + k, hold[1] + k
             self._display_pos = QPointF(
                 self._display_pos.x() + (tx - self._display_pos.x()) * 0.45,
                 self._display_pos.y() + (ty - self._display_pos.y()) * 0.45,
@@ -840,7 +864,13 @@ class CursorOverlay(QWidget):
         if self._ring is not None and self._flight_phase in (
             _PHASE_DWELLING, _PHASE_FLYING
         ):
-            self._draw_ring(p)
+            if self._style == theme.STYLE_CLASSIC:
+                self._draw_ring(p)
+            elif self._flight_phase == _PHASE_DWELLING:
+                # The new ring draws in once the arrow has landed, then is still.
+                rx, ry, _r = self._ring
+                paint.draw_target_ring(p, QPointF(rx - self.x(), ry - self.y()),
+                                       (time.monotonic() - self._arrived_at) / theme.RING_IN_S)
 
         # Whiteboard annotations — drawn under the buddy too
         if self._annotations:
@@ -849,7 +879,14 @@ class CursorOverlay(QWidget):
         cx = self._display_pos.x() - self.x()
         cy = self._display_pos.y() - self.y()
 
-        if self._mode == MODE_LISTENING:
+        if self._style == theme.STYLE_NEW:
+            tip = QPointF(cx, cy)                    # the arrow's tip is the point
+            paint.draw_arrow(p, tip)
+            if self._mode == MODE_LISTENING:
+                paint.draw_listening(p, tip, self._audio_level, self._phase)
+            elif self._mode == MODE_THINKING:
+                paint.draw_thinking(p, tip, self._spin_phase)
+        elif self._mode == MODE_LISTENING:
             self._draw_waveform(p, cx, cy)
         elif self._mode == MODE_THINKING:
             self._draw_spinner(p, cx, cy)
