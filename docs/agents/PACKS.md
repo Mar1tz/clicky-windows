@@ -26,6 +26,7 @@ each pack:
 | Online store (`store`) | Stock cover and reorders, purchase orders, margins, unshipped orders, returns, listings | none above DRAFT | Morning orders, weekly restock | "check my shop" | below |
 | Trades (`trades`) | Quotes from a price list, a diary with no double bookings, parts lists, job invoices, certificate renewals | Issue an invoice, record a payment (POST) | Evening office, parts for the week | "do my paperwork" | below |
 | Payroll (`payroll`) | A small employer's pay run: gross pay, imported deductions, reviewer checks, payslips, bank file, journal, leave | Finalise a pay run (POST) | Pay run check (the 20th) | "check the pay run" | below |
+| Tax practice (`taxpractice`) | A practitioner's clients: deadline calendar, document checklists, escalating chasers, workpapers, assessment checks | none above DRAFT | Weekly deadlines | "check the tax deadlines" | below |
 
 ## Sales CRM
 
@@ -118,3 +119,26 @@ each pack:
 * **With Accounting on too:** "payroll" also matches Accounting's
   payroll review, which is for accountants. The first pack switched on
   wins, so "pay run" is the Payroll pack's own phrase.
+
+## Tax practice
+
+* **No tax law:** each return's deadline is a date the practitioner gives,
+  or their rule (`deadline_rules`: `{"company": {"months": 9, "days": 1}}`
+  after the period end). With neither, the pack asks.
+* **Checklists:** the documents each return type needs come from
+  `checklists`, or the built-in process lists for individual, company and
+  VAT returns. A document is found by part of its name. When all are in, a
+  return waiting for documents moves to preparing.
+* **Chasers:** `.eml` drafts listing what is missing, at most one every
+  `chase_days` (7). They go friendly, then firm, then final (deadline,
+  late-penalty risk, "call me"). After three, the client is flagged for a
+  phone call.
+* **Workpapers:** a client's transaction CSV totalled by its category
+  column, or by keywords (`category_words`). Anything left over is listed.
+  The total must tie out to the sum of the categories.
+* **Filing:** a return is marked filed only when every document is in and
+  the tax filed is recorded. An assessment that differs from the tax filed
+  by more than `assessment_tolerance` (1.00) is flagged.
+* **Weekly deadlines** (Mondays): shows returns past their deadline, and
+  those due within `urgent_days` (30) with documents missing, then drafts
+  the chasers.
