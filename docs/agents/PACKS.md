@@ -27,6 +27,7 @@ each pack:
 | Trades (`trades`) | Quotes from a price list, a diary with no double bookings, parts lists, job invoices, certificate renewals | Issue an invoice, record a payment (POST) | Evening office, parts for the week | "do my paperwork" | below |
 | Payroll (`payroll`) | A small employer's pay run: gross pay, imported deductions, reviewer checks, payslips, bank file, journal, leave | Finalise a pay run (POST) | Pay run check (the 20th) | "check the pay run" | below |
 | Tax practice (`taxpractice`) | A practitioner's clients: deadline calendar, document checklists, escalating chasers, workpapers, assessment checks | none above DRAFT | Weekly deadlines | "check the tax deadlines" | below |
+| Household finance (`household`) | Statements, categories, budgets, subscriptions and bills, price rises, warranties, a monthly report | none above DRAFT | Where the money went (the 1st) | "show me where the money went" | below |
 
 ## Sales CRM
 
@@ -142,3 +143,23 @@ each pack:
 * **Weekly deadlines** (Mondays): shows returns past their deadline, and
   those due within `urgent_days` (30) with documents missing, then drafts
   the chasers.
+
+## Household finance
+
+* **Statements:** any bank's CSV. The pack reads either one amount column
+  or money in / money out, and dates as `2026-09-05`, `05/09/2026` or
+  `05 Sep 2026`. A statement dropped in twice is imported once, while two
+  identical payments on one day stay two.
+* **Categories:** whole words in the description (so "tfl" is not found
+  inside "netflix"), then any rule the household teaches
+  (`teach_category`), which also re-files past payments. Positive amounts
+  are income unless they are a transfer.
+* **Budget:** a month's spending by category against `set_budget`.
+  Overruns are flagged.
+* **Regular payments:** a payee paid three or more times about a month
+  apart (a median gap of 26-35 days) is treated as regular, if it was paid
+  in the last 45 days. The pack gives the yearly cost, the next date and
+  any price rise, and flags those due within 7 days.
+* **Warranties:** one ending within 60 days is flagged.
+* **Report:** in, out, saved, the category table, the biggest payments and
+  the regular payments, as Markdown in `Reports/`.
