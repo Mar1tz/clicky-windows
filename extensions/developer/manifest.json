@@ -1,0 +1,20 @@
+{
+  "id": "developer",
+  "name": "Software developers",
+  "version": "1.0",
+  "description": "The chores around the code: every change reviewed for secrets, debug leftovers and missing tests, failing tests explained from the report, loose dependencies found, issues sorted, the next version and release notes from your commits. Nothing is pushed, merged or labelled for you.",
+  "capabilities": ["change_review", "test_failures", "dependencies", "todos", "issue_triage", "release_notes"],
+  "required_tools": ["files", "git"],
+  "optional_integrations": ["github", "gitlab"],
+  "activation_phrases": [
+    "i'm a developer", "i am a developer", "i'm a software engineer", "i am a software engineer", "i write code",
+    "i'm a programmer", "i'm a web developer", "i maintain an open source"
+  ],
+  "offer": [
+    "Changes reviewed for secrets and leftovers",
+    "Failing tests explained",
+    "Loose dependencies found",
+    "Issues sorted: labels, duplicates, stale",
+    "The next version and release notes"
+  ]
+}

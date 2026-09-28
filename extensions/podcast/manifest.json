@@ -1,0 +1,20 @@
+{
+  "id": "podcast",
+  "name": "Podcast production",
+  "version": "1.0",
+  "description": "A producer for your show: transcripts read for length and speaking time, chapters that work in podcast apps, show notes, clips for social, guests and their release forms, a release calendar with no gaps. Nothing is uploaded or published for you.",
+  "capabilities": ["episodes", "guests", "transcripts", "chapters", "show_notes", "clips", "calendar"],
+  "required_tools": ["files"],
+  "optional_integrations": ["spotify_for_creators", "buzzsprout", "riverside", "descript"],
+  "activation_phrases": [
+    "i have a podcast", "i run a podcast", "i host a podcast", "my podcast", "i'm a podcaster", "i am a podcaster",
+    "i produce a podcast"
+  ],
+  "offer": [
+    "Chapters that work in podcast apps",
+    "Show notes from the episode",
+    "Clips found in the transcript",
+    "Guests and their release forms",
+    "A release calendar with no gaps"
+  ]
+}

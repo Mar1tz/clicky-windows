@@ -29,6 +29,8 @@ each pack:
 | Tax practice (`taxpractice`) | A practitioner's clients: deadline calendar, document checklists, escalating chasers, workpapers, assessment checks | none above DRAFT | Weekly deadlines | "check the tax deadlines" | below |
 | Household finance (`household`) | Statements, categories, budgets, subscriptions and bills, price rises, warranties, a monthly report | none above DRAFT | Where the money went (the 1st) | "show me where the money went" | below |
 | Lettings (`lettings`) | Rent roll and arrears, escalating letters, repairs and contractors, certificates, renewals, deposits | Settle a deposit (POST) | Morning lettings | "check the rent roll" | below |
+| Software developers (`developer`) | Change review (secrets, leftovers, tests, size), test failures, dependencies, TODOs, issue triage, release notes | none above DRAFT | Review before pushing, prepare a release | "review my changes" | below |
+| Podcast production (`podcast`) | Transcripts (length, speaking time), clips, chapters for podcast apps, show notes, guests and releases, calendar | none above DRAFT | The week's show | "check this week's podcast" | below |
 
 ## Sales CRM
 
@@ -185,3 +187,49 @@ each pack:
 * **Deposits:** each deduction needs a reason, and together they cannot
   exceed the deposit. Settling (POST) fixes the split and ends the
   tenancy. The money moves through the deposit scheme, not here.
+
+## Software developers
+
+* **Reads, never writes the repo:** `git log`, `diff` and `grep` are run
+  locally. Release notes, reviews and triage reports go to the pack's own
+  folder. Nothing is committed, pushed, tagged, merged or labelled. Tool
+  names stay clear of the core's `git_*` tools.
+* **Versions:** worked out from conventional commits since the last tag.
+  A breaking change (`!` or `BREAKING CHANGE`) is a major bump (minor
+  before 1.0), `feat` is minor, and `fix`/`perf` is patch.
+* **Release notes:** breaking changes, features, fixes, performance and
+  other changes. Docs, tests, CI, chore, style and build commits are left
+  out.
+* **Change review** (a range, or the uncommitted work) flags:
+  * secrets: AWS and Google keys, private keys, GitHub tokens, hard-coded
+    passwords;
+  * debug leftovers outside tests;
+  * source changed with no test changed;
+  * changes over `big_change` (400) lines.
+* **Checks:**
+  * TODO/FIXME/HACK/XXX in tracked files;
+  * unpinned or ranged Python requirements, packages listed twice, and
+    npm `*`/`latest`;
+  * JUnit XML failures grouped by cause.
+* **Issue triage** (from `gh issue list --json …`): suggests labels for
+  unlabelled issues, finds likely duplicates by title similarity (80%),
+  and lists issues quiet for `stale_days` (60).
+
+## Podcast production
+
+* **Transcripts:** SRT, WebVTT (`<v Name>` voices) or `[00:01:02] Name:
+  text` lines. The pack gives the episode's length, words, and each
+  speaker's seconds and share.
+* **Clips:** windows of `clip_min`-`clip_max` (20-60 s) around the words
+  asked for, or around questions if no words are given. The best come
+  first, and no two overlap.
+* **Chapters:** must start at 00:00:00, go in order, have a title and
+  stay inside the episode. They are written as Podcasting 2.0 JSON
+  chapters (`version 1.2.0`, `startTime` in seconds) and as a plain list.
+* **Show notes:** summary, guest, chapters and links.
+* **Publishing:** marking an episode published is refused until it has
+  final audio, notes and valid chapters, and its guest has signed a
+  release.
+* **Calendar:** release slots on `release_weekday` (Tuesday by default),
+  what fills them, and the gaps. Episodes due within a week that are not
+  ready are flagged, and so are recorded guests with no signed release.
