@@ -28,6 +28,7 @@ each pack:
 | Payroll (`payroll`) | A small employer's pay run: gross pay, imported deductions, reviewer checks, payslips, bank file, journal, leave | Finalise a pay run (POST) | Pay run check (the 20th) | "check the pay run" | below |
 | Tax practice (`taxpractice`) | A practitioner's clients: deadline calendar, document checklists, escalating chasers, workpapers, assessment checks | none above DRAFT | Weekly deadlines | "check the tax deadlines" | below |
 | Household finance (`household`) | Statements, categories, budgets, subscriptions and bills, price rises, warranties, a monthly report | none above DRAFT | Where the money went (the 1st) | "show me where the money went" | below |
+| Lettings (`lettings`) | Rent roll and arrears, escalating letters, repairs and contractors, certificates, renewals, deposits | Settle a deposit (POST) | Morning lettings | "check the rent roll" | below |
 
 ## Sales CRM
 
@@ -163,3 +164,24 @@ each pack:
 * **Warranties:** one ending within 60 days is flagged.
 * **Report:** in, out, saved, the category table, the biggest payments and
   the regular payments, as Markdown in `Reports/`.
+
+## Lettings
+
+* **Rent:** falls due on the tenancy's day each month; a 31st falls on the
+  month's last day. Payments pay off the oldest month first. Arrears are
+  dated from the oldest unpaid month.
+* **Bank matching:** money in is matched to a tenancy by its reference in
+  the description, or else by a tenant's surname. Anything unmatched is
+  listed, and the same bank line is never counted twice.
+* **Arrears letters:** a reminder at 3 days late, a second at 14 and a
+  final at 30, with each step drafted once per run of arrears. After the
+  final letter the pack flags that any formal notice depends on local
+  law. It never drafts one.
+* **Repairs:** target days by priority (urgent 1, high 7, normal 28). A
+  works order `.eml` goes to a named contractor or the first of the trade.
+  Repairs past their target are flagged.
+* **Certificates:** expired or expiring within 30 days are flagged.
+  Tenancies ending within `renewal_days` (60) are flagged too.
+* **Deposits:** each deduction needs a reason, and together they cannot
+  exceed the deposit. Settling (POST) fixes the split and ends the
+  tenancy. The money moves through the deposit scheme, not here.
