@@ -456,3 +456,82 @@ def test_the_highlight_is_marked_as_the_target():
     from companion_manager import CompanionManager
     src = inspect.getsource(CompanionManager._highlight)
     assert src.count('"role": "target"') == 2
+
+
+# -- OD-06: the island is a fixed bar ------------------------------------------------------------------------
+
+LONG_ANSWER = ("The export button is in the File menu, second item from the top. Choose it, then pick where "
+               "the file should go and press Save.")
+
+
+def _speak(cap, text, seconds=6.0, width=1920):
+    """Feed an answer the way the overlay does and tick it for `seconds`;
+    the pill's size on every frame it can be seen."""
+    import time as _time
+
+    from PyQt6.QtCore import QRectF
+    cap.on_state("SPEAKING")
+    for word in text.split(" "):
+        cap.push(word + " ")
+    cap.finish()
+    cap.set_screen_width(width)
+    cap.needs_screen = False
+    screen = QRectF(0, 0, width, 1040)
+    t0 = _time.monotonic()
+    sizes = []
+    for i in range(int(seconds * 60)):
+        cap.tick(t0 + i / 60.0, screen, 0.0, 0.0)
+        if cap._alpha > 0.05:
+            sizes.append((round(cap._pill.width()), round(cap._pill.height())))
+    return sizes
+
+
+def test_the_new_island_is_one_size_from_the_first_word_to_the_last(qapp):
+    from ui import overlay_theme as t
+    from ui.caption import CaptionIsland
+    new = CaptionIsland()
+    new.set_style("new")
+    sizes = _speak(new, LONG_ANSWER)
+    assert sizes and set(sizes) == {(int(t.ISLAND_W_MAX), int(t.ISLAND_H2))}, "it never grows"
+    classic = CaptionIsland()
+    assert len(set(_speak(classic, LONG_ANSWER))) > 3, "the classic pill grows word by word"
+
+
+def test_a_short_answer_sits_in_the_middle_of_the_bar(qapp):
+    from PyQt6.QtGui import QImage, QPainter
+
+    from ui import overlay_theme as t
+    from ui.caption import CaptionIsland
+    cap = CaptionIsland()
+    cap.set_style("new")
+    # short enough for one line in any font (offscreen Qt's fallback is twice Segoe UI's width)
+    _speak(cap, "It's in File.", seconds=3.0)
+    assert len(cap._lines) == 1
+    img = QImage(1920, 120, QImage.Format.Format_ARGB32)
+    img.fill(0)
+    p = QPainter(img)
+    cap.draw(p)
+    p.end()
+    pill = cap._pill
+    left = int(pill.x() + t.ISLAND_PAD_X + t.ISLAND_GLYPH_W + t.ISLAND_GLYPH_GAP)
+    rows = [y for y in range(int(pill.top()), int(pill.bottom()))
+            if any(img.pixelColor(x, y).lightness() > 170 for x in range(left, int(pill.right()) - 10, 2))]
+    assert rows, "no text found in the bar"
+    middle = (rows[0] + rows[-1]) / 2
+    assert abs(middle - pill.center().y()) <= 3, f"text centred at {middle}, the bar at {pill.center().y()}"
+
+
+def test_a_small_screen_gets_a_narrower_bar(qapp):
+    from ui.caption import CaptionIsland
+    cap = CaptionIsland()
+    cap.set_style("new")
+    assert set(_speak(cap, "Sure, it's in the File menu.", seconds=1.0, width=600)) == {(360, 58)}
+
+
+def test_a_spaced_dash_is_kept_and_a_bullet_is_not(qapp):
+    from ui.caption import CaptionIsland
+    cap = CaptionIsland()
+    cap.set_style("new")
+    _speak(cap, "- Sure - it's in the File menu.", seconds=2.0)
+    words = " ".join(ln.text for ln in cap._lines)
+    assert words == "Sure – it's in the File menu."

@@ -140,16 +140,14 @@ class CaptionIsland:
             f.setWeight(QFont.Weight.Medium)
         # The 1.5% tighten is what stops Segoe reading as a system dialog.
         f.setLetterSpacing(QFont.SpacingType.PercentageSpacing, 98.5)
-        self._font = f
-        # Built against the widget so measured text matches painted text.
-        self._fm = QFontMetricsF(f, device) if device is not None else QFontMetricsF(f)
-        self._lh = self._fm.height()
-        self._avg_adv = self._fm.horizontalAdvance("abcdefghijklmnopqrstuvwxyz ") / 27.0
-        self._h1 = self._lh + 2 * CAP_PAD_Y
-        self._h2 = 2 * self._lh + CAP_LINE_GAP + 2 * CAP_PAD_Y
+        self._classic_font = f
+        self._device = device
 
         self.needs_screen: bool = False
         self._style = theme.STYLE_CLASSIC      # the redesign's look is "new" (OD-01..09)
+        self._applied = ""
+        self._adv: dict[str, float] = {}
+        self._apply_style()
 
         # Text pipeline
         self._pending = ""              # raw chars not yet split into words
@@ -158,7 +156,6 @@ class CaptionIsland:
         self._lines: list[_Line] = []
         self._out_line = ""             # line rolling off the top
         self._dirty = False
-        self._adv: dict[str, float] = {}
 
         # Episode bookkeeping
         self._state = "hidden"          # hidden | enter | live | linger | exit
@@ -187,6 +184,7 @@ class CaptionIsland:
         self._tw = CAP_W_MIN
         self._th = self._h1
         self._roll = 0.0
+        self._two = 0.0                 # new look: 0 = one line centred, 1 = two lines
         self._swap = 0.0
         self._energy = 0.0
         self._last_t = 0.0
@@ -381,7 +379,8 @@ class CaptionIsland:
             p.translate(-cx, -cy)
 
             a = self._alpha
-            r = min(rect.height() / 2.0, CAP_RADIUS_MAX)
+            r = (min(rect.height() / 2.0, CAP_RADIUS_MAX) if self._style == theme.STYLE_CLASSIC
+                 else theme.ISLAND_R2)
             if self._style == theme.STYLE_CLASSIC:
                 self._draw_bloom(p, rect, r, a)
             self._draw_shadow(p, rect, r, a)
@@ -410,20 +409,30 @@ class CaptionIsland:
         self._exit_k = CAP_EXIT_K
         self._promoted = False
         self._roll = 0.0
+        self._two = 0.0
         self._energy = 0.0
         self._barge_ticks = 0
         self._frozen_at = 0.0
         self._last_chunk_at = time.monotonic()
         self._word_at = 0.0
         self._last_reveal_at = 0.0
-        # Width ratchet resets: a short follow-up must not inherit a long
-        # answer's slab. The physical size lerps down to meet it.
-        self._tw = CAP_W_MIN
-        self._th = self._h1
+        if fresh:
+            self._apply_style()                  # a look chosen while hidden starts now
+        if self._style == theme.STYLE_NEW:
+            # The fixed bar: its final size from the first word to the last.
+            self._tw, self._th = self._max_w, self._h2
+        else:
+            # Width ratchet resets: a short follow-up must not inherit a long
+            # answer's slab. The physical size lerps down to meet it.
+            self._tw = CAP_W_MIN
+            self._th = self._h1
         if fresh:
             self._p = self._pv = 0.0
-            self._w = CAP_W_SEED
-            self._h = CAP_H_SEED
+            if self._style == theme.STYLE_NEW:
+                self._w, self._h = self._tw, self._th
+            else:
+                self._w = CAP_W_SEED
+                self._h = CAP_H_SEED
             self._swap = 0.0
             self.needs_screen = True
 
@@ -446,9 +455,13 @@ class CaptionIsland:
             self._pv = self._pv * 0.60 + (1.0 - self._p) * 0.155
             self._p += self._pv
         # Size is deliberately NOT sprung. Overshoot is delightful on position
-        # and fatal on a dimension.
-        self._w += (self._tw - self._w) * 0.22
-        self._h += (self._th - self._h) * 0.18
+        # and fatal on a dimension. The new look's bar does not change size at all.
+        if self._style == theme.STYLE_NEW:
+            self._w, self._h = self._tw, self._th
+        else:
+            self._w += (self._tw - self._w) * 0.22
+            self._h += (self._th - self._h) * 0.18
+        self._two += ((1.0 if len(self._lines) >= 2 else 0.0) - self._two) * 0.25
         self._roll += (0.0 - self._roll) * 0.22
         if self._out_line and self._roll < 0.02:
             self._out_line = ""
@@ -461,17 +474,20 @@ class CaptionIsland:
         w = float(round(self._w))
         h = float(round(self._h))
         cx = screen.x() + screen.width() / 2.0 - ox
-        rest_top = screen.y() + CAP_TOP_MARGIN - oy
+        rest_top = screen.y() + self._top - oy
         # At p=0 the whole pill is above the clip edge: it extrudes from the
         # bezel rather than fading in.
-        y = rest_top - (h + CAP_TOP_MARGIN) * (1.0 - p)
+        y = rest_top - (h + self._top) * (1.0 - p)
         x = float(round(cx - w / 2.0))
         self._pill = QRectF(x, float(round(y)), w, h)
         self._clip = QRectF(screen.x() - ox, screen.y() - oy,
                             screen.width(), screen.height())
-        scale = min(1.03, 0.84 + 0.16 * p)
-        if self._state in ("live", "linger") and self._style == theme.STYLE_CLASSIC:
-            scale *= 1.0 + 0.0015 * math.sin(self._now * 1.7)   # felt, not seen
+        if self._style == theme.STYLE_NEW:
+            scale = 1.0                          # it slides in whole; it never grows
+        else:
+            scale = min(1.03, 0.84 + 0.16 * p)
+            if self._state in ("live", "linger"):
+                scale *= 1.0 + 0.0015 * math.sin(self._now * 1.7)   # felt, not seen
         self._scale = scale
         # Opaque by p≈0.74: the fade finishes well before the motion settles,
         # which is what makes it read as a solid object arriving.
@@ -504,7 +520,9 @@ class CaptionIsland:
             chunk, self._pending = pend[:i], pend[i + 1:]
         for tok in chunk.split():
             tok = tok.strip(_MD_EDGE)
-            if not tok or tok in ("-", ">", "•"):
+            if tok == "-" and (self._queue or self._words):
+                tok = "–"              # "Sure - it's": a pause mid-sentence, not a list bullet
+            elif not tok or tok in ("-", ">", "•"):
                 continue
             self._queue.extend(self._split_long(tok))
 
@@ -604,7 +622,7 @@ class CaptionIsland:
         self._ratchet()
 
     def _ratchet(self) -> None:
-        if self._promoted or not self._lines:
+        if self._promoted or not self._lines or self._style == theme.STYLE_NEW:
             return
         longest = max(ln.adv for ln in self._lines)
         needed = longest + 2 * CAP_PAD_X + 2 * CAP_SIDE
@@ -618,6 +636,40 @@ class CaptionIsland:
         if style not in theme.STYLES:
             raise ValueError(f"style is one of {', '.join(theme.STYLES)}")
         self._style = style
+        if self._state == "hidden":
+            self._apply_style()
+
+    def _apply_style(self) -> None:
+        """The island's measurements for its look. Classic: today's pill.
+        New (OD-06): a solid pill 160-440 px wide, 36 px tall for one line and
+        58 for two, 14 px text - everything from ui/overlay_theme."""
+        if self._applied == self._style:
+            return
+        self._applied = self._style
+        if self._style == theme.STYLE_NEW:
+            f = theme.font(theme.ISLAND_TEXT_PX, QFont.Weight.Medium)
+            self._pad_x, self._pad_y = theme.ISLAND_PAD_X, 0.0
+            self._side_l, self._side_r = theme.ISLAND_GLYPH_W + theme.ISLAND_GLYPH_GAP, 0.0
+            self._w_min, self._w_max_cap = theme.ISLAND_W_MIN, theme.ISLAND_W_MAX
+            self._line_gap, self._top = theme.ISLAND_LINE_GAP, theme.ISLAND_TOP
+        else:
+            f = self._classic_font
+            self._pad_x, self._pad_y = CAP_PAD_X, CAP_PAD_Y
+            self._side_l = self._side_r = CAP_SIDE
+            self._w_min, self._w_max_cap = CAP_W_MIN, 0.0
+            self._line_gap, self._top = CAP_LINE_GAP, CAP_TOP_MARGIN
+        self._font = f
+        # Built against the widget so measured text matches painted text.
+        dev = self._device
+        self._fm = QFontMetricsF(f, dev) if dev is not None else QFontMetricsF(f)
+        self._lh = self._fm.height()
+        self._avg_adv = self._fm.horizontalAdvance("abcdefghijklmnopqrstuvwxyz ") / 27.0
+        if self._style == theme.STYLE_NEW:
+            self._h1, self._h2 = theme.ISLAND_H1, theme.ISLAND_H2
+        else:
+            self._h1 = self._lh + 2 * CAP_PAD_Y
+            self._h2 = 2 * self._lh + CAP_LINE_GAP + 2 * CAP_PAD_Y
+        self._adv.clear()
 
     @property
     def style(self) -> str:
@@ -628,6 +680,14 @@ class CaptionIsland:
         52 characters is a reading-comfort ceiling, not a fraction of the
         monitor: it does not scale up on a 49-inch panel, only down on a
         small laptop screen."""
+        if self._style == theme.STYLE_NEW:
+            # The fixed bar: 440 px, or 60% of a small screen, and it is that
+            # size from the first word (OD-06).
+            self._max_w = min(theme.ISLAND_W_MAX, max(theme.ISLAND_W_MIN, 0.6 * width))
+            self._content_max = self._max_w - 2 * self._pad_x - self._side_l - self._side_r
+            self._tw = self._w = self._max_w
+            self._th = self._h = self._h2
+            return
         raw = CAP_MAX_CHARS * self._avg_adv + 2 * CAP_PAD_X + 2 * CAP_SIDE
         self._max_w = _clamp(raw, 380.0, max(380.0, 0.52 * width))
         self._content_max = self._max_w - 2 * CAP_PAD_X - 2 * CAP_SIDE
@@ -688,6 +748,14 @@ class CaptionIsland:
         # A tight contact shadow plus a wide ambient one. One layer reads as a
         # drop shadow from 2009.
         p.setPen(Qt.PenStyle.NoPen)
+        if self._style == theme.STYLE_NEW:
+            # The new look's one soft shadow, 4 px down (its blur in three steps).
+            for dy, inflate, share in ((theme.SHADOW_Y, 0, 0.45), (theme.SHADOW_Y + 2, 3, 0.22),
+                                       (theme.SHADOW_Y + 4, 6, 0.10)):
+                p.setBrush(QBrush(theme.color(theme.SHADOW, theme.SHADOW_A * share * a)))
+                rr = rect.adjusted(-inflate, -inflate + dy, inflate, inflate + dy)
+                p.drawRoundedRect(rr, r + inflate, r + inflate)
+            return
         for dy, inflate, alpha in ((1, 0, 30), (3, 4, 20), (7, 10, 12), (14, 20, 6)):
             c = QColor(0, 0, 0, int(alpha * a))
             p.setBrush(QBrush(c))
@@ -698,10 +766,18 @@ class CaptionIsland:
         w, h = rect.width(), rect.height()
         p.save()
         p.translate(rect.x(), rect.y())
+        body = self._body_path(w, h, r)
+
+        if self._style == theme.STYLE_NEW:
+            # Solid, so the words read the same on any wallpaper; one 1 px border.
+            p.setPen(QPen(theme.color(theme.BORDER, a), 1.0))
+            p.setBrush(QBrush(theme.color(theme.SURFACE, theme.SURFACE_A * a)))
+            p.drawPath(body)
+            p.restore()
+            return
 
         # Fill: near-black but cool-shifted. Pure black looks like a hole and a
         # flat fill is the number-one tell of "a rounded rectangle with text".
-        body = self._body_path(w, h, r)
         g = QLinearGradient(0, 0, 0, h)
         g.setColorAt(0.0, QColor(26, 28, 36, int(240 * a)))
         g.setColorAt(1.0, QColor(9, 10, 14, int(240 * a)))
@@ -738,8 +814,8 @@ class CaptionIsland:
         sig_audio_level is the user's room while Tora is the one talking."""
         e = self._energy
         cy = rect.y() + rect.height() / 2.0
-        x0 = rect.x() + CAP_PAD_X
-        block_cx = x0 + CAP_IND_W / 2.0
+        x0 = rect.x() + self._pad_x
+        block_cx = x0 + (CAP_IND_W if self._style == theme.STYLE_CLASSIC else theme.ISLAND_GLYPH_W) / 2.0
         p.setPen(Qt.PenStyle.NoPen)
 
         classic = self._style == theme.STYLE_CLASSIC
@@ -787,44 +863,63 @@ class CaptionIsland:
             return
         fm = self._fm
         lh = self._lh
-        step = lh + CAP_LINE_GAP
-        tx = rect.x() + CAP_PAD_X + CAP_SIDE
-        content_w = rect.width() - 2 * CAP_PAD_X - 2 * CAP_SIDE
+        new = self._style == theme.STYLE_NEW
+        step = lh + self._line_gap
+        tx = rect.x() + self._pad_x + self._side_l
 
         # Text is clipped to the pill's inner box so a rolling line vanishes
         # under the rim, not outside it. The clip runs to the right PADDING,
         # not the content box: while the pill is still growing toward a new
         # ratchet target the newest word may sit in the right mirror-spacer,
         # and it must melt into the glass there rather than be sliced.
-        clip_right = rect.right() - CAP_PAD_X
+        clip_right = rect.right() - self._pad_x
+        top_in = 2.0 if new else self._pad_y - 1.0
         p.setClipRect(
-            QRectF(tx - 2.0, rect.y() + CAP_PAD_Y - 1.0,
-                   clip_right - tx + 2.0, rect.height() - 2 * CAP_PAD_Y + 2.0),
+            QRectF(tx - 2.0, rect.y() + top_in, clip_right - tx + 2.0, rect.height() - 2 * top_in),
             Qt.ClipOperation.IntersectClip,
         )
         p.setFont(self._font)
 
         roll_off = self._roll * step
-        live_base = rect.y() + rect.height() - CAP_PAD_Y - fm.descent() + roll_off
-        if abs(self._roll) < 0.02:
+        if new:
+            # The fixed bar: one line sits in the middle; when a second starts,
+            # the first moves up to make room. Only the words move.
+            mid = rect.center().y() + (fm.ascent() - fm.descent()) / 2.0
+            if len(self._lines) >= 2:
+                live_base = _lerp(mid + step, mid + step / 2.0, self._two) + roll_off
+            else:
+                live_base = mid + roll_off
+        else:
+            live_base = rect.y() + rect.height() - self._pad_y - fm.descent() + roll_off
+        if abs(self._roll) < 0.02 and (not new or abs(self._two - round(self._two)) < 0.02):
             live_base = float(round(live_base))   # crisp at rest, smooth mid-roll
         prev_base = live_base - step
         out_base = prev_base - step
 
-        base_rgb = (237, 242, 250)
+        base = QColor(theme.TEXT) if new else QColor(237, 242, 250)
+        base_rgb = (base.red(), base.green(), base.blue())
         col = QColor(*base_rgb)
+        dim = QColor(theme.TEXT_DIM)
 
         if self._out_line and self._roll > 0.02:
-            col.setAlpha(int(140 * self._roll * ta))
-            p.setPen(col)
+            if new:
+                dim.setAlphaF(self._roll * ta)
+                p.setPen(dim)
+            else:
+                col.setAlpha(int(140 * self._roll * ta))
+                p.setPen(col)
             p.drawText(QPointF(tx, out_base), self._out_line)
 
         lines = self._lines
         if not lines:
             return
         if len(lines) == 2:
-            col.setAlpha(int(140 * ta))
-            p.setPen(col)
+            if new:
+                dim.setAlphaF(ta)                # the earlier line, quieter
+                p.setPen(dim)
+            else:
+                col.setAlpha(int(140 * ta))
+                p.setPen(col)
             p.drawText(QPointF(tx, prev_base), lines[0].text)
 
         live = lines[-1].text
