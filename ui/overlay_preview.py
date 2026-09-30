@@ -200,7 +200,8 @@ def setup(overlay, style: str, place: str = "centre", size: str = "normal", redu
 
 def capture(overlay, stage: Stage, scene: Scene, kind: str, style: str) -> QImage:
     """The island strip on top - wherever the island sits - and the area round
-    the cursor below, over one backdrop."""
+    the cursor below, over one backdrop. In the screen's own pixels, so a shot
+    at 150% scaling shows what 150% really looks like."""
     slot = overlay._caption.slot(stage.r)
     mid = slot.center().x() if slot is not None else stage.r.center().x()
     left = min(max(mid - 320, stage.r.left()), stage.r.right() - 640)
@@ -208,7 +209,10 @@ def capture(overlay, stage: Stage, scene: Scene, kind: str, style: str) -> QImag
     focus = overlay._locked_pos if overlay._locked_pos is not None else overlay._display_pos
     near = _crop(stage, QPointF(focus), 640, 300)
     head, gap = 20, 8
-    img = QImage(640, head + island.height() + gap + near.height(), QImage.Format.Format_ARGB32)
+    dpr = max(1.0, overlay.devicePixelRatioF())
+    img = QImage(round(640 * dpr), round((head + island.height() + gap + near.height()) * dpr),
+                 QImage.Format.Format_ARGB32)
+    img.setDevicePixelRatio(dpr)
     img.fill(QColor("#FFFFFF"))
     p = QPainter(img)
     p.setRenderHint(QPainter.RenderHint.Antialiasing)

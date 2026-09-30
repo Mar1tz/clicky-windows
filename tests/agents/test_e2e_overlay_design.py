@@ -942,9 +942,10 @@ def test_the_preview_shows_each_setting(qapp, tmp_path):
     slot = cap.slot(stage)
     left = min(max(slot.center().x() - 320, stage.left()), stage.right() - 640)
     img = QImage(path)
+    k = img.width() / 640                              # the shot is in the screen's own pixels
     head = 20
-    inside = img.pixelColor(int(slot.right() - left - 30), int(head + slot.top() - stage.top() + 62))
-    outside = img.pixelColor(int(slot.left() - left - 20), int(head + slot.top() - stage.top() + 20))
+    inside = img.pixelColor(int(k * (slot.right() - left - 30)), int(k * (head + slot.top() - stage.top() + 62)))
+    outside = img.pixelColor(int(k * (slot.left() - left - 20)), int(k * (head + slot.top() - stage.top() + 20)))
     assert inside.lightness() < 60, "the large bar, at the right, 62 px down (normal ends at 58)"
     assert outside.lightness() > 200, "and the backdrop beside it"
 

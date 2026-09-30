@@ -21,8 +21,14 @@ off by default). The classic look stays exactly as it is until Gate C.
 | OD-05 Step chip placement | done | 3fc5b53 |
 | OD-06 Island size (the fixed bar) | done | 8f18e1b |
 | OD-07 Island states | done | 79d495d |
-| OD-08 Settings | done | the OD-08 commit |
-| OD-09 Review and switch | waits on Gate C | |
+| OD-08 Settings | done | 5941f00 |
+| OD-09 Review and switch | review page up; waits on Gate C | |
+
+The OD-09 review page shows every state, both looks, on light and dark
+desktops at 100, 125 and 150%:
+https://claude.ai/artifact/Uv3bg5zLBhJ1pjBa1RQQcP. The shots come from
+`python -m ui.overlay_preview --style both --shots DIR` with
+`QT_SCALE_FACTOR` at 0.8, 1.0 and 1.2 on this PC's 125% screen.
 
 Gate A (the preview plays every state; nothing redraws at rest) passed after
 OD-02. Gate B (the tip lands on the pixel; the chip never covers it) passed
