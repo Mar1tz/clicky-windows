@@ -119,7 +119,17 @@ a = Analysis(
     excludes=[
         "matplotlib", "scipy", "pandas", "tkinter",
         "notebook", "jupyter", "IPython",
-        "torch.distributions", "torch.onnx",
+        # collect_all("onnxruntime") takes its model-conversion tools too
+        # (onnxruntime.transformers / .quantization), and those import the
+        # whole Hugging Face stack: torch, transformers, accelerate, librosa
+        # (numba, llvmlite, scikit-learn), faiss, nltk. RapidOCR only runs
+        # models. Left in, the 30 Sep 2026 build was 1.34 GB instead of ~0.6.
+        "torch", "transformers", "accelerate", "librosa", "numba", "llvmlite",
+        "sklearn", "faiss", "nltk", "tensorflow", "keras",
+        # Optional, as BUILD.md says: the browser tools tell the user to
+        # `pip install playwright` when it is missing. It is imported inside
+        # functions, which PyInstaller still follows - so it got bundled.
+        "playwright",
     ],
     noarchive=False,
 )

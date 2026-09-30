@@ -4,8 +4,8 @@ Two ways to package HeyTora for your friend's laptop:
 
 | Method | Output | Size | Install | Best for |
 |---|---|---|---|---|
-| **Portable folder** | `dist\HeyTora\` | ~400-600 MB | Copy the folder, double-click `HeyTora.exe` | Quick testing, USB stick |
-| **Setup installer** | `Setup-HeyTora.exe` | ~200-400 MB | Double-click, Next, Finish | Polished distribution |
+| **Portable folder** | `dist\HeyTora\` | ~640 MB (a zip of it is smaller) | Unzip, double-click `HeyTora.exe` | Quick testing, USB stick |
+| **Setup installer** | `Setup-HeyTora.exe` | ~200-300 MB | Double-click, Next, Finish | Polished distribution |
 
 ---
 
@@ -57,6 +57,15 @@ Your friend runs `Setup-HeyTora.exe`:
 | uiautomation + RapidOCR + onnxruntime | ✅ | Local pointing tiers |
 | OpenCV (headless) | ✅ | Figure detection for teaching drawings |
 | Your `.env` | ❌ | **Must be added post-install** (security) |
+| torch, transformers, numba, faiss… | ❌ | Excluded in `heytora.spec`: onnxruntime's conversion tools drag them in, HeyTora never uses them (1.34 GB → 0.64 GB) |
+| Playwright | ❌ | Excluded; browser tasks say so and everything else works |
+
+**Keys never ship.** The built app reads only a `.env` / `.env.local` next to
+`HeyTora.exe`, and `build.bat` copies `.env.example` (empty keys), never
+`.env`. It also accepts `GOOGLE_API_KEY` / `GEMINI_API_KEY` from Windows'
+own environment variables - so on a PC where one is set (the developer's),
+a test run of the exe uses it without asking. To see what a tester sees,
+try it on another PC or a Windows account without that variable.
 
 ---
 
@@ -143,10 +152,12 @@ heytora/
 * The SQLite databases (`agents.db`, `agent_memory.db`) and the accounts file
   live under `%LOCALAPPDATA%\HeyTora`, next to `tora.log`. The workspace defaults
   to `%USERPROFILE%\Documents\Tora Projects` and is created on first run.
-* Playwright (browser worker) is **optional** and not bundled: `pip install
-  playwright && playwright install chromium` on the target machine enables
-  it. Without it the browser tools fail with that exact instruction and
-  everything else keeps working.
+* Playwright (browser worker) is **optional** and not bundled (it is
+  excluded in `heytora.spec`, and it needs its own Chromium download
+  anyway). In the built app the browser tools say it is missing and
+  everything else keeps working; `pip install playwright` on the target
+  machine does NOT help a built app - it only enables them when running
+  from source.
 * Computer control needs `pynput` (already a requirement) and asks the user
   before every action regardless of settings — that floor is in code, not
   configuration.
