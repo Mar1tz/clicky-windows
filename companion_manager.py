@@ -38,6 +38,7 @@ from ai.base_provider import BaseLLMProvider, Message
 from ai import gemini, gemini_memory, gemini_planner, gemini_vision
 from ai.gemini import Models
 from audio.ambient_listener import AmbientListener
+from screen import monitors
 from screen.capture import capture_all_screens
 from ui.panel import AppState
 from tutor import (
@@ -2167,13 +2168,14 @@ class CompanionManager(QObject):
             return None
         if target is None:
             return None
-        scale = (shot.dpi_scale if shot is not None else None) or self._dpi_scale()
+        # Physical px (UI Automation, OCR) to the overlay's logical px, on
+        # the monitor the target is on - each monitor has its own scaling.
         bbox = None
         if getattr(target, "bbox", None):
-            l, t, r, b = target.bbox
-            bbox = (l / scale, t / scale, r / scale, b / scale)
+            bbox = monitors.rect_to_logical(*target.bbox)
+        x, y = monitors.to_logical(target.x, target.y)
         return SimpleNamespace(
-            x=target.x / scale, y=target.y / scale,
+            x=x, y=y,
             label=(target.label or query), bbox=bbox,
             via=getattr(target, "source", "") or "local",
         )
@@ -2265,8 +2267,8 @@ class CompanionManager(QObject):
         if best[0] < 0.85 and (best[0] - second) < 0.15:
             return None                       # ambiguous — let the real search decide
         score, cx, cy, name = best
-        scale = self._dpi_scale()
-        return SimpleNamespace(x=cx / scale, y=cy / scale, label=name)
+        x, y = monitors.to_logical(cx, cy)
+        return SimpleNamespace(x=x, y=y, label=name)
 
     async def _point_to(self, query: str, *, hold: bool = True, shot=None) -> bool:
         """Resolve `query` and fly the buddy there. True if it landed."""
@@ -2387,21 +2389,18 @@ class CompanionManager(QObject):
                 anchor = ref
             if anchor is None:
                 return None
-            scale = self._dpi_scale()
             from ai.hybrid_pointer import nearest_in_direction
             # A stale snapshot is no snapshot: nearest_in_direction then walks
             # the screen as it is now (APP-04).
             snapshot = (self._pointables or None) if self._snapshot_fresh() else None
+            ax, ay = monitors.to_physical(anchor.x, anchor.y)
             nb = await asyncio.to_thread(
-                lambda: nearest_in_direction(
-                    anchor.x * scale, anchor.y * scale, direction,
-                    candidates=snapshot,
-                )
+                lambda: nearest_in_direction(ax, ay, direction, candidates=snapshot)
             )
             if nb is None:
                 return None
-            return SimpleNamespace(x=nb.x / scale, y=nb.y / scale,
-                                   label=nb.label or "there")
+            x, y = monitors.to_logical(nb.x, nb.y)
+            return SimpleNamespace(x=x, y=y, label=nb.label or "there")
 
         if is_backref(query) and fresh:
             return SimpleNamespace(x=ref.x, y=ref.y, label=ref.label or "there")
@@ -4199,25 +4198,14 @@ class CompanionManager(QObject):
             return (shot.logical_left, shot.logical_top,
                     shot.physical_width / dpi, shot.physical_height / dpi)
         try:
-            import mss
-            from screen.capture import _query_dpi_scale
             from tutor import foreground_window_center
-            dpi = _query_dpi_scale() or 1.0
             centre = foreground_window_center()
-            with mss.mss() as sct:
-                monitors = sct.monitors[1:]
-                if not monitors:
-                    return None
-                pick = monitors[0]
-                if centre is not None:
-                    cx, cy = centre
-                    for m in monitors:
-                        if (m["left"] <= cx < m["left"] + m["width"]
-                                and m["top"] <= cy < m["top"] + m["height"]):
-                            pick = m
-                            break
-            return (pick["left"] / dpi, pick["top"] / dpi,
-                    pick["width"] / dpi, pick["height"] / dpi)
+            mons = monitors.monitors()
+            m = (monitors.monitor_at(centre[0], centre[1], mons) if centre is not None
+                 else monitors.primary(mons))
+            # The monitor's own logical rectangle - its own scaling, its own
+            # corner - not the physical one divided by the system scaling.
+            return tuple(m.logical) if m is not None else None
         except Exception:
             return None
 
@@ -4264,10 +4252,7 @@ class CompanionManager(QObject):
             t = find_target(name, skip_ocr=True)
             if t is None:
                 return None
-            shot = self._shot(1)
-            scale = (shot.dpi_scale if shot else 1.0) or 1.0
-            l, tp, r, b = t.bbox
-            return (l / scale, tp / scale, r / scale, b / scale)
+            return monitors.rect_to_logical(*t.bbox)
         except Exception:
             return None
 

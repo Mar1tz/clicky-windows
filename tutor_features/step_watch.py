@@ -401,6 +401,16 @@ class StepWatcher:
         self._local_armed = True
         return True
 
+    def _to_logical(self, px: float, py: float) -> tuple[float, float]:
+        """A click from the mouse hook (physical px) in the overlay's logical
+        px, on the monitor it was on - each has its own scaling. Only when
+        Windows cannot list the monitors, the scaling this watcher was given."""
+        from screen import monitors
+        mons = monitors.monitors()
+        if mons:
+            return monitors.to_logical(px, py, mons)
+        return px / self._scale, py / self._scale
+
     def end(self) -> None:
         t, self._judge_task = self._judge_task, None
         if t is not None and not t.done():
@@ -428,7 +438,7 @@ class StepWatcher:
         for px, py, t in _clicks.drain():
             if bbox is None:
                 continue
-            lx, ly = px / self._scale, py / self._scale
+            lx, ly = self._to_logical(px, py)
             l, tp, r, b = bbox
             if (l - CLICK_PAD_PX <= lx <= r + CLICK_PAD_PX
                     and tp - CLICK_PAD_PX <= ly <= b + CLICK_PAD_PX):

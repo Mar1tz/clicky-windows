@@ -10,21 +10,28 @@ Matches tora-main/leanring-buddy/OverlayWindow.swift:
       listening       → 5-bar waveform
       thinking        → rotating arc spinner
       pointing        → triangle + speech bubble ("found it!" etc.)
+
+One window per monitor (_Surface), each exactly covering its monitor, all
+drawing the same scene in desktop coordinates. It used to be one window
+stretched over every monitor, and Windows gives a window ONE scaling: on
+this PC - a 100% monitor between two 125% ones - the cursor, its card and
+the drawings came out in the wrong place and size on the other monitors,
+and Windows resized the window as it changed hands between them. The top
+caption always sits on the main monitor.
 """
 
-import ctypes
 import math
-import os
 import random
 import time
 from typing import Optional
 
 from PyQt6.QtWidgets import QWidget, QApplication
-from PyQt6.QtCore import Qt, QTimer, QPoint, QPointF, QRectF
+from PyQt6.QtCore import Qt, QTimer, QPointF, QRectF
 from PyQt6.QtGui import (
     QPainter, QColor, QPen, QBrush, QPainterPath, QCursor, QFont,
 )
 
+from screen import monitors
 from ui.caption import CaptionIsland
 
 
@@ -78,32 +85,6 @@ ANNOTATION_TTL_S    = 14.0
 GUIDE_LINGER_S      = 4.0
 
 _TEXT_SIZES = {"s": 12, "m": 17, "l": 26}
-
-
-# Which monitor the foreground window is on, by GDI device name. Only the
-# NAME is used — rcMonitor/rcWork are physical px and every coordinate the
-# caption draws with comes from QScreen (logical px).
-class _MONITORINFOEXW(ctypes.Structure):
-    _fields_ = [
-        ("cbSize", ctypes.c_uint32),
-        ("rcMonitor", ctypes.c_long * 4),
-        ("rcWork", ctypes.c_long * 4),
-        ("dwFlags", ctypes.c_uint32),
-        ("szDevice", ctypes.c_wchar * 32),
-    ]
-
-
-try:
-    _user32 = ctypes.windll.user32
-    # HWND/HMONITOR are pointers; the default c_int restype truncates them
-    # on 64-bit and the lookup silently fails.
-    _user32.GetForegroundWindow.restype = ctypes.c_void_p
-    _user32.GetWindowThreadProcessId.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
-    _user32.MonitorFromWindow.restype = ctypes.c_void_p
-    _user32.MonitorFromWindow.argtypes = [ctypes.c_void_p, ctypes.c_uint32]
-    _user32.GetMonitorInfoW.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
-except Exception:          # not Windows
-    _user32 = None
 
 
 def _shape_path_pts(shape: dict):
@@ -217,7 +198,55 @@ _PHASE_DWELLING  = "dwelling"
 _PHASE_RETURNING = "returning"
 
 
+class _Surface(QWidget):
+    """One monitor's share of the overlay: a transparent, click-through
+    window covering exactly that monitor, so Windows draws it at THAT
+    monitor's scaling. It paints the whole scene in desktop coordinates and
+    its own edges clip it."""
+
+    def __init__(self, overlay: "CursorOverlay", screen):
+        super().__init__(None)
+        self.setWindowFlags(
+            Qt.WindowType.FramelessWindowHint
+            | Qt.WindowType.WindowStaysOnTopHint
+            | Qt.WindowType.Tool
+            | Qt.WindowType.WindowTransparentForInput
+        )
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
+        self._overlay = overlay
+        self.qscreen = screen
+        self.drawn = False               # something was on it at the last frame
+        self.place(screen)
+
+    def place(self, screen) -> None:
+        self.qscreen = screen
+        geo = screen.geometry()
+        # Leave the bottom 2 px: a topmost window covering a whole monitor
+        # stops Windows' auto-hide taskbar from appearing on hover.
+        geo.setBottom(geo.bottom() - 2)
+        if hasattr(self, "setScreen"):
+            self.setScreen(screen)
+        self.setGeometry(geo)
+
+    def area(self) -> QRectF:
+        return QRectF(self.geometry())
+
+    def paintEvent(self, event):
+        p = QPainter(self)
+        try:
+            p.setRenderHint(QPainter.RenderHint.Antialiasing)
+            p.translate(-self.x(), -self.y())        # draw in desktop coordinates
+            self._overlay._paint(p)
+        finally:
+            p.end()
+
+
 class CursorOverlay(QWidget):
+    """The buddy, its drawings and the top caption: the state, the 60 fps
+    tick and the painting. Not a window itself - main.py's show() shows one
+    _Surface per monitor, which calls back into _paint."""
 
     def __init__(self):
         super().__init__()
@@ -225,6 +254,7 @@ class CursorOverlay(QWidget):
         # Spring follow state
         self._display_pos = QPointF(0, 0)
         self._vel = QPointF(0, 0)
+        self._pointer_screen = None            # the monitor the pointer was on last frame
         self._mode: str = MODE_IDLE
         self._audio_level: float = 0.0
         self._phase: float = 0.0
@@ -265,9 +295,11 @@ class CursorOverlay(QWidget):
         self._island_alpha: float = 0.0
 
         # ── Top caption island ──────────────────────────────────────────────
-        # The words Tora is saying, at the top of the active monitor. Fed by
-        # sig_response_chunk; see ui/caption.py. The monitor is resolved once
-        # per utterance and locked so the pill cannot teleport mid-sentence.
+        # The words Tora is saying, at the top of the MAIN monitor, always -
+        # the user's choice: it used to follow the window in front, and with
+        # three monitors it turned up on whichever one that was. Fed by
+        # sig_response_chunk; see ui/caption.py. The screen is looked up once
+        # per utterance.
         self._caption = CaptionIsland(self)
         self._cap_screen: Optional[QRectF] = None
 
@@ -286,17 +318,18 @@ class CursorOverlay(QWidget):
         # Thinking spinner phase
         self._spin_phase: float = 0.0
 
-        # Transparent click-through, covers all monitors
-        self.setWindowFlags(
-            Qt.WindowType.FramelessWindowHint
-            | Qt.WindowType.WindowStaysOnTopHint
-            | Qt.WindowType.Tool
-            | Qt.WindowType.WindowTransparentForInput
-        )
-        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
-        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
-        self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
-        self._cover_all_monitors()
+        # One window per monitor, kept in step with the monitors: plugged in,
+        # unplugged, rearranged or rescaled, the overlay follows.
+        self._surfaces: list[_Surface] = []
+        self._shown = False
+        self._watched_screens: set = set()
+        self._sync_pending = False
+        self._sync_surfaces()
+        app = QApplication.instance()
+        if app is not None:
+            app.screenAdded.connect(self._screens_changed)
+            app.screenRemoved.connect(self._screens_changed)
+            app.primaryScreenChanged.connect(self._screens_changed)
 
         # Seed position so we don't flash at (0, 0)
         qp = QCursor.pos()
@@ -435,53 +468,13 @@ class CursorOverlay(QWidget):
         self._caption.set_voice_clock(clock)
 
     def _caption_screen_rect(self) -> QRectF:
-        """availableGeometry of the monitor the user is actually on, in
-        LOGICAL px — not geometry(), so a top-docked taskbar never hides the
-        pill.
-
-        Order: the foreground window's monitor (exact GDI name match, own
-        process skipped so a focused Tora panel cannot drag the caption) ->
-        the monitor under the buddy's pointing target or the cursor ->
-        this widget's screen -> primary. QApplication.screens() is never
-        indexed: on this three-monitor rig screens[0] was the wrong one.
-        """
-        scr = None
-        if _user32 is not None:
-            try:
-                hwnd = _user32.GetForegroundWindow()
-                if hwnd:
-                    pid = ctypes.c_uint32(0)
-                    _user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
-                    if pid.value != os.getpid():
-                        hmon = _user32.MonitorFromWindow(hwnd, 2)   # NEAREST
-                        if hmon:
-                            mi = _MONITORINFOEXW()
-                            mi.cbSize = ctypes.sizeof(_MONITORINFOEXW)
-                            if _user32.GetMonitorInfoW(hmon, ctypes.byref(mi)):
-                                name = mi.szDevice
-                                for s in QApplication.screens():
-                                    if s.name() == name:   # exact — never looser
-                                        scr = s
-                                        break
-            except Exception:
-                scr = None
-        if scr is None:
-            if self._locked_pos is not None:
-                pt = QPoint(int(self._locked_pos.x()), int(self._locked_pos.y()))
-            else:
-                pt = QCursor.pos()
-            scr = QApplication.screenAt(pt)
-        if scr is None:
-            scr = self.screen()
-        if scr is None:
-            scr = QApplication.primaryScreen()
-        rect = QRectF(scr.availableGeometry())
-        # Self-heal: _cover_all_monitors() runs once at startup, so a monitor
-        # hot-plugged since then is outside this widget and the pill would be
-        # drawn off-widget with no error. Tick-path only — never from paint.
-        if not rect.intersects(QRectF(self.geometry())):
-            self._cover_all_monitors()
-        return rect
+        """The MAIN monitor's work area in logical px - the island is always
+        at the top of the main screen. availableGeometry, not geometry, so a
+        taskbar docked at the top never hides it. (It used to follow the
+        window in front, matched to a screen by device name - and Qt names
+        most screens after the monitor model, so that match failed and it
+        followed the mouse instead.)"""
+        return QRectF(QApplication.primaryScreen().availableGeometry())
 
     def set_slow_mode(self, enabled: bool):
         """Doubles flight + dwell duration so students can track the motion."""
@@ -600,15 +593,78 @@ class CursorOverlay(QWidget):
 
     # ── Internal ──────────────────────────────────────────────────────────────
 
-    def _cover_all_monitors(self):
-        geo = QApplication.primaryScreen().virtualGeometry()
-        for s in QApplication.screens():
-            geo = geo.united(s.geometry())
-        # Leave a 2px gap at the bottom edge: a topmost window covering the
-        # full screen suppresses Windows' auto-hide taskbar hover trigger.
-        # The buddy just never renders in those 2 rows.
-        geo.setBottom(geo.bottom() - 2)
-        self.setGeometry(geo)
+    # ── One window per monitor ───────────────────────────────────────────────
+
+    def show(self):
+        """Show the overlay: every monitor's window. This widget itself is
+        only the controller and is never shown."""
+        self._shown = True
+        for s in self._surfaces:
+            s.show()
+        self._refresh(force=True)
+
+    def hide(self):
+        self._shown = False
+        for s in self._surfaces:
+            s.hide()
+
+    def _screens_changed(self, *_args) -> None:
+        # Coalesced: plugging a monitor in fires several of these at once.
+        if not self._sync_pending:
+            self._sync_pending = True
+            QTimer.singleShot(0, self._sync_surfaces)
+
+    def _sync_surfaces(self) -> None:
+        """One window for each monitor there is now, each over its monitor."""
+        self._sync_pending = False
+        screens = list(QApplication.screens())
+        mine = {id(s.qscreen): s for s in self._surfaces}
+        surfaces = []
+        for scr in screens:
+            surf = mine.pop(id(scr), None) or _Surface(self, scr)
+            surf.place(scr)
+            if self._shown:
+                surf.show()
+            surfaces.append(surf)
+            if id(scr) not in self._watched_screens:
+                self._watched_screens.add(id(scr))
+                scr.geometryChanged.connect(self._screens_changed)
+                scr.availableGeometryChanged.connect(self._screens_changed)
+        for gone in mine.values():                 # unplugged
+            gone.hide()
+            gone.deleteLater()
+        self._surfaces = surfaces
+        # Tell the rest of Tora where Qt puts each monitor, so its arrows
+        # land in the same place the overlay draws them (screen/monitors.py).
+        monitors.publish([(g.x(), g.y(), g.width(), g.height())
+                          for g in (s.geometry() for s in screens)])
+        self._cap_screen = None                    # the main monitor may have changed
+        self._caption.needs_screen = self._caption.active()
+        self._refresh(force=True)
+
+    def _regions(self) -> list:
+        """Where on the desktop something is drawn now, generously."""
+        if self._annotations:
+            return [None]                          # drawings: every monitor
+        d = self._display_pos
+        out = [QRectF(d.x() - 70, d.y() - 170, 480, 290)]   # the buddy, its bubble and card
+        if self._ring is not None:
+            rx, ry, r = self._ring
+            out.append(QRectF(rx - r - 30, ry - r - 30, 2 * r + 60, 2 * r + 60))
+        if self._caption.active() and self._cap_screen is not None:
+            out.append(self._cap_screen)
+        return out
+
+    def _refresh(self, force: bool = False) -> None:
+        """Repaint the monitors that have something on them now - or had at
+        the last frame, to rub it out. The rest are left alone."""
+        regions = self._regions()
+        for s in self._surfaces:
+            area = s.area()
+            has = any(r is None or area.intersects(r) for r in regions)
+            if has or s.drawn or force:
+                s.update()
+            s.drawn = has
 
     def _release_lock(self):
         self._locked_pos = None
@@ -634,9 +690,15 @@ class CursorOverlay(QWidget):
                     self._cap_screen = self._caption_screen_rect()
                     cap.set_screen_width(self._cap_screen.width())
                     cap.needs_screen = False
-                cap.tick(time.monotonic(), self._cap_screen, self.x(), self.y())
+                cap.tick(time.monotonic(), self._cap_screen, 0.0, 0.0)   # desktop coordinates
             except Exception:
                 cap.clear()
+
+        # State that only changes with time, advanced here once a frame - not
+        # in painting, which now runs once per monitor.
+        lines = self._island_lines()
+        self._island_alpha += ((1.0 if lines else 0.0) - self._island_alpha) * 0.18
+        self._prune_annotations()
 
         # ── Pointing phase machine ──
         if self._flight_phase in (_PHASE_FLYING, _PHASE_RETURNING):
@@ -677,7 +739,7 @@ class CursorOverlay(QWidget):
                 else:  # RETURNING
                     self._release_lock()
             self._phase += 0.10
-            self.update()
+            self._refresh()
             return
 
         if self._flight_phase == _PHASE_DWELLING:
@@ -694,7 +756,7 @@ class CursorOverlay(QWidget):
                 # Fade bubble out during return
                 self._bubble_alpha = 0.0
             self._phase += 0.10
-            self.update()
+            self._refresh()
             return
 
         # ── Drawing mode: buddy rides the pen tip of the active stroke, and
@@ -715,12 +777,23 @@ class CursorOverlay(QWidget):
             )
             self._vel = QPointF(0, 0)
             self._phase += 0.10
-            self.update()
+            self._refresh()
             return
 
         # ── Normal cursor-follow spring ──
         target = QPointF(real.x() + OFFSET_X, real.y() + OFFSET_Y)
         stiffness, damping = 0.28, 0.62
+
+        # Onto another monitor: jump there instead of gliding. Monitors at
+        # different scalings do not meet edge to edge in Qt's coordinates -
+        # between a 100% and a 125% monitor there is a strip no window
+        # covers - so a glide vanished into it and lagged in from the side.
+        scr = QApplication.screenAt(qp)
+        if scr is not None and scr is not self._pointer_screen:
+            if self._pointer_screen is not None:
+                self._display_pos = QPointF(target)
+                self._vel = QPointF(0, 0)
+            self._pointer_screen = scr
 
         # Spring
         ax = (target.x() - self._display_pos.x()) * stiffness
@@ -736,14 +809,15 @@ class CursorOverlay(QWidget):
         self._spin_phase += 0.14  # ~0.8s per rev @ 60fps matches Swift
         self._ring_phase += 0.08
 
-        self.update()
+        self._refresh()
 
     # ── Painting ──────────────────────────────────────────────────────────────
 
-    def paintEvent(self, event):
-        p = QPainter(self)
-        p.setRenderHint(QPainter.RenderHint.Antialiasing)
-
+    def _paint(self, p: QPainter) -> None:
+        """The whole scene, in desktop coordinates. Called by each monitor's
+        window with its painter already moved to that monitor; the window's
+        edges clip the rest. Painting only - nothing here changes state, as
+        it runs once per monitor per frame."""
         # Ring goes UNDER the buddy
         if self._ring is not None and self._flight_phase in (
             _PHASE_DWELLING, _PHASE_FLYING
@@ -754,8 +828,8 @@ class CursorOverlay(QWidget):
         if self._annotations:
             self._draw_annotations(p)
 
-        cx = self._display_pos.x() - self.x()
-        cy = self._display_pos.y() - self.y()
+        cx = self._display_pos.x()
+        cy = self._display_pos.y()
 
         if self._mode == MODE_LISTENING:
             self._draw_waveform(p, cx, cy)
@@ -778,14 +852,11 @@ class CursorOverlay(QWidget):
             except Exception:
                 pass
 
-        p.end()
-
     def _draw_island(self, p, cx, cy):
         """A small status card above the buddy: what it's doing, and where
-        you are in the guide. Fades in and out so it never snaps."""
+        you are in the guide. Fades in and out so it never snaps (the fade
+        is advanced in _tick)."""
         lines = self._island_lines()
-        target = 1.0 if lines else 0.0
-        self._island_alpha += (target - self._island_alpha) * 0.18
         if self._island_alpha < 0.02 or not lines:
             return
         head, sub = lines
@@ -863,12 +934,10 @@ class CursorOverlay(QWidget):
         shapes with a ttl fade out over their last 25%.
         """
         now = time.monotonic()
-        keep = []
         for ann in self._annotations:
             u = (now - ann["start"]) / ann.get("dur", 0.6)
             if u <= 0:
-                keep.append(ann)     # queued, not started yet
-                continue
+                continue             # queued, not started yet
             u = min(1.0, u)
 
             alpha = 1.0
@@ -876,10 +945,9 @@ class CursorOverlay(QWidget):
             if ttl is not None:
                 age = now - ann["start"]
                 if age > ttl:
-                    continue         # expired — drop
+                    continue         # expired - _prune_annotations drops it
                 if age > ttl * 0.75:
                     alpha = max(0.0, 1.0 - (age - ttl * 0.75) / (ttl * 0.25))
-            keep.append(ann)
 
             col = QColor(ANNOT_COLORS.get(ann.get("color", "blue"), CURSOR_BLUE))
             col.setAlpha(int(235 * alpha))
@@ -905,7 +973,14 @@ class CursorOverlay(QWidget):
                     self._paint_text(p, ann, u, col, alpha)
             except Exception:
                 continue   # a malformed shape must never break the paint loop
-        self._annotations = keep
+
+    def _prune_annotations(self) -> None:
+        """Drop drawings whose time is up (once a frame, from _tick)."""
+        if not self._annotations:
+            return
+        now = time.monotonic()
+        self._annotations = [a for a in self._annotations
+                             if a.get("ttl") is None or now - a["start"] <= a["ttl"]]
 
     def _pens(self, col, width=4.0):
         """(under, main) pen pair — dark under-stroke keeps lines readable
@@ -922,7 +997,7 @@ class CursorOverlay(QWidget):
 
     def _paint_stroke_path(self, p, pts, closed, u, col, arrow=False, width=4.0):
         """Draw the first u-fraction of a polyline (progressive stroke)."""
-        pts = [(x - self.x(), y - self.y()) for (x, y) in pts]
+        pts = list(pts)
         drawn = _partial_pts(pts, closed, u)
         if len(drawn) < 2:
             return
@@ -948,8 +1023,8 @@ class CursorOverlay(QWidget):
                     p.drawLine(QPointF(x2, y2), QPointF(ax, ay))
 
     def _paint_circle(self, p, ann, u, col, alpha):
-        x = ann["x"] - self.x()
-        y = ann["y"] - self.y()
+        x = ann["x"]
+        y = ann["y"]
         r = ann["r"]
         rect = QRectF(x - r, y - r, 2 * r, 2 * r)
         p.setBrush(Qt.BrushStyle.NoBrush)
@@ -980,8 +1055,8 @@ class CursorOverlay(QWidget):
         self._paint_stroke_path(p, [p1, p2, p3], False, u, col, width=3.0)
 
     def _paint_text(self, p, ann, u, col, alpha):
-        x = ann["x"] - self.x()
-        y = ann["y"] - self.y()
+        x = ann["x"]
+        y = ann["y"]
         pt_size = _TEXT_SIZES.get(ann.get("size", "m"), 17)
         font = QFont("Segoe UI", pt_size, QFont.Weight.Bold)
         p.setFont(font)
@@ -1005,8 +1080,6 @@ class CursorOverlay(QWidget):
     def _draw_ring(self, p):
         """Pulsing blue ring around the detected UI element."""
         rx, ry, base_r = self._ring
-        rx -= self.x()
-        ry -= self.y()
         pulse = (math.sin(self._ring_phase) + 1) / 2   # 0..1
         r = base_r + pulse * 6
         # Outer halo

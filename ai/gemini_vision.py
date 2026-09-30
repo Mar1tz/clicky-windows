@@ -448,13 +448,16 @@ async def locate(
     if physical_height is None:
         physical_height = original_height
 
-    px = ((xmin + xmax) / 2000.0) * physical_width + physical_left
-    py = ((ymin + ymax) / 2000.0) * physical_height + physical_top
+    # Scaled from the MONITOR's corner, which Qt keeps where Windows has it
+    # (screen/monitors.py) - not from the desktop's origin, which put the
+    # point on the wrong spot, or monitor, anywhere but the main screen.
     s = dpi_scale if dpi_scale > 0 else 1.0
+    lx = physical_left + ((xmin + xmax) / 2000.0) * physical_width / s
+    ly = physical_top + ((ymin + ymax) / 2000.0) * physical_height / s
 
     return Detected(
-        x=int(round(px / s)),
-        y=int(round(py / s)),
+        x=int(round(lx)),
+        y=int(round(ly)),
         screen_index=screen_index,
         label=(data.get("label") or "").strip()[:40],
     )

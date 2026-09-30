@@ -35,6 +35,19 @@ def _offline_by_default(monkeypatch, request):
 
 
 @pytest.fixture(autouse=True)
+def _no_real_monitors(monkeypatch):
+    """screen.monitors reads the machine's real monitors - three of them, at
+    100% and 125%, on the PC this was written on - so a test's pixels would
+    depend on where it runs. Every test gets none (pixels pass straight
+    through); the monitor tests give their own layout."""
+    try:
+        from screen import monitors
+        monkeypatch.setattr(monitors, "monitors", lambda: [])
+    except Exception:  # noqa: BLE001 - a suite without the app still runs
+        pass
+
+
+@pytest.fixture(autouse=True)
 def _grants_stay_in_the_sandbox(tmp_path, monkeypatch):
     """Standing desktop permissions are written to disk (DC-16), and the
     default path is the USER'S profile. The first test to call

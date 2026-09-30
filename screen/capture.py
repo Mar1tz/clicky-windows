@@ -41,34 +41,48 @@ class ScreenShot:
     physical_left: int    # mss-reported origin (physical px)
     physical_top: int
 
-    # DPI scale (physical / logical). 1.0 on normal displays, 1.5 on 150% DPI.
+    # THIS monitor's scaling (physical / logical): 1.0 at 100%, 1.25 at 125%.
     dpi_scale: float
 
-    # Convenience: where this monitor's top-left sits in LOGICAL screen space
+    # Where this monitor's top-left sits in LOGICAL screen space - as Qt has
+    # it, which is where Windows has it (see screen/monitors.py), not the
+    # physical position divided by a scaling.
     logical_left: int
     logical_top: int
 
 
 def _query_dpi_scale() -> float:
-    """Best-effort DPI scale for the primary monitor.
-    Returns 1.0 if anything goes wrong."""
+    """The system scaling - the main monitor's at sign-in. Only a fallback:
+    each monitor has its own (screen.monitors), and dividing every monitor
+    by this one put Tora's arrows on the wrong spot, or the wrong monitor,
+    anywhere but the main screen. Returns 1.0 if anything goes wrong.
+
+    It no longer calls SetProcessDPIAware: Qt makes the process per-monitor
+    DPI aware, and that call would downgrade a process that was not yet."""
     try:
-        # GetDpiForSystem returns DPI as integer (96 = 100%, 144 = 150%)
-        u = ctypes.windll.user32
-        u.SetProcessDPIAware()
-        gdfs = getattr(u, "GetDpiForSystem", None)
+        gdfs = getattr(ctypes.windll.user32, "GetDpiForSystem", None)
         if gdfs:
             return max(1.0, gdfs() / 96.0)
-        # Fallback: ratio of GetSystemMetrics(physical) vs (logical)
         return 1.0
     except Exception:
         return 1.0
 
 
+def _placement(left: int, top: int, mons) -> tuple[float, int, int]:
+    """(scaling, logical left, logical top) of the monitor whose physical
+    top-left corner is (left, top) - its own scaling, not the system's."""
+    for m in mons:
+        if m.left == left and m.top == top:
+            return m.scale or 1.0, int(round(m.logical[0])), int(round(m.logical[1]))
+    dpi = _query_dpi_scale()
+    return dpi, int(round(left / dpi)), int(round(top / dpi))
+
+
 def capture_all_screens(max_width: int = 1280) -> List[ScreenShot]:
     """Capture all monitors. Each ScreenShot carries everything needed
     to convert detection coords back into logical screen space."""
-    dpi = _query_dpi_scale()
+    from screen import monitors
+    mons = monitors.monitors()
     results = []
     with mss.mss() as sct:
         # mss monitor index 0 is the combined virtual screen; 1+ are real monitors
@@ -79,6 +93,7 @@ def capture_all_screens(max_width: int = 1280) -> List[ScreenShot]:
             phys_w, phys_h = img.width, img.height
             phys_left = int(monitor.get("left", 0))
             phys_top  = int(monitor.get("top",  0))
+            dpi, log_left, log_top = _placement(phys_left, phys_top, mons)
 
             # Downscale only the JPEG we send to the LLM — keep physical numbers intact
             if img.width > max_width:
@@ -102,17 +117,21 @@ def capture_all_screens(max_width: int = 1280) -> List[ScreenShot]:
                 physical_left=phys_left,
                 physical_top=phys_top,
                 dpi_scale=dpi,
-                logical_left=int(round(phys_left / dpi)),
-                logical_top=int(round(phys_top  / dpi)),
+                logical_left=log_left,
+                logical_top=log_top,
             ))
 
     return results
 
 
 def capture_primary() -> ScreenShot:
-    """Capture only the primary monitor."""
+    """The main monitor's screenshot. Not screens[0]: mss lists monitors in
+    its own order, and with three it was the right-hand one. The main
+    monitor is the one whose top-left corner is the desktop's origin."""
     screens = capture_all_screens()
-    return screens[0] if screens else None
+    if not screens:
+        return None
+    return next((s for s in screens if s.physical_left == 0 and s.physical_top == 0), screens[0])
 
 
 def screen_count() -> int:
