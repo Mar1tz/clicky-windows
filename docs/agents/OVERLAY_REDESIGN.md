@@ -25,3 +25,18 @@ is e090124.
 
 Lesson: judge a new look of the overlay in motion on the user's own screen
 before building more milestones on it; a yes on screenshots was not enough.
+
+## What came next: the notch (2026-09-30)
+
+The user then asked for the top island only, from four references: the
+iPhone's Dynamic Island, NotchNook on a Mac, a Windows weather pill and
+Notchify. The request was one fixed size that never grows as Tora talks.
+`ui/caption.py` is now a pure black notch, flush with the top of the screen.
+It is square where it meets the edge, with a small inward curve on each
+side, and rounded below. It is 460 x 42 px (60% of a small screen) and shows
+one line of white words; a finished line rolls up into the edge. The cursor
+is still the classic triangle.
+
+This time the user saw it live on their screen first: a one-line and a
+two-line version, played side by side. They chose one line. Tests:
+`tests/agents/test_e2e_caption_notch.py`.

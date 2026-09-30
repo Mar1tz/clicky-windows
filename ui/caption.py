@@ -1,11 +1,15 @@
 """
 Top-of-screen caption island — the words Tora is saying, as it says them.
 
-A dark glass capsule that extrudes from the top edge of the monitor the user
-is actually looking at, fills with Tora's speech a word at a time, and
-retracts when the answer ends. Modelled on the macOS Dynamic Island, adapted
-for a screen with no notch: it floats 12px below the edge rather than
-pretending to be part of the bezel.
+A black notch that slides down out of the top edge of the monitor the user
+is actually looking at, fills with Tora's speech a word at a time, and slides
+back up when the answer ends. Modelled on the iPhone's Dynamic Island and the
+notch apps for Mac and Windows (NotchNook, Notchify): pure black, flush with
+the top of the screen, square where it meets the edge and rounded below.
+
+It is ONE SIZE from the first word to the last. The old pill grew a step at
+a time as the answer came in, and the user hated watching it grow; now the
+words move and the notch does not. Older lines roll up into the bezel.
 
 This module is pure state + painting. It knows nothing about widgets, signals
 or threads: CursorOverlay owns one instance, feeds it text through Qt slots,
@@ -19,15 +23,13 @@ Four independent layers keep it still:
 
   1. whole words only        a partial word is never rendered
   2. paced reveal            tokens leave a queue at a rate, not on arrival
-  3. width ratchet           the pill only ever grows, in 24px steps, and is
-                             re-evaluated on a word reveal, never per frame
+  3. fixed size              the notch never changes size, so nothing
+                             around the words moves
   4. fixed wrap width        text wraps against a width locked for the whole
-                             utterance, not the animating pill width
+                             utterance
 
-Motion is a single presence spring `p` that drives position, scale and alpha
-together so they can never disagree; size is a plain lerp with no overshoot,
-because a pill that bounces past its width and back is exactly the "cheap"
-look this file exists to avoid.
+Motion is one presence value `p` that eases in and out in a set time with no
+overshoot: a notch that bounced would come away from the edge it hangs from.
 """
 
 from __future__ import annotations
@@ -35,11 +37,10 @@ from __future__ import annotations
 import math
 import re
 import time
-from typing import Optional
 
 from PyQt6.QtCore import Qt, QRectF, QPointF
 from PyQt6.QtGui import (
-    QPainter, QColor, QPen, QBrush, QPainterPath,
+    QPainter, QColor, QBrush, QPainterPath,
     QFont, QFontInfo, QFontMetricsF, QLinearGradient,
 )
 
@@ -48,21 +49,19 @@ from PyQt6.QtGui import (
 # Duplicated from overlay.py on purpose: this module must not import ui.*
 CAP_BLUE = QColor(0x33, 0x80, 0xFF)
 
-CAP_TOP_MARGIN   = 12.0     # floats below the edge; Windows has no notch
-CAP_PAD_X        = 20.0
-CAP_PAD_Y        = 12.0
+# The notch: one size, whatever is said.
+CAP_W            = 460.0    # ≈52 characters; past ~55 the return saccade mis-lands
+CAP_W_MIN        = 300.0    # on a small screen it takes 60% of the width, not less
+CAP_H            = 42.0     # one line; a finished line rolls up into the bezel
+CAP_RADIUS       = 18.0     # the bottom corners
+CAP_SHOULDER     = 8.0      # the inward curve where it meets the top edge
+CAP_PAD_X        = 18.0
 CAP_IND_W        = 21.0     # 4 bars × 3px + 3 gaps × 3px
-CAP_IND_GAP      = 13.0
-CAP_SIDE         = CAP_IND_W + CAP_IND_GAP   # mirrored on the right so the
-                                             # text block is optically centred
-CAP_LINE_GAP     = 5.0
-CAP_W_MIN        = 236.0
-CAP_W_SEED       = 120.0
-CAP_H_SEED       = 30.0
-CAP_RADIUS_MAX   = 22.0
-CAP_MAX_CHARS    = 52       # live-reading ceiling; past ~55 the return saccade mis-lands
-CAP_W_QUANTUM    = 24.0
-CAP_W_DEADBAND   = 10.0
+CAP_IND_GAP      = 12.0
+CAP_LINE_GAP     = 4.0
+CAP_IN_S         = 0.22     # slides down out of the edge
+CAP_OUT_S        = 0.20     # and back up into it
+CAP_OUT_S_FAST   = 0.12     # cancelled, or the user started talking
 
 # Reveal governor (words per second)
 CAP_LAG_S        = 0.35
@@ -80,15 +79,11 @@ CAP_BUDGET_FLOOR = -2.0
 
 # Timing
 CAP_WORD_REVEAL_S   = 0.16
-CAP_HILITE_S        = 0.38
-CAP_HILITE_SENT_S   = 0.45
 CAP_PARTIAL_FLUSH_S = 0.45  # a trailing partial word is committed after this silence
 CAP_DEAD_AIR_S      = 1.2
 CAP_BACKSTOP_S      = 20.0  # a hung provider can never pin the pill open
 CAP_LINGER_CANCEL_S = 0.45
 CAP_BARGE_CONFIRM_S = 1.5
-CAP_EXIT_K          = 0.22  # ≈266ms
-CAP_EXIT_K_FAST     = 0.34  # ≈150ms — cancel / user started talking
 
 CAP_PUNCT_GLUE    = ",.!?;:…\"')]"
 CAP_PUNCT_OVERHANG = 12.0
@@ -129,11 +124,11 @@ class CaptionIsland:
         # DPR 1.25 against the primary's 1.0 and a spanning window carries one
         # backing-store DPR, so a light stem goes soft and a bold one blooms.
         f = QFont("Segoe UI Variable Display")
-        f.setPointSizeF(12.5)
+        f.setPointSizeF(11.5)
         f.setWeight(QFont.Weight.Medium)
         if QFontInfo(f).family() != "Segoe UI Variable Display":
             f = QFont("Segoe UI")
-            f.setPointSizeF(12.5)
+            f.setPointSizeF(11.5)
             f.setWeight(QFont.Weight.Medium)
         # The 1.5% tighten is what stops Segoe reading as a system dialog.
         f.setLetterSpacing(QFont.SpacingType.PercentageSpacing, 98.5)
@@ -141,9 +136,6 @@ class CaptionIsland:
         # Built against the widget so measured text matches painted text.
         self._fm = QFontMetricsF(f, device) if device is not None else QFontMetricsF(f)
         self._lh = self._fm.height()
-        self._avg_adv = self._fm.horizontalAdvance("abcdefghijklmnopqrstuvwxyz ") / 27.0
-        self._h1 = self._lh + 2 * CAP_PAD_Y
-        self._h2 = 2 * self._lh + CAP_LINE_GAP + 2 * CAP_PAD_Y
 
         self.needs_screen: bool = False
 
@@ -170,18 +162,15 @@ class CaptionIsland:
         self._speaking = False
         self._hold = 0.0
         self._linger_until = 0.0
-        self._exit_k = CAP_EXIT_K
-        self._promoted = False
-        self._max_w = 545.0
-        self._content_max = 437.0
+        self._exit_s = CAP_OUT_S
+        self._max_w = CAP_W
+        self._content_max = CAP_W - 2 * CAP_PAD_X - CAP_IND_W - CAP_IND_GAP
 
         # Simulation
-        self._p = 0.0                   # presence: position, scale and alpha
+        self._p = 0.0                   # presence: 0 = up inside the edge, 1 = down
         self._pv = 0.0
-        self._w = CAP_W_SEED
-        self._h = CAP_H_SEED
-        self._tw = CAP_W_MIN
-        self._th = self._h1
+        self._w = CAP_W
+        self._h = CAP_H
         self._roll = 0.0
         self._swap = 0.0
         self._energy = 0.0
@@ -193,7 +182,6 @@ class CaptionIsland:
         # Resolved every tick, consumed by draw()
         self._pill = QRectF()
         self._clip = QRectF()
-        self._scale = 1.0
         self._alpha = 0.0
         self._text_alpha = 0.0
         self._now = 0.0
@@ -222,8 +210,8 @@ class CaptionIsland:
             self._begin_episode(fresh=True)
             self._state = "enter"
         elif st == "exit":
-            # Caught mid-retraction: keep p, pv, w, h exactly where they are so
-            # the pill swings back out instead of restarting from the bezel.
+            # Caught mid-retraction: keep p where it is so the notch comes
+            # back down from there instead of starting inside the edge.
             self._begin_episode(fresh=False)
             self._state = "enter"
         elif self._no_more and not self._queue and not self._pending:
@@ -278,19 +266,19 @@ class CaptionIsland:
             # spoken; showing it would be a lie.
             self._queue.clear()
             self._pending = ""
-            self._seal(0.0, CAP_EXIT_K_FAST)
+            self._seal(0.0, CAP_OUT_S_FAST)
             self._state = "exit"
             return
         if name == "IDLE":
             self._pump_tokens(time.monotonic(), force=True)
             if self._no_more:
                 visible = sum(ln.n for ln in self._lines)
-                self._seal(_clamp(1.1 + 0.30 * visible, 1.6, 3.4), CAP_EXIT_K)
+                self._seal(_clamp(1.1 + 0.30 * visible, 1.6, 3.4), CAP_OUT_S)
             else:
                 # Esc, or an error path falling through its finally: cancelled.
                 self._queue.clear()
                 self._pending = ""
-                self._seal(CAP_LINGER_CANCEL_S, CAP_EXIT_K_FAST)
+                self._seal(CAP_LINGER_CANCEL_S, CAP_OUT_S_FAST)
 
     def note_audio_level(self, level: float) -> None:
         """Barge-in probe. The realtime session clears its player locally and
@@ -323,7 +311,7 @@ class CaptionIsland:
                 and now - self._last_chunk_at > CAP_BACKSTOP_S):
             self._queue.clear()
             self._pending = ""
-            self._exit_k = CAP_EXIT_K
+            self._exit_s = CAP_OUT_S
             self._state = "exit"
 
         self._pump_tokens(now)
@@ -365,22 +353,12 @@ class CaptionIsland:
         try:
             p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
             p.setRenderHint(QPainter.RenderHint.TextAntialiasing, True)
-            # Clip to the monitor BEFORE the scale transform, so the pill is
-            # sliced by that monitor's top edge and its shadow never spills
-            # onto a neighbouring display.
+            # Clip to the monitor, so the notch comes out of THAT monitor's top
+            # edge and never shows on the display above it.
             p.setClipRect(self._clip)
             rect = self._pill
-            cx, cy = rect.center().x(), rect.center().y()
-            s = self._scale
-            p.translate(cx, cy)
-            p.scale(s, s)
-            p.translate(-cx, -cy)
-
             a = self._alpha
-            r = min(rect.height() / 2.0, CAP_RADIUS_MAX)
-            self._draw_bloom(p, rect, r, a)
-            self._draw_shadow(p, rect, r, a)
-            self._draw_body(p, rect, r, a)
+            self._draw_body(p, rect, a)
             self._draw_indicator(p, rect, a, self._now)
             self._draw_text(p, rect, a, self._now)
         finally:
@@ -402,8 +380,7 @@ class CaptionIsland:
         self._no_more = False
         self._sealed = False
         self._hold = 0.0
-        self._exit_k = CAP_EXIT_K
-        self._promoted = False
+        self._exit_s = CAP_OUT_S
         self._roll = 0.0
         self._energy = 0.0
         self._barge_ticks = 0
@@ -411,39 +388,26 @@ class CaptionIsland:
         self._last_chunk_at = time.monotonic()
         self._word_at = 0.0
         self._last_reveal_at = 0.0
-        # Width ratchet resets: a short follow-up must not inherit a long
-        # answer's slab. The physical size lerps down to meet it.
-        self._tw = CAP_W_MIN
-        self._th = self._h1
         if fresh:
             self._p = self._pv = 0.0
-            self._w = CAP_W_SEED
-            self._h = CAP_H_SEED
             self._swap = 0.0
             self.needs_screen = True
 
-    def _seal(self, hold: float, exit_k: float) -> None:
+    def _seal(self, hold: float, exit_s: float) -> None:
         self._sealed = True
         self._hold = hold
-        self._exit_k = exit_k
+        self._exit_s = exit_s
 
     # ── Simulation ───────────────────────────────────────────────────────────
 
     def _substep(self) -> None:
+        # In and out in a set time; _geometry eases it. No overshoot: the notch
+        # hangs from the edge and must never come away from it.
         if self._state == "exit":
-            np_ = self._p + (0.0 - self._p) * self._exit_k
-            # Keep velocity honest so a mid-retraction catch has momentum.
-            self._pv = np_ - self._p
-            self._p = np_
+            self._p = max(0.0, self._p - (1.0 / 60.0) / self._exit_s)
         else:
-            # Traced: peaks 1.116 at frame 8 (~133ms), settles ~400ms. An 11%
-            # overshoot — a visible, tasteful pop.
-            self._pv = self._pv * 0.60 + (1.0 - self._p) * 0.155
-            self._p += self._pv
-        # Size is deliberately NOT sprung. Overshoot is delightful on position
-        # and fatal on a dimension.
-        self._w += (self._tw - self._w) * 0.22
-        self._h += (self._th - self._h) * 0.18
+            self._p = min(1.0, self._p + (1.0 / 60.0) / CAP_IN_S)
+        self._pv = 0.0
         self._roll += (0.0 - self._roll) * 0.22
         if self._out_line and self._roll < 0.02:
             self._out_line = ""
@@ -452,26 +416,24 @@ class CaptionIsland:
         self._energy *= 0.90
 
     def _geometry(self, screen: QRectF, ox: float, oy: float) -> None:
-        p = self._p
+        # Ease out on the way down (quick, then settles), in on the way up.
+        u = self._p
+        p = 1.0 - (1.0 - u) ** 3
         w = float(round(self._w))
         h = float(round(self._h))
         cx = screen.x() + screen.width() / 2.0 - ox
-        rest_top = screen.y() + CAP_TOP_MARGIN - oy
-        # At p=0 the whole pill is above the clip edge: it extrudes from the
-        # bezel rather than fading in.
-        y = rest_top - (h + CAP_TOP_MARGIN) * (1.0 - p)
+        top = screen.y() - oy
+        # Flush with the top of the screen at rest. Above that it is clipped,
+        # so it comes down out of the edge rather than fading in.
+        y = top - h * (1.0 - p)
         x = float(round(cx - w / 2.0))
         self._pill = QRectF(x, float(round(y)), w, h)
         self._clip = QRectF(screen.x() - ox, screen.y() - oy,
                             screen.width(), screen.height())
-        scale = min(1.03, 0.84 + 0.16 * p)
-        if self._state in ("live", "linger"):
-            scale *= 1.0 + 0.0015 * math.sin(self._now * 1.7)   # felt, not seen
-        self._scale = scale
-        # Opaque by p≈0.74: the fade finishes well before the motion settles,
-        # which is what makes it read as a solid object arriving.
-        self._alpha = _clamp(p * 1.35, 0.0, 1.0)
-        self._text_alpha = self._alpha * _clamp((p - 0.35) / 0.65, 0.0, 1.0)
+        # Solid the whole way: it is a thing coming out of the edge, not a
+        # ghost fading in. The words fade in over the last part of the move.
+        self._alpha = 1.0 if u > 0.0 else 0.0
+        self._text_alpha = _clamp((p - 0.45) / 0.55, 0.0, 1.0)
 
     # ── Text pipeline ────────────────────────────────────────────────────────
 
@@ -499,7 +461,9 @@ class CaptionIsland:
             chunk, self._pending = pend[:i], pend[i + 1:]
         for tok in chunk.split():
             tok = tok.strip(_MD_EDGE)
-            if not tok or tok in ("-", ">", "•"):
+            if tok == "-" and (self._queue or self._words):
+                tok = "–"              # "Sure - it's": a pause mid-sentence, not a list bullet
+            elif not tok or tok in ("-", ">", "•"):
                 continue
             self._queue.extend(self._split_long(tok))
 
@@ -515,7 +479,6 @@ class CaptionIsland:
             ln = self._lines[-1]
             ln.text += run
             ln.adv = self._advance(ln.text)
-            self._ratchet()
             return True
         return False
 
@@ -579,140 +542,63 @@ class CaptionIsland:
         if cur:
             lines.append(_Line(cur, self._advance(cur), n))
 
-        # Roll-up: drop the leading line permanently. A "keep the last N words"
-        # cap would shift the first visible line's wrap points as words fall
-        # off, so text already on screen would re-break and jump.
-        while len(lines) > 2:
+        # Roll-up: drop the leading line permanently - it slides up into the
+        # bezel. A "keep the last N words" cap would shift the first visible
+        # line's wrap points as words fall off, so text on screen would jump.
+        while len(lines) > 1:
             gone = lines.pop(0)
             del self._words[:gone.n]
             self._out_line = gone.text
             self._roll = 1.0
 
         self._lines = lines
-        if len(lines) >= 2 and not self._promoted:
-            # The answer is now known to be long: promote width and height in
-            # one step and freeze them for the rest of the episode. Every
-            # further 24px step would be pure churn.
-            self._promoted = True
-            self._tw = self._max_w
-            self._th = self._h2
-        self._ratchet()
-
-    def _ratchet(self) -> None:
-        if self._promoted or not self._lines:
-            return
-        longest = max(ln.adv for ln in self._lines)
-        needed = longest + 2 * CAP_PAD_X + 2 * CAP_SIDE
-        if needed > self._tw + CAP_W_DEADBAND:
-            steps = math.ceil((needed - CAP_W_MIN) / CAP_W_QUANTUM)
-            self._tw = min(self._max_w, CAP_W_MIN + max(0, steps) * CAP_W_QUANTUM)
 
     def set_screen_width(self, width: float) -> None:
         """Called once per episode by the overlay after the monitor is locked.
-        52 characters is a reading-comfort ceiling, not a fraction of the
-        monitor: it does not scale up on a 49-inch panel, only down on a
-        small laptop screen."""
-        raw = CAP_MAX_CHARS * self._avg_adv + 2 * CAP_PAD_X + 2 * CAP_SIDE
-        self._max_w = _clamp(raw, 380.0, max(380.0, 0.52 * width))
-        self._content_max = self._max_w - 2 * CAP_PAD_X - 2 * CAP_SIDE
+        The notch's width is a reading-comfort ceiling (≈52 characters), not
+        a fraction of the monitor: it does not grow on a 49-inch panel, only
+        narrows on a small laptop screen. Its size is then fixed until the
+        answer is over."""
+        self._max_w = min(CAP_W, max(CAP_W_MIN, 0.6 * width))
+        self._content_max = self._max_w - 2 * CAP_PAD_X - CAP_IND_W - CAP_IND_GAP
+        self._w = self._max_w
+        self._h = CAP_H
 
     # ── Painting ─────────────────────────────────────────────────────────────
 
-    def _body_path(self, w: float, h: float, r: float) -> QPainterPath:
-        """iOS continuous-corner path at the origin, cached. Qt's rounded rect
-        is a circular arc and the curvature discontinuity against a capsule
-        end is visible at 46px."""
-        key = (round(w), round(h), round(r * 2) / 2)
+    def _body_path(self, w: float, h: float) -> QPainterPath:
+        """The notch at the origin, cached: square along the top edge, with a
+        small inward curve on each side where it meets the edge (the way a
+        MacBook's notch meets the bezel), and rounded bottom corners."""
+        key = (round(w), round(h))
         path = self._path_cache.get(key)
         if path is not None:
             return path
         if len(self._path_cache) > 24:
             self._path_cache.clear()
+        r, s = min(CAP_RADIUS, h / 2.0), CAP_SHOULDER
+        k = 0.4477 * r                     # a quarter circle as one cubic
         path = QPainterPath()
-        ext = 1.528665 * r
-        if ext > min(w, h) / 2.0:
-            # A one-line pill is a true capsule; its ends ARE semicircles.
-            path.addRoundedRect(QRectF(0, 0, w, h), r, r)
-        else:
-            c1, c2, c3, c4, c5, c6 = 1.088198, 0.868407, 0.631098, 0.079584, 0.419, 0.215
-            path.moveTo(ext, 0)
-            path.lineTo(w - ext, 0)
-            path.cubicTo(w - c1 * r, 0, w - c2 * r, 0, w - c3 * r, c4 * r)
-            path.cubicTo(w - c5 * r, c6 * r, w - c6 * r, c5 * r, w - c4 * r, c3 * r)
-            path.cubicTo(w, c2 * r, w, c1 * r, w, ext)
-            path.lineTo(w, h - ext)
-            path.cubicTo(w, h - c1 * r, w, h - c2 * r, w - c4 * r, h - c3 * r)
-            path.cubicTo(w - c6 * r, h - c5 * r, w - c5 * r, h - c6 * r, w - c3 * r, h - c4 * r)
-            path.cubicTo(w - c2 * r, h, w - c1 * r, h, w - ext, h)
-            path.lineTo(ext, h)
-            path.cubicTo(c1 * r, h, c2 * r, h, c3 * r, h - c4 * r)
-            path.cubicTo(c5 * r, h - c6 * r, c6 * r, h - c5 * r, c4 * r, h - c3 * r)
-            path.cubicTo(0, h - c2 * r, 0, h - c1 * r, 0, h - ext)
-            path.lineTo(0, ext)
-            path.cubicTo(0, c1 * r, 0, c2 * r, c4 * r, c3 * r)
-            path.cubicTo(c6 * r, c5 * r, c5 * r, c6 * r, c3 * r, c4 * r)
-            path.cubicTo(c2 * r, 0, c1 * r, 0, ext, 0)
-            path.closeSubpath()
+        path.moveTo(-s, 0)
+        path.quadTo(0, 0, 0, s)            # left shoulder
+        path.lineTo(0, h - r)
+        path.cubicTo(0, h - k, k, h, r, h)
+        path.lineTo(w - r, h)
+        path.cubicTo(w - k, h, w, h - k, w, h - r)
+        path.lineTo(w, s)
+        path.quadTo(w, 0, w + s, 0)        # right shoulder
+        path.closeSubpath()
         self._path_cache[key] = path
         return path
 
-    def _draw_bloom(self, p: QPainter, rect: QRectF, r: float, a: float) -> None:
-        e = self._energy
-        if e <= 0.02:
-            return
-        p.setPen(Qt.PenStyle.NoPen)
-        for inflate, alpha in ((28, 7), (18, 11), (10, 18)):
-            c = QColor(CAP_BLUE)
-            c.setAlpha(int(alpha * e * a))
-            p.setBrush(QBrush(c))
-            rr = rect.adjusted(-inflate, -inflate, inflate, inflate)
-            p.drawRoundedRect(rr, r + inflate, r + inflate)
-
-    def _draw_shadow(self, p: QPainter, rect: QRectF, r: float, a: float) -> None:
-        # A tight contact shadow plus a wide ambient one. One layer reads as a
-        # drop shadow from 2009.
-        p.setPen(Qt.PenStyle.NoPen)
-        for dy, inflate, alpha in ((1, 0, 30), (3, 4, 20), (7, 10, 12), (14, 20, 6)):
-            c = QColor(0, 0, 0, int(alpha * a))
-            p.setBrush(QBrush(c))
-            rr = rect.adjusted(-inflate, -inflate + dy, inflate, inflate + dy)
-            p.drawRoundedRect(rr, r + inflate, r + inflate)
-
-    def _draw_body(self, p: QPainter, rect: QRectF, r: float, a: float) -> None:
-        w, h = rect.width(), rect.height()
+    def _draw_body(self, p: QPainter, rect: QRectF, a: float) -> None:
+        # Pure black and nothing else - no rim, no glow, no shadow - so it
+        # reads as part of the screen's edge, like the notches it is modelled on.
         p.save()
         p.translate(rect.x(), rect.y())
-
-        # Fill: near-black but cool-shifted. Pure black looks like a hole and a
-        # flat fill is the number-one tell of "a rounded rectangle with text".
-        body = self._body_path(w, h, r)
-        g = QLinearGradient(0, 0, 0, h)
-        g.setColorAt(0.0, QColor(26, 28, 36, int(240 * a)))
-        g.setColorAt(1.0, QColor(9, 10, 14, int(240 * a)))
         p.setPen(Qt.PenStyle.NoPen)
-        p.setBrush(QBrush(g))
-        p.drawPath(body)
-
-        # Specular rim: a uniform rim looks like a border, a graded one looks
-        # like an edge catching light.
-        rim = QLinearGradient(0, 0, 0, h)
-        rim.setColorAt(0.00, QColor(255, 255, 255, int(0.17 * 255 * a)))
-        rim.setColorAt(0.38, QColor(255, 255, 255, int(0.02 * 255 * a)))
-        rim.setColorAt(0.82, QColor(255, 255, 255, int(0.015 * 255 * a)))
-        rim.setColorAt(1.00, QColor(255, 255, 255, int(0.055 * 255 * a)))
-        p.setBrush(Qt.BrushStyle.NoBrush)
-        p.setPen(QPen(QBrush(rim), 1.0))
-        inner = self._body_path(w - 1.0, h - 1.0, max(1.0, r - 0.5))
-        p.translate(0.5, 0.5)
-        p.drawPath(inner)
-        p.translate(-0.5, -0.5)
-
-        # Outer hairline: the only thing that keeps dark glass from dissolving
-        # into a white wallpaper.
-        p.setPen(QPen(QColor(0, 0, 0, int(150 * a)), 1.0))
-        outer = self._body_path(w + 1.0, h + 1.0, r + 0.5)
-        p.translate(-0.5, -0.5)
-        p.drawPath(outer)
+        p.setBrush(QBrush(QColor(0, 0, 0, int(255 * a))))
+        p.drawPath(self._body_path(rect.width(), rect.height()))
         p.restore()
 
     def _draw_indicator(self, p: QPainter, rect: QRectF, a: float, now: float) -> None:
@@ -725,24 +611,17 @@ class CaptionIsland:
         block_cx = x0 + CAP_IND_W / 2.0
         p.setPen(Qt.PenStyle.NoPen)
 
-        if e > 0.02:
-            halo = QColor(CAP_BLUE)
-            halo.setAlpha(int(60 * e * a))
-            p.setBrush(QBrush(halo))
-            p.drawEllipse(QPointF(block_cx, cy), 13.0, 13.0)
-
+        # No halo: on black the blue bars are enough, the way the Dynamic
+        # Island's own activity marks are.
         merge = _clamp(1.0 - e / 0.06, 0.0, 1.0)
         fill = QLinearGradient(0, cy - 10, 0, cy + 10)
         fill.setColorAt(0.0, QColor(111, 173, 255, int(235 * a)))
         fill.setColorAt(1.0, QColor(46, 111, 232, int(235 * a)))
 
         if merge > 0.98:
-            # At rest: the same 3.4 rad/s pulse as the cursor island's sparkle.
-            rr = 4.0 + 0.55 * math.sin(now * 3.4)
-            halo = QColor(CAP_BLUE)
-            halo.setAlpha(int(0.18 * 255 * a))
-            p.setBrush(QBrush(halo))
-            p.drawEllipse(QPointF(block_cx, cy), 2.2 * rr, 2.2 * rr)
+            # At rest: one small dot with the same 3.4 rad/s pulse as the
+            # cursor card's sparkle.
+            rr = 3.5 + 0.45 * math.sin(now * 3.4)
             p.setBrush(QBrush(fill))
             p.drawEllipse(QPointF(block_cx, cy), rr, rr)
             return
@@ -768,30 +647,27 @@ class CaptionIsland:
         fm = self._fm
         lh = self._lh
         step = lh + CAP_LINE_GAP
-        tx = rect.x() + CAP_PAD_X + CAP_SIDE
-        content_w = rect.width() - 2 * CAP_PAD_X - 2 * CAP_SIDE
+        tx = rect.x() + CAP_PAD_X + CAP_IND_W + CAP_IND_GAP
 
-        # Text is clipped to the pill's inner box so a rolling line vanishes
-        # under the rim, not outside it. The clip runs to the right PADDING,
-        # not the content box: while the pill is still growing toward a new
-        # ratchet target the newest word may sit in the right mirror-spacer,
-        # and it must melt into the glass there rather than be sliced.
-        clip_right = rect.right() - CAP_PAD_X
+        # Clipped to the notch itself, so a finished line slides up and
+        # disappears into the top edge. A little room on the right for
+        # punctuation that overhangs the wrap width.
+        clip_right = rect.right() - CAP_PAD_X + CAP_PUNCT_OVERHANG / 2.0
         p.setClipRect(
-            QRectF(tx - 2.0, rect.y() + CAP_PAD_Y - 1.0,
-                   clip_right - tx + 2.0, rect.height() - 2 * CAP_PAD_Y + 2.0),
+            QRectF(tx - 2.0, rect.y(), clip_right - tx + 2.0, rect.height()),
             Qt.ClipOperation.IntersectClip,
         )
         p.setFont(self._font)
 
+        # The line sits in the middle of the notch. When it is full it slides
+        # up into the edge and the next one comes up from below.
         roll_off = self._roll * step
-        live_base = rect.y() + rect.height() - CAP_PAD_Y - fm.descent() + roll_off
+        live_base = rect.center().y() + (fm.ascent() - fm.descent()) / 2.0 + roll_off
         if abs(self._roll) < 0.02:
             live_base = float(round(live_base))   # crisp at rest, smooth mid-roll
-        prev_base = live_base - step
-        out_base = prev_base - step
+        out_base = live_base - step
 
-        base_rgb = (237, 242, 250)
+        base_rgb = (255, 255, 255)
         col = QColor(*base_rgb)
 
         if self._out_line and self._roll > 0.02:
@@ -802,10 +678,6 @@ class CaptionIsland:
         lines = self._lines
         if not lines:
             return
-        if len(lines) == 2:
-            col.setAlpha(int(140 * ta))
-            p.setPen(col)
-            p.drawText(QPointF(tx, prev_base), lines[0].text)
 
         live = lines[-1].text
         j = live.rfind(" ")
@@ -821,20 +693,11 @@ class CaptionIsland:
         if tail:
             u = _clamp((now - self._word_at) / CAP_WORD_REVEAL_S, 0.0, 1.0)
             ease = _smoothstep(u)
-            sent = tail[-1:] in ".!?…"
-            u3 = _clamp((now - self._word_at) / (CAP_HILITE_SENT_S if sent else CAP_HILITE_S), 0.0, 1.0)
-            hil = 0.30 * (1.0 - u3) ** 2
             wx = tx + (self._advance(prefix + " ") if prefix else 0.0)
-            wx_r = wx + self._advance(tail)
-            end_x = wx_r
-            # Melt into the glass over the last 24px before the padding. At
-            # rest every word ends >= CAP_SIDE inside that, so this only ever
-            # acts during the ~250ms the pill is growing to fit a new word.
-            edge = _clamp((clip_right - wx_r) / 24.0, 0.0, 1.0)
-            c = QColor(int(_lerp(base_rgb[0], 255, hil)),
-                       int(_lerp(base_rgb[1], 255, hil)),
-                       int(_lerp(base_rgb[2], 255, hil)),
-                       int(255 * ta * ease * edge))
+            end_x = wx + self._advance(tail)
+            # The words are already white; the newest one is marked by its
+            # rise and fade-in alone.
+            c = QColor(*base_rgb, int(255 * ta * ease))
             p.setPen(c)
             p.drawText(QPointF(wx, live_base - 2.5 * (1.0 - ease)), tail)
 
