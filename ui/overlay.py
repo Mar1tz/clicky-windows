@@ -1,15 +1,16 @@
 """
-Tora's blue buddy cursor — faithful port of the original macOS overlay.
+Tora's blue buddy cursor — a port of the original macOS overlay, redrawn.
 
-Matches tora-main/leanring-buddy/OverlayWindow.swift:
-  - Flat solid blue equilateral triangle (#3380FF), 16×16, rotated -35°
-  - Sits at (+35, +25) relative to the real cursor
-  - Soft blue drop shadow (radius ~8)
-  - States cross-fade in place:
+Behaves as tora-main/leanring-buddy/OverlayWindow.swift:
+  - A blue triangle, rotated -35°, at (+35, +25) from the real cursor
+  - States in place:
       idle / speaking → triangle
-      listening       → 5-bar waveform
-      thinking        → rotating arc spinner
-      pointing        → triangle + speech bubble ("found it!" etc.)
+      listening       → voice bars
+      thinking        → turning ring
+      pointing        → triangle + the name of the thing, in a bubble
+Its look - rounded, a gradient, a soft shadow and a quiet glow instead of a
+flat triangle in three stacked blue discs - is ui/buddy.py, chosen by the
+user from four shown side by side on 30 Sep 2026.
 
 One window per monitor (_Surface), each exactly covering its monitor, all
 drawing the same scene in desktop coordinates. It used to be one window
@@ -32,6 +33,7 @@ from PyQt6.QtGui import (
 )
 
 from screen import monitors
+from ui import buddy
 from ui.caption import CaptionIsland
 
 
@@ -45,8 +47,6 @@ MODE_SPEAKING  = "speaking"
 OFFSET_X = 35
 OFFSET_Y = 25
 
-# Triangle bounding box edge (Swift: frame(width: 16, height: 16))
-TRI_SIZE = 16
 # Swift: .rotationEffect(.degrees(-35))
 TRI_ROTATION_DEG = -35.0
 
@@ -831,16 +831,19 @@ class CursorOverlay(QWidget):
         cx = self._display_pos.x()
         cy = self._display_pos.y()
 
+        # The buddy's look is ui/buddy.py (the polished triangle, chosen 30 Sep).
         if self._mode == MODE_LISTENING:
-            self._draw_waveform(p, cx, cy)
+            buddy.draw_listening(p, cx, cy, self._audio_level, self._phase * 0.5)
         elif self._mode == MODE_THINKING:
-            self._draw_spinner(p, cx, cy)
+            buddy.draw_thinking(p, cx, cy, self._spin_phase * 0.36)
         else:
-            # idle, speaking, pointing
-            self._draw_triangle(p, cx, cy)
+            # idle, speaking, pointing: its glow breathes, slowly
+            buddy.draw_pointer(p, cx, cy, rotation=self._rotation_deg, scale=self._flight_scale,
+                               breath=0.5 + 0.5 * math.sin(self._phase * 0.37))
 
         if self._locked_pos is not None and self._bubble_text:
-            self._draw_bubble(p, cx, cy, self._bubble_text)
+            buddy.draw_bubble(p, cx, cy, self._bubble_text,
+                              alpha=self._bubble_alpha, scale=self._bubble_scale)
 
         self._draw_island(p, cx, cy)
 
@@ -1095,137 +1098,3 @@ class CursorOverlay(QWidget):
         pen = QPen(inner, 2)
         p.setPen(pen)
         p.drawEllipse(QPointF(rx, ry), r, r)
-
-    def _draw_glow(self, p, cx, cy, radius, color_alpha=90):
-        """Cheap soft shadow approximating Swift's .shadow(radius: 8)."""
-        g = QColor(CURSOR_BLUE)
-        for i, r_mul in enumerate((1.6, 1.25, 1.0)):
-            g.setAlpha(color_alpha // (i + 1))
-            p.setBrush(QBrush(g))
-            p.setPen(Qt.PenStyle.NoPen)
-            p.drawEllipse(QPointF(cx, cy), radius * r_mul, radius * r_mul)
-
-    def _draw_triangle(self, p, cx, cy):
-        """Flat blue equilateral triangle, rotated -35° → cursor-like tilt."""
-        size = TRI_SIZE
-        height = size * math.sqrt(3) / 2
-
-        # Build triangle in local coords, then rotate/translate
-        path = QPainterPath()
-        path.moveTo(0, -height / 1.5)              # top vertex
-        path.lineTo(-size / 2, height / 3)         # bottom-left
-        path.lineTo( size / 2, height / 3)         # bottom-right
-        path.closeSubpath()
-
-        p.save()
-        p.translate(cx, cy)
-
-        # Glow — drawn unrotated so it's a round halo
-        glow = QColor(CURSOR_BLUE)
-        for i, (r_mul, alpha) in enumerate(((2.2, 35), (1.6, 55), (1.15, 85))):
-            glow.setAlpha(alpha)
-            p.setBrush(QBrush(glow))
-            p.setPen(Qt.PenStyle.NoPen)
-            p.drawEllipse(QPointF(0, 0), size * r_mul * 0.5, size * r_mul * 0.5)
-
-        p.rotate(self._rotation_deg)
-        p.scale(self._flight_scale, self._flight_scale)
-        p.setBrush(QBrush(CURSOR_BLUE))
-        p.setPen(Qt.PenStyle.NoPen)
-        p.drawPath(path)
-
-        p.restore()
-
-    def _draw_waveform(self, p, cx, cy):
-        """5 vertical rounded bars reacting to audio (mirrors BlueCursorWaveformView)."""
-        bar_count = 5
-        profile = (0.4, 0.7, 1.0, 0.7, 0.4)
-        bar_w = 2.0
-        spacing = 2.0
-        total_w = bar_count * bar_w + (bar_count - 1) * spacing
-
-        # Glow behind bars
-        glow = QColor(CURSOR_BLUE)
-        for r_mul, a in ((2.0, 40), (1.3, 70)):
-            glow.setAlpha(a)
-            p.setBrush(QBrush(glow))
-            p.setPen(Qt.PenStyle.NoPen)
-            p.drawEllipse(QPointF(cx, cy), 10 * r_mul, 10 * r_mul)
-
-        p.setBrush(QBrush(CURSOR_BLUE))
-        p.setPen(Qt.PenStyle.NoPen)
-
-        for i in range(bar_count):
-            phase = self._phase * 1.8 + i * 0.35
-            reactive = self._audio_level * 10 * profile[i]
-            idle_pulse = (math.sin(phase) + 1) / 2 * 1.5
-            h = 3 + reactive + idle_pulse
-            x = cx - total_w / 2 + i * (bar_w + spacing)
-            y = cy - h / 2
-            p.drawRoundedRect(QRectF(x, y, bar_w, h), 1.2, 1.2)
-
-    def _draw_spinner(self, p, cx, cy):
-        """Rotating arc — mirrors BlueCursorSpinnerView (trim 0.15 → 0.85)."""
-        diameter = 14.0
-        rect = QRectF(cx - diameter / 2, cy - diameter / 2, diameter, diameter)
-
-        # Glow
-        glow = QColor(CURSOR_BLUE)
-        for r_mul, a in ((2.0, 40), (1.3, 70)):
-            glow.setAlpha(a)
-            p.setBrush(QBrush(glow))
-            p.setPen(Qt.PenStyle.NoPen)
-            p.drawEllipse(QPointF(cx, cy), diameter * r_mul * 0.5, diameter * r_mul * 0.5)
-
-        pen = QPen(CURSOR_BLUE, 2.5)
-        pen.setCapStyle(Qt.PenCapStyle.RoundCap)
-        p.setPen(pen)
-        p.setBrush(Qt.BrushStyle.NoBrush)
-
-        # 70% of the circle (0.15→0.85), rotating
-        start_deg = -self._spin_phase * 180 / math.pi * 2
-        span_deg = 252   # 0.7 * 360
-        p.drawArc(rect, int(start_deg * 16) % (360 * 16), int(span_deg * 16))
-
-    def _draw_bubble(self, p, cx, cy, label: str):
-        """Speech bubble next to the buddy, matches Swift pill style."""
-        font = QFont("Segoe UI", 9, QFont.Weight.Medium)
-        p.setFont(font)
-        fm = p.fontMetrics()
-
-        pad_x, pad_y = 8, 4
-        tw = fm.horizontalAdvance(label) + pad_x * 2
-        th = fm.height() + pad_y * 2
-
-        # Swift positions bubble at (cursor.x + 10 + bubbleW/2, cursor.y + 18)
-        box_x = cx + 10
-        box_y = cy + 18 - th / 2
-
-        # Apply scale-bounce entrance around the bubble's left edge
-        scale = max(0.01, self._bubble_scale)
-        p.save()
-        p.translate(box_x, box_y + th / 2)
-        p.scale(scale, scale)
-        p.translate(-box_x, -(box_y + th / 2))
-
-        a = int(255 * self._bubble_alpha)
-        bg = QColor(CURSOR_BLUE)
-        bg.setAlpha(a)
-        glow = QColor(CURSOR_BLUE)
-        glow.setAlpha(int(90 * self._bubble_alpha))
-
-        # Glow
-        p.setBrush(QBrush(glow))
-        p.setPen(Qt.PenStyle.NoPen)
-        p.drawRoundedRect(QRectF(box_x - 4, box_y - 4, tw + 8, th + 8), 9, 9)
-
-        # Pill
-        p.setBrush(QBrush(bg))
-        p.drawRoundedRect(QRectF(box_x, box_y, tw, th), 6, 6)
-
-        # Text
-        text_color = QColor(255, 255, 255, a)
-        p.setPen(QPen(text_color, 1))
-        p.drawText(QRectF(box_x, box_y, tw, th), Qt.AlignmentFlag.AlignCenter, label)
-
-        p.restore()
