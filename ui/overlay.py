@@ -262,8 +262,9 @@ class CursorOverlay(QWidget):
         # Slow mode — doubles flight + dwell so Tora feels more like a teacher
         self._slow_mode: bool = False
 
-        # Which look: "classic" (today's) or "new" (the redesign, OD-01..09).
-        # Settings > On screen switches it; classic until the new look is signed off.
+        # Which look: "classic" or "new" (the redesign, OD-01..09). main.py sets
+        # the saved one - new unless Settings > On screen turned it off. The
+        # widget itself starts classic until the classic look is removed.
         self._style: str = theme.STYLE_CLASSIC
         # Settings > On screen > Reduced motion (OD-08, new look): the arrow
         # jumps to where it is going and the target ring is simply there.

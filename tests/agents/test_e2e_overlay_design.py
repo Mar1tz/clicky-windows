@@ -1,8 +1,9 @@
 """The overlay redesign (the "HeyTora overlay redesign" doc, OD-01..09).
 
-One test section per milestone. The classic look stays exactly as it is
-behind the new_overlay switch until the new one is signed off, so these
-tests check the new look and that nothing leaks between the two.
+One test section per milestone. The new look was signed off (Gate C) and is
+the default; the classic look stays exactly as it was, one switch away,
+until it is removed - so these tests check the new look and that nothing
+leaks between the two.
 """
 from __future__ import annotations
 
@@ -60,10 +61,12 @@ def test_the_new_look_holds_no_colours_of_its_own():
         assert not re.search(r"#[0-9A-Fa-f]{6}\b", src), f"{f}: a hex colour - use ui/overlay_theme"
 
 
-def test_the_switch_is_saved_and_classic_until_signed_off():
+def test_the_new_look_is_the_default_since_it_was_signed_off(monkeypatch):
     import config
-    assert config.Config.SWITCHES["new_overlay"] == ("TORA_NEW_OVERLAY", False)
-    assert config.cfg.switch("new_overlay") is False
+    assert config.Config.SWITCHES["new_overlay"] == ("TORA_NEW_OVERLAY", True), "Gate C, 2026-09-30"
+    assert config.cfg.switch("new_overlay") is True
+    monkeypatch.setenv("TORA_NEW_OVERLAY", "0")
+    assert config.cfg.switch("new_overlay") is False, "the classic look is one switch away"
     assert 'set_style("new" if cfg.switch("new_overlay") else "classic")' in (ROOT / "main.py").read_text(
         encoding="utf-8")
 

@@ -7,8 +7,9 @@ milestones, OD-01 to OD-09, in four phases with three gates. That doc
 belongs to another account and can no longer be edited from this one, so
 progress and the decisions taken since are recorded here.
 
-The new look is built behind the `new_overlay` switch (`TORA_NEW_OVERLAY`,
-off by default). The classic look stays exactly as it is until Gate C.
+The new look was built behind the `new_overlay` switch (`TORA_NEW_OVERLAY`)
+and became the default at Gate C. The classic look is unchanged behind the
+same switch until it is removed.
 
 ## Status
 
@@ -22,7 +23,7 @@ off by default). The classic look stays exactly as it is until Gate C.
 | OD-06 Island size (the fixed bar) | done | 8f18e1b |
 | OD-07 Island states | done | 79d495d |
 | OD-08 Settings | done | 5941f00 |
-| OD-09 Review and switch | review page up; waits on Gate C | |
+| OD-09 Review and switch | signed off; new look is the default; live walkthrough next | 172b560 and the Gate C commit |
 
 The OD-09 review page shows every state, both looks, on light and dark
 desktops at 100, 125 and 150%:
@@ -32,8 +33,11 @@ https://claude.ai/artifact/Uv3bg5zLBhJ1pjBa1RQQcP. The shots come from
 
 Gate A (the preview plays every state; nothing redraws at rest) passed after
 OD-02. Gate B (the tip lands on the pixel; the chip never covers it) passed
-after OD-05. Gate C is the user's yes on the preview; then the new look
-becomes the default.
+after OD-05. Gate C, the user's yes on the review page, passed on
+2026-09-30: the new look is now the default (`TORA_NEW_OVERLAY` defaults to
+on). The classic look stays one switch away in Settings > On screen until it
+is removed. The widgets themselves still start classic, and main.py sets
+the saved look.
 
 OD-04 and OD-05 were committed from the editor together with the Teachers
 pack's `extensions/teachers/classroom.py`, so they share 3fc5b53.
@@ -75,7 +79,7 @@ go top right instead, so it is a setting (OD-08).
 
 | Setting | Choices | Saved as |
 | --- | --- | --- |
-| New look | on, off (off until Gate C) | `TORA_NEW_OVERLAY` |
+| New look | on (the default since Gate C), off (classic) | `TORA_NEW_OVERLAY` |
 | Island | top centre, top right (16 px from the edge), off (voice only) | `TORA_ISLAND_PLACE` |
 | Island size | small 380 x 50 with 12 px text, normal 440 x 58 with 14 px, large 500 x 66 with 16 px | `TORA_ISLAND_SIZE` |
 | Reduced motion | the arrow jumps, the target ring is simply there, the island fades instead of sliding, and words appear without rising or rolling | `TORA_REDUCED_MOTION` |
@@ -106,7 +110,8 @@ clear of the island wherever it sits.
 python -m ui.overlay_preview --style new            # plays every state on the real overlay
 python -m ui.overlay_preview --style both --shots DIR   # PNGs on light, dark and busy backdrops
 python -m ui.overlay_preview --place right --size large --reduced   # with the On screen settings
-set TORA_NEW_OVERLAY=1 && python main.py            # the app in the new look
+python main.py                                      # the app, in the new look
+set TORA_NEW_OVERLAY=0 && python main.py            # the classic look, while it exists
 ```
 
 Tests: `tests/agents/test_e2e_overlay_design.py`, one section per milestone.

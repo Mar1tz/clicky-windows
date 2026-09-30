@@ -518,8 +518,9 @@ class Config:
         # without the approval box. Off until the user turns it on.
         "auto_approve":  ("TORA_AGENT_AUTO_APPROVE", False),
         # Settings > Overlay: the redesigned island, cursor and step chip
-        # (OD-01..09). Off - the classic look - until the new one is signed off.
-        "new_overlay":   ("TORA_NEW_OVERLAY", False),
+        # (OD-01..09). On since the user signed it off (Gate C, 2026-09-30); off
+        # is the classic look, kept one switch away until it is removed.
+        "new_overlay":   ("TORA_NEW_OVERLAY", True),
         # Settings > On screen (OD-08): the arrow jumps instead of gliding and
         # the island fades instead of sliding. New look only.
         "reduced_motion": ("TORA_REDUCED_MOTION", False),
