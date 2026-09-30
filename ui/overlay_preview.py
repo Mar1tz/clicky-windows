@@ -69,6 +69,11 @@ def scenes(stage: Stage) -> list[Scene]:
         ov.add_shape({"kind": "rect", "color": "blue", "role": "target", "x1": xy[0] - 49, "y1": xy[1] - 18,
                       "x2": xy[0] + 49, "y2": xy[1] + 18})
 
+    def state(ov, name: str) -> None:
+        # What main.py does on every state change: the cursor and the island.
+        ov.set_mode(name.lower())
+        ov.caption_state(name)
+
     def step(ov, n: int, total: int, instruction: str, xy: tuple[float, float], label: str) -> None:
         ov.set_guide_progress(n, total, instruction)
         ov.guide_point(xy[0], xy[1], label)
@@ -76,9 +81,9 @@ def scenes(stage: Stage) -> list[Scene]:
 
     return [
         Scene("idle", "resting beside the pointer", lambda ov, s: None, 0.8),
-        Scene("listening", "listening to you", lambda ov, s: (ov.set_mode("listening"),
+        Scene("listening", "listening to you", lambda ov, s: (state(ov, "LISTENING"),
                                                              [ov.set_audio_level(0.2) for _ in range(6)]), 0.8),
-        Scene("thinking", "working on it", lambda ov, s: (ov.set_mode("thinking"),
+        Scene("thinking", "working on it", lambda ov, s: (state(ov, "THINKING"),
                                                          ov.set_activity("finding", "Looking for the Export button")), 1.0),
         Scene("speaking-short", "a one-line answer", lambda ov, s: speak(ov, "Sure - it's in the File menu."), 2.2),
         Scene("speaking-long", "a long answer", lambda ov, s: speak(ov, LONG_ANSWER), 4.5),
@@ -120,6 +125,7 @@ def reset(overlay) -> None:
     overlay._release_lock()
     overlay.set_activity("", "")
     overlay.set_mode("idle")
+    overlay.caption_state("IDLE")
     overlay._caption.clear()
     overlay.clear_annotations()
 

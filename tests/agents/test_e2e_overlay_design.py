@@ -535,3 +535,199 @@ def test_a_spaced_dash_is_kept_and_a_bullet_is_not(qapp):
     _speak(cap, "- Sure - it's in the File menu.", seconds=2.0)
     words = " ".join(ln.text for ln in cap._lines)
     assert words == "Sure – it's in the File menu."
+
+
+# -- OD-07: the island's states ------------------------------------------------------------------------------
+
+def _new_island():
+    from ui.caption import CaptionIsland
+    cap = CaptionIsland()
+    cap.set_style("new")
+    return cap
+
+
+def _run(cap, t0, seconds, width=1920):
+    """Tick the island at 60 fps from t0 the way the overlay does; (time,
+    state, size while it can be seen) for every frame."""
+    from PyQt6.QtCore import QRectF
+    screen = QRectF(0, 0, width, 1040)
+    seen = []
+    for i in range(int(seconds * 60)):
+        now = t0 + i / 60.0
+        if cap.needs_screen:
+            cap.set_screen_width(width)
+            cap.needs_screen = False
+        if cap.active():
+            cap.tick(now, screen, 0.0, 0.0)
+        size = (round(cap._pill.width()), round(cap._pill.height())) if cap._alpha > 0.05 else None
+        seen.append((now, cap._state, size))
+    return seen
+
+
+def _say(cap, text):
+    cap.on_state("SPEAKING")
+    for word in text.split(" "):
+        cap.push(word + " ")
+    cap.finish()
+
+
+def test_the_island_shows_each_state_with_its_glyph(qapp):
+    import time
+    cap = _new_island()
+    t0 = time.monotonic()
+    cap.on_state("LISTENING")
+    assert cap.active(), "the island opens when you talk"
+    _run(cap, t0, 0.5)
+    assert (cap._glyph(), cap._status_line()) == ("listen", ("listen", "Listening"))
+    cap.on_state("THINKING")
+    assert (cap._glyph(), cap._status_line()) == ("think", ("think", "Thinking…"))
+    cap.set_activity("Analysing your screen…")
+    assert cap._status_line() == ("think", "Analysing your screen…")
+    cap.set_activity("")
+    _say(cap, "It's in the File menu.")
+    _run(cap, t0 + 0.5, 1.5)
+    assert cap._glyph() == "speak" and " ".join(ln.text for ln in cap._lines) == "It's in the File menu."
+
+
+def test_the_bar_is_one_size_through_every_state(qapp):
+    import time
+    from ui import overlay_theme as t
+    cap = _new_island()
+    t0 = time.monotonic()
+    cap.on_state("LISTENING")
+    seen = _run(cap, t0, 0.6)
+    cap.on_state("THINKING")
+    cap.set_activity("Looking that up…")
+    seen += _run(cap, t0 + 0.6, 0.6)
+    cap.set_activity("")
+    _say(cap, LONG_ANSWER)
+    seen += _run(cap, t0 + 1.2, 5.0)
+    assert {z for _t, _s, z in seen if z} == {(int(t.ISLAND_W_MAX), int(t.ISLAND_H2))}
+    assert all(s != "exit" for _t, s, _z in seen), "it never leaves between states"
+
+
+def test_the_last_words_stay_1_5_s_and_the_bar_leaves_in_200_ms(qapp):
+    import time
+    from ui import overlay_theme as t
+    cap = _new_island()
+    t0 = time.monotonic()
+    _say(cap, "Sure, it's saved.")
+    _run(cap, t0, 1.0)
+    cap.on_state("IDLE")
+    seen = _run(cap, t0 + 1.0, 3.0)
+    lingered = [now for now, s, _z in seen if s == "linger"]
+    leaving = [now for now, s, _z in seen if s == "exit"]
+    gone = next(now for now, s, _z in seen if s == "hidden")
+    assert lingered[-1] - lingered[0] == pytest.approx(t.LINGER_S, abs=0.05)
+    assert gone - leaving[0] <= t.ISLAND_OUT_S + 0.02
+    assert all(z is None or z == (int(t.ISLAND_W_MAX), int(t.ISLAND_H2)) for _n, _s, z in seen), "whole"
+
+
+def test_the_bar_slides_in_without_a_bounce(qapp):
+    import time
+    from ui import overlay_theme as t
+    cap = _new_island()
+    cap.on_state("LISTENING")
+    tops = []
+    t0 = time.monotonic()
+    for i in range(30):
+        _run(cap, t0 + i / 60.0, 1 / 60.0)
+        tops.append(cap._pill.top())
+    assert tops == sorted(tops) and tops[-1] == t.ISLAND_TOP, "down once, no overshoot"
+    assert tops.index(t.ISLAND_TOP) <= round(t.ISLAND_IN_S * 60) + 1
+
+
+def test_when_you_talk_the_words_go_at_once_and_the_bar_stays(qapp):
+    import time
+    cap = _new_island()
+    t0 = time.monotonic()
+    _say(cap, "Sure, it's in the File menu.")
+    _run(cap, t0, 1.5)
+    assert cap._lines
+    p = cap._p
+    cap.on_state("LISTENING")
+    assert not cap._lines and not cap._queue, "at once, not after a linger"
+    assert cap.active() and cap._p == p and cap._glyph() == "listen"
+
+
+def test_a_walkthrough_shows_its_step_between_toras_words(qapp):
+    import time
+    cap = _new_island()
+    t0 = time.monotonic()
+    cap.set_guide(2, 5, "Open the File menu")
+    assert cap.active() and cap._status_line() == ("rest", "Open the File menu") and cap._badge() == "2/5"
+    _say(cap, "Now open the File menu.")
+    _run(cap, t0, 1.5)
+    assert cap._lines, "her words take the bar"
+    cap.on_state("IDLE")
+    seen = _run(cap, t0 + 1.5, 3.0)
+    assert cap._state == "live" and not cap._lines, "the step comes back after the linger"
+    assert cap._status_line() == ("rest", "Open the File menu")
+    assert all(s != "exit" for _t, s, _z in seen), "it hands back instead of leaving and coming back"
+    cap.set_guide(0, 0, "")
+    _run(cap, t0 + 4.5, 0.5)
+    assert not cap.active(), "the walkthrough is over"
+
+
+def test_every_state_draws(qapp):
+    """Each state paints into an image without an error (the overlay would
+    swallow one) and puts words or a glyph inside the bar."""
+    import time
+    from PyQt6.QtGui import QImage, QPainter
+    t0 = time.monotonic()
+    for name, setup in [("listening", lambda c: c.on_state("LISTENING")),
+                        ("thinking", lambda c: (c.on_state("THINKING"), c.set_activity("Looking that up…"))),
+                        ("speaking", lambda c: _say(c, "Sure, it's in the File menu.")),
+                        ("guiding", lambda c: c.set_guide(2, 5, "Open the File menu"))]:
+        cap = _new_island()
+        setup(cap)
+        _run(cap, t0, 1.5)
+        img = QImage(1920, 120, QImage.Format.Format_ARGB32)
+        img.fill(0)
+        p = QPainter(img)
+        cap.draw(p)
+        p.end()
+        pill = cap._pill
+        lit = sum(1 for y in range(int(pill.top()) + 4, int(pill.bottom()) - 4, 2)
+                  for x in range(int(pill.left()) + 8, int(pill.right()) - 8, 2)
+                  if img.pixelColor(x, y).lightness() > 120)
+        assert lit > 20, name
+
+
+def test_what_tora_is_doing_moves_from_the_cursor_card_to_the_island(overlay, monkeypatch):
+    drawn = []
+    monkeypatch.setattr(type(overlay), "_draw_island", lambda self, *a: drawn.append("card"))
+    _at_rest(overlay)
+    overlay.set_activity("screen", "Analysing your screen…")
+    c = overlay._display_pos
+    _grab(overlay, c.x() - 50, c.y() - 80, 300, 160)
+    assert drawn == ["card"] and not overlay._caption.active(), "classic: the card, as today"
+    overlay.set_activity("", "")
+    drawn.clear()
+    overlay.set_style("new")
+    overlay.set_activity("screen", "Analysing your screen…")
+    assert overlay._caption.active()
+    assert overlay._caption._status_line() == ("think", "Analysing your screen…")
+    _grab(overlay, c.x() - 50, c.y() - 80, 300, 160)
+    assert drawn == [], "new: no card by the cursor"
+    overlay.set_activity("", "")
+    assert overlay._caption._state == "exit", "nothing to say and nothing to do: it goes"
+
+
+def test_a_waiting_walkthrough_costs_no_frames(overlay):
+    from ui.overlay import IDLE_POLL_MS
+    overlay.set_style("new")
+    _at_rest(overlay)
+    overlay.set_guide_progress(2, 5, "Open the File menu")
+    cap = overlay._caption
+    assert cap.active()
+    cap._p, cap._state = 1.0, "live"                  # it has slid in
+    overlay._tick()
+    overlay._tick()
+    calls = _spy_updates(overlay)
+    for _ in range(120):
+        overlay._tick()
+    assert calls == [] and overlay._tick_timer.interval() == IDLE_POLL_MS
+    overlay.set_guide_progress(3, 5, "Choose Export")
+    overlay._tick()
+    assert calls, "the next step is drawn"

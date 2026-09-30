@@ -27,7 +27,7 @@ from PyQt6.QtGui import (
 
 from ui import overlay_paint as paint
 from ui import overlay_theme as theme
-from ui.caption import CaptionIsland
+from ui.caption import CaptionIsland, activity_words
 from ui.overlay_chip import Chip, chip_for, place_chip, target_ring
 
 
@@ -443,11 +443,13 @@ class CursorOverlay(QWidget):
         return a * (theme.DIM_WHILE_TALKING if self._mode == MODE_LISTENING else 1.0)
 
     def set_activity(self, key: str, message: str):
-        """Show what the assistant is doing ("" clears it)."""
+        """Show what the assistant is doing ("" clears it): in the card by the
+        cursor in the classic look, in the top island in the new one (OD-07)."""
         if key != self._activity_key or message != self._activity_text:
             self._activity_at = time.monotonic()
         self._activity_key = key or ""
         self._activity_text = message or ""
+        self._caption.set_activity(self._activity_text)
 
     def set_guide_progress(self, current: int, total: int, label: str = ""):
         """Step N of M for the island. total == 0 hides it; a negative total
@@ -456,6 +458,9 @@ class CursorOverlay(QWidget):
         self._guide_cur = int(current)
         self._guide_total = int(total)
         self._guide_label = label or ""
+        cap = getattr(self, "_caption", None)
+        if cap is not None:
+            cap.set_guide(self._guide_cur, self._guide_total, self._guide_label)
         if (getattr(self, "_style", theme.STYLE_CLASSIC) == theme.STYLE_NEW
                 and getattr(self, "_locked_pos", None) is not None and getattr(self, "_chip_target", "")):
             # The count changed under a step already on screen (the plan finished writing).
@@ -481,13 +486,7 @@ class CursorOverlay(QWidget):
         makes an assistant feel hung; changing the words proves it is alive
         even when there is nothing new to report.
         """
-        head = self._activity_text
-        if head:
-            age = time.monotonic() - self._activity_at
-            if age > 8.0:
-                head = "Still working on it…"
-            elif age > 3.5:
-                head = f"{head.rstrip('.… ')} — still going…"
+        head = activity_words(self._activity_text, time.monotonic() - self._activity_at)
         sub = ""
         if self._guide_total != 0:
             sub = (f"Step {self._guide_cur} of {self._guide_total}"
@@ -764,14 +763,11 @@ class CursorOverlay(QWidget):
             return True
         if self._mode in (MODE_LISTENING, MODE_THINKING):
             return True
-        if self._caption.active():
+        if self._caption.moving():
             return True
-        lines = self._island_lines()
-        if lines is not None or self._island_alpha > 0.02:
-            if self._style == theme.STYLE_CLASSIC:
-                return True                          # its dot pulses
-            if abs((1.0 if lines else 0.0) - self._island_alpha) > 0.02:
-                return True                          # fading in or out
+        if self._style == theme.STYLE_CLASSIC and (self._island_lines() is not None
+                                                   or self._island_alpha > 0.02):
+            return True                              # the card's dot pulses
         return (self._follow_error > 0.3
                 or abs(self._vel.x()) + abs(self._vel.y()) > 0.1)
 
@@ -779,9 +775,10 @@ class CursorOverlay(QWidget):
         """End of a tick: draw only if something can have changed, and let the
         timer slow down when nothing moves (OD-02)."""
         busy = self._animating()
-        lines = self._island_lines()
-        if lines != self._last_island:               # its words changed
-            self._last_island = lines
+        look = (self._island_lines() if self._style == theme.STYLE_CLASSIC else None,
+                self._caption.signature())
+        if look != self._last_island:                # the card or the island changed
+            self._last_island = look
             self._repaint_pending = True
         if busy or self._repaint_pending:
             self._repaint_pending = False
@@ -973,8 +970,9 @@ class CursorOverlay(QWidget):
         elif self._locked_pos is not None and self._bubble_text:
             self._draw_bubble(p, cx, cy, self._bubble_text)
 
-        # Never a chip and a card at once: in the new look the chip is the label.
-        if not chip_up:
+        # The card by the cursor is the classic look's. In the new one what Tora
+        # is doing is in the top island (OD-07) and the chip is the label.
+        if self._style == theme.STYLE_CLASSIC:
             self._draw_island(p, cx, cy)
 
         # Top caption — last, so its save/restore is never leaked into
@@ -1032,18 +1030,17 @@ class CursorOverlay(QWidget):
         p.setBrush(Qt.BrushStyle.NoBrush)
         p.drawRoundedRect(QRectF(x, y, w, h), 11, 11)
 
-        # Breathing sparkle — the proof-of-life (a still dot in the new look)
+        # Breathing sparkle — the proof-of-life
         t = time.monotonic()
         pulse = 0.55 + 0.45 * math.sin(t * 3.4)
         dot = QColor(CURSOR_BLUE)
         dot.setAlpha(int(255 * a))
         dcx, dcy = x + pad_x - 1, y + pad_y + fm_h.height() / 2
         p.setPen(Qt.PenStyle.NoPen)
-        if self._style == theme.STYLE_CLASSIC:
-            halo = QColor(CURSOR_BLUE)
-            halo.setAlpha(int(90 * a * pulse))
-            p.setBrush(QBrush(halo))
-            p.drawEllipse(QPointF(dcx, dcy), 6.5 * pulse + 2.5, 6.5 * pulse + 2.5)
+        halo = QColor(CURSOR_BLUE)
+        halo.setAlpha(int(90 * a * pulse))
+        p.setBrush(QBrush(halo))
+        p.drawEllipse(QPointF(dcx, dcy), 6.5 * pulse + 2.5, 6.5 * pulse + 2.5)
         p.setBrush(QBrush(dot))
         p.drawEllipse(QPointF(dcx, dcy), 3.2, 3.2)
 

@@ -147,11 +147,64 @@ def _part_w(kind: str, words: str) -> float:
     return w + 2 * _KEY_PAD if kind == "key" else w
 
 
+def badge_width(text: str, widest: str = "") -> float:
+    """A step badge's width; `widest` holds it steady while the count changes."""
+    fm = QFontMetricsF(_font("badge"))
+    return max(fm.horizontalAdvance(text), fm.horizontalAdvance(widest) if widest else 0.0) + 12.0
+
+
+def draw_badge(p: QPainter, x: float, cy: float, text: str, alpha: float = 1.0, width: float = 0.0) -> float:
+    """The step count, "2/5", in a soft accent pill; the chip and the island
+    draw the same one. Returns its width."""
+    bw = width or badge_width(text)
+    badge = QRectF(x, cy - t.BADGE_H / 2, bw, t.BADGE_H)
+    p.setBrush(QBrush(t.color(t.ACCENT, t.ACCENT_SOFT_A * alpha)))
+    p.setPen(QPen(t.color(t.ACCENT, 0.55 * alpha), 1.0))
+    p.drawRoundedRect(badge.adjusted(0.5, 0.5, -0.5, -0.5), t.BADGE_R, t.BADGE_R)
+    p.setFont(_font("badge"))
+    p.setPen(t.color(t.TEXT, alpha))
+    p.drawText(badge, Qt.AlignmentFlag.AlignCenter, text)
+    return bw
+
+
+def draw_island_glyph(p: QPainter, centre: QPointF, kind: str, level: float, phase: float,
+                      alpha: float = 1.0) -> None:
+    """The island's state at a glance (OD-07): "listen" bars that follow your
+    voice, a "think" ring that turns, "speak" bars that move with her words
+    (level = how lively), and a still "rest" dot while a walkthrough waits."""
+    if alpha <= 0.01:
+        return
+    p.save()
+    p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+    colour = t.color(t.ACCENT, alpha)
+    if kind == "think":
+        pen = QPen(colour, 2.0)
+        pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+        p.setPen(pen)
+        p.setBrush(Qt.BrushStyle.NoBrush)
+        r = 5.5
+        start = int((-math.degrees(phase * 2.0)) * 16) % (360 * 16)
+        p.drawArc(QRectF(centre.x() - r, centre.y() - r, 2 * r, 2 * r), start, 250 * 16)
+    elif kind in ("listen", "speak"):
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(QBrush(colour))
+        lively = max(0.0, min(1.0, level))
+        for i, shape in enumerate((0.6, 1.0, 0.75)):
+            wobble = 1.2 * (math.sin(phase * 1.8 + i * 0.9) + 1.0) if lively > 0.02 else 0.0
+            h = 4.0 + 9.0 * lively * shape + wobble * lively
+            p.drawRoundedRect(QRectF(centre.x() - 6.25 + i * 4.5, centre.y() - h / 2.0, 2.5, h), 1.25, 1.25)
+    else:
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(QBrush(colour))
+        p.drawEllipse(centre, 3.5, 3.5)
+    p.restore()
+
+
 def chip_size(chip) -> QSizeF:
     """The chip's size for its words: padding, the badge, each part."""
     w = 2 * t.CHIP_PAD_X
     if chip.badge:
-        w += QFontMetricsF(_font("badge")).horizontalAdvance(chip.badge) + 12.0 + 8.0
+        w += badge_width(chip.badge) + 8.0
     parts = list(chip.parts)
     for i, (kind, words) in enumerate(parts):
         w += _part_w(kind, words)
@@ -176,15 +229,7 @@ def draw_chip(p: QPainter, rect: QRectF, chip, alpha: float = 1.0) -> None:
     p.drawRoundedRect(rect.adjusted(0.5, 0.5, -0.5, -0.5), t.CHIP_R, t.CHIP_R)
     x, cy = rect.left() + t.CHIP_PAD_X, rect.center().y()
     if chip.badge:
-        bw = QFontMetricsF(_font("badge")).horizontalAdvance(chip.badge) + 12.0
-        badge = QRectF(x, cy - t.BADGE_H / 2, bw, t.BADGE_H)
-        p.setBrush(QBrush(t.color(t.ACCENT, t.ACCENT_SOFT_A * alpha)))
-        p.setPen(QPen(t.color(t.ACCENT, 0.55 * alpha), 1.0))
-        p.drawRoundedRect(badge.adjusted(0.5, 0.5, -0.5, -0.5), t.BADGE_R, t.BADGE_R)
-        p.setFont(_font("badge"))
-        p.setPen(t.color(t.TEXT, alpha))
-        p.drawText(badge, Qt.AlignmentFlag.AlignCenter, chip.badge)
-        x += bw + 8.0
+        x += draw_badge(p, x, cy, chip.badge, alpha) + 8.0
     for i, (kind, words) in enumerate(chip.parts):
         if i:
             x += _PART_GAP
