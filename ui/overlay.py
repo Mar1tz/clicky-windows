@@ -263,8 +263,11 @@ class CursorOverlay(QWidget):
         self._slow_mode: bool = False
 
         # Which look: "classic" (today's) or "new" (the redesign, OD-01..09).
-        # Settings > Overlay switches it; classic until the new look is signed off.
+        # Settings > On screen switches it; classic until the new look is signed off.
         self._style: str = theme.STYLE_CLASSIC
+        # Settings > On screen > Reduced motion (OD-08, new look): the arrow
+        # jumps to where it is going and the target ring is simply there.
+        self._reduced: bool = False
 
         # The new look's one label, beside the target (OD-04/05): its words,
         # the target's name they were built from, and where it sits (global px).
@@ -430,10 +433,10 @@ class CursorOverlay(QWidget):
         scr = (QApplication.screenAt(QPoint(int(tip.x()), int(tip.y()))) or self.screen()
                or QApplication.primaryScreen())
         screen = QRectF(scr.availableGeometry())
-        island = QRectF(screen.center().x() - theme.ISLAND_W_MAX / 2, screen.top() + theme.ISLAND_TOP,
-                        theme.ISLAND_W_MAX, theme.ISLAND_H2)
+        island = self._caption.slot(screen)          # wherever Settings put it; None when off
+        avoid = [r for r in (island, paint.arrow_box(tip)) if r is not None]
         self._chip_rect = place_chip(target_ring(tip, self._target_bounds), paint.chip_size(self._chip),
-                                     screen, [island, paint.arrow_box(tip)])
+                                     screen, avoid)
 
     def _chip_alpha(self) -> float:
         """Fades in once the arrow has landed; dims while you are talking."""
@@ -582,6 +585,19 @@ class CursorOverlay(QWidget):
     def style(self) -> str:
         return self._style
 
+    def set_island(self, place: str, size: str):
+        """Settings > On screen (OD-08): where the top island sits - "centre",
+        "right" or "off" (voice only) - and its size. New look only."""
+        self._caption.set_island(place, size)
+        self._place_chip()
+
+    def set_reduced_motion(self, on: bool):
+        """Settings > On screen (OD-08): less movement in the new look - the
+        arrow jumps instead of gliding, the island fades instead of sliding."""
+        self._reduced = bool(on)
+        self._caption.set_reduced_motion(on)
+        self._repaint_pending = True
+
     def set_point_hold(self, hold: bool):
         """Called by manager when TTS starts (True) / ends (False).
         While held, dwell never auto-expires — the buddy stays on the element
@@ -683,7 +699,9 @@ class CursorOverlay(QWidget):
         if self._style == theme.STYLE_NEW:
             # The new look moves in a straight line and eases out: 0.35 s for a
             # step, 0.9-1.4 s while explaining, 0.5 s home. No arc, no spin.
-            if duration is not None:
+            if self._reduced:
+                dur = 0.0                            # it jumps: there on the next frame
+            elif duration is not None:
                 dur = duration * (2.0 if self._slow_mode else 1.0)
             elif phase == _PHASE_RETURNING:
                 dur = theme.RETURN_MOVE_S
@@ -810,7 +828,7 @@ class CursorOverlay(QWidget):
         # ── Pointing phase machine ──
         if self._flight_phase in (_PHASE_FLYING, _PHASE_RETURNING):
             elapsed = time.monotonic() - self._fly_t0
-            lp = min(1.0, elapsed / max(0.001, self._fly_duration))
+            lp = 1.0 if self._fly_duration <= 0 else min(1.0, elapsed / self._fly_duration)   # 0: a jump
             classic = self._style == theme.STYLE_CLASSIC
             # Smoothstep easing — gentle start and end, teacher-friendly.
             # The new look eases out: quick away, gentle arrival.
@@ -935,7 +953,7 @@ class CursorOverlay(QWidget):
             elif self._flight_phase == _PHASE_DWELLING:
                 # The new ring draws in once the arrow has landed, then is still.
                 rx, ry, _r = self._ring
-                progress = (time.monotonic() - self._arrived_at) / theme.RING_IN_S
+                progress = 1.0 if self._reduced else (time.monotonic() - self._arrived_at) / theme.RING_IN_S
                 if self._target_bounds is not None:
                     paint.draw_target_bounds(p, self._target_bounds.translated(-self.x(), -self.y()), progress)
                 else:

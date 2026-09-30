@@ -731,3 +731,220 @@ def test_a_waiting_walkthrough_costs_no_frames(overlay):
     overlay.set_guide_progress(3, 5, "Choose Export")
     overlay._tick()
     assert calls, "the next step is drawn"
+
+
+# -- OD-08: Settings > On screen -----------------------------------------------------------------------------
+
+def test_the_island_choices_are_saved_and_survive_a_restart(tmp_path, monkeypatch):
+    import config as config_module
+    from dotenv import load_dotenv
+    cfg = config_module.cfg
+    assert (cfg.choice("island_place"), cfg.choice("island_size")) == ("centre", "normal")
+    assert cfg.switch("reduced_motion") is False
+    cfg.set_choice("island_place", "right")
+    cfg.set_choice("island_size", "large")
+    cfg.set_switch("reduced_motion", True)
+    for env, _d, _a in config_module.Config.CHOICES.values():
+        monkeypatch.delenv(env, raising=False)
+    monkeypatch.delenv("TORA_REDUCED_MOTION", raising=False)
+    load_dotenv(tmp_path / ".env", override=True)          # what the next launch reads
+    assert (cfg.choice("island_place"), cfg.choice("island_size")) == ("right", "large")
+    assert cfg.switch("reduced_motion") is True
+    monkeypatch.setenv("TORA_ISLAND_SIZE", "enormous")
+    assert cfg.choice("island_size") == "normal", "nonsense in .env is the default"
+    cfg.set_choice("island_place", "sideways")
+    assert cfg.choice("island_place") == "centre"
+
+
+def test_main_applies_the_choices_at_start():
+    src = (ROOT / "main.py").read_text(encoding="utf-8")
+    assert 'overlay.set_island(cfg.choice("island_place"), cfg.choice("island_size"))' in src
+    assert 'overlay.set_reduced_motion(cfg.switch("reduced_motion"))' in src
+    assert "AppBridge(manager, tray, panel, overlay)" in src, "Settings can reach the overlay"
+
+
+def test_top_right_puts_the_bar_at_the_right_edge(qapp):
+    import time
+    from PyQt6.QtCore import QRectF
+    from ui import overlay_theme as t
+    cap = _new_island()
+    cap.set_island("right", "normal")
+    _say(cap, "Sure, it's in the File menu.")
+    _run(cap, time.monotonic(), 1.0)
+    assert cap._pill.right() == 1920 - t.ISLAND_EDGE and cap._pill.top() == t.ISLAND_TOP
+    assert cap.slot(QRectF(0, 0, 1920, 1040)) == cap._pill, "the chip keeps clear of where it really is"
+
+
+@pytest.mark.parametrize("size, px", [("small", 12), ("normal", 14), ("large", 16)])
+def test_each_size_is_one_size_throughout(qapp, size, px):
+    import time
+    from ui import overlay_theme as t
+    cap = _new_island()
+    cap.set_island("centre", size)
+    _say(cap, LONG_ANSWER)
+    seen = _run(cap, time.monotonic(), 5.0)
+    _px, w, h = t.ISLAND_SIZES[size]
+    assert {z for _t, _s, z in seen if z} == {(int(w), int(h))}
+    assert cap._font.pixelSize() == px
+    assert 2 * cap._lh + t.ISLAND_LINE_GAP < h, "two lines fit"
+
+
+def test_off_means_voice_only(qapp):
+    import time
+    cap = _new_island()
+    _say(cap, "Sure, it's in the File menu.")
+    _run(cap, time.monotonic(), 0.5)
+    assert cap.active()
+    cap.set_island("off", "normal")
+    _run(cap, time.monotonic(), 0.5)
+    assert not cap.active(), "the one on screen goes"
+    _say(cap, "Next, open the File menu.")
+    cap.on_state("LISTENING")
+    cap.set_activity("Looking that up…")
+    cap.set_guide(2, 5, "Open the File menu")
+    from PyQt6.QtCore import QRectF
+    assert not cap.active() and cap.slot(QRectF(0, 0, 1920, 1040)) is None, "nothing to keep clear of"
+
+
+def test_reduced_motion_fades_the_bar_and_the_words_stay_put(qapp):
+    import time
+    from ui import overlay_theme as t
+    cap = _new_island()
+    cap.set_reduced_motion(True)
+    cap.on_state("LISTENING")
+    tops, alphas = [], []
+    t0 = time.monotonic()
+    for i in range(20):
+        _run(cap, t0 + i / 60.0, 1 / 60.0)
+        tops.append(cap._pill.top())
+        alphas.append(cap._alpha)
+    assert set(tops) == {t.ISLAND_TOP}, "it does not slide"
+    assert alphas[0] < alphas[-1] == 1.0, "it fades in"
+    _say(cap, LONG_ANSWER)
+    rolls = []
+    for i in range(300):
+        _run(cap, t0 + 0.5 + i / 60.0, 1 / 60.0)
+        rolls.append(cap._roll)
+    assert max(rolls) == 0.0 and len(cap._lines) == 2, "a finished line goes; it never rolls"
+
+
+def test_reduced_motion_the_arrow_jumps(overlay):
+    overlay.set_style("new")
+    overlay.set_reduced_motion(True)
+    _at_rest(overlay)
+    overlay.guide_point(700.0, 320.0, "Export")
+    overlay._tick()
+    assert (overlay._display_pos.x(), overlay._display_pos.y()) == (700.0, 320.0), "there on the next frame"
+
+
+def test_the_chip_keeps_clear_of_the_island_where_it_sits(overlay):
+    from PyQt6.QtCore import QRectF
+    from PyQt6.QtWidgets import QApplication
+    overlay.set_style("new")
+    overlay.set_island("right", "large")
+    _at_rest(overlay)
+    scr = QRectF(QApplication.primaryScreen().availableGeometry())
+    island = overlay._caption.slot(scr)
+    at = (island.center().x(), island.bottom() + 6)      # a target just under the island
+    overlay.set_guide_progress(2, 5, "Click Settings.")
+    overlay.guide_point(at[0], at[1], "Settings")
+    assert overlay._chip_rect is not None and not overlay._chip_rect.intersects(island)
+
+
+class _LookBridge:
+    """Settings > On screen reads and changes through these; recorded."""
+
+    def __init__(self, **look):
+        from ui.app_bridge import AppBridge
+        self._real = AppBridge()
+        self.look = {"new": False, "place": "centre", "size": "normal", "reduced": False, **look}
+        self.done = []
+
+    def overlay_look(self):
+        return dict(self.look)
+
+    def set_overlay_look(self, **change):
+        self.done.append(change)
+
+    def show_island(self):
+        self.done.append("show")
+        return True
+
+    def __getattr__(self, name):                       # the rest of the page: the real, empty bridge
+        return getattr(self._real, name)
+
+
+def _on_screen_card(page):
+    from PyQt6.QtWidgets import QLabel
+    from ui.app_widgets import Card
+    for card in page.findChildren(Card):
+        if "On screen" in [lbl.text() for lbl in card.findChildren(QLabel)]:
+            return card
+    raise AssertionError("no On screen card")
+
+
+def test_the_settings_page_has_the_look_on_screen(qapp):
+    from PyQt6.QtWidgets import QLabel, QPushButton
+    from ui.app_pages import SettingsPage
+    from ui.app_widgets import Select, ToggleRow
+    bridge = _LookBridge()
+    page = SettingsPage(bridge)                        # kept: Qt deletes an orphaned page's children
+    card = _on_screen_card(page)
+    toggles = {next(lbl.text() for lbl in r.findChildren(QLabel)): r for r in card.findChildren(ToggleRow)}
+    place, size = card.findChildren(Select)
+    assert [place.itemText(i) for i in range(3)] == ["Top centre", "Top right", "Off - voice only"]
+    assert [size.itemText(i) for i in range(3)] == ["Small", "Normal", "Large"]
+    assert not place.isEnabled() and not toggles["Reduced motion"].isEnabled(), "new look only"
+    toggles["New look"].switch.setChecked(True)
+    assert place.isEnabled() and size.isEnabled() and toggles["Reduced motion"].isEnabled()
+    place.setCurrentIndex(1)
+    size.setCurrentIndex(2)
+    toggles["Reduced motion"].switch.setChecked(True)
+    next(b for b in card.findChildren(QPushButton) if b.text() == "Show me").click()
+    assert bridge.done == [{"new": True}, {"place": "right"}, {"size": "large"}, {"reduced": True}, "show"]
+
+
+def test_the_page_shows_what_was_saved(qapp):
+    from ui.app_pages import SettingsPage
+    from ui.app_widgets import Select
+    page = SettingsPage(_LookBridge(new=True, place="off", size="small"))
+    place, size = _on_screen_card(page).findChildren(Select)
+    assert (place.currentText(), size.currentText()) == ("Off - voice only", "Small") and place.isEnabled()
+
+
+def test_a_change_is_saved_and_applied_to_the_overlay_now(overlay):
+    from config import cfg
+    from ui.app_bridge import AppBridge
+    bridge = AppBridge(overlay=overlay)
+    bridge.set_overlay_look(new=True, place="right", size="large", reduced=True)
+    assert (cfg.switch("new_overlay"), cfg.choice("island_place"), cfg.choice("island_size"),
+            cfg.switch("reduced_motion")) == (True, "right", "large", True)
+    cap = overlay._caption
+    assert overlay.style == "new" and overlay._reduced
+    assert (cap._place, cap._size, cap._reduced) == ("right", "large", True)
+    assert bridge.show_island() and cap.active(), "Show me puts a line in the island"
+    bridge._state = "speaking"
+    assert bridge.show_island() is False, "never over a real answer"
+
+
+def test_the_preview_shows_each_setting(qapp, tmp_path):
+    from PyQt6.QtCore import QRectF
+    from PyQt6.QtGui import QImage
+    from PyQt6.QtWidgets import QApplication
+    from ui.caption import CaptionIsland
+    from ui.overlay_preview import shots
+    (path,) = [p for p in shots(str(tmp_path), ("new",), settle_scale=0.3, only={"speaking-short"},
+                                place="right", size="large") if p.endswith("-light.png")]
+    stage = QRectF(QApplication.primaryScreen().availableGeometry())
+    cap = CaptionIsland()
+    cap.set_style("new")
+    cap.set_island("right", "large")
+    slot = cap.slot(stage)
+    left = min(max(slot.center().x() - 320, stage.left()), stage.right() - 640)
+    img = QImage(path)
+    head = 20
+    inside = img.pixelColor(int(slot.right() - left - 30), int(head + slot.top() - stage.top() + 62))
+    outside = img.pixelColor(int(slot.left() - left - 20), int(head + slot.top() - stage.top() + 20))
+    assert inside.lightness() < 60, "the large bar, at the right, 62 px down (normal ends at 58)"
+    assert outside.lightness() > 200, "and the backdrop beside it"
+

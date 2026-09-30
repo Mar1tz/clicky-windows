@@ -36,9 +36,9 @@ class AppBridge(QObject):
     # shown at the time refreshes itself.
     changed = pyqtSignal(str)
 
-    def __init__(self, manager: Any = None, tray: Any = None, panel: Any = None):
+    def __init__(self, manager: Any = None, tray: Any = None, panel: Any = None, overlay: Any = None):
         super().__init__()
-        self.manager, self.tray, self.panel = manager, tray, panel
+        self.manager, self.tray, self.panel, self.overlay = manager, tray, panel, overlay
         self._state = "idle"
         if manager is not None:
             manager.sig_state_changed.connect(self._on_state)
@@ -242,6 +242,48 @@ class AppBridge(QObject):
         if wf is not None and hasattr(wf, "set_auto_approve"):
             wf.set_auto_approve(bool(on))
         self.changed.emit("switches")
+
+    # ── on screen (OD-08) ────────────────────────────────────────────────────
+
+    def overlay_look(self) -> dict:
+        """The look on screen, as saved: the new look on or not, the island's
+        place and size, and reduced motion."""
+        from config import cfg
+        return {"new": cfg.switch("new_overlay"), "place": cfg.choice("island_place"),
+                "size": cfg.choice("island_size"), "reduced": cfg.switch("reduced_motion")}
+
+    def set_overlay_look(self, **change) -> None:
+        """Save a change - new=, place=, size=, reduced= - for every launch and
+        apply it to the overlay now. Not through the tray: none of these are
+        in its menu."""
+        from config import cfg
+        if "new" in change:
+            cfg.set_switch("new_overlay", bool(change["new"]))
+        if "place" in change:
+            cfg.set_choice("island_place", change["place"])
+        if "size" in change:
+            cfg.set_choice("island_size", change["size"])
+        if "reduced" in change:
+            cfg.set_switch("reduced_motion", bool(change["reduced"]))
+        ov = self.overlay
+        if ov is not None:
+            look = self.overlay_look()
+            ov.set_style("new" if look["new"] else "classic")
+            ov.set_island(look["place"], look["size"])
+            ov.set_reduced_motion(look["reduced"])
+        self.changed.emit("switches")
+
+    def show_island(self) -> bool:
+        """Settings > On screen > Show me: one sample line in the island, so a
+        change can be seen without asking Tora anything. Not mid-turn."""
+        ov = self.overlay
+        if ov is None or self._state != "idle":
+            return False
+        ov.caption_state("SPEAKING")
+        ov.caption_chunk("This is how my answers will look up here.")
+        ov.caption_done()
+        ov.caption_state("IDLE")
+        return True
 
     def grants(self) -> list[str]:
         """Desktop actions the user said to always allow (DC-16)."""

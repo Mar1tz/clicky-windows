@@ -20,8 +20,8 @@ off by default). The classic look stays exactly as it is until Gate C.
 | OD-04 Step chip words | done | 3fc5b53 |
 | OD-05 Step chip placement | done | 3fc5b53 |
 | OD-06 Island size (the fixed bar) | done | 8f18e1b |
-| OD-07 Island states | done | the OD-07 commit |
-| OD-08 Settings | next | |
+| OD-07 Island states | done | 79d495d |
+| OD-08 Settings | done | the OD-08 commit |
 | OD-09 Review and switch | waits on Gate C | |
 
 Gate A (the preview plays every state; nothing redraws at rest) passed after
@@ -63,7 +63,22 @@ into the island; the step's action is on the chip beside the target. The
 classic look keeps its card.
 
 **Island position.** Top centre by default. The plan asks whether it should
-go top right instead; OD-08 adds a setting (top centre, top right, off).
+go top right instead, so it is a setting (OD-08).
+
+**Settings > On screen (OD-08).** One card on the Settings page:
+
+| Setting | Choices | Saved as |
+| --- | --- | --- |
+| New look | on, off (off until Gate C) | `TORA_NEW_OVERLAY` |
+| Island | top centre, top right (16 px from the edge), off (voice only) | `TORA_ISLAND_PLACE` |
+| Island size | small 380 x 50 with 12 px text, normal 440 x 58 with 14 px, large 500 x 66 with 16 px | `TORA_ISLAND_SIZE` |
+| Reduced motion | the arrow jumps, the target ring is simply there, the island fades instead of sliding, and words appear without rising or rolling | `TORA_REDUCED_MOTION` |
+
+The last three apply to the new look only; their rows are disabled while it
+is off. A change is saved and applied to the overlay at once. "Show me" puts
+one line in the island so it can be seen without asking Tora anything; it
+does nothing mid-turn. Each size keeps the fixed-bar rule. The chip keeps
+clear of the island wherever it sits.
 
 ## Where the build differs from the plan
 
@@ -84,6 +99,7 @@ go top right instead; OD-08 adds a setting (top centre, top right, off).
 ```
 python -m ui.overlay_preview --style new            # plays every state on the real overlay
 python -m ui.overlay_preview --style both --shots DIR   # PNGs on light, dark and busy backdrops
+python -m ui.overlay_preview --place right --size large --reduced   # with the On screen settings
 set TORA_NEW_OVERLAY=1 && python main.py            # the app in the new look
 ```
 

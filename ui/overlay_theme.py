@@ -59,6 +59,16 @@ ISLAND_PAD_X = 14.0
 ISLAND_GLYPH_W = 16.0
 ISLAND_GLYPH_GAP = 8.0
 ISLAND_LINE_GAP = 4.0
+ISLAND_EDGE = 16.0                # from the screen's right edge, when it sits top right
+
+# Settings > On screen (OD-08). Where the island sits ("off" = voice only), and
+# its three sizes: text px, width, height. Normal is the one above.
+ISLAND_PLACES = ("centre", "right", "off")
+ISLAND_SIZES = {
+    "small": (12, 380.0, 50.0),
+    "normal": (ISLAND_TEXT_PX, ISLAND_W_MAX, ISLAND_H2),
+    "large": (16, 500.0, 66.0),
+}
 
 ARROW_H = 20.0                    # the pointer arrow, tip to tail
 OUTLINE_W = 1.5

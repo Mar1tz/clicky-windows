@@ -6,6 +6,9 @@
     python -m ui.overlay_preview --shots DIR         write a PNG of every state instead of showing
                                                      anything: both looks, on a light, a dark and a
                                                      busy backdrop
+    python -m ui.overlay_preview --place right --size large --reduced
+                                                     the new look with Settings > On screen's
+                                                     choices (OD-08); they work with --shots too
 
 The redesign (milestones OD-01..09) is reviewed here before it reaches a real
 walkthrough: every island state, every cursor state, the step label at the
@@ -188,9 +191,20 @@ def _crop(stage: Stage, focus: QPointF, w: int, h: int) -> QRect:
     return QRect(x, y, w, h)
 
 
+def setup(overlay, style: str, place: str = "centre", size: str = "normal", reduced: bool = False) -> None:
+    """The look, and Settings > On screen's choices, as main.py applies them."""
+    overlay.set_style(style)
+    overlay.set_island(place, size)
+    overlay.set_reduced_motion(reduced)
+
+
 def capture(overlay, stage: Stage, scene: Scene, kind: str, style: str) -> QImage:
-    """The island strip on top, the area round the cursor below, over one backdrop."""
-    island = QRect(int(stage.r.center().x() - 320), int(stage.r.top()), 640, 110)
+    """The island strip on top - wherever the island sits - and the area round
+    the cursor below, over one backdrop."""
+    slot = overlay._caption.slot(stage.r)
+    mid = slot.center().x() if slot is not None else stage.r.center().x()
+    left = min(max(mid - 320, stage.r.left()), stage.r.right() - 640)
+    island = QRect(int(left), int(stage.r.top()), 640, 110)
     focus = overlay._locked_pos if overlay._locked_pos is not None else overlay._display_pos
     near = _crop(stage, QPointF(focus), 640, 300)
     head, gap = 20, 8
@@ -222,7 +236,10 @@ def capture(overlay, stage: Stage, scene: Scene, kind: str, style: str) -> QImag
     return img
 
 
-def shots(out_dir: str, styles: tuple[str, ...] = ("classic", "new"), settle_scale: float = 1.0) -> list[str]:
+def shots(out_dir: str, styles: tuple[str, ...] = ("classic", "new"), settle_scale: float = 1.0,
+          only: Optional[set[str]] = None, **look) -> list[str]:
+    """PNGs of every scene (or `only` these), in each look; `look` is
+    Settings > On screen's place=, size=, reduced=."""
     from ui.overlay import CursorOverlay
     app = QApplication.instance() or QApplication(sys.argv[:1])
     os.makedirs(out_dir, exist_ok=True)
@@ -232,9 +249,11 @@ def shots(out_dir: str, styles: tuple[str, ...] = ("classic", "new"), settle_sca
     for style in styles:
         ov = CursorOverlay()
         attach(ov, stage)
-        ov.set_style(style)
+        setup(ov, style, **look)
         try:
             for i, sc in enumerate(scenes(stage), 1):
+                if only is not None and sc.name not in only:
+                    continue
                 play(ov, stage, sc, sc.settle * settle_scale)
                 for kind in BACKDROPS:
                     path = os.path.join(out_dir, f"{style}-{i:02d}-{sc.name}-{kind}.png")
@@ -246,14 +265,14 @@ def shots(out_dir: str, styles: tuple[str, ...] = ("classic", "new"), settle_sca
     return written
 
 
-def live(style: str, loop: bool) -> int:
+def live(style: str, loop: bool, **look) -> int:
     from ui.overlay import CursorOverlay
     app = QApplication.instance() or QApplication(sys.argv[:1])
     screen = app.primaryScreen()
     stage = Stage(QRectF(screen.availableGeometry()))
     ov = CursorOverlay()
     attach(ov, stage)
-    ov.set_style(style)
+    setup(ov, style, **look)
     ov.show()
     order = scenes(stage)
     state = {"i": 0}
@@ -280,13 +299,18 @@ def main(argv: Optional[list[str]] = None) -> int:
     ap.add_argument("--style", choices=["new", "classic", "both"], default="new")
     ap.add_argument("--shots", metavar="DIR", help="write PNGs of every state instead of showing them")
     ap.add_argument("--loop", action="store_true", help="keep playing")
+    # Settings > On screen (OD-08); the new look only.
+    ap.add_argument("--place", choices=["centre", "right", "off"], default="centre", help="where the island sits")
+    ap.add_argument("--size", choices=["small", "normal", "large"], default="normal", help="the island's size")
+    ap.add_argument("--reduced", action="store_true", help="reduced motion")
     args = ap.parse_args(argv)
+    look = {"place": args.place, "size": args.size, "reduced": args.reduced}
     if args.shots:
         styles = ("classic", "new") if args.style == "both" else (args.style,)
-        paths = shots(args.shots, styles)
+        paths = shots(args.shots, styles, **look)
         print(f"{len(paths)} screenshots in {os.path.abspath(args.shots)}")
         return 0
-    return live("new" if args.style == "both" else args.style, args.loop)
+    return live("new" if args.style == "both" else args.style, args.loop, **look)
 
 
 if __name__ == "__main__":

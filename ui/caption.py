@@ -161,8 +161,14 @@ class CaptionIsland:
 
         self.needs_screen: bool = False
         self._style = theme.STYLE_CLASSIC      # the redesign's look is "new" (OD-01..09)
-        self._applied = ""
+        self._applied: tuple = ()
         self._adv: dict[str, float] = {}
+        # Settings > On screen (OD-08), new look only: where it sits, how big,
+        # and less movement. The place is locked per episode like the monitor.
+        self._place = "centre"
+        self._ep_place = "centre"
+        self._size = "normal"
+        self._reduced = False
 
         # What Tora is doing when she is not talking. The new look shows it in
         # the island (OD-07); the classic look keeps its card by the cursor.
@@ -235,7 +241,7 @@ class CaptionIsland:
         non-empty fragment of an utterance, regardless of app state — on the
         cascade path SPEAKING is emitted only after the whole answer has
         streamed, so waiting for it would show nothing until the end."""
-        if not text:
+        if not text or self._off():
             return
         t = text.replace("\r", " ").replace("\n", " ").replace("\t", " ")
         t = _ANY_BRACKET_TAG.sub("", t)
@@ -443,11 +449,46 @@ class CaptionIsland:
             return ""
         return f"{cur}/{total}" if total > 0 else f"{cur}"
 
+    def _off(self) -> bool:
+        """Settings > On screen > Island: off - voice only (new look)."""
+        return self._style == theme.STYLE_NEW and self._place == "off"
+
+    def set_island(self, place: str, size: str) -> None:
+        """Where the new island sits - "centre", "right" or "off" - and how big
+        it is (Settings > On screen, OD-08). An island on screen keeps its
+        place and size; "off" sends it away now."""
+        if place not in theme.ISLAND_PLACES or size not in theme.ISLAND_SIZES:
+            raise ValueError(f"place is one of {theme.ISLAND_PLACES}, size one of {tuple(theme.ISLAND_SIZES)}")
+        self._place, self._size = place, size
+        if self._state == "hidden":
+            self._apply_style()
+        elif self._off():
+            self._state = "exit"
+
+    def set_reduced_motion(self, on: bool) -> None:
+        """Less movement (Settings > On screen, OD-08): the new island fades in
+        and out instead of sliding, and words appear without rising or rolling."""
+        self._reduced = bool(on)
+
+    def slot(self, screen: QRectF) -> Optional[QRectF]:
+        """Where the island sits on this screen, in the same pixels as the
+        screen - or None when it is off - so the step chip can keep clear."""
+        if self._off():
+            return None
+        _px, w_max, h = theme.ISLAND_SIZES[self._size]
+        if self._style == theme.STYLE_NEW:
+            w = min(w_max, max(theme.ISLAND_W_MIN, 0.6 * screen.width()))
+        else:
+            w, h = theme.ISLAND_W_MAX, theme.ISLAND_H2
+        right = self._style == theme.STYLE_NEW and self._place == "right"
+        x = (screen.right() - theme.ISLAND_EDGE - w if right else screen.center().x() - w / 2.0)
+        return QRectF(x, screen.top() + theme.ISLAND_TOP, w, h)
+
     def _fit(self) -> None:
         """The new bar's text column: after the glyph, and after the step badge
         in a walkthrough. Changed only with no words on screen, so text never
         shifts under the reader."""
-        if self._style != theme.STYLE_NEW or self._applied != theme.STYLE_NEW:
+        if self._style != theme.STYLE_NEW or self._applied[:1] != (theme.STYLE_NEW,):
             return
         side = theme.ISLAND_GLYPH_W + theme.ISLAND_GLYPH_GAP
         if self._guide[1]:
@@ -463,7 +504,7 @@ class CaptionIsland:
     def _sync_status(self) -> None:
         """Open, keep or close the new island for what Tora is doing. Her words
         on screen always win; they hand back after their linger."""
-        if self._style != theme.STYLE_NEW or self._has_words():
+        if self._style != theme.STYLE_NEW or self._has_words() or self._off():
             return
         if self._status_line() is not None:
             if self._state == "hidden":
@@ -600,6 +641,7 @@ class CaptionIsland:
         self._last_reveal_at = 0.0
         if fresh:
             self._apply_style()                  # a look chosen while hidden starts now
+            self._ep_place = self._place
         if self._style == theme.STYLE_NEW:
             # The fixed bar: its final size from the first word to the last.
             self._tw, self._th = self._max_w, self._h2
@@ -652,7 +694,11 @@ class CaptionIsland:
         else:
             self._w += (self._tw - self._w) * 0.22
             self._h += (self._th - self._h) * 0.18
-        self._two += ((1.0 if len(self._lines) >= 2 else 0.0) - self._two) * 0.25
+        two = 1.0 if len(self._lines) >= 2 else 0.0
+        still = self._reduced and self._style == theme.STYLE_NEW
+        self._two = two if still else self._two + (two - self._two) * 0.25
+        if still:
+            self._roll = 0.0                     # the old line goes; it does not roll
         self._roll += (0.0 - self._roll) * 0.22
         if self._out_line and self._roll < 0.02:
             self._out_line = ""
@@ -667,9 +713,13 @@ class CaptionIsland:
         cx = screen.x() + screen.width() / 2.0 - ox
         rest_top = screen.y() + self._top - oy
         # At p=0 the whole pill is above the clip edge: it extrudes from the
-        # bezel rather than fading in.
-        y = rest_top - (h + self._top) * (1.0 - p)
-        x = float(round(cx - w / 2.0))
+        # bezel rather than fading in. With reduced motion the new bar only fades.
+        new = self._style == theme.STYLE_NEW
+        y = rest_top if new and self._reduced else rest_top - (h + self._top) * (1.0 - p)
+        if new and self._ep_place == "right":
+            x = float(round(screen.x() + screen.width() - ox - theme.ISLAND_EDGE - w))
+        else:
+            x = float(round(cx - w / 2.0))
         self._pill = QRectF(x, float(round(y)), w, h)
         self._clip = QRectF(screen.x() - ox, screen.y() - oy,
                             screen.width(), screen.height())
@@ -834,14 +884,16 @@ class CaptionIsland:
         """The island's measurements for its look. Classic: today's pill.
         New (OD-06): a solid bar of one size, 440 x 58 px (narrower on a small
         screen), 14 px text - everything from ui/overlay_theme."""
-        if self._applied == self._style:
+        key = (self._style, self._size)
+        if self._applied == key:
             return
-        self._applied = self._style
+        self._applied = key
+        px, w_max, h2 = theme.ISLAND_SIZES[self._size]
         if self._style == theme.STYLE_NEW:
-            f = theme.font(theme.ISLAND_TEXT_PX, QFont.Weight.Medium)
+            f = theme.font(px, QFont.Weight.Medium)
             self._pad_x, self._pad_y = theme.ISLAND_PAD_X, 0.0
             self._side_l, self._side_r = theme.ISLAND_GLYPH_W + theme.ISLAND_GLYPH_GAP, 0.0
-            self._w_min, self._w_max_cap = theme.ISLAND_W_MIN, theme.ISLAND_W_MAX
+            self._w_min, self._w_max_cap = theme.ISLAND_W_MIN, w_max
             self._line_gap, self._top = theme.ISLAND_LINE_GAP, theme.ISLAND_TOP
         else:
             f = self._classic_font
@@ -856,7 +908,7 @@ class CaptionIsland:
         self._lh = self._fm.height()
         self._avg_adv = self._fm.horizontalAdvance("abcdefghijklmnopqrstuvwxyz ") / 27.0
         if self._style == theme.STYLE_NEW:
-            self._h1, self._h2 = theme.ISLAND_H1, theme.ISLAND_H2
+            self._h1, self._h2 = theme.ISLAND_H1, h2
         else:
             self._h1 = self._lh + 2 * CAP_PAD_Y
             self._h2 = 2 * self._lh + CAP_LINE_GAP + 2 * CAP_PAD_Y
@@ -872,9 +924,9 @@ class CaptionIsland:
         monitor: it does not scale up on a 49-inch panel, only down on a
         small laptop screen."""
         if self._style == theme.STYLE_NEW:
-            # The fixed bar: 440 px, or 60% of a small screen, and it is that
-            # size from the first word (OD-06).
-            self._max_w = min(theme.ISLAND_W_MAX, max(theme.ISLAND_W_MIN, 0.6 * width))
+            # The fixed bar: 440 px (its size setting's width), or 60% of a
+            # small screen, and it is that size from the first word (OD-06).
+            self._max_w = min(self._w_max_cap, max(theme.ISLAND_W_MIN, 0.6 * width))
             self._fit()
             self._tw = self._w = self._max_w
             self._th = self._h = self._h2
@@ -1147,6 +1199,8 @@ class CaptionIsland:
             sent = tail[-1:] in ".!?…"
             u3 = _clamp((now - self._word_at) / (CAP_HILITE_SENT_S if sent else CAP_HILITE_S), 0.0, 1.0)
             hil = 0.30 * (1.0 - u3) ** 2
+            if new and self._reduced:
+                ease, hil = 1.0, 0.0             # it is simply there: no rise, no flash
             wx = tx + (self._advance(prefix + " ") if prefix else 0.0)
             wx_r = wx + self._advance(tail)
             end_x = wx_r
