@@ -248,6 +248,9 @@ def main():
     manager.sig_response_chunk.connect(panel.append_response_chunk)
     manager.sig_response_chunk.connect(overlay.caption_chunk)
     manager.sig_response_done.connect(overlay.caption_done)
+    # The words arrive seconds ahead of the voice; the caption paces them by
+    # how far the voice has actually got.
+    overlay.set_voice_clock(manager.voice_clock)
 
     # Audio level → cursor waveform (+ panel meter)
     manager.sig_audio_level.connect(panel.set_audio_level)

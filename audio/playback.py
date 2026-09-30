@@ -233,6 +233,20 @@ class PcmStreamPlayer:
         with self._lock:
             return len(self._buf) / (self._rate * 2)
 
+    @property
+    def bytes_per_second(self) -> int:
+        return self._rate * 2          # int16 mono
+
+    @property
+    def latency(self) -> float:
+        """How long a sample takes from leaving the buffer to leaving the
+        speaker: the device's own output latency (0 when closed)."""
+        stream = self._stream
+        try:
+            return float(stream.latency) if stream is not None else 0.0
+        except Exception:
+            return 0.0
+
     async def drain(self, timeout: float = 120.0) -> None:
         """Wait until the buffer has played out (or stop_audio fires)."""
         deadline = time.monotonic() + timeout

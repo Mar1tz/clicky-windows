@@ -448,6 +448,12 @@ class RealtimeConversation:
 
         self._turn = Turn()
         self._speaking = False
+        # Bytes of the answer being spoken, counted from when its first audio
+        # arrived; with what is still queued, this says how far the voice
+        # has got (voice_clock). Reset when an answer starts after the last
+        # one finished playing - not per Turn, which ends at turn_complete
+        # while most of the answer is still waiting in the player.
+        self._voice_bytes = 0
         self._tool_rounds = 0
         # True once a turn has ended, until the user speaks again. The user
         # speaking across that boundary is what "a new request" means, and a
@@ -484,6 +490,23 @@ class RealtimeConversation:
             return self._player.queued_seconds > 0.05
         except Exception:
             return False
+
+    def voice_clock(self) -> Optional[tuple[float, float]]:
+        """How far Tora's voice has got through the answer she is speaking:
+        (seconds heard so far, seconds of it received), or None when she is
+        not speaking.
+
+        The words arrive as fast as the audio - a seven-second answer in
+        about two - so a caption that shows them on arrival runs seconds
+        ahead of the voice. This is what lets it keep time instead. Safe to
+        read from any thread: two numbers and a locked buffer length.
+        """
+        if not self.speaking:
+            return None
+        player = self._player
+        received = self._voice_bytes / player.bytes_per_second
+        played = received - player.queued_seconds - player.latency
+        return max(0.0, played), received
 
     @property
     def connecting(self) -> bool:
@@ -784,8 +807,11 @@ class RealtimeConversation:
 
                 elif ev.kind == "audio":
                     if not self._speaking:
+                        if self._player.queued_seconds <= 0.05:
+                            self._voice_bytes = 0       # a new answer, not more of the last
                         self._speaking = True
                         self._player.start()
+                    self._voice_bytes += len(ev.audio)
                     self._player.feed(ev.audio)
 
                 elif ev.kind == "interrupted":

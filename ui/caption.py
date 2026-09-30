@@ -28,6 +28,13 @@ Four independent layers keep it still:
   4. fixed wrap width        text wraps against a width locked for the whole
                              utterance
 
+And one more thing makes the words match the voice. Gemini Live sends an
+answer's text and audio together, far faster than Tora speaks it, and says
+the turn is complete while most of it is still waiting in the player. So
+the live voice's clock (set_voice_clock) decides when each word shows - as
+the voice reaches it - and the notch stays until the voice stops. Without a
+clock (a walkthrough line in the Windows voice) the words pace themselves.
+
 Motion is one presence value `p` that eases in and out in a set time with no
 overshoot: a notch that bounced would come away from the edge it hangs from.
 """
@@ -84,6 +91,7 @@ CAP_DEAD_AIR_S      = 1.2
 CAP_BACKSTOP_S      = 20.0  # a hung provider can never pin the pill open
 CAP_LINGER_CANCEL_S = 0.45
 CAP_BARGE_CONFIRM_S = 1.5
+CAP_VOICE_LEAD_S    = 0.15  # a word shows this much before the voice says it
 
 CAP_PUNCT_GLUE    = ",.!?;:…\"')]"
 CAP_PUNCT_OVERHANG = 12.0
@@ -138,6 +146,15 @@ class CaptionIsland:
         self._lh = self._fm.height()
 
         self.needs_screen: bool = False
+
+        # Keeping time with the voice. Tora's live answer arrives as text and
+        # audio together, far faster than she speaks it, so the words are
+        # revealed by how far the VOICE has got, not by when they arrived.
+        self._voice = None              # () -> (seconds heard, seconds received) | None
+        self._clock = None              # this tick's reading
+        self._chars_in = 0              # characters of this answer received
+        self._chars_out = 0             # ... and shown
+        self._idle_wait = False         # the answer is over but still being spoken
 
         # Text pipeline
         self._pending = ""              # raw chars not yet split into words
@@ -225,6 +242,7 @@ class CaptionIsland:
             self._first_chunk_words = len(t.split())
         self._last_chunk_at = now
         self._frozen_at = 0.0
+        self._chars_in += len(t)
 
         # Punctuation that arrives as its own fragment glues onto the previous
         # word rather than becoming a floating token.
@@ -266,8 +284,15 @@ class CaptionIsland:
             # spoken; showing it would be a lie.
             self._queue.clear()
             self._pending = ""
+            self._idle_wait = False
             self._seal(0.0, CAP_OUT_S_FAST)
             self._state = "exit"
+            return
+        if name == "IDLE" and self._voice_live():
+            # The server has finished sending, but most of the answer is still
+            # to be spoken. The notch stays, and this is handled when the
+            # voice stops (tick).
+            self._idle_wait = True
             return
         if name == "IDLE":
             self._pump_tokens(time.monotonic(), force=True)
@@ -298,6 +323,21 @@ class CaptionIsland:
         self._p = self._pv = 0.0
         self._alpha = self._text_alpha = 0.0
 
+    def set_voice_clock(self, clock) -> None:
+        """How far Tora's voice has got: a callable returning (seconds heard,
+        seconds received) of the answer being spoken, or None when she is not
+        speaking (CompanionManager.voice_clock). With it the words keep time
+        with the voice; without it they are paced by a words-per-second guess."""
+        self._voice = clock
+
+    def _voice_live(self) -> bool:
+        if self._voice is None:
+            return False
+        try:
+            return self._voice() is not None
+        except Exception:
+            return False
+
     # ── Driven by the overlay ────────────────────────────────────────────────
 
     def tick(self, now: float, screen: QRectF, ox: float, oy: float) -> None:
@@ -306,8 +346,13 @@ class CaptionIsland:
         dt = min(0.05, max(0.0, now - self._last_t))
         self._last_t = now
         self._now = now
+        try:
+            self._clock = self._voice() if self._voice is not None else None
+        except Exception:
+            self._clock = None
 
         if (self._state not in ("hidden", "exit") and not self._speaking
+                and self._clock is None
                 and now - self._last_chunk_at > CAP_BACKSTOP_S):
             self._queue.clear()
             self._pending = ""
@@ -318,6 +363,10 @@ class CaptionIsland:
         self._govern(now, dt)
         if self._dirty:
             self._relayout()
+        if self._idle_wait and self._clock is None:
+            # The voice has finished: now the answer is over.
+            self._idle_wait = False
+            self.on_state("IDLE")
 
         # Fixed substeps: a GC pause or a screenshot capture must not turn into
         # a burst of motion. Cap of 4 keeps a long stall from fast-forwarding.
@@ -388,6 +437,8 @@ class CaptionIsland:
         self._last_chunk_at = time.monotonic()
         self._word_at = 0.0
         self._last_reveal_at = 0.0
+        self._chars_in = self._chars_out = 0
+        self._idle_wait = False
         if fresh:
             self._p = self._pv = 0.0
             self._swap = 0.0
@@ -496,6 +547,20 @@ class CaptionIsland:
             if now - self._frozen_at < CAP_BARGE_CONFIRM_S:
                 return
             self._frozen_at = 0.0          # a cough or a door: resume, nothing lost
+        clock = self._clock
+        if clock is not None and not self._sealed:
+            # Keep time with the voice. Text and audio of an answer arrive
+            # together, so the share of the audio heard is the share of the
+            # text said: a word shows as the voice reaches it. The voice
+            # brings its own pauses, so no cadence beats here.
+            heard, received = clock
+            if received <= 0.0:
+                return
+            said = (heard + CAP_VOICE_LEAD_S) / received * self._chars_in
+            while self._queue and self._chars_out <= said:
+                self._reveal_one(now)
+            self._budget = 0.0
+            return
         if self._sealed:
             rate = CAP_WPS_DRAIN
         elif self._mode == "bulk":
@@ -511,6 +576,7 @@ class CaptionIsland:
     def _reveal_one(self, now: float) -> None:
         tok = self._queue.pop(0)
         self._words.append(tok)
+        self._chars_out += len(tok) + 1
         self._word_at = now
         self._last_reveal_at = now
         self._energy = min(1.0, self._energy + 0.38)

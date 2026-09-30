@@ -429,6 +429,11 @@ class CursorOverlay(QWidget):
         AppState from ui.panel."""
         self._caption.on_state(state_name)
 
+    def set_voice_clock(self, clock) -> None:
+        """CompanionManager.voice_clock: how far Tora's live voice has got,
+        so the caption's words keep time with it. Called on this thread."""
+        self._caption.set_voice_clock(clock)
+
     def _caption_screen_rect(self) -> QRectF:
         """availableGeometry of the monitor the user is actually on, in
         LOGICAL px — not geometry(), so a top-docked taskbar never hides the

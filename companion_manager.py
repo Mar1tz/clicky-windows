@@ -988,6 +988,18 @@ class CompanionManager(QObject):
         # the panel fills in at roughly the pace of the voice.
         self.sig_response_chunk.emit(text)
 
+    def voice_clock(self):
+        """Where Tora's live voice is: (seconds heard, seconds received) of the
+        answer she is speaking, or None when she is not. The top caption reads
+        it on the Qt thread so its words keep time with the voice."""
+        conv = self._realtime
+        if conv is None:
+            return None
+        try:
+            return conv.voice_clock()
+        except Exception:  # noqa: BLE001 - a caption must never break the voice
+            return None
+
     def _on_realtime_speaking(self) -> None:
         self._activity("")          # it's talking now — nothing to report
         self._emit_state(AppState.SPEAKING)
