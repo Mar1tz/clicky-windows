@@ -43,14 +43,10 @@ from PyQt6.QtGui import (
     QFont, QFontInfo, QFontMetricsF, QLinearGradient,
 )
 
-from ui import overlay_paint as paint
-from ui import overlay_theme as theme
-
 
 # ── Tunables ─────────────────────────────────────────────────────────────────
-# From the tokens module, which holds values only - so importing it pulls in
-# no widget code, which is what this module must avoid.
-CAP_BLUE = theme.color(theme.CLASSIC_BLUE)
+# Duplicated from overlay.py on purpose: this module must not import ui.*
+CAP_BLUE = QColor(0x33, 0x80, 0xFF)
 
 CAP_TOP_MARGIN   = 12.0     # floats below the edge; Windows has no notch
 CAP_PAD_X        = 20.0
@@ -103,21 +99,6 @@ CAP_BAR_PROFILE   = (0.62, 1.00, 0.86, 0.48)   # asymmetric: reads as a voice, n
 # path never went through that code, so guard against residue here too.
 _ANY_BRACKET_TAG = re.compile(r"\[[A-Z]{2,10}(?::[^\]]*)?\]")
 _MD_EDGE = "*_`#"
-_BADGE_WIDEST = "88/88"     # the step badge keeps one width while its count changes
-
-
-def activity_words(text: str, age: float) -> str:
-    """What Tora is doing, in words that change the longer it runs. A static
-    "Thinking…" that sits there for six seconds is exactly what makes an
-    assistant feel hung; changing the words proves it is alive even when
-    there is nothing new to report."""
-    if not text:
-        return ""
-    if age > 8.0:
-        return "Still working on it…"
-    if age > 3.5:
-        return f"{text.rstrip('.… ')} — still going…"
-    return text
 
 
 def _clamp(v: float, lo: float, hi: float) -> float:
@@ -156,28 +137,15 @@ class CaptionIsland:
             f.setWeight(QFont.Weight.Medium)
         # The 1.5% tighten is what stops Segoe reading as a system dialog.
         f.setLetterSpacing(QFont.SpacingType.PercentageSpacing, 98.5)
-        self._classic_font = f
-        self._device = device
+        self._font = f
+        # Built against the widget so measured text matches painted text.
+        self._fm = QFontMetricsF(f, device) if device is not None else QFontMetricsF(f)
+        self._lh = self._fm.height()
+        self._avg_adv = self._fm.horizontalAdvance("abcdefghijklmnopqrstuvwxyz ") / 27.0
+        self._h1 = self._lh + 2 * CAP_PAD_Y
+        self._h2 = 2 * self._lh + CAP_LINE_GAP + 2 * CAP_PAD_Y
 
         self.needs_screen: bool = False
-        self._style = theme.STYLE_CLASSIC      # the redesign's look is "new" (OD-01..09)
-        self._applied: tuple = ()
-        self._adv: dict[str, float] = {}
-        # Settings > On screen (OD-08), new look only: where it sits, how big,
-        # and less movement. The place is locked per episode like the monitor.
-        self._place = "centre"
-        self._ep_place = "centre"
-        self._size = "normal"
-        self._reduced = False
-
-        # What Tora is doing when she is not talking. The new look shows it in
-        # the island (OD-07); the classic look keeps its card by the cursor.
-        self._app = "IDLE"                  # AppState name
-        self._activity = ""
-        self._activity_at = 0.0
-        self._guide: tuple[int, int, str] = (0, 0, "")
-        self._level = 0.0                   # your voice, for the listening bars
-        self._apply_style()
 
         # Text pipeline
         self._pending = ""              # raw chars not yet split into words
@@ -186,6 +154,7 @@ class CaptionIsland:
         self._lines: list[_Line] = []
         self._out_line = ""             # line rolling off the top
         self._dirty = False
+        self._adv: dict[str, float] = {}
 
         # Episode bookkeeping
         self._state = "hidden"          # hidden | enter | live | linger | exit
@@ -214,7 +183,6 @@ class CaptionIsland:
         self._tw = CAP_W_MIN
         self._th = self._h1
         self._roll = 0.0
-        self._two = 0.0                 # new look: 0 = one line centred, 1 = two lines
         self._swap = 0.0
         self._energy = 0.0
         self._last_t = 0.0
@@ -241,7 +209,7 @@ class CaptionIsland:
         non-empty fragment of an utterance, regardless of app state — on the
         cascade path SPEAKING is emitted only after the whole answer has
         streamed, so waiting for it would show nothing until the end."""
-        if not text or self._off():
+        if not text:
             return
         t = text.replace("\r", " ").replace("\n", " ").replace("\t", " ")
         t = _ANY_BRACKET_TAG.sub("", t)
@@ -299,15 +267,10 @@ class CaptionIsland:
 
     def on_state(self, name: str) -> None:
         """AppState by name. SPEAKING never opens and never wipes."""
-        self._app = name
         if name == "SPEAKING":
             self._speaking = True
-            self._sync_status()
             return
         self._speaking = False
-        if self._style == theme.STYLE_NEW:
-            self._on_state_new(name)
-            return
         if self._state == "hidden":
             return
         if name in ("LISTENING", "THINKING"):
@@ -329,48 +292,11 @@ class CaptionIsland:
                 self._pending = ""
                 self._seal(CAP_LINGER_CANCEL_S, CAP_EXIT_K_FAST)
 
-    def _on_state_new(self, name: str) -> None:
-        """The new island through a turn: Listening, Thinking (or what Tora is
-        doing), her words, and back to a walkthrough's step or away."""
-        if name in ("LISTENING", "THINKING"):
-            # A new question. The last answer goes at once - you are talking,
-            # and whatever was queued will never be spoken. The bar stays.
-            if self._has_words():
-                self._drop_words()
-        elif name == "IDLE" and self._has_words():
-            self._pump_tokens(time.monotonic(), force=True)
-            if self._no_more:
-                self._seal(theme.LINGER_S, CAP_EXIT_K)
-            else:
-                # Esc, or an error path falling through its finally: cancelled.
-                self._queue.clear()
-                self._pending = ""
-                self._seal(CAP_LINGER_CANCEL_S, CAP_EXIT_K_FAST)
-            return
-        self._sync_status()
-
-    def set_activity(self, text: str) -> None:
-        """What Tora is doing ("" clears it), from sig_activity."""
-        text = text or ""
-        if text != self._activity:
-            self._activity = text
-            self._activity_at = time.monotonic()
-        self._sync_status()
-
-    def set_guide(self, current: int, total: int, label: str = "") -> None:
-        """A walkthrough's progress: total 0 = none, negative = still being
-        planned. Between Tora's words the new island shows the step."""
-        self._guide = (int(current), int(total), label or "")
-        if not self._has_words():
-            self._fit()
-        self._sync_status()
-
     def note_audio_level(self, level: float) -> None:
         """Barge-in probe. The realtime session clears its player locally and
         emits nothing; the UI only learns a second later when LISTENING lands.
         The mic level is already in hand, so use it — but FREEZE, never wipe:
         this is a heuristic on a microphone and must never destroy text."""
-        self._level = level
         if self._state == "live" and level > 0.30:
             self._barge_ticks += 1
         else:
@@ -384,141 +310,6 @@ class CaptionIsland:
         self._p = self._pv = 0.0
         self._alpha = self._text_alpha = 0.0
 
-    def moving(self) -> bool:
-        """True while the island needs frames. The classic pill breathes, so
-        always; the new bar only while something on it moves (OD-02)."""
-        if self._state == "hidden":
-            return False
-        if self._style == theme.STYLE_CLASSIC:
-            return True
-        if self._state in ("enter", "exit") or self._queue or self._pending:
-            return True
-        now = self._now
-        if (now - self._word_at < CAP_HILITE_SENT_S + 0.05 or self._roll > 0.02
-                or self._swap > 0.02 or 0.02 < self._two < 0.98):
-            return True
-        glyph = self._glyph()
-        if glyph in ("listen", "think") or (glyph == "speak" and self._energy > 0.02):
-            return True
-        # the dead-air dots pulse
-        return (self._state == "live" and bool(self._lines) and not self._no_more
-                and now - self._last_reveal_at > CAP_DEAD_AIR_S)
-
-    def signature(self) -> tuple:
-        """What the island shows, so the overlay redraws it on a change only."""
-        if self._state == "hidden":
-            return ()
-        line = None if self._lines else self._status_line()
-        return (self._state, self._glyph(), len(self._words), line, self._badge())
-
-    # ── What Tora is doing (the new look, OD-07) ─────────────────────────────
-
-    def _has_words(self) -> bool:
-        return bool(self._lines or self._words or self._queue or self._pending or self._out_line)
-
-    def _status_line(self) -> Optional[tuple[str, str]]:
-        """(glyph, words) for the new island when it is not showing speech, or
-        None when there is nothing to show. The card that sat by the cursor
-        showed these; in the new look they live here."""
-        if self._style != theme.STYLE_NEW:
-            return None
-        app = self._app
-        if app == "LISTENING":
-            return ("listen", "Listening")
-        if self._activity:
-            return ("think", activity_words(self._activity, time.monotonic() - self._activity_at))
-        if app == "THINKING":
-            return ("think", "Thinking…")
-        if app == "SPEAKING":
-            return ("speak", "")                 # the voice is ahead of its words
-        if self._guide[1] != 0:
-            return ("rest", self._guide[2])      # a walkthrough waits on its step
-        return None
-
-    def _glyph(self) -> str:
-        if self._app == "LISTENING":
-            return "listen"
-        if self._lines or self._app == "SPEAKING":
-            return "speak"
-        line = self._status_line()
-        return line[0] if line else "rest"
-
-    def _badge(self) -> str:
-        cur, total, _label = self._guide
-        if self._style != theme.STYLE_NEW or not total or not cur:
-            return ""
-        return f"{cur}/{total}" if total > 0 else f"{cur}"
-
-    def _off(self) -> bool:
-        """Settings > On screen > Island: off - voice only (new look)."""
-        return self._style == theme.STYLE_NEW and self._place == "off"
-
-    def set_island(self, place: str, size: str) -> None:
-        """Where the new island sits - "centre", "right" or "off" - and how big
-        it is (Settings > On screen, OD-08). An island on screen keeps its
-        place and size; "off" sends it away now."""
-        if place not in theme.ISLAND_PLACES or size not in theme.ISLAND_SIZES:
-            raise ValueError(f"place is one of {theme.ISLAND_PLACES}, size one of {tuple(theme.ISLAND_SIZES)}")
-        self._place, self._size = place, size
-        if self._state == "hidden":
-            self._apply_style()
-        elif self._off():
-            self._state = "exit"
-
-    def set_reduced_motion(self, on: bool) -> None:
-        """Less movement (Settings > On screen, OD-08): the new island fades in
-        and out instead of sliding, and words appear without rising or rolling."""
-        self._reduced = bool(on)
-
-    def slot(self, screen: QRectF) -> Optional[QRectF]:
-        """Where the island sits on this screen, in the same pixels as the
-        screen - or None when it is off - so the step chip can keep clear."""
-        if self._off():
-            return None
-        _px, w_max, h = theme.ISLAND_SIZES[self._size]
-        if self._style == theme.STYLE_NEW:
-            w = min(w_max, max(theme.ISLAND_W_MIN, 0.6 * screen.width()))
-        else:
-            w, h = theme.ISLAND_W_MAX, theme.ISLAND_H2
-        right = self._style == theme.STYLE_NEW and self._place == "right"
-        x = (screen.right() - theme.ISLAND_EDGE - w if right else screen.center().x() - w / 2.0)
-        return QRectF(x, screen.top() + theme.ISLAND_TOP, w, h)
-
-    def _fit(self) -> None:
-        """The new bar's text column: after the glyph, and after the step badge
-        in a walkthrough. Changed only with no words on screen, so text never
-        shifts under the reader."""
-        if self._style != theme.STYLE_NEW or self._applied[:1] != (theme.STYLE_NEW,):
-            return
-        side = theme.ISLAND_GLYPH_W + theme.ISLAND_GLYPH_GAP
-        if self._guide[1]:
-            side += paint.badge_width("", _BADGE_WIDEST) + theme.ISLAND_GLYPH_GAP
-        self._side_l = side
-        self._content_max = self._max_w - 2 * self._pad_x - self._side_l - self._side_r
-
-    def _drop_words(self) -> None:
-        """The answer on screen goes at once; the bar stays where it is."""
-        self._begin_episode(fresh=False)
-        self._swap = 1.0
-
-    def _sync_status(self) -> None:
-        """Open, keep or close the new island for what Tora is doing. Her words
-        on screen always win; they hand back after their linger."""
-        if self._style != theme.STYLE_NEW or self._has_words() or self._off():
-            return
-        if self._status_line() is not None:
-            if self._state == "hidden":
-                self._begin_episode(fresh=True)
-                self._state = "enter"
-            elif self._state == "exit":
-                self._begin_episode(fresh=False)
-                self._state = "enter"
-            elif self._state == "linger":
-                self._state = "live"
-            self._sealed = False
-        elif self._state in ("enter", "live", "linger"):
-            self._state = "exit"
-
     # ── Driven by the overlay ────────────────────────────────────────────────
 
     def tick(self, now: float, screen: QRectF, ox: float, oy: float) -> None:
@@ -530,17 +321,10 @@ class CaptionIsland:
 
         if (self._state not in ("hidden", "exit") and not self._speaking
                 and now - self._last_chunk_at > CAP_BACKSTOP_S):
-            if self._style == theme.STYLE_NEW:
-                # Only her words are backstopped: what she is doing is cleared
-                # by whoever set it.
-                if self._has_words():
-                    self._drop_words()
-                    self._sync_status()
-            else:
-                self._queue.clear()
-                self._pending = ""
-                self._exit_k = CAP_EXIT_K
-                self._state = "exit"
+            self._queue.clear()
+            self._pending = ""
+            self._exit_k = CAP_EXIT_K
+            self._state = "exit"
 
         self._pump_tokens(now)
         self._govern(now, dt)
@@ -566,13 +350,7 @@ class CaptionIsland:
                 self._linger_until = now + self._hold
         elif st == "linger":
             if now >= self._linger_until:
-                if self._status_line() is not None:
-                    # The new bar hands back to what Tora is doing - a
-                    # walkthrough's step - instead of leaving and coming back.
-                    self._drop_words()
-                    self._state = "live"
-                else:
-                    self._state = "exit"
+                self._state = "exit"
         elif st == "exit":
             if self._p < 0.02:
                 self.clear()
@@ -599,16 +377,11 @@ class CaptionIsland:
             p.translate(-cx, -cy)
 
             a = self._alpha
-            r = (min(rect.height() / 2.0, CAP_RADIUS_MAX) if self._style == theme.STYLE_CLASSIC
-                 else theme.ISLAND_R2)
-            if self._style == theme.STYLE_CLASSIC:
-                self._draw_bloom(p, rect, r, a)
+            r = min(rect.height() / 2.0, CAP_RADIUS_MAX)
+            self._draw_bloom(p, rect, r, a)
             self._draw_shadow(p, rect, r, a)
             self._draw_body(p, rect, r, a)
-            if self._style == theme.STYLE_CLASSIC:
-                self._draw_indicator(p, rect, a, self._now)
-            else:
-                self._draw_state(p, rect, a, self._now)
+            self._draw_indicator(p, rect, a, self._now)
             self._draw_text(p, rect, a, self._now)
         finally:
             p.restore()
@@ -632,34 +405,22 @@ class CaptionIsland:
         self._exit_k = CAP_EXIT_K
         self._promoted = False
         self._roll = 0.0
-        self._two = 0.0
         self._energy = 0.0
         self._barge_ticks = 0
         self._frozen_at = 0.0
         self._last_chunk_at = time.monotonic()
         self._word_at = 0.0
         self._last_reveal_at = 0.0
-        if fresh:
-            self._apply_style()                  # a look chosen while hidden starts now
-            self._ep_place = self._place
-        if self._style == theme.STYLE_NEW:
-            # The fixed bar: its final size from the first word to the last.
-            self._tw, self._th = self._max_w, self._h2
-        else:
-            # Width ratchet resets: a short follow-up must not inherit a long
-            # answer's slab. The physical size lerps down to meet it.
-            self._tw = CAP_W_MIN
-            self._th = self._h1
+        # Width ratchet resets: a short follow-up must not inherit a long
+        # answer's slab. The physical size lerps down to meet it.
+        self._tw = CAP_W_MIN
+        self._th = self._h1
         if fresh:
             self._p = self._pv = 0.0
-            if self._style == theme.STYLE_NEW:
-                self._w, self._h = self._tw, self._th
-            else:
-                self._w = CAP_W_SEED
-                self._h = CAP_H_SEED
+            self._w = CAP_W_SEED
+            self._h = CAP_H_SEED
             self._swap = 0.0
             self.needs_screen = True
-        self._fit()
 
     def _seal(self, hold: float, exit_k: float) -> None:
         self._sealed = True
@@ -669,15 +430,7 @@ class CaptionIsland:
     # ── Simulation ───────────────────────────────────────────────────────────
 
     def _substep(self) -> None:
-        if self._style == theme.STYLE_NEW:
-            # The new bar slides in and out whole in a set time, with no
-            # bounce; _geometry eases it.
-            if self._state == "exit":
-                self._p = max(0.0, self._p - (1.0 / 60.0) / theme.ISLAND_OUT_S)
-            else:
-                self._p = min(1.0, self._p + (1.0 / 60.0) / theme.ISLAND_IN_S)
-            self._pv = 0.0
-        elif self._state == "exit":
+        if self._state == "exit":
             np_ = self._p + (0.0 - self._p) * self._exit_k
             # Keep velocity honest so a mid-retraction catch has momentum.
             self._pv = np_ - self._p
@@ -688,17 +441,9 @@ class CaptionIsland:
             self._pv = self._pv * 0.60 + (1.0 - self._p) * 0.155
             self._p += self._pv
         # Size is deliberately NOT sprung. Overshoot is delightful on position
-        # and fatal on a dimension. The new look's bar does not change size at all.
-        if self._style == theme.STYLE_NEW:
-            self._w, self._h = self._tw, self._th
-        else:
-            self._w += (self._tw - self._w) * 0.22
-            self._h += (self._th - self._h) * 0.18
-        two = 1.0 if len(self._lines) >= 2 else 0.0
-        still = self._reduced and self._style == theme.STYLE_NEW
-        self._two = two if still else self._two + (two - self._two) * 0.25
-        if still:
-            self._roll = 0.0                     # the old line goes; it does not roll
+        # and fatal on a dimension.
+        self._w += (self._tw - self._w) * 0.22
+        self._h += (self._th - self._h) * 0.18
         self._roll += (0.0 - self._roll) * 0.22
         if self._out_line and self._roll < 0.02:
             self._out_line = ""
@@ -707,28 +452,21 @@ class CaptionIsland:
         self._energy *= 0.90
 
     def _geometry(self, screen: QRectF, ox: float, oy: float) -> None:
-        p = self._p if self._style == theme.STYLE_CLASSIC else paint.ease_out(self._p)
+        p = self._p
         w = float(round(self._w))
         h = float(round(self._h))
         cx = screen.x() + screen.width() / 2.0 - ox
-        rest_top = screen.y() + self._top - oy
+        rest_top = screen.y() + CAP_TOP_MARGIN - oy
         # At p=0 the whole pill is above the clip edge: it extrudes from the
-        # bezel rather than fading in. With reduced motion the new bar only fades.
-        new = self._style == theme.STYLE_NEW
-        y = rest_top if new and self._reduced else rest_top - (h + self._top) * (1.0 - p)
-        if new and self._ep_place == "right":
-            x = float(round(screen.x() + screen.width() - ox - theme.ISLAND_EDGE - w))
-        else:
-            x = float(round(cx - w / 2.0))
+        # bezel rather than fading in.
+        y = rest_top - (h + CAP_TOP_MARGIN) * (1.0 - p)
+        x = float(round(cx - w / 2.0))
         self._pill = QRectF(x, float(round(y)), w, h)
         self._clip = QRectF(screen.x() - ox, screen.y() - oy,
                             screen.width(), screen.height())
-        if self._style == theme.STYLE_NEW:
-            scale = 1.0                          # it slides in whole; it never grows
-        else:
-            scale = min(1.03, 0.84 + 0.16 * p)
-            if self._state in ("live", "linger"):
-                scale *= 1.0 + 0.0015 * math.sin(self._now * 1.7)   # felt, not seen
+        scale = min(1.03, 0.84 + 0.16 * p)
+        if self._state in ("live", "linger"):
+            scale *= 1.0 + 0.0015 * math.sin(self._now * 1.7)   # felt, not seen
         self._scale = scale
         # Opaque by p≈0.74: the fade finishes well before the motion settles,
         # which is what makes it read as a solid object arriving.
@@ -761,9 +499,7 @@ class CaptionIsland:
             chunk, self._pending = pend[:i], pend[i + 1:]
         for tok in chunk.split():
             tok = tok.strip(_MD_EDGE)
-            if tok == "-" and (self._queue or self._words):
-                tok = "–"              # "Sure - it's": a pause mid-sentence, not a list bullet
-            elif not tok or tok in ("-", ">", "•"):
+            if not tok or tok in ("-", ">", "•"):
                 continue
             self._queue.extend(self._split_long(tok))
 
@@ -863,7 +599,7 @@ class CaptionIsland:
         self._ratchet()
 
     def _ratchet(self) -> None:
-        if self._promoted or not self._lines or self._style == theme.STYLE_NEW:
+        if self._promoted or not self._lines:
             return
         longest = max(ln.adv for ln in self._lines)
         needed = longest + 2 * CAP_PAD_X + 2 * CAP_SIDE
@@ -871,66 +607,11 @@ class CaptionIsland:
             steps = math.ceil((needed - CAP_W_MIN) / CAP_W_QUANTUM)
             self._tw = min(self._max_w, CAP_W_MIN + max(0, steps) * CAP_W_QUANTUM)
 
-    def set_style(self, style: str) -> None:
-        """"classic" (today's look) or "new" (the redesign). Takes effect on the
-        next answer; one already on screen keeps the look it opened with."""
-        if style not in theme.STYLES:
-            raise ValueError(f"style is one of {', '.join(theme.STYLES)}")
-        self._style = style
-        if self._state == "hidden":
-            self._apply_style()
-
-    def _apply_style(self) -> None:
-        """The island's measurements for its look. Classic: today's pill.
-        New (OD-06): a solid bar of one size, 440 x 58 px (narrower on a small
-        screen), 14 px text - everything from ui/overlay_theme."""
-        key = (self._style, self._size)
-        if self._applied == key:
-            return
-        self._applied = key
-        px, w_max, h2 = theme.ISLAND_SIZES[self._size]
-        if self._style == theme.STYLE_NEW:
-            f = theme.font(px, QFont.Weight.Medium)
-            self._pad_x, self._pad_y = theme.ISLAND_PAD_X, 0.0
-            self._side_l, self._side_r = theme.ISLAND_GLYPH_W + theme.ISLAND_GLYPH_GAP, 0.0
-            self._w_min, self._w_max_cap = theme.ISLAND_W_MIN, w_max
-            self._line_gap, self._top = theme.ISLAND_LINE_GAP, theme.ISLAND_TOP
-        else:
-            f = self._classic_font
-            self._pad_x, self._pad_y = CAP_PAD_X, CAP_PAD_Y
-            self._side_l = self._side_r = CAP_SIDE
-            self._w_min, self._w_max_cap = CAP_W_MIN, 0.0
-            self._line_gap, self._top = CAP_LINE_GAP, CAP_TOP_MARGIN
-        self._font = f
-        # Built against the widget so measured text matches painted text.
-        dev = self._device
-        self._fm = QFontMetricsF(f, dev) if dev is not None else QFontMetricsF(f)
-        self._lh = self._fm.height()
-        self._avg_adv = self._fm.horizontalAdvance("abcdefghijklmnopqrstuvwxyz ") / 27.0
-        if self._style == theme.STYLE_NEW:
-            self._h1, self._h2 = theme.ISLAND_H1, h2
-        else:
-            self._h1 = self._lh + 2 * CAP_PAD_Y
-            self._h2 = 2 * self._lh + CAP_LINE_GAP + 2 * CAP_PAD_Y
-        self._adv.clear()
-
-    @property
-    def style(self) -> str:
-        return self._style
-
     def set_screen_width(self, width: float) -> None:
         """Called once per episode by the overlay after the monitor is locked.
         52 characters is a reading-comfort ceiling, not a fraction of the
         monitor: it does not scale up on a 49-inch panel, only down on a
         small laptop screen."""
-        if self._style == theme.STYLE_NEW:
-            # The fixed bar: 440 px (its size setting's width), or 60% of a
-            # small screen, and it is that size from the first word (OD-06).
-            self._max_w = min(self._w_max_cap, max(theme.ISLAND_W_MIN, 0.6 * width))
-            self._fit()
-            self._tw = self._w = self._max_w
-            self._th = self._h = self._h2
-            return
         raw = CAP_MAX_CHARS * self._avg_adv + 2 * CAP_PAD_X + 2 * CAP_SIDE
         self._max_w = _clamp(raw, 380.0, max(380.0, 0.52 * width))
         self._content_max = self._max_w - 2 * CAP_PAD_X - 2 * CAP_SIDE
@@ -991,14 +672,6 @@ class CaptionIsland:
         # A tight contact shadow plus a wide ambient one. One layer reads as a
         # drop shadow from 2009.
         p.setPen(Qt.PenStyle.NoPen)
-        if self._style == theme.STYLE_NEW:
-            # The new look's one soft shadow, 4 px down (its blur in three steps).
-            for dy, inflate, share in ((theme.SHADOW_Y, 0, 0.45), (theme.SHADOW_Y + 2, 3, 0.22),
-                                       (theme.SHADOW_Y + 4, 6, 0.10)):
-                p.setBrush(QBrush(theme.color(theme.SHADOW, theme.SHADOW_A * share * a)))
-                rr = rect.adjusted(-inflate, -inflate + dy, inflate, inflate + dy)
-                p.drawRoundedRect(rr, r + inflate, r + inflate)
-            return
         for dy, inflate, alpha in ((1, 0, 30), (3, 4, 20), (7, 10, 12), (14, 20, 6)):
             c = QColor(0, 0, 0, int(alpha * a))
             p.setBrush(QBrush(c))
@@ -1009,18 +682,10 @@ class CaptionIsland:
         w, h = rect.width(), rect.height()
         p.save()
         p.translate(rect.x(), rect.y())
-        body = self._body_path(w, h, r)
-
-        if self._style == theme.STYLE_NEW:
-            # Solid, so the words read the same on any wallpaper; one 1 px border.
-            p.setPen(QPen(theme.color(theme.BORDER, a), 1.0))
-            p.setBrush(QBrush(theme.color(theme.SURFACE, theme.SURFACE_A * a)))
-            p.drawPath(body)
-            p.restore()
-            return
 
         # Fill: near-black but cool-shifted. Pure black looks like a hole and a
         # flat fill is the number-one tell of "a rounded rectangle with text".
+        body = self._body_path(w, h, r)
         g = QLinearGradient(0, 0, 0, h)
         g.setColorAt(0.0, QColor(26, 28, 36, int(240 * a)))
         g.setColorAt(1.0, QColor(9, 10, 14, int(240 * a)))
@@ -1029,19 +694,18 @@ class CaptionIsland:
         p.drawPath(body)
 
         # Specular rim: a uniform rim looks like a border, a graded one looks
-        # like an edge catching light. Classic look only.
+        # like an edge catching light.
+        rim = QLinearGradient(0, 0, 0, h)
+        rim.setColorAt(0.00, QColor(255, 255, 255, int(0.17 * 255 * a)))
+        rim.setColorAt(0.38, QColor(255, 255, 255, int(0.02 * 255 * a)))
+        rim.setColorAt(0.82, QColor(255, 255, 255, int(0.015 * 255 * a)))
+        rim.setColorAt(1.00, QColor(255, 255, 255, int(0.055 * 255 * a)))
         p.setBrush(Qt.BrushStyle.NoBrush)
-        if self._style == theme.STYLE_CLASSIC:
-            rim = QLinearGradient(0, 0, 0, h)
-            rim.setColorAt(0.00, QColor(255, 255, 255, int(0.17 * 255 * a)))
-            rim.setColorAt(0.38, QColor(255, 255, 255, int(0.02 * 255 * a)))
-            rim.setColorAt(0.82, QColor(255, 255, 255, int(0.015 * 255 * a)))
-            rim.setColorAt(1.00, QColor(255, 255, 255, int(0.055 * 255 * a)))
-            p.setPen(QPen(QBrush(rim), 1.0))
-            inner = self._body_path(w - 1.0, h - 1.0, max(1.0, r - 0.5))
-            p.translate(0.5, 0.5)
-            p.drawPath(inner)
-            p.translate(-0.5, -0.5)
+        p.setPen(QPen(QBrush(rim), 1.0))
+        inner = self._body_path(w - 1.0, h - 1.0, max(1.0, r - 0.5))
+        p.translate(0.5, 0.5)
+        p.drawPath(inner)
+        p.translate(-0.5, -0.5)
 
         # Outer hairline: the only thing that keeps dark glass from dissolving
         # into a white wallpaper.
@@ -1057,7 +721,7 @@ class CaptionIsland:
         sig_audio_level is the user's room while Tora is the one talking."""
         e = self._energy
         cy = rect.y() + rect.height() / 2.0
-        x0 = rect.x() + self._pad_x
+        x0 = rect.x() + CAP_PAD_X
         block_cx = x0 + CAP_IND_W / 2.0
         p.setPen(Qt.PenStyle.NoPen)
 
@@ -1097,89 +761,50 @@ class CaptionIsland:
             p.drawRoundedRect(QRectF(bx - bw / 2.0, cy - bh / 2.0, bw, bh),
                               bw / 2.0, bw / 2.0)
 
-    def _draw_state(self, p: QPainter, rect: QRectF, a: float, now: float) -> None:
-        """The new bar's left edge: the state at a glance, then in a
-        walkthrough its step count (OD-07)."""
-        cy = rect.center().y()
-        x = rect.x() + self._pad_x
-        kind = self._glyph()
-        level = self._level if kind == "listen" else self._energy
-        paint.draw_island_glyph(p, QPointF(x + theme.ISLAND_GLYPH_W / 2.0, cy), kind, level, now * 3.0, a)
-        badge = self._badge()
-        room = theme.ISLAND_GLYPH_W + theme.ISLAND_GLYPH_GAP
-        if badge and self._side_l > room + 1.0:          # only where _fit made room for it
-            paint.draw_badge(p, x + room, cy, badge, a, width=paint.badge_width(badge, _BADGE_WIDEST))
-
     def _draw_text(self, p: QPainter, rect: QRectF, a: float, now: float) -> None:
         ta = self._text_alpha * (1.0 - 0.75 * self._swap)
         if ta < 0.01:
             return
         fm = self._fm
         lh = self._lh
-        new = self._style == theme.STYLE_NEW
-        step = lh + self._line_gap
-        tx = rect.x() + self._pad_x + self._side_l
+        step = lh + CAP_LINE_GAP
+        tx = rect.x() + CAP_PAD_X + CAP_SIDE
+        content_w = rect.width() - 2 * CAP_PAD_X - 2 * CAP_SIDE
 
         # Text is clipped to the pill's inner box so a rolling line vanishes
         # under the rim, not outside it. The clip runs to the right PADDING,
         # not the content box: while the pill is still growing toward a new
         # ratchet target the newest word may sit in the right mirror-spacer,
         # and it must melt into the glass there rather than be sliced.
-        clip_right = rect.right() - self._pad_x
-        top_in = 2.0 if new else self._pad_y - 1.0
+        clip_right = rect.right() - CAP_PAD_X
         p.setClipRect(
-            QRectF(tx - 2.0, rect.y() + top_in, clip_right - tx + 2.0, rect.height() - 2 * top_in),
+            QRectF(tx - 2.0, rect.y() + CAP_PAD_Y - 1.0,
+                   clip_right - tx + 2.0, rect.height() - 2 * CAP_PAD_Y + 2.0),
             Qt.ClipOperation.IntersectClip,
         )
         p.setFont(self._font)
 
         roll_off = self._roll * step
-        if new:
-            # The fixed bar: one line sits in the middle; when a second starts,
-            # the first moves up to make room. Only the words move.
-            mid = rect.center().y() + (fm.ascent() - fm.descent()) / 2.0
-            if len(self._lines) >= 2:
-                live_base = _lerp(mid + step, mid + step / 2.0, self._two) + roll_off
-            else:
-                live_base = mid + roll_off
-        else:
-            live_base = rect.y() + rect.height() - self._pad_y - fm.descent() + roll_off
-        if abs(self._roll) < 0.02 and (not new or abs(self._two - round(self._two)) < 0.02):
+        live_base = rect.y() + rect.height() - CAP_PAD_Y - fm.descent() + roll_off
+        if abs(self._roll) < 0.02:
             live_base = float(round(live_base))   # crisp at rest, smooth mid-roll
         prev_base = live_base - step
         out_base = prev_base - step
 
-        base = QColor(theme.TEXT) if new else QColor(237, 242, 250)
-        base_rgb = (base.red(), base.green(), base.blue())
+        base_rgb = (237, 242, 250)
         col = QColor(*base_rgb)
-        dim = QColor(theme.TEXT_DIM)
 
         if self._out_line and self._roll > 0.02:
-            if new:
-                dim.setAlphaF(self._roll * ta)
-                p.setPen(dim)
-            else:
-                col.setAlpha(int(140 * self._roll * ta))
-                p.setPen(col)
+            col.setAlpha(int(140 * self._roll * ta))
+            p.setPen(col)
             p.drawText(QPointF(tx, out_base), self._out_line)
 
         lines = self._lines
         if not lines:
-            line = self._status_line() if new else None
-            if line and line[1]:
-                # What Tora is doing, quieter than what she says, on one line.
-                words = fm.elidedText(line[1], Qt.TextElideMode.ElideRight, self._content_max)
-                dim.setAlphaF(ta)
-                p.setPen(dim)
-                p.drawText(QPointF(tx, float(round(mid))), words)
             return
         if len(lines) == 2:
-            if new:
-                dim.setAlphaF(ta)                # the earlier line, quieter
-                p.setPen(dim)
-            else:
-                col.setAlpha(int(140 * ta))
-                p.setPen(col)
+            col.setAlpha(int(140 * ta))
+            p.setPen(col)
             p.drawText(QPointF(tx, prev_base), lines[0].text)
 
         live = lines[-1].text
@@ -1199,8 +824,6 @@ class CaptionIsland:
             sent = tail[-1:] in ".!?…"
             u3 = _clamp((now - self._word_at) / (CAP_HILITE_SENT_S if sent else CAP_HILITE_S), 0.0, 1.0)
             hil = 0.30 * (1.0 - u3) ** 2
-            if new and self._reduced:
-                ease, hil = 1.0, 0.0             # it is simply there: no rise, no flash
             wx = tx + (self._advance(prefix + " ") if prefix else 0.0)
             wx_r = wx + self._advance(tail)
             end_x = wx_r

@@ -517,37 +517,7 @@ class Config:
         # Settings > Approvals (APP-14): agents and desktop actions go ahead
         # without the approval box. Off until the user turns it on.
         "auto_approve":  ("TORA_AGENT_AUTO_APPROVE", False),
-        # Settings > Overlay: the redesigned island, cursor and step chip
-        # (OD-01..09). Off - the classic look. The user tried the new one after
-        # signing it off and asked for the old look back (2026-09-30).
-        "new_overlay":   ("TORA_NEW_OVERLAY", False),
-        # Settings > On screen (OD-08): the arrow jumps instead of gliding and
-        # the island fades instead of sliding. New look only.
-        "reduced_motion": ("TORA_REDUCED_MOTION", False),
     }
-
-    # Settings that are one of a few words. name -> (env var, default, choices).
-    # Settings > On screen (OD-08): where the top island sits - "off" is voice
-    # only - and how big it is. New look only.
-    CHOICES = {
-        "island_place": ("TORA_ISLAND_PLACE", "centre", ("centre", "right", "off")),
-        "island_size":  ("TORA_ISLAND_SIZE", "normal", ("small", "normal", "large")),
-    }
-
-    def choice(self, name: str) -> str:
-        """A saved choice, or its default when nothing (or nonsense) is saved."""
-        env, default, allowed = self.CHOICES[name]
-        raw = os.environ.get(env, "").strip().lower()
-        return raw if raw in allowed else default
-
-    def set_choice(self, name: str, value: str) -> None:
-        """Change a choice now, and for every launch after this one."""
-        env, default, allowed = self.CHOICES[name]
-        value = (value or "").strip().lower()
-        if value not in allowed:
-            value = default
-        os.environ[env] = value
-        self._write_env(env, value)
 
     def switch(self, name: str) -> bool:
         """A saved switch's value, or its default."""

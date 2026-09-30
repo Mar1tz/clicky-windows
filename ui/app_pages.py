@@ -956,8 +956,6 @@ class SettingsPage(Page):
                     trailing=label("set in .env as TORA_HOTKEY", "faint")))
         self.body.add(mic)
 
-        self.body.add(self._on_screen())
-
         look = Card("HeyTora on this PC")
         panel = ToggleRow("Show the floating panel",
                           "The small window with the conversation in it.",
@@ -969,49 +967,6 @@ class SettingsPage(Page):
         start.switch.toggled.connect(br.set_autostart)
         look.add(start)
         self.body.add(look)
-
-    # What the island's choices are called, in the order the menus show them.
-    _PLACES = (("centre", "Top centre"), ("right", "Top right"), ("off", "Off - voice only"))
-    _SIZES = (("small", "Small"), ("normal", "Normal"), ("large", "Large"))
-
-    def _on_screen(self) -> Card:
-        """OD-08: the redesigned island, arrow and step label, and how the
-        island sits. The last three apply to the new look only, so they wait
-        until it is on."""
-        br = self.bridge
-        now = br.overlay_look()
-        show = button("Show me")
-        show.clicked.connect(br.show_island)
-        card = Card("On screen", "The words at the top of your screen, the arrow and the step label.",
-                    action=show)
-        new = ToggleRow("New look",
-                        "A smaller, solid island that stays one size, an arrow whose tip is the "
-                        "point, and one label beside what to click. The settings below are "
-                        "for it.",
-                        now["new"], first=True)
-        card.add(new)
-        places, sizes = [k for k, _w in self._PLACES], [k for k, _w in self._SIZES]
-        place = Select(*(w for _k, w in self._PLACES), width=220)
-        place.setCurrentIndex(places.index(now["place"]))
-        size = Select(*(w for _k, w in self._SIZES), width=220)
-        size.setCurrentIndex(sizes.index(now["size"]))
-        rows = [Row("Island", "Where Tora's words appear.", trailing=place),
-                Row("Island size", "The same size all the way through an answer.", trailing=size)]
-        reduced = ToggleRow("Reduced motion",
-                            "The arrow jumps instead of gliding; the island fades instead of sliding.",
-                            now["reduced"])
-        rows.append(reduced)
-        for row in rows:
-            row.setEnabled(now["new"])
-            card.add(row)
-        new.switch.toggled.connect(lambda on: ([r.setEnabled(on) for r in rows],
-                                               br.set_overlay_look(new=on)))
-        place.currentIndexChanged.connect(
-            lambda k: br.set_overlay_look(place=places[k]) if 0 <= k < len(places) else None)
-        size.currentIndexChanged.connect(
-            lambda k: br.set_overlay_look(size=sizes[k]) if 0 <= k < len(sizes) else None)
-        reduced.switch.toggled.connect(lambda on: br.set_overlay_look(reduced=on))
-        return card
 
 
 # ── Setup ─────────────────────────────────────────────────────────────────────

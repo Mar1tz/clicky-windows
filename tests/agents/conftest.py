@@ -55,8 +55,6 @@ def _grants_stay_in_the_sandbox(tmp_path, monkeypatch):
                             staticmethod(lambda: tmp_path / ".env"))
         for env, _default in config_module.Config.SWITCHES.values():
             monkeypatch.delenv(env, raising=False)
-        for env, _default, _allowed in config_module.Config.CHOICES.values():
-            monkeypatch.delenv(env, raising=False)
     except Exception:  # noqa: BLE001 - a suite without the app still runs
         pass
 

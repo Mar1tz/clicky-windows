@@ -308,9 +308,8 @@ def main():
                 from ui.app_bridge import AppBridge
                 from ui.app_window import ToraApp
                 # Everything the window reads comes from these, and every
-                # change it makes goes down the tray's own path (APP-10). The
-                # overlay is there for Settings > On screen (OD-08).
-                w = ToraApp(AppBridge(manager, tray, panel, overlay))
+                # change it makes goes down the tray's own path (APP-10).
+                w = ToraApp(AppBridge(manager, tray, panel))
                 app_window["w"] = w
             app_window["w"].open_at()
         except Exception as exc:          # noqa: BLE001 - never kill the tray
@@ -328,9 +327,6 @@ def main():
     tray.on_toggle_slow_mode.connect(manager.set_slow_mode)
     tray.on_toggle_slow_mode.connect(overlay.set_slow_mode)
     overlay.set_slow_mode(cfg.switch("slow_mode"))    # as it was left (APP-03)
-    overlay.set_style("new" if cfg.switch("new_overlay") else "classic")
-    overlay.set_island(cfg.choice("island_place"), cfg.choice("island_size"))   # OD-08
-    overlay.set_reduced_motion(cfg.switch("reduced_motion"))
     tray.on_toggle_auto_advance.connect(manager.set_guide_auto_advance)
     tray.on_toggle_quiz_mode.connect(manager.set_quiz_mode)
     tray.on_toggle_privacy.connect(manager.set_privacy_guard)
