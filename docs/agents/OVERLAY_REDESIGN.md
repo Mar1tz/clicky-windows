@@ -7,9 +7,10 @@ milestones, OD-01 to OD-09, in four phases with three gates. That doc
 belongs to another account and can no longer be edited from this one, so
 progress and the decisions taken since are recorded here.
 
-The new look was built behind the `new_overlay` switch (`TORA_NEW_OVERLAY`)
-and became the default at Gate C. The classic look is unchanged behind the
-same switch until it is removed.
+**Reversed (2026-09-30).** After signing off the review page, the user saw
+the new cursor and island and asked for the old look back. The default is
+the classic look again (`TORA_NEW_OVERLAY` off). The new look is still in the
+code, behind that switch, until it is decided whether to remove it.
 
 ## Status
 
@@ -23,7 +24,7 @@ same switch until it is removed.
 | OD-06 Island size (the fixed bar) | done | 8f18e1b |
 | OD-07 Island states | done | 79d495d |
 | OD-08 Settings | done | 5941f00 |
-| OD-09 Review and switch | signed off; new look is the default; live walkthrough next | 172b560 and the Gate C commit |
+| OD-09 Review and switch | signed off, then reversed: classic is the default | 172b560, 9ccf88e, the reversal commit |
 
 The OD-09 review page shows every state, both looks, on light and dark
 desktops at 100, 125 and 150%:
@@ -34,10 +35,8 @@ https://claude.ai/artifact/Uv3bg5zLBhJ1pjBa1RQQcP. The shots come from
 Gate A (the preview plays every state; nothing redraws at rest) passed after
 OD-02. Gate B (the tip lands on the pixel; the chip never covers it) passed
 after OD-05. Gate C, the user's yes on the review page, passed on
-2026-09-30: the new look is now the default (`TORA_NEW_OVERLAY` defaults to
-on). The classic look stays one switch away in Settings > On screen until it
-is removed. The widgets themselves still start classic, and main.py sets
-the saved look.
+2026-09-30 and made the new look the default (9ccf88e). The same day the
+user asked for the old look back, so the default returned to classic.
 
 OD-04 and OD-05 were committed from the editor together with the Teachers
 pack's `extensions/teachers/classroom.py`, so they share 3fc5b53.

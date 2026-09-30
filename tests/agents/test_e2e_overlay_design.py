@@ -61,12 +61,10 @@ def test_the_new_look_holds_no_colours_of_its_own():
         assert not re.search(r"#[0-9A-Fa-f]{6}\b", src), f"{f}: a hex colour - use ui/overlay_theme"
 
 
-def test_the_new_look_is_the_default_since_it_was_signed_off(monkeypatch):
+def test_the_classic_look_is_the_default():
     import config
-    assert config.Config.SWITCHES["new_overlay"] == ("TORA_NEW_OVERLAY", True), "Gate C, 2026-09-30"
-    assert config.cfg.switch("new_overlay") is True
-    monkeypatch.setenv("TORA_NEW_OVERLAY", "0")
-    assert config.cfg.switch("new_overlay") is False, "the classic look is one switch away"
+    assert config.Config.SWITCHES["new_overlay"] == ("TORA_NEW_OVERLAY", False), "the user chose the old look"
+    assert config.cfg.switch("new_overlay") is False
     assert 'set_style("new" if cfg.switch("new_overlay") else "classic")' in (ROOT / "main.py").read_text(
         encoding="utf-8")
 

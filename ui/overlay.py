@@ -263,8 +263,7 @@ class CursorOverlay(QWidget):
         self._slow_mode: bool = False
 
         # Which look: "classic" or "new" (the redesign, OD-01..09). main.py sets
-        # the saved one - new unless Settings > On screen turned it off. The
-        # widget itself starts classic until the classic look is removed.
+        # the saved one - classic unless Settings > On screen turned the new on.
         self._style: str = theme.STYLE_CLASSIC
         # Settings > On screen > Reduced motion (OD-08, new look): the arrow
         # jumps to where it is going and the target ring is simply there.

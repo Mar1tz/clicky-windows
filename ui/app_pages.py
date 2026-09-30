@@ -986,8 +986,8 @@ class SettingsPage(Page):
                     action=show)
         new = ToggleRow("New look",
                         "A smaller, solid island that stays one size, an arrow whose tip is the "
-                        "point, and one label beside what to click. Off brings back the classic "
-                        "look; the settings below are for the new one.",
+                        "point, and one label beside what to click. The settings below are "
+                        "for it.",
                         now["new"], first=True)
         card.add(new)
         places, sizes = [k for k, _w in self._PLACES], [k for k, _w in self._SIZES]
