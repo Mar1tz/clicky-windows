@@ -36,7 +36,7 @@ import secrets
 import threading
 import time
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Callable, Optional
 from urllib.parse import urlencode
 
 import httpx
@@ -47,6 +47,7 @@ _log = logging.getLogger("tora.account")
 
 REFRESH_EARLY_S = 90          # refresh a session this long before it expires
 SUMMARY_TTL_S = 60            # the plan and usage are re-read at most this often
+ALERT_AT = (0.8, 1.0)         # tell the user at 80% and at 100% of an allowance, once a month each
 TICKET_SPARE_S = 30           # a window ticket this close to its end is asked for again
 
 
@@ -97,6 +98,86 @@ def limit_words(info: dict, website: str = "") -> str:
     return f"{head} Upgrade{where}, or switch to your own Gemini key in Settings."
 
 
+_UNITS = {"talk": ("talk message", "talk messages"), "agent": ("agent message", "agent messages"),
+          "dictation": ("dictation", "dictations")}
+
+
+def _count(n: int, kind: str) -> str:
+    one, many = _UNITS.get(kind, (kind, kind))
+    return f"{n} {one if n == 1 else many}"
+
+
+def resets_on(summary: dict) -> str:
+    """"1 Nov" - when the month's allowances start again (the user's own calendar)."""
+    end = str((summary or {}).get("period_end") or "")
+    try:
+        import datetime as _dt
+        when = _dt.datetime.fromisoformat(end.replace("Z", "+00:00")).astimezone()
+        return f"{when.day} {when:%b}"
+    except ValueError:
+        return "the 1st"
+
+
+def short_status(summary: dict) -> str:
+    """One line for the tray and the log: "Free plan - 18 talk messages left"."""
+    if not summary:
+        return ""
+    plan = summary.get("plan_name") or (summary.get("plan") or "").capitalize() or "HeyTora"
+    limits, usage = summary.get("limits") or {}, summary.get("usage") or {}
+    blocked = summary.get("blocked") or {}
+    if blocked.get("all") == "budget":
+        return f"{plan} plan - this month's use is up (resets {resets_on(summary)})"
+    parts = []
+    for kind in ("talk", "agent"):
+        if kind not in limits:
+            continue
+        if limits[kind] is None:
+            parts.append(f"unlimited {_UNITS[kind][1]}")
+        else:
+            left = max(0, int(limits[kind]) - int(usage.get(kind) or 0))
+            parts.append(f"{_count(left, kind)} left")
+    return f"{plan} plan" + (" - " + ", ".join(parts) if parts else "")
+
+
+def alerts(summary: dict) -> list[tuple[str, str]]:
+    """(key, words) for each allowance worth telling the user about now.
+    The key holds the month, so each is said once a month."""
+    if not summary:
+        return []
+    month = str(summary.get("period_start") or "")[:7]
+    plan = summary.get("plan_name") or (summary.get("plan") or "").capitalize()
+    limits, usage = summary.get("limits") or {}, summary.get("usage") or {}
+    blocked = summary.get("blocked") or {}
+    when = resets_on(summary)
+    out: list[tuple[str, str]] = []
+    for kind in ("talk", "agent", "dictation"):
+        limit = limits.get(kind)
+        if limit is None or kind not in limits:
+            if blocked.get(kind) == "day":
+                out.append((f"{month}:{kind}:day:{summary.get('day_resets_at')}",
+                            f"That's today's fair use of {_UNITS[kind][1]} on the {plan} plan - "
+                            "more tomorrow."))
+            continue
+        used = int(usage.get(kind) or 0)
+        limit = int(limit)
+        if limit and used >= limit:
+            out.append((f"{month}:{kind}:100",
+                        f"You've used all {_count(limit, kind)} on the {plan} plan this month. "
+                        f"They come back on {when} - or upgrade on the HeyTora website."))
+        elif limit and used >= ALERT_AT[0] * limit:
+            out.append((f"{month}:{kind}:80",
+                        f"{_count(limit - used, kind)} left this month on the {plan} plan "
+                        f"({used} of {limit} used). More on {when}."))
+    fair = summary.get("fair_use")
+    if blocked.get("all") == "budget":
+        out.append((f"{month}:all:100", f"This month's HeyTora use on the {plan} plan is used up. "
+                                        f"It starts again on {when} - or upgrade on the HeyTora website."))
+    elif isinstance(fair, (int, float)) and fair >= ALERT_AT[0]:
+        out.append((f"{month}:all:80", f"You've used most of this month's HeyTora use on the {plan} plan. "
+                                       f"It starts again on {when}."))
+    return out
+
+
 @dataclass
 class VoicePass:
     url: str                  # the constrained Live websocket, without the token
@@ -113,8 +194,15 @@ class Account:
         self._transport = transport                 # tests give a fake one
         self._lock = threading.RLock()
         self._session: Optional[dict] = store.load()
-        self._summary: Optional[dict] = None
+        # The last plan read, kept with the sign-in: shown at once after a
+        # restart (and talk_metered() is right from the first question), then
+        # read again in the background. _summary_at 0 = not read this run.
+        self._summary: Optional[dict] = (self._session or {}).get("summary")
         self._summary_at = 0.0
+        self._summary_error = ""                            # why the last read failed, in words
+        self._summary_busy = False
+        self._listeners: list[Callable[[], None]] = []
+        self._skew = 0.0                                    # this PC's clock minus the server's
         self._tickets: dict[str, tuple[str, float]] = {}   # kind -> (window ticket, ends)
         self._new_talk = False                              # the next talk window is a new question
         self._window_locks = {"talk": threading.Lock(), "agent": threading.Lock()}
@@ -194,7 +282,10 @@ class Account:
         with self._lock:
             session, self._session = self._session, None
             self._summary, self._tickets, self._new_talk = None, {}, False
+            self._summary_error = ""
             store.clear()
+        _log.info("signed out")
+        self._changed()
         if session and settings.configured():
             try:
                 with self._http() as http:
@@ -239,20 +330,124 @@ class Account:
                 "expires_at": float(expires_at),
                 "email": user.get("email") or old.get("email", ""),
                 "user_id": user.get("id") or old.get("user_id", ""),
+                # The remembered plan and alerts belong to this user only.
+                "summary": old.get("summary") if old.get("user_id", "") in ("", user.get("id", ""))
+                or not user.get("id") else None,
+                "warned": old.get("warned", []) if old.get("user_id", "") in ("", user.get("id", ""))
+                or not user.get("id") else [],
             }
             store.save(self._session)
 
     # -- the server ----------------------------------------------------------------------------------------
 
     def summary(self, force: bool = False) -> dict:
-        """The plan, its limits and this month's usage: {plan, limits, usage, ...}."""
+        """The plan, its limits and this month's usage: {plan, limits, usage,
+        today, blocked, fair_use, period_end, ...} (migration 0005)."""
         with self._lock:
             if not force and self._summary is not None and time.time() - self._summary_at < SUMMARY_TTL_S:
                 return dict(self._summary)
-        data = self._call("GET", "me")
+        try:
+            data = self._call("GET", "me")
+        except AccountError as e:
+            with self._lock:
+                self._summary_error = str(e)
+            self._changed()
+            raise
+        self._clock(data)
         with self._lock:
-            self._summary, self._summary_at = data, time.time()
+            self._summary, self._summary_at, self._summary_error = data, time.time(), ""
+            self._remember()
+        _log.info("plan: %s", short_status(data))
+        self._changed()
         return dict(data)
+
+    def refresh_soon(self, max_age: float = SUMMARY_TTL_S) -> bool:
+        """Read the plan again in the background if it is older than
+        `max_age` (and not being read already). Listeners hear when it lands
+        - or fails. True if a read was started."""
+        with self._lock:
+            if (self._summary_busy or not self.signed_in() or not settings.configured()
+                    or (self._summary_at > 0 and time.time() - self._summary_at < max_age)):
+                return False
+            self._summary_busy = True
+        self._changed()                                     # "reading your plan"
+
+        def read() -> None:
+            try:
+                self.summary(force=True)
+            except Exception as e:  # noqa: BLE001 - the error is kept for the screen
+                _log.info("could not read the plan: %s", e)
+            finally:
+                with self._lock:
+                    self._summary_busy = False
+                self._changed()
+        threading.Thread(target=read, name="heytora-plan", daemon=True).start()
+        return True
+
+    def plan_state(self) -> dict:
+        """What the screens show - never the network: the last plan read (or
+        remembered from the last run), whether it is being read, and why the
+        last read failed."""
+        with self._lock:
+            return {"summary": dict(self._summary) if self._summary else None,
+                    "fresh": self._summary_at > 0, "busy": self._summary_busy,
+                    "error": self._summary_error}
+
+    def on_change(self, listener: Callable[[], None]) -> None:
+        """Call `listener` (on any thread) whenever the plan or its use changes."""
+        with self._lock:
+            if listener not in self._listeners:
+                self._listeners.append(listener)
+
+    def _changed(self) -> None:
+        with self._lock:
+            listeners = list(self._listeners)
+        for listener in listeners:
+            try:
+                listener()
+            except Exception:  # noqa: BLE001 - a screen must never break the account
+                _log.debug("plan listener failed", exc_info=True)
+
+    def _remember(self) -> None:
+        """Keep the plan with the sign-in, for the next run. (Call with _lock held.)"""
+        if self._session is not None:
+            self._session["summary"] = self._summary
+            try:
+                store.save(self._session)
+            except Exception:  # noqa: BLE001 - only a convenience
+                _log.debug("could not keep the plan on disk", exc_info=True)
+
+    def _clock(self, data: dict) -> None:
+        """Note how far this PC's clock is from the server's."""
+        now = data.get("now")
+        if isinstance(now, (int, float)) and now > 0:
+            with self._lock:
+                self._skew = time.time() - float(now)
+
+    def _local(self, server_time: float) -> float:
+        """A server time, on this PC's clock."""
+        with self._lock:
+            return float(server_time) + self._skew
+
+    def take_alerts(self) -> list[str]:
+        """What to tell the user about their allowances that they have not been
+        told this month: 80% used, all used, today's fair use, the month's
+        overall use. Each once; remembered across restarts."""
+        with self._lock:
+            summary = self._summary
+            if not summary or self._session is None:
+                return []
+            warned = set(self._session.get("warned") or [])
+            fresh = [(key, words) for key, words in alerts(summary) if key not in warned]
+            if fresh:
+                month = str(summary.get("period_start") or "")[:7]
+                # Last month's keys go; this month's stay.
+                self._session["warned"] = sorted({k for k in warned if k.startswith(month)}
+                                                 | {k for k, _w in fresh})
+                self._remember()
+        for _key, words in fresh:
+            _log.info("plan alert: %s", words)
+        return [words for _key, words in fresh]
 
     async def asummary(self, force: bool = False) -> dict:
         return await asyncio.to_thread(self.summary, force)
@@ -291,12 +486,14 @@ class Account:
                 if new or e.info.get("reason") not in ("passes", "window"):
                     raise
                 data = self._call("POST", "voice-pass", {**body, "new": True})
+            self._clock(data)
             usage = data.get("usage") or {}
             self._note_usage(usage)
             with self._lock:
                 self._new_talk = False
                 if data.get("ticket"):
-                    self._tickets["talk"] = (data["ticket"], float(data.get("ticket_expires_at") or 0))
+                    self._tickets["talk"] = (data["ticket"],
+                                             self._local(float(data.get("ticket_expires_at") or 0)))
             return VoicePass(url=data["url"], token=data["token"], usage=usage,
                              ticket=data.get("ticket", ""))
 
@@ -319,12 +516,18 @@ class Account:
                 if not new and self._held(kind):
                     return self._tickets[kind][0]
             data = self._call("POST", "ticket", {"kind": kind, "new": new})
+            self._clock(data)
             self._note_usage(data.get("usage") or {})
             with self._lock:
                 if kind == "talk":
                     self._new_talk = False
-                self._tickets[kind] = (data["ticket"], float(data.get("expires_at") or 0))
+                self._tickets[kind] = (data["ticket"], self._local(float(data.get("expires_at") or 0)))
                 return data["ticket"]
+
+    def drop_ticket(self, kind: str) -> None:
+        """The server says this window has ended: the next call asks for its ticket again."""
+        with self._lock:
+            self._tickets.pop(kind, None)
 
     async def aticket(self, kind: str = "talk") -> str:
         return await asyncio.to_thread(self.ticket, kind)
@@ -346,17 +549,48 @@ class Account:
                 "x-heytora-ticket": ticket}
 
     def _note_usage(self, usage: dict) -> None:
-        """Keep the cached summary's count in step with what the server said."""
+        """Keep the plan's counts in step with what the server just said - a
+        new talk window, an agent window, a dictation - so the screens move
+        with every question, not only when the plan is read again."""
         kind = usage.get("kind")
+        if not kind or usage.get("used") is None or usage.get("reused"):
+            return
+        _log.info("%s: %s of %s this month%s", _KIND_WORDS.get(kind, kind), usage["used"],
+                  "unlimited" if usage.get("limit") is None else usage["limit"],
+                  f" (window {usage['window']})" if usage.get("window") else "")
         with self._lock:
-            if self._summary is not None and kind and usage.get("used") is not None:
+            if self._summary is not None:
                 self._summary.setdefault("usage", {})[kind] = usage["used"]
+                today = self._summary.setdefault("today", {})
+                today[kind] = int(today.get(kind) or 0) + 1
+                self._remember()
+        self._changed()
+
+    def _note_refusal(self, info: dict) -> None:
+        """The server refused: the screens say so now, not at the next read."""
+        reason, kind = info.get("reason"), info.get("kind")
+        _log.info("refused by the plan: %s %s", reason, kind)
+        with self._lock:
+            if self._summary is None:
+                return
+            blocked = self._summary.setdefault("blocked", {})
+            if reason == "budget":
+                blocked["all"] = "budget"
+            elif reason in ("limit", "day") and kind in ("talk", "dictation", "agent"):
+                blocked[kind] = reason
+            else:
+                return
+        self._changed()
 
     def _call(self, method: str, path: str, body: Optional[dict] = None) -> dict:
         token = self.token()
-        with self._http() as http:
-            r = http.request(method, settings.function_url(path), json=body,
-                             headers={**self._apikey(), "Authorization": f"Bearer {token}"})
+        try:
+            with self._http() as http:
+                r = http.request(method, settings.function_url(path), json=body,
+                                 headers={**self._apikey(), "Authorization": f"Bearer {token}"})
+        except httpx.HTTPError as e:
+            # Offline, or HeyTora's server not answering: words, not a traceback.
+            raise AccountError("Could not reach HeyTora - check the internet connection.") from e
         if r.status_code == 401:
             # The server no longer accepts this sign-in (account deleted, signed
             # out everywhere): forget it here too, so the app asks again.
@@ -365,7 +599,9 @@ class Account:
                 store.clear()
             raise SignInNeeded("Your sign-in has ended - sign in to HeyTora again.")
         if r.status_code in (402, 429):
-            raise LimitReached(_heytora_info(r))
+            info = _heytora_info(r)
+            self._note_refusal(info)
+            raise LimitReached(info)
         if r.status_code >= 400:
             raise AccountError(_auth_message(r, "HeyTora's server had a problem - try again."))
         return r.json()

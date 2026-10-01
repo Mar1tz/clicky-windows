@@ -900,15 +900,12 @@ class SettingsPage(Page):
     _USAGE = (("talk", "Talk", "messages"), ("agent", "Agent", "messages"),
               ("dictation", "Dictation", "dictations"))
 
-    def refresh(self) -> None:
-        super().refresh()
-        if not getattr(self, "_account_asked", False):
-            self._account_asked = True               # once per showing: the reply redraws it
-            self.bridge.refresh_account()
-
     def showEvent(self, event) -> None:
-        self._account_asked = False
+        """Every time the page comes on screen - opened, switched to, or the
+        window back from being closed - the plan is read again (at most once a
+        minute). What is known shows at once; the answer redraws the card."""
         super().showEvent(event)
+        self.bridge.refresh_account()
 
     def _sign_out_button(self):
         out = button("Sign out")
@@ -933,8 +930,10 @@ class SettingsPage(Page):
             if st["configured"] and st["signed_in"]:
                 switch = button("Use my plan instead")
                 switch.clicked.connect(lambda: br.set_access_mode("account"))
-                card.add(Row("Your HeyTora plan", "Think on your plan instead of your key.",
-                             trailing=switch))
+                known = st["summary"] or {}
+                plan = known.get("plan_name") or (known.get("plan") or "").capitalize()
+                card.add(Row(f"Your HeyTora plan{f' ({plan})' if plan else ''}",
+                             "Think on your plan instead of your key.", trailing=switch))
             elif st["configured"]:
                 switch = button("Use a HeyTora account instead")
                 switch.clicked.connect(lambda: (br.set_access_mode("account"), br.run_setup()))
@@ -956,27 +955,63 @@ class SettingsPage(Page):
                          dot=T.WARN, trailing=sign_in, first=True))
             return card
 
-        summary = st["summary"] or {}
-        plan = (summary.get("plan") or "").capitalize()
-        card.add(Row(st["email"] or "Signed in",
-                     f"{plan} plan" if plan else "Reading your plan…",
-                     dot=T.OK, trailing=self._sign_out_button(), first=True))
-        if summary.get("error"):
-            card.add(label(f"Couldn't read your plan: {summary['error']}", "faint", wrap=True))
-        limits, usage = summary.get("limits") or {}, summary.get("usage") or {}
-        for kind, name, unit in self._USAGE:
-            if kind not in limits:
-                continue
-            used, limit = int(usage.get(kind) or 0), limits[kind]
-            words = (f"{used} this month - unlimited" if limit is None
-                     else f"{used} of {limit} {unit} this month")
-            meter = Meter(0.0 if limit is None else (used / max(1, limit)),
-                          colour=T.WARN if limit is not None and used >= limit else T.ACCENT)
-            box = QVBoxLayout()
-            box.setSpacing(6)
-            box.addWidget(label(f"{name}:  {words}"))
-            box.addWidget(meter)
-            card.body.addLayout(box)
+        from account.service import resets_on
+        who = st["email"] or "Signed in"
+        summary = st["summary"]
+        if summary is None:
+            # Nothing known yet: say what is happening - never a silent wait.
+            if st["error"] and not st["busy"]:
+                again = button("Try again")
+                again.clicked.connect(lambda: br.refresh_account(force=True))
+                card.add(Row(who, "Couldn't read your plan", dot=T.WARN, trailing=again, first=True))
+                card.add(label(st["error"], "faint", wrap=True))
+            else:
+                card.add(Row(who, "Reading your plan…", dot=T.OK,
+                             trailing=self._sign_out_button(), first=True))
+        else:
+            plan = summary.get("plan_name") or (summary.get("plan") or "").capitalize() or "HeyTora"
+            when = resets_on(summary)
+            card.add(Row(who, f"{plan} plan · this month's use starts again on {when}",
+                         dot=T.OK, trailing=self._sign_out_button(), first=True))
+            if st["error"] and not st["busy"]:
+                again = button("Try again")
+                again.clicked.connect(lambda: br.refresh_account(force=True))
+                card.add(Row("Couldn't update just now", "This is your last known use.",
+                             dot=T.WARN, trailing=again))
+            blocked = summary.get("blocked") or {}
+            if blocked.get("all") == "budget":
+                card.add(Row("This month's use is up",
+                             f"Everything starts again on {when} - or upgrade on the website, or "
+                             "use your own Gemini key.", dot=T.WARN))
+            limits, usage = summary.get("limits") or {}, summary.get("usage") or {}
+            for kind, name, unit in self._USAGE:
+                if kind not in limits:
+                    continue
+                used, limit = int(usage.get(kind) or 0), limits[kind]
+                if limit is None:
+                    words = f"{used} this month - unlimited"
+                else:
+                    left = max(0, int(limit) - used)
+                    words = f"{used} of {limit} {unit} this month · " + (f"{left} left" if left else "all used")
+                if blocked.get(kind) == "day":
+                    words += " · today's fair use reached"
+                full = limit is not None and used >= int(limit)
+                meter = Meter(0.0 if limit is None else min(1.0, used / max(1, int(limit))),
+                              colour=T.WARN if full or blocked.get(kind) else T.ACCENT)
+                box = QVBoxLayout()
+                box.setSpacing(6)
+                box.addWidget(label(f"{name}:  {words}"))
+                box.addWidget(meter)
+                card.body.addLayout(box)
+            fair = summary.get("fair_use")
+            if isinstance(fair, (int, float)):
+                box = QVBoxLayout()
+                box.setSpacing(6)
+                box.addWidget(label(f"Overall use this month:  {round(fair * 100)}%"))
+                box.addWidget(Meter(min(1.0, float(fair)), colour=T.WARN if fair >= 0.8 else T.ACCENT))
+                box.addWidget(label("Everything Tora does for you - looking at your screen, planning, "
+                                    "agents thinking - counts a little towards this.", "faint", wrap=True))
+                card.body.addLayout(box)
         own = button("Use my own Gemini key instead", "link")
         own.clicked.connect(lambda: (br.set_access_mode("own_key"), br.run_setup()))
         card.body.addWidget(own, 0, Qt.AlignmentFlag.AlignLeft)

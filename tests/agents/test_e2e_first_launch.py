@@ -199,7 +199,7 @@ class _Bridge:
     def account_state(self):
         return dict(self.state)
 
-    def refresh_account(self):
+    def refresh_account(self, force=False):
         self.done.append("refresh")
 
     def account_sign_out(self):
@@ -226,8 +226,11 @@ def _texts(w):
 def _state(**kw):
     base = {"configured": True, "mode": "account", "signed_in": True, "email": "amy@example.com",
             "website": "https://heytora.example", "own_key": False,
-            "summary": {"plan": "free", "limits": {"talk": 25, "agent": 25, "dictation": 300, "calls": 1500},
-                        "usage": {"talk": 7, "agent": 25, "calls": 40}}}
+            "fresh": True, "busy": False, "error": "",
+            "summary": {"plan": "free", "plan_name": "Free",
+                        "limits": {"talk": 25, "agent": 25, "dictation": 300},
+                        "usage": {"talk": 7, "agent": 25}, "period_end": "2026-11-01T00:00:00+00:00",
+                        "blocked": {"agent": "limit"}, "fair_use": 0.12}}
     base.update(kw)
     return base
 
@@ -239,16 +242,22 @@ def test_the_account_card_shows_the_plan_and_this_months_use(qapp, monkeypatch):
     monkeypatch.setattr(app_pages, "confirm_sign_out", lambda _parent: True)
     bridge = _Bridge(_state())
     page = SettingsPage(bridge)
-    page.refresh()
-    texts = _texts(page)
-    assert "amy@example.com" in texts and "Free plan" in texts
-    assert "Talk:  7 of 25 messages this month" in texts
-    assert "Agent:  25 of 25 messages this month" in texts
-    assert not any("calls" in t.lower() or "requests" in t.lower() for t in texts), "the backstop is hidden"
-    buttons = {b.text(): b for b in page.findChildren(QPushButton)}
-    buttons["Manage plan"].click()
-    buttons["Sign out"].click()
-    assert "website" in bridge.done and "sign out" in bridge.done and "refresh" in bridge.done
+    page.show()                                    # on screen: the plan is asked for
+    qapp.processEvents()
+    try:
+        texts = _texts(page)
+        assert "amy@example.com" in texts
+        assert "Talk:  7 of 25 messages this month · 18 left" in texts
+        assert "Agent:  25 of 25 messages this month · all used" in texts
+        assert any("Free plan · this month's use starts again on 1 Nov" in t for t in texts)
+        assert "Overall use this month:  12%" in texts
+        assert not any("calls" in t.lower() or "requests" in t.lower() or "$" in t for t in texts),             "the server's own numbers stay hidden"
+        buttons = {b.text(): b for b in page.findChildren(QPushButton)}
+        buttons["Manage plan"].click()
+        buttons["Sign out"].click()
+        assert "website" in bridge.done and "sign out" in bridge.done and "refresh" in bridge.done
+    finally:
+        page.close()
 
 
 def test_sign_out_asks_first_because_it_closes_heytora(qapp, monkeypatch):
@@ -266,11 +275,46 @@ def test_sign_out_asks_first_because_it_closes_heytora(qapp, monkeypatch):
 def test_unlimited_talk_on_pro(qapp):
     from ui.app_pages import SettingsPage
     page = SettingsPage(_Bridge(_state(summary={
-        "plan": "pro", "limits": {"talk": None, "agent": 150, "dictation": None},
-        "usage": {"talk": 210, "agent": 12}})))
+        "plan": "pro", "plan_name": "Pro", "limits": {"talk": None, "agent": 150, "dictation": None},
+        "usage": {"talk": 210, "agent": 12}, "period_end": "2026-11-01T00:00:00+00:00"})))
     page.refresh()
     texts = _texts(page)
-    assert "Pro plan" in texts and "Talk:  210 this month - unlimited" in texts
+    assert any(t.startswith("Pro plan") for t in texts) and "Talk:  210 this month - unlimited" in texts
+    assert not any(t.startswith("Overall use") for t in texts), "not known, not shown"
+
+
+def _card_texts(qapp, **state):
+    from ui.app_pages import SettingsPage
+    page = SettingsPage(_Bridge(_state(**state)))
+    page.refresh()
+    return page, _texts(page)
+
+
+def test_while_the_plan_is_read_it_says_so(qapp):
+    _page, texts = _card_texts(qapp, summary=None, busy=True, fresh=False)
+    assert "Reading your plan…" in texts
+
+
+def test_a_plan_that_could_not_be_read_says_why_and_offers_another_try(qapp):
+    from PyQt6.QtWidgets import QPushButton
+    page, texts = _card_texts(qapp, summary=None, error="Could not reach HeyTora - check the internet.")
+    assert "Couldn't read your plan" in texts and "Reading your plan…" not in texts
+    assert "Could not reach HeyTora - check the internet." in texts
+    next(b for b in page.findChildren(QPushButton) if b.text() == "Try again").click()
+    assert "refresh" in page.bridge.done
+
+
+def test_a_failed_update_keeps_the_last_known_use(qapp):
+    _page, texts = _card_texts(qapp, error="Could not reach HeyTora.", fresh=False)
+    assert "Couldn't update just now" in texts and "Talk:  7 of 25 messages this month · 18 left" in texts
+
+
+def test_a_spent_month_and_todays_fair_use_are_said_plainly(qapp):
+    summary = _state()["summary"] | {"blocked": {"all": "budget", "talk": "day"}, "fair_use": 1.0}
+    _page, texts = _card_texts(qapp, summary=summary)
+    assert "This month's use is up" in texts
+    assert "Talk:  7 of 25 messages this month · 18 left · today's fair use reached" in texts
+    assert "Overall use this month:  100%" in texts
 
 
 def test_signed_out_offers_to_sign_in(qapp):

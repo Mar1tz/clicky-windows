@@ -147,6 +147,17 @@ async def _route(answer: bool = False) -> tuple[str, dict, dict]:
     return account().proxy_root(), {}, headers
 
 
+def _ticket_ended(status: int, body: str) -> bool:
+    """HeyTora says the window this call ran on has ended (or was never this
+    app's): worth one more try with a fresh ticket."""
+    if status != 402 or "heytora_ticket" not in (body or "").lower() or own_key():
+        return False
+    from account.service import account
+    account().drop_ticket("agent" if _kind.get() == "agent" else "talk")
+    _log.info("window ticket refused - asking for the window again")
+    return True
+
+
 class GeminiError(RuntimeError):
     """An API error with the message Google actually sent, not just a status.
 
@@ -387,6 +398,8 @@ async def _post(path: str, body: dict, timeout: float) -> httpx.Response:
 
     try:
         r = await once()
+        if _ticket_ended(r.status_code, r.text):
+            r = await once()
     except GeminiError as e:              # HeyTora said no before Google was asked
         report_problem(e)
         raise
@@ -579,6 +592,7 @@ async def _sse(model: str, body: dict, timeout: float) -> AsyncIterator[dict]:
     first part twice. An account problem is reported (report_problem).
     """
     stale_left = 1
+    ticket_left = 1
     busy_delays = list(BUSY_RETRY_DELAYS)
     while True:
         started = False
@@ -616,6 +630,9 @@ async def _sse(model: str, body: dict, timeout: float) -> AsyncIterator[dict]:
             _log.info("retrying the stream once on a fresh connection after "
                       "%s: %s", type(e).__name__, e)
         except GeminiError as e:
+            if not started and ticket_left and _ticket_ended(e.status, e.body):
+                ticket_left = 0
+                continue
             if not started and busy_delays and problem_of(e) == "busy":
                 delay = busy_delays.pop(0)
                 _log.info("Google is busy (%d) - asking again in %.0fs",

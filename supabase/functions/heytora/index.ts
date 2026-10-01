@@ -175,11 +175,14 @@ Deno.serve(async (req: Request): Promise<Response> => {
     if (error) throw new Error(`${fn}: ${error.message}`);
     return data as Record<string, unknown>;
   };
+  // `now` rides along with every end time: the app measures what is left by
+  // the server's clock, so a PC whose clock is off is never misled.
   const ticketFor = async (kind: string, w: Record<string, unknown>) => ({
     ticket: await makeTicket(TICKET_SECRET, user.id, {
       kind, window: String(w.window), expires: Number(w.expires_at),
     }),
     expires_at: Number(w.expires_at),
+    now: Date.now() / 1000,
   });
 
   try {
@@ -209,7 +212,7 @@ Deno.serve(async (req: Request): Promise<Response> => {
         const endsAt = Date.now() / 1000 + Math.min(Math.max(minutes, 1), 120) * 60;
         const pass = await mintPass(model, endsAt);
         delete usage.limits;
-        return json(200, { ...pass, expires_at: endsAt, usage });
+        return json(200, { ...pass, expires_at: endsAt, now: Date.now() / 1000, usage });
       }
       // Talk: the pass lives inside a talk window - a new one unless the app
       // says it is the same question (a reconnect) - and ends with it.
@@ -220,7 +223,8 @@ Deno.serve(async (req: Request): Promise<Response> => {
       const pass = await mintPass(model, Number(p.expires_at));
       const t = await ticketFor("talk", w);
       return json(200, {
-        ...pass, expires_at: Number(p.expires_at), ticket: t.ticket, ticket_expires_at: t.expires_at, usage: w,
+        ...pass, expires_at: Number(p.expires_at), ticket: t.ticket, ticket_expires_at: t.expires_at,
+        now: t.now, usage: w,
       });
     }
 

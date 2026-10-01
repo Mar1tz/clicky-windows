@@ -68,9 +68,41 @@ user buys is counted as a *window* the server opens and closes:
   no new download needed. The app and website only ever see talk, dictation
   and agent (`get_usage_summary`).
 
-When an allowance runs out, the user is told which one and what to do
-(upgrade on the website, or use their own key) — in the caption, the tray and
-Settings → "Your HeyTora account" (which shows the plan and this month's use).
+## What the user sees
+
+- **Settings → "Your HeyTora account"**: the plan and when it starts again;
+  talk, agent and dictation as "7 of 25 this month · 18 left" with a meter;
+  "today's fair use reached" when that applies; *overall use this month* (the
+  cost ceiling as a percentage, never dollars); "This month's use is up" when
+  it is. The plan shown is the account's own (`account.service`): remembered
+  from the last run, so it appears at once, and read again whenever the page
+  comes on screen. A read that fails says so, with **Try again**, and keeps
+  the last known use - never a silent "Reading your plan…".
+- **The counts move with every question**: each window the server opens
+  reports this month's count, and every screen hears it at once.
+- **The tray's first line**: "HeyTora · Free plan - 18 talk messages left".
+- **A heads-up at 80% and at 100%** of each allowance, today's fair use, and
+  the month's overall use - each once a month, remembered across restarts.
+- When an allowance runs out the server's own words say which and what to
+  do - in the caption, the tray and Settings.
+- Window ends are measured on the **server's clock**, so a PC whose clock is
+  off keeps working; a ticket the server has ended is asked for again once.
+
+The website reads the same `get_usage_summary()` with the user's sign-in:
+`plan`, `plan_name`, `limits`, `usage`, `today`, `blocked`, `fair_use`,
+`period_end`, `day_resets_at`, `now`.
+
+## What the business sees
+
+```sql
+select * from heytora_admin_usage();              -- this month
+select * from heytora_admin_usage('2026-09-01');  -- any month
+```
+
+One row per account: plan, talk / dictation / agent / requests, what Google
+charged for their forwarded calls (`cost_usd`), last use. Service role only:
+the Supabase SQL editor, or the website's server — never the app or a
+signed-in user.
 
 ## Status — live since 1 Oct 2026
 
@@ -78,7 +110,7 @@ Project `uizwfpxzzkokyrkvjzkr` (eu-west-1), shared with the website.
 
 | Step | State |
 | --- | --- |
-| Database: `0001` – `0004` | applied (0001 was already there; 0004 on 2 Oct) |
+| Database: `0001` – `0005` | applied (0001 was already there; 0004 and 0005 on 2 Oct) |
 | Secrets `GEMINI_API_KEY`, `HEYTORA_TICKET_SECRET` | set (Management API; never in git) |
 | Function `heytora` | deployed, JWT verification on |
 | Redirect URLs | `http://127.0.0.1:*/heytora/signed-in` — **the website must keep this entry** when it adds its own |

@@ -237,10 +237,21 @@ class ToraApp(QWidget):
     def _refresh_now(self) -> None:
         """Redraw the page on screen - if it is live, anyone can see it, and
         what changed is something it shows (Page.TOPICS)."""
+        if not self.isVisible():
+            return          # kept: showEvent redraws when the window is back
         topics, self._pending_topics = self._pending_topics, set()
         page = self._stack.currentWidget()
-        if (page is not None and self.isVisible() and getattr(page, "LIVE", False)
+        if (page is not None and getattr(page, "LIVE", False)
                 and set(getattr(page, "TOPICS", ())) & topics):
+            page.refresh()
+
+    def showEvent(self, event) -> None:
+        """Back on screen after being closed: the page shows what is true now,
+        including anything that changed while nobody could see it."""
+        super().showEvent(event)
+        self._pending_topics.clear()
+        page = self._stack.currentWidget()
+        if page is not None and getattr(page, "LIVE", False):
             page.refresh()
 
     # ── behaviour ────────────────────────────────────────────────────────────

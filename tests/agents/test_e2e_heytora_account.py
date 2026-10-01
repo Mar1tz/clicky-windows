@@ -51,14 +51,15 @@ class FakeHeyTora:
         self.opened = {"talk": 0, "agent": 0}
         self.window_seq = 0
         self.pass_refusal = ""                  # "passes" / "window": refuse a reused window once
+        self.clock_offset = 0.0                 # the server's clock minus this PC's
 
     def window(self, kind: str, new: bool) -> tuple[int, float, bool]:
         held = self.windows.get(kind)
-        if held and not new and held[1] > time.time():
+        if held and not new and held[1] > time.time() + self.clock_offset:
             return held[0], held[1], True
         self.window_seq += 1
         self.opened[kind] += 1
-        held = (self.window_seq, time.time() + 60 * self.window_minutes[kind])
+        held = (self.window_seq, time.time() + self.clock_offset + 60 * self.window_minutes[kind])
         self.windows[kind] = held
         return held[0], held[1], False
 
@@ -68,7 +69,7 @@ class FakeHeyTora:
 
     def valid(self, ticket: str) -> bool:
         parts = (ticket or "").split(".")
-        return len(parts) == 4 and parts[0] in self.windows and int(parts[1]) == self.windows[parts[0]][0]             and int(parts[2]) > time.time()
+        return len(parts) == 4 and parts[0] in self.windows and int(parts[1]) == self.windows[parts[0]][0]             and int(parts[2]) > time.time() + self.clock_offset
 
     def session(self) -> dict:
         self.issued += 1
@@ -106,8 +107,11 @@ class FakeHeyTora:
             return httpx.Response(401, json={"error": {"code": 401, "status": "HEYTORA_SIGNIN",
                                                        "message": "Sign in to HeyTora to keep talking."}})
         if path.endswith("/heytora/me"):
-            return httpx.Response(200, json={"plan": self.plan, "limits": self.limits,
-                                             "usage": self.usage})
+            return httpx.Response(200, json={
+                "plan": self.plan, "plan_name": self.plan.capitalize(), "limits": self.limits,
+                "usage": self.usage, "today": {}, "blocked": {}, "fair_use": 0.1,
+                "period_start": "2026-10-01T00:00:00+00:00", "period_end": "2026-11-01T00:00:00+00:00",
+                "now": time.time() + self.clock_offset})
         if path.endswith("/heytora/voice-pass"):
             if self.talk_refused:
                 info = {"reason": "limit", "kind": "talk", "used": 25, "limit": 25, "plan": "free"}
@@ -127,6 +131,7 @@ class FakeHeyTora:
                         "message": "That conversation has ended - ask again."}})
                 window, ends, reused = self.window("talk", body.get("new", True) is not False)
                 reply |= {"ticket": self.ticket("talk", window, ends), "ticket_expires_at": ends,
+                          "now": time.time() + self.clock_offset,
                           "usage": {"ok": True, "kind": "talk", "window": window, "reused": reused,
                                     **({} if reused else {"used": self.opened["talk"], "limit": 25})}}
             return httpx.Response(200, json=reply)
@@ -135,6 +140,7 @@ class FakeHeyTora:
             window, ends, reused = self.window(kind, bool(body.get("new")))
             return httpx.Response(200, json={
                 "ticket": self.ticket(kind, window, ends), "expires_at": ends, "kind": kind,
+                "now": time.time() + self.clock_offset,
                 "usage": {"ok": True, "kind": kind, "window": window, "reused": reused,
                           **({} if reused else {"used": self.opened[kind], "limit": 25})}})
         if "/heytora/v1beta/models" in path:

@@ -245,47 +245,55 @@ class AppBridge(QObject):
 
     # ── HeyTora account (2026-10-01) ─────────────────────────────────────────
 
-    _account_summary: Optional[dict] = None
-    _account_busy = False
-
     def account_state(self) -> dict:
-        """What the Account card shows - never the network: the plan and usage
-        are the last ones read (refresh_account reads them again)."""
+        """What the Account card shows - never the network. The plan is the
+        account's own (account.service.plan_state): the last one read, or the
+        one remembered from the last run, whether it is being read again, and
+        why the last read failed. The card redraws when any of it changes."""
         from account import settings
         from account.service import account
         from config import cfg
         acc = account()
+        self._watch_account()
+        st = acc.plan_state()
         return {"configured": settings.configured(), "mode": cfg.access_mode(),
                 "signed_in": acc.signed_in(), "email": acc.email,
-                "website": settings.website_url(), "summary": self._account_summary,
+                "website": settings.website_url(), "summary": st["summary"],
+                "fresh": st["fresh"], "busy": st["busy"], "error": st["error"],
                 "own_key": bool(cfg.google_api_key)}
 
-    def refresh_account(self) -> None:
-        """Read the plan and this month's usage again, off the UI thread; the
-        page redraws when they arrive."""
+    def refresh_account(self, force: bool = False) -> None:
+        """Read the plan and this month's use again, off the UI thread, unless
+        it was read in the last minute (or `force`). The card hears the
+        answer - or the failure - through the "account" topic."""
         from account.service import account
-        from config import cfg
-        if self._account_busy or cfg.access_mode() != "account" or not account().signed_in():
-            return
-        self._account_busy = True
+        self._watch_account()
+        account().refresh_soon(0 if force else 60)
 
-        def work():
-            try:
-                self._account_summary = account().summary(force=True)
-            except Exception as e:  # noqa: BLE001 - shown as "couldn't read"
-                self._account_summary = {"error": str(e)}
-            finally:
-                self._account_busy = False
-                self.changed.emit("account")
-        import threading
-        threading.Thread(target=work, daemon=True).start()
+    def _watch_account(self) -> None:
+        """The account's plan changes (any thread) become the "account" topic.
+        Held weakly: a bridge that is gone is simply not told."""
+        if getattr(self, "_watching", False):
+            return
+        self._watching = True
+        import weakref
+        from account.service import account
+        me = weakref.ref(self)
+
+        def heard() -> None:
+            bridge = me()
+            if bridge is not None:
+                try:
+                    bridge.changed.emit("account")
+                except RuntimeError:          # its Qt object is already deleted
+                    pass
+        account().on_change(heard)
 
     def account_sign_out(self) -> None:
         """Sign out - and with no account, no HeyTora: the app restarts at the
         sign-in window (main.py, ui/sign_in_gate.py)."""
         from account.service import account
         account().sign_out()
-        self._account_summary = None
         self._access_changed()
         from ui import sign_in_gate
         sign_in_gate.lost()
@@ -294,7 +302,6 @@ class AppBridge(QObject):
         """"account" or "own_key", for every launch, and taken up now."""
         from config import cfg
         cfg.set_access_mode(mode)
-        self._account_summary = None
         self._access_changed()
 
     def run_setup(self) -> None:

@@ -295,6 +295,17 @@ def main():
     # one notification - never 77 silent failures.
     manager.sig_account_problem.connect(tray.set_account_problem)
 
+    # The plan, in the tray: its first menu line follows every question,
+    # and 80% / all used is said once a month (account.service.alerts).
+    try:
+        from account import settings as _acc_settings
+        from account.service import account as _account
+        if _acc_settings.configured():
+            _account().on_change(tray.plan_changed.emit)
+            tray.plan_changed.emit()          # what was remembered from the last run
+    except Exception:  # noqa: BLE001 - the plan line is a convenience
+        pass
+
     # A sign-in that ends while HeyTora runs - Settings → Sign out, or the
     # server no longer accepting it - closes this copy and opens a fresh one
     # at the sign-in window, instead of carrying on unlocked.

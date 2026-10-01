@@ -63,6 +63,9 @@ class TrayManager(QObject):
     on_open_extensions    = pyqtSignal()        # industry packs on/off
     on_open_dashboard     = pyqtSignal()        # the enabled packs' dashboards
     on_open_app           = pyqtSignal()        # the one-window app (ui/app_window)
+    # The HeyTora plan or its use changed - emitted from any thread by the
+    # account (main.py wires account().on_change to it); handled on Qt's.
+    plan_changed          = pyqtSignal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -104,6 +107,9 @@ class TrayManager(QObject):
         self._is_recording = False
         # "billing" / "key" while Google is refusing the account (APP-02).
         self._account_problem = ""
+        # "Free plan - 18 talk messages left": the first line of the menu.
+        self._plan_line = ""
+        self.plan_changed.connect(self._refresh_plan)
         # The input device Tora listens on; None = the system default.
         self._active_mic_index = cfg.mic_device_index
 
@@ -148,6 +154,10 @@ class TrayManager(QObject):
             warn = menu.addAction("⚠  Google refused the API key — fix it…")
             warn.triggered.connect(self.on_api_keys)
             menu.addSeparator()
+        if self._plan_line and account_mode:
+            plan = menu.addAction(f"HeyTora · {self._plan_line}")
+            plan.setToolTip("Your plan and this month's use - open Settings for the details")
+            plan.triggered.connect(self.on_open_app)
         info = menu.addAction(
             f"Gemini · {providers['conversation']}  |  voice: {providers['voice']}"
         )
@@ -622,6 +632,25 @@ class TrayManager(QObject):
         if kind != self._account_problem:
             self._account_problem = kind
             self._build_menu()
+
+    def _refresh_plan(self) -> None:
+        """The plan changed: the menu's first line follows it, and anything
+        worth saying - 80% used, all used, today's fair use - is said once."""
+        try:
+            from account import settings
+            from account.service import account, short_status
+            if not settings.configured():
+                return
+            acc = account()
+            line = short_status(acc.plan_state()["summary"] or {}) if acc.signed_in() else ""
+            alerts = acc.take_alerts() if acc.signed_in() else []
+        except Exception:  # noqa: BLE001 - the tray must never break on the plan
+            return
+        if line != self._plan_line:
+            self._plan_line = line
+            self._build_menu()
+        for words in alerts:
+            self._tray.showMessage("HeyTora plan", words, QSystemTrayIcon.MessageIcon.Information, 8000)
 
     def _open_website(self) -> None:
         """Where the plan is changed (Settings > Account says the same)."""
