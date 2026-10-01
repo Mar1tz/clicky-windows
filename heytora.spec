@@ -49,6 +49,14 @@ hidden = [
 
     # Log hygiene, imported inside _setup_logging
     "logsafe",
+
+    # HeyTora accounts (sign-in, the server function's client) and the
+    # per-monitor pixel maths - both imported inside functions.
+    "account",
+    "account.service",
+    "account.settings",
+    "account.store",
+    "screen.monitors",
 ]
 
 # ── The agent workforce. CompanionManager imports agents.bootstrap lazily

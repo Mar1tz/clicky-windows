@@ -89,6 +89,18 @@ def provider_from_env(prefix: str = "OMNIROUTE") -> Optional[OpenAICompatiblePro
     )
 
 
+def _heytora_account() -> bool:
+    """Is the app in HeyTora-account mode and signed in? (No own key.)"""
+    try:
+        from config import cfg
+        if cfg.access_mode() != "account":
+            return False
+        from account.service import account
+        return account().signed_in()
+    except Exception:  # noqa: BLE001 - library use without the app
+        return False
+
+
 def build_router(
     accounts: Optional[AccountStore] = None,
     *,
@@ -161,6 +173,16 @@ def build_router(
     if gateway is not False and gemini_key():
         router.register(GeminiAgentProvider(), kinds=None, priority=10)
         router.register(GeminiAgentProvider(model="gemini-3.8-flash"),
+                        kinds=[TaskKind.FAST], priority=12)
+    elif gateway is not False and _heytora_account():
+        # A HeyTora account: the same Gemini, through HeyTora's server, on the
+        # user's plan - each agent ticket is one agent message.
+        from account.service import account
+        root = account().proxy_root()
+        router.register(GeminiAgentProvider(base_url=root, auth=account().agent_headers),
+                        kinds=None, priority=10)
+        router.register(GeminiAgentProvider(model="gemini-3.8-flash", base_url=root,
+                                            auth=account().agent_headers),
                         kinds=[TaskKind.FAST], priority=12)
 
     # ── Phase 2 hooks — register real adapters above the fallback ────────────

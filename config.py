@@ -571,8 +571,54 @@ class Config:
         return "tavily" if self.tavily_api_key else "duckduckgo"
 
     def has_key(self) -> bool:
-        """Tora cannot do anything at all without this."""
-        return bool(self.google_api_key)
+        """Can Tora reach Gemini at all - with the user's own key, or with a
+        signed-in HeyTora account? Tora cannot do anything without one."""
+        if self.access_mode() == "own_key":
+            return bool(self.google_api_key)
+        try:
+            from account.service import account
+            return account().signed_in()
+        except Exception:  # noqa: BLE001 - no account support: no access
+            return False
+
+    # ── HeyTora account or own key (2026-10-01) ──────────────────────────
+    #
+    # "account": Gemini through HeyTora's server, on the plan the user picked
+    #            on the website. The business key lives on that server and
+    #            never reaches this machine - a key shipped in an app is a key
+    #            anyone can read off the wire.
+    # "own_key": the user's own Gemini key, straight to Google, no limits
+    #            from HeyTora.
+    ACCESS_MODES = ("account", "own_key")
+
+    def access_mode(self) -> str:
+        """Saved as TORA_ACCESS. Unset, an own key wins if there is one, so
+        a developer's .env keeps working exactly as before."""
+        raw = os.environ.get("TORA_ACCESS", "").strip().lower()
+        if raw in self.ACCESS_MODES:
+            return raw
+        return "own_key" if self.google_api_key else "account"
+
+    def set_access_mode(self, mode: str) -> None:
+        if mode not in self.ACCESS_MODES:
+            raise ValueError(f"access mode is one of {self.ACCESS_MODES}")
+        os.environ["TORA_ACCESS"] = mode
+        self._write_env("TORA_ACCESS", mode)
+
+    # ── Who the user is (first launch) ───────────────────────────────────
+
+    def profile(self) -> tuple[str, list[str]]:
+        """(name, what they use their PC for) from the first launch."""
+        name = os.environ.get("TORA_USER_NAME", "").strip()
+        uses = [u.strip() for u in os.environ.get("TORA_USER_USES", "").split(",") if u.strip()]
+        return name, uses
+
+    def set_profile(self, name: str, uses: list[str]) -> None:
+        name = " ".join((name or "").split())[:40]
+        joined = ",".join(u.replace(",", " ").strip() for u in uses if u and u.strip())[:300]
+        for env, value in (("TORA_USER_NAME", name), ("TORA_USER_USES", joined)):
+            os.environ[env] = value
+            self._write_env(env, value)
 
     def realtime(self) -> bool:
         return self.conversation_mode != "cascade"

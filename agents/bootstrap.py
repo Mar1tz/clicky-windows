@@ -193,6 +193,35 @@ def build_agent_manager(
     return mgr
 
 
+def rewire_providers(mgr: AgentManager, accounts=None) -> bool:
+    """Rebuild a RUNNING workforce's providers - the router, and the parts
+    that think with a real one (planner, verifier, decomposer, classifier).
+
+    For a change of access without restarting the agents: signing in to a
+    HeyTora account on the first launch, signing out, or switching to an own
+    Gemini key. Swapping the router alone would leave a workforce that
+    started with no provider on its template planner for good. True when a
+    real provider is connected now.
+    """
+    from agents.planning import ProviderPlanner, TemplatePlanner
+    from agents.providers import AccountStore, build_router
+    from agents.understanding import HeuristicIntentClassifier, TieredIntentClassifier
+    from agents.verification import CompositeVerifier, RuleVerifier
+
+    if accounts is None:
+        accounts = AccountStore(os.path.join(data_dir(), "agent_accounts.json"))
+    router = build_router(accounts)
+    live = has_live_provider(router)
+    mgr.router = router
+    mgr.planner = ProviderPlanner(fallback=TemplatePlanner(), prefer_templates=True) if live \
+        else TemplatePlanner()
+    mgr.verifier = CompositeVerifier(rules=RuleVerifier()) if live else RuleVerifier()
+    mgr.decomposer = ProviderDecomposer(fallback=TemplateDecomposer()) if live else TemplateDecomposer()
+    mgr.classifier = TieredIntentClassifier(router.pick(TaskKind.FAST)) if live \
+        else HeuristicIntentClassifier()
+    return live
+
+
 def attach_extensions(mgr: AgentManager, *, in_memory: bool = False,
                       base_dir: Optional[str] = None) -> AgentManager:
     """Give the manager its scheduler and industry-extension registry, and

@@ -35,6 +35,25 @@ def _offline_by_default(monkeypatch, request):
 
 
 @pytest.fixture(autouse=True)
+def _own_key_by_default(monkeypatch):
+    """With no key in the environment the app would choose a HeyTora account
+    (account/), and every test that fakes Google's HTTP would be sent to a
+    server that is not there. Tests run as a developer does - own key - and
+    the account tests switch to "account" themselves. The profile from the
+    first launch starts empty too."""
+    monkeypatch.setenv("TORA_ACCESS", "own_key")
+    monkeypatch.delenv("TORA_USER_NAME", raising=False)
+    monkeypatch.delenv("TORA_USER_USES", raising=False)
+    for name in ("TORA_SUPABASE_URL", "TORA_SUPABASE_ANON_KEY", "TORA_WEBSITE_URL"):
+        monkeypatch.delenv(name, raising=False)
+    try:
+        from account import service
+        service.reset(None)
+    except Exception:  # noqa: BLE001 - a suite without the app still runs
+        pass
+
+
+@pytest.fixture(autouse=True)
 def _no_real_monitors(monkeypatch):
     """screen.monitors reads the machine's real monitors - three of them, at
     100% and 125%, on the PC this was written on - so a test's pixels would

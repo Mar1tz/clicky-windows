@@ -41,7 +41,7 @@ from typing import Any, AsyncIterator, Optional
 import websockets
 from websockets.exceptions import ConnectionClosed
 
-from ai.gemini import LIVE_WS, api_key
+from ai.gemini import LIVE_WS, api_key, own_key
 
 _log = logging.getLogger("tora.live")
 
@@ -113,13 +113,9 @@ class LiveSession:
     # ── Lifecycle ────────────────────────────────────────────────────────────
 
     async def connect(self, timeout: float = 20.0) -> None:
-        key = api_key()
-        if not key:
-            raise RuntimeError(
-                "No Google API key. Add GOOGLE_API_KEY in Tray → API Key."
-            )
+        address = await self._address()
         self._ws = await asyncio.wait_for(
-            websockets.connect(f"{LIVE_WS}?key={key}", max_size=None),
+            websockets.connect(address, max_size=None),
             timeout=timeout,
         )
         await self._send({"setup": self._setup})
@@ -127,6 +123,25 @@ class LiveSession:
         msg = json.loads(raw if isinstance(raw, str) else raw.decode())
         if "setupComplete" not in msg:
             raise RuntimeError(f"Live setup refused: {json.dumps(msg)[:300]}")
+
+    async def _address(self) -> str:
+        """Where the websocket goes. Own key: Google with the key. HeyTora
+        account: Google with a voice pass - a one-session token HeyTora's
+        server mints with the business key, which never comes here. Each
+        pass is a talk message (or a dictation) on the user's plan."""
+        if own_key():
+            key = api_key()
+            if not key:
+                raise RuntimeError("No Google API key. Add GOOGLE_API_KEY in Tray → API Key.")
+            return f"{LIVE_WS}?key={key}"
+        from account.service import account
+        from ai.gemini import Models
+        kind = "dictation" if self._model == Models.STT else "talk"
+        voice_pass = await account().avoice_pass(kind, self._model)
+        self.usage = voice_pass.usage
+        return voice_pass.address()
+
+    usage: dict = {}                      # what the voice pass said about the plan
 
     async def close(self) -> None:
         self._closed = True

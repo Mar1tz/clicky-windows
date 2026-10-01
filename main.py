@@ -435,10 +435,16 @@ def main():
     tray.on_set_stt_language.connect(manager.set_stt_language)
     tray.on_set_custom_instructions.connect(manager.set_custom_instructions)
 
-    # Setup wizard (re-run) + diagnostics
+    # Setup wizard (re-run) + diagnostics. Finishing it may have signed in to
+    # a HeyTora account or set a key: the running app takes that up at once.
+    def _access_changed():
+        manager.on_access_changed()
+        tray.rebuild_menu()
+
     def _run_setup_again():
         from ui.setup_wizard import SetupWizard
         wiz = SetupWizard()
+        wiz.completed.connect(_access_changed)
         wiz.show()
         _setup_keepalive[0] = wiz
     tray.on_run_setup.connect(_run_setup_again)
@@ -553,11 +559,11 @@ def main():
         if os.environ.get("TORA_FORCE_SETUP", "").strip() in ("1", "true", "yes"):
             wiz = SetupWizard()
             wiz.show()
-            _setup_keepalive[0] = wiz
         else:
             wiz = maybe_show_setup_wizard()
-            if wiz is not None:
-                _setup_keepalive[0] = wiz   # keep a reference so it isn't GC'd
+        if wiz is not None:
+            wiz.completed.connect(_access_changed)
+            _setup_keepalive[0] = wiz       # keep a reference so it isn't GC'd
     except Exception as e:
         print(f"[setup-wizard] skipped: {e}")
 

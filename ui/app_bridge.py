@@ -243,6 +243,76 @@ class AppBridge(QObject):
             wf.set_auto_approve(bool(on))
         self.changed.emit("switches")
 
+    # ── HeyTora account (2026-10-01) ─────────────────────────────────────────
+
+    _account_summary: Optional[dict] = None
+    _account_busy = False
+
+    def account_state(self) -> dict:
+        """What the Account card shows - never the network: the plan and usage
+        are the last ones read (refresh_account reads them again)."""
+        from account import settings
+        from account.service import account
+        from config import cfg
+        acc = account()
+        return {"configured": settings.configured(), "mode": cfg.access_mode(),
+                "signed_in": acc.signed_in(), "email": acc.email,
+                "website": settings.website_url(), "summary": self._account_summary,
+                "own_key": bool(cfg.google_api_key)}
+
+    def refresh_account(self) -> None:
+        """Read the plan and this month's usage again, off the UI thread; the
+        page redraws when they arrive."""
+        from account.service import account
+        from config import cfg
+        if self._account_busy or cfg.access_mode() != "account" or not account().signed_in():
+            return
+        self._account_busy = True
+
+        def work():
+            try:
+                self._account_summary = account().summary(force=True)
+            except Exception as e:  # noqa: BLE001 - shown as "couldn't read"
+                self._account_summary = {"error": str(e)}
+            finally:
+                self._account_busy = False
+                self.changed.emit("account")
+        import threading
+        threading.Thread(target=work, daemon=True).start()
+
+    def account_sign_out(self) -> None:
+        from account.service import account
+        account().sign_out()
+        self._account_summary = None
+        self._access_changed()
+
+    def set_access_mode(self, mode: str) -> None:
+        """"account" or "own_key", for every launch, and taken up now."""
+        from config import cfg
+        cfg.set_access_mode(mode)
+        self._account_summary = None
+        self._access_changed()
+
+    def run_setup(self) -> None:
+        """Open the first-launch wizard again (sign in, or add a key)."""
+        if self.tray is not None and hasattr(self.tray, "on_run_setup"):
+            self.tray.on_run_setup.emit()
+
+    def open_website(self) -> None:
+        from account import settings
+        if settings.website_url():
+            from PyQt6.QtCore import QUrl
+            from PyQt6.QtGui import QDesktopServices
+            QDesktopServices.openUrl(QUrl(settings.website_url()))
+
+    def _access_changed(self) -> None:
+        if self.manager is not None and hasattr(self.manager, "on_access_changed"):
+            try:
+                self.manager.on_access_changed()
+            except Exception:  # noqa: BLE001
+                _log.exception("could not take up the new access")
+        self.changed.emit("account")
+
     def grants(self) -> list[str]:
         """Desktop actions the user said to always allow (DC-16)."""
         wf = self.workforce()

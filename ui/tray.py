@@ -121,9 +121,23 @@ class TrayManager(QObject):
         )
 
         providers = cfg.describe()
-        if not cfg.has_key():
+        account_mode = cfg.access_mode() == "account"
+        if not cfg.has_key() and account_mode:
+            # A HeyTora account, signed out: the wizard signs in (or takes a key).
+            warn = menu.addAction("⚠  Sign in to HeyTora…")
+            warn.triggered.connect(self.on_run_setup)
+            menu.addSeparator()
+        elif not cfg.has_key():
             warn = menu.addAction("⚠  No Google API key — click API Key…")
             warn.triggered.connect(self.on_api_keys)
+            menu.addSeparator()
+        elif self._account_problem == "plan":
+            warn = menu.addAction("⚠  This month's HeyTora allowance is used up — upgrade…")
+            warn.triggered.connect(self._open_website)
+            menu.addSeparator()
+        elif self._account_problem == "signin":
+            warn = menu.addAction("⚠  Sign in to HeyTora again…")
+            warn.triggered.connect(self.on_run_setup)
             menu.addSeparator()
         elif self._account_problem == "billing":
             warn = menu.addAction("⚠  Gemini credits have run out — top up…")
@@ -600,13 +614,20 @@ class TrayManager(QObject):
         has stopped. A warning at the top of the menu while it lasts, and
         one notification when it starts - Tora cannot SAY it, her voice is
         on the same account (APP-02)."""
-        kind = kind if kind in ("billing", "key") else ""
+        kind = kind if kind in ("billing", "key", "plan", "signin") else ""
         if kind and words:
-            self._tray.showMessage("Tora can't reach Google", words,
-                                   QSystemTrayIcon.MessageIcon.Warning, 8000)
+            heading = {"plan": "HeyTora plan", "signin": "Sign in to HeyTora"}.get(
+                kind, "Tora can't reach Google")
+            self._tray.showMessage(heading, words, QSystemTrayIcon.MessageIcon.Warning, 8000)
         if kind != self._account_problem:
             self._account_problem = kind
             self._build_menu()
+
+    def _open_website(self) -> None:
+        """Where the plan is changed (Settings > Account says the same)."""
+        from account import settings
+        if settings.website_url():
+            __import__("webbrowser").open(settings.website_url())
 
     def show_notification(self, title: str, message: str):
         self._tray.showMessage(

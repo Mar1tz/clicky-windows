@@ -27,7 +27,7 @@ import base64
 import json
 import logging
 import os
-from typing import Any, Iterable, Optional
+from typing import Any, Awaitable, Callable, Iterable, Optional
 
 import httpx
 
@@ -73,8 +73,12 @@ class GeminiAgentProvider(AgentProvider):
         base_url: str = API_ROOT,
         timeout: httpx.Timeout = DEFAULT_TIMEOUT,
         client: Optional[httpx.AsyncClient] = None,
+        auth: Optional[Callable[[], Awaitable[dict]]] = None,
     ):
-        self.api_key = api_key or api_key_from_env()
+        # `auth`: headers for each call instead of a key - a HeyTora account
+        # reaching Gemini through its server (the business key stays there).
+        self._auth = auth
+        self.api_key = "" if auth else (api_key or api_key_from_env())
         chain = [model] if model else []
         chain += [m for m in (fallback_models if fallback_models is not None else DEFAULT_MODELS)
                   if m and m not in chain]
@@ -103,6 +107,11 @@ class GeminiAgentProvider(AgentProvider):
     def _headers(self) -> dict[str, str]:
         return {"Content-Type": "application/json", "x-goog-api-key": self.api_key}
 
+    async def _request_headers(self) -> dict[str, str]:
+        if self._auth is None:
+            return self._headers()
+        return {"Content-Type": "application/json", **(await self._auth())}
+
     def candidates(self, preferred: Optional[str] = None) -> list[str]:
         ordered: list[str] = []
         for m in [preferred or self.model, *self.fallback_models]:
@@ -123,8 +132,9 @@ class GeminiAgentProvider(AgentProvider):
         temperature: float = 0.2,
         max_tokens: int = 4096,
     ) -> ProviderResponse:
-        if not self.api_key:
+        if not self.api_key and self._auth is None:
             raise ProviderError("no Gemini API key configured")
+        headers = await self._request_headers()
         body: dict[str, Any] = {
             "contents": self.encode_messages(messages),
             "generationConfig": {"temperature": temperature, "maxOutputTokens": max_tokens},
@@ -139,7 +149,7 @@ class GeminiAgentProvider(AgentProvider):
             try:
                 r = await self._http().post(
                     f"{self.base_url}/models/{candidate}:generateContent",
-                    headers=self._headers(), json=body)
+                    headers=headers, json=body)
                 if r.status_code >= 400:
                     raise httpx.HTTPStatusError(
                         f"HTTP {r.status_code}: {r.text[:300]}", request=r.request, response=r)
@@ -251,6 +261,10 @@ class GeminiAgentProvider(AgentProvider):
                                     max_context=1_000_000, cost_tier=1)
 
     async def health_check(self) -> bool:
+        if self._auth is not None:
+            # Through HeyTora's server: asking would take an agent ticket - an
+            # agent message on the user's plan - just to say hello.
+            return True
         if not self.api_key:
             return False
         try:

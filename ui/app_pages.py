@@ -881,6 +881,79 @@ class SettingsPage(Page):
     HEADING = "Settings"
     LEDE = "The rails. What Tora may touch, what runs without asking, and how she hears you."
     LIVE = True
+    TOPICS = frozenset({"account"})          # the plan and usage arrive after the page is drawn
+
+    # The allowances shown, in the user's words. "calls" is a hidden backstop.
+    _USAGE = (("talk", "Talk", "messages"), ("agent", "Agent", "messages"),
+              ("dictation", "Dictation", "dictations"))
+
+    def refresh(self) -> None:
+        super().refresh()
+        if not getattr(self, "_account_asked", False):
+            self._account_asked = True               # once per showing: the reply redraws it
+            self.bridge.refresh_account()
+
+    def showEvent(self, event) -> None:
+        self._account_asked = False
+        super().showEvent(event)
+
+    def _account_card(self) -> Card:
+        """The HeyTora account (1 Oct 2026) - who is signed in, the plan, and
+        this month's use - or the user's own key."""
+        br = self.bridge
+        st = br.account_state()
+        if st["mode"] == "own_key":
+            card = Card("Gemini access", "Your own Gemini key, straight to Google - no HeyTora limits.")
+            card.add(Row("Using your own Gemini key", "Change it in Setup → API keys.",
+                         dot=T.OK if st["own_key"] else T.WARN, first=True))
+            if st["configured"]:
+                switch = button("Use a HeyTora account instead")
+                switch.clicked.connect(lambda: (br.set_access_mode("account"), br.run_setup()))
+                card.add(Row("Have a HeyTora plan?", "Sign in and use it here.", trailing=switch))
+            return card
+
+        manage = button("Manage plan", "primary") if st["website"] else None
+        if manage is not None:
+            manage.clicked.connect(br.open_website)
+        card = Card("Your HeyTora account", "Your plan and this month's use.", action=manage)
+        if not st["configured"]:
+            card.add(Row("HeyTora accounts aren't set up in this build",
+                         "Use your own Gemini key instead.", dot=T.WARN, first=True))
+            return card
+        if not st["signed_in"]:
+            sign_in = button("Sign in…", "primary")
+            sign_in.clicked.connect(br.run_setup)
+            card.add(Row("Not signed in", "Sign in with the email you used on the website.",
+                         dot=T.WARN, trailing=sign_in, first=True))
+            return card
+
+        summary = st["summary"] or {}
+        plan = (summary.get("plan") or "").capitalize()
+        out = button("Sign out")
+        out.clicked.connect(br.account_sign_out)
+        card.add(Row(st["email"] or "Signed in",
+                     f"{plan} plan" if plan else "Reading your plan…",
+                     dot=T.OK, trailing=out, first=True))
+        if summary.get("error"):
+            card.add(label(f"Couldn't read your plan: {summary['error']}", "faint", wrap=True))
+        limits, usage = summary.get("limits") or {}, summary.get("usage") or {}
+        for kind, name, unit in self._USAGE:
+            if kind not in limits:
+                continue
+            used, limit = int(usage.get(kind) or 0), limits[kind]
+            words = (f"{used} this month - unlimited" if limit is None
+                     else f"{used} of {limit} {unit} this month")
+            meter = Meter(0.0 if limit is None else (used / max(1, limit)),
+                          colour=T.WARN if limit is not None and used >= limit else T.ACCENT)
+            box = QVBoxLayout()
+            box.setSpacing(6)
+            box.addWidget(label(f"{name}:  {words}"))
+            box.addWidget(meter)
+            card.body.addLayout(box)
+        own = button("Use my own Gemini key instead", "link")
+        own.clicked.connect(lambda: (br.set_access_mode("own_key"), br.run_setup()))
+        card.body.addWidget(own, 0, Qt.AlignmentFlag.AlignLeft)
+        return card
 
     def build(self) -> None:
         br = self.bridge
@@ -903,6 +976,9 @@ class SettingsPage(Page):
                             "Esc takes your mouse and keyboard back. What an agent runs "
                             "this way is marked in its task's activity.", "faint", wrap=True))
         self.body.add(approvals)
+        # The HeyTora account (or own key): second, after the approvals that
+        # APP-14 put first.
+        self.body.add(self._account_card())
 
         # The workforce's own settings widget - the one "Agent settings…" in
         # the tray opens: workspace, what runs without asking, plan first,

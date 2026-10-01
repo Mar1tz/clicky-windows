@@ -29,6 +29,8 @@ Model roles (override any of them in .env):
 from __future__ import annotations
 
 import asyncio
+import contextlib
+import contextvars
 import json
 import re
 import logging
@@ -84,10 +86,52 @@ class Models:
 
 
 def api_key() -> str:
-    """The key every call uses. Read live so the API-keys dialog takes effect
-    without a restart."""
+    """The user's own key, in "own key" mode. Read live so the API-keys
+    dialog takes effect without a restart. In "HeyTora account" mode there
+    is no key on this machine at all - see _route."""
     from config import cfg
     return cfg.google_api_key or ""
+
+
+def own_key() -> bool:
+    """Straight to Google with the user's key (True), or through HeyTora's
+    server on their plan (False)."""
+    from config import cfg
+    return cfg.access_mode() == "own_key"
+
+
+# What a request is for, so HeyTora's server counts it against the right
+# part of the plan: "talk" (default), "dictation" or "agent".
+_kind: contextvars.ContextVar[str] = contextvars.ContextVar("heytora_kind", default="talk")
+
+
+@contextlib.contextmanager
+def request_kind(kind: str):
+    token = _kind.set(kind)
+    try:
+        yield
+    finally:
+        _kind.reset(token)
+
+
+_SIGNIN_BODY = json.dumps({"error": {"code": 401, "status": "HEYTORA_SIGNIN",
+                                     "message": "Sign in to HeyTora to keep talking."}})
+
+
+async def _route() -> tuple[str, dict, dict]:
+    """(root, query params, headers) for a REST call: Google with the user's
+    own key, or HeyTora's server with their sign-in - the business key is
+    added there and never reaches this machine."""
+    if own_key():
+        return API_ROOT, {"key": api_key()}, {}
+    from account.service import AccountError, account
+    try:
+        token = await account().atoken()
+    except AccountError as e:
+        raise GeminiError(401, json.dumps({"error": {"code": 401, "status": "HEYTORA_SIGNIN",
+                                                     "message": str(e)}})) from e
+    return account().proxy_root(), {}, {"Authorization": f"Bearer {token}",
+                                        "x-heytora-kind": _kind.get()}
 
 
 class GeminiError(RuntimeError):
@@ -169,8 +213,8 @@ async def warm_up() -> bool:
     Fired at startup. A cheap GET is enough — what matters is that the socket
     and TLS session are established and pooled by the time someone speaks.
     """
-    if not api_key():
-        return False
+    if not own_key() or not api_key():
+        return False                     # account mode: the first call warms it
     try:
         r = await client().get(
             f"{API_ROOT}/models/{Models.VISION_FAST}",
@@ -221,12 +265,20 @@ _NETWORK = ("getaddrinfo failed", "name or service not known", "timed out during
 
 
 def problem_of(error: Any) -> str:
-    """"quota", "billing", "key", "busy", "network", or "" - what went
-    wrong, in the terms a person can act on. Takes an exception or a
-    message."""
+    """"plan", "signin", "quota", "billing", "key", "busy", "network", or ""
+    - what went wrong, in the terms a person can act on. Takes an exception
+    or a message."""
     text = str(error or "").lower()
     status = getattr(error, "status", 0) or 0
     body = str(getattr(error, "body", "") or "").lower()
+    # HeyTora's own server first: the plan's allowance for the month is used
+    # up, or the user must sign in again. Neither is Google's billing.
+    named = type(error).__name__
+    if named == "LimitReached" or "heytora_limit" in body or "heytora_limit" in text:
+        return "plan"
+    if named in ("SignInNeeded", "NotConfigured") or "heytora_signin" in body \
+            or "heytora_signin" in text:
+        return "signin"
     if any(w in text or w in body for w in _QUOTA):
         return "quota"
     if any(w in text for w in _BILLING) or status == 402:
@@ -278,7 +330,7 @@ def report_problem(error: Any) -> str:
     Returns the kind. Never raises - a report must not become the failure."""
     global _problem_active
     kind = problem_of(error)
-    if kind in ("billing", "key") and _problem_listener is not None:
+    if kind in ("billing", "key", "plan", "signin") and _problem_listener is not None:
         _problem_active = True
         try:
             _problem_listener(kind, str(error)[:300])
@@ -303,16 +355,18 @@ def report_ok() -> None:
 BUSY_RETRY_DELAYS = (1.0, 2.0)
 
 
-async def _post(url: str, body: dict, timeout: float) -> httpx.Response:
+async def _post(path: str, body: dict, timeout: float) -> httpx.Response:
     async def once() -> httpx.Response:
+        root, params, headers = await _route()
+        extra = {"headers": headers} if headers else {}      # own key: exactly as before
         try:
-            return await client().post(url, params={"key": api_key()}, json=body,
-                                       timeout=timeout)
+            return await client().post(f"{root}/{path}", params=params, json=body,
+                                       timeout=timeout, **extra)
         except _STALE_CONNECTION as e:
             _log.info("retrying once on a fresh connection after %s: %s",
                       type(e).__name__, e)
-            return await client().post(url, params={"key": api_key()}, json=body,
-                                       timeout=timeout)
+            return await client().post(f"{root}/{path}", params=params, json=body,
+                                       timeout=timeout, **extra)
 
     r = await once()
     for delay in BUSY_RETRY_DELAYS:
@@ -329,7 +383,8 @@ async def _post(url: str, body: dict, timeout: float) -> httpx.Response:
 
 
 def _url(model: str, method: str) -> str:
-    return f"{API_ROOT}/models/{model}:{method}"
+    """The path of a model call; _route says which server it goes to."""
+    return f"models/{model}:{method}"
 
 
 def thinking(budget: Optional[int], model: str) -> dict:
@@ -507,12 +562,14 @@ async def _sse(model: str, body: dict, timeout: float) -> AsyncIterator[dict]:
     while True:
         started = False
         try:
+            root, params, headers = await _route()
             async with client().stream(
                 "POST",
-                _url(model, "streamGenerateContent"),
-                params={"key": api_key(), "alt": "sse"},
+                f"{root}/{_url(model, 'streamGenerateContent')}",
+                params={**params, "alt": "sse"},
                 json=body,
                 timeout=timeout,
+                **({"headers": headers} if headers else {}),
             ) as resp:
                 if resp.status_code != 200:
                     raise GeminiError(resp.status_code,
@@ -665,6 +722,15 @@ def text_part(text: str) -> dict:
 
 
 async def health_check() -> bool:
+    """Can Gemini be reached: the own key works, or the account is signed in
+    and HeyTora's server answers."""
+    if not own_key():
+        try:
+            from account.service import account
+            await account().asummary(force=True)
+            return True
+        except Exception:
+            return False
     if not api_key():
         return False
     try:

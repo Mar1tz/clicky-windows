@@ -64,11 +64,14 @@ def _label(model_id: str, display: str) -> str:
 
 
 async def _fetch() -> list[dict]:
-    if not gemini.api_key():
+    if gemini.own_key() and not gemini.api_key():
         return []
+    # Own key: Google. HeyTora account: the same list through its server.
+    root, params, headers = await gemini._route()
     r = await gemini.client().get(
-        f"{gemini.API_ROOT}/models",
-        params={"key": gemini.api_key(), "pageSize": 200},
+        f"{root}/models",
+        params={**params, "pageSize": 200},
+        headers=headers,
         timeout=15.0,
     )
     if r.status_code != 200:

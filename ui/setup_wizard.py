@@ -1,35 +1,42 @@
 """
-First-run setup wizard.
+First launch: getting to know the user, and getting them connected.
 
-Shown once on the first launch, or whenever the user clicks
-"Tray → Run setup again…". There is only one thing to set up now:
+Shown once on the first launch (and from "Tray → Run setup again…"), and
+whenever Tora has no way to reach Gemini. Seven short pages:
 
-  0. What Tora is and how to talk to it
-  1. A Google API key
-  2. Check the key actually works, and say which models it reached
+  welcome → name → what the PC is for → connect → microphone → start with
+  Windows → done
 
-The old wizard spent four screens installing Ollama and pulling several
-gigabytes of local weights before Tora could answer anything. With one
-cloud provider there is nothing to install — paste a key and it works — so
-this is a short walkthrough rather than a download manager.
+"Connect" is the one that matters: sign in to the HeyTora account made on
+the website (an emailed code, no password) - Gemini then runs through
+HeyTora's server on that account's plan, and the business key never comes
+to this PC - or paste one's own Gemini key, straight to Google. A build
+without HeyTora's service filled in (account/settings.py) offers only the
+key.
 
-The verify step is worth its screen: a typo'd or restricted key otherwise
-fails silently later, as a Tora that hears you and then says nothing.
+The name and what the PC is for go into Tora's instructions (cfg.profile),
+so the first answer already starts from the user's world.
+
+Network work (sending the code, signing in, checking a key) runs on worker
+threads and reports back through signals: the window never freezes.
 """
 
 from __future__ import annotations
 
-import asyncio
-import os
 import threading
 from pathlib import Path
+from typing import Callable, Optional
 
-from PyQt6.QtCore import pyqtSignal
+from PyQt6.QtCore import Qt, QTimer, QUrl, pyqtSignal
+from PyQt6.QtGui import QDesktopServices
 from PyQt6.QtWidgets import (
-    QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QProgressBar,
+    QDialog, QGridLayout, QHBoxLayout, QLineEdit, QPushButton, QStackedWidget, QVBoxLayout,
+    QWidget,
 )
 
 from config import cfg
+from ui import app_theme as T
+from ui.app_widgets import Card, Meter, Select, ToggleRow, button, label, lede, title
 
 
 # Marker file: the wizard skips itself if this exists.
@@ -50,290 +57,455 @@ def mark_setup_complete() -> None:
 
 
 def _pretty_hotkey() -> str:
-    return "+".join(p.strip().capitalize() for p in cfg.hotkey.split("+"))
+    return " + ".join(p.strip().capitalize() for p in cfg.hotkey.split("+"))
 
 
-# ─── Wizard ───────────────────────────────────────────────────────────────────
+# What a PC is for - shown as chips. Kept short and in the user's words.
+USES = ("Work & email", "School & study", "Writing", "Design & creative", "Coding",
+        "Accounting & money", "Running a business", "Video & content", "Gaming",
+        "Everyday stuff")
+
+PAGES = ("welcome", "name", "uses", "connect", "mic", "startup", "done")
+
+
+def _check_own_key(key: str) -> tuple[bool, str]:
+    """Does this Gemini key work? Asked straight of Google, with the key."""
+    import httpx
+    try:
+        r = httpx.get("https://generativelanguage.googleapis.com/v1beta/models",
+                      params={"key": key}, timeout=12.0)
+    except httpx.HTTPError:
+        return False, "Couldn't reach Google - check the internet connection."
+    if r.status_code == 200:
+        return True, "Key works."
+    return False, ("Google didn't accept that key. Copy it again in full from "
+                   "aistudio.google.com/app/apikey.")
+
 
 class SetupWizard(QDialog):
-    """One window: welcome → key → verify → done."""
+    """The first launch, one page at a time."""
 
-    finished_signal = pyqtSignal(bool, str)   # ok, message
+    completed = pyqtSignal()                       # finished: access may have changed
+    _result = pyqtSignal(str, bool, str)           # (job, ok, message) from a worker thread
 
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, *, account=None,
+                 check_key: Callable[[str], tuple[bool, str]] = _check_own_key):
         super().__init__(parent)
-        self.setWindowTitle("HeyTora Setup")
+        self.setWindowTitle("Welcome to HeyTora")
         self.setModal(False)
-        self.setMinimumSize(600, 420)
-        self.setStyleSheet("""
-            QDialog { background: #0e1014; color: #e8eaed; }
-            QLabel  { color: #e8eaed; }
-            QLabel#title { font-size: 22px; font-weight: 700; }
-            QLabel#subtitle { color: #a0a3a8; font-size: 13px; }
-            QLabel#status { color: #c8cbd0; font-size: 13px; }
-            QPushButton {
-                background: #1f6feb; color: white; border: none;
-                padding: 10px 18px; border-radius: 8px;
-                font-weight: 600; font-size: 13px;
-            }
-            QPushButton:hover  { background: #2f7fff; }
-            QPushButton:disabled { background: #333; color: #888; }
-            QPushButton#secondary {
-                background: transparent; color: #a0a3a8;
-                border: 1px solid #2a2d33;
-            }
-            QPushButton#secondary:hover { color: #e8eaed; border-color: #444; }
-            QProgressBar {
-                background: #1a1d22; border: 1px solid #2a2d33;
-                border-radius: 6px; height: 12px; text-align: center;
-                color: #e8eaed; font-size: 11px;
-            }
-            QProgressBar::chunk { background: #1f6feb; border-radius: 6px; }
-        """)
+        self.setFixedSize(720, 560)
+        self.setStyleSheet(T.qss() + f"QDialog {{ background: {T.BG}; }}")
+        if account is None:
+            from account.service import account as _app_account
+            account = _app_account()
+        self._account = account
+        self._check_key = check_key
+        self._email = ""
+        self._connected = cfg.has_key()
+        self._level = 0.0
+        self._stream = None
 
-        self._keys_dialog = None
-        self._worker: threading.Thread | None = None
-        self._step = "welcome"
+        self._result.connect(self._on_result)
+        self._build()
+        self._go("welcome")
 
-        self._build_ui()
-        self.finished_signal.connect(self._on_finished)
+    # ── layout ────────────────────────────────────────────────────────────────
 
-    # ── UI ────────────────────────────────────────────────────────────────────
+    def _build(self) -> None:
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(36, 28, 36, 24)
+        outer.setSpacing(16)
+        self.steps = label("", "faint")
+        outer.addWidget(self.steps)
+        self.stack = QStackedWidget()
+        outer.addWidget(self.stack, 1)
+        self.pages: dict[str, QWidget] = {}
+        for name in PAGES:
+            page = QWidget()
+            lay = QVBoxLayout(page)
+            lay.setContentsMargins(0, 0, 0, 0)
+            lay.setSpacing(12)
+            getattr(self, f"_page_{name}")(lay)
+            lay.addStretch(1)
+            self.pages[name] = page
+            self.stack.addWidget(page)
 
-    def _build_ui(self):
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(32, 28, 32, 24)
-        layout.setSpacing(14)
+        row = QHBoxLayout()
+        self.back_btn = button("Back")
+        self.back_btn.clicked.connect(self._back)
+        row.addWidget(self.back_btn)
+        row.addStretch(1)
+        self.skip_btn = button("Skip")
+        self.skip_btn.clicked.connect(self._next)
+        row.addWidget(self.skip_btn)
+        self.next_btn = button("Continue", "primary")
+        self.next_btn.clicked.connect(self._next)
+        row.addWidget(self.next_btn)
+        outer.addLayout(row)
 
-        self.title = QLabel("Welcome to HeyTora")
-        self.title.setObjectName("title")
-        layout.addWidget(self.title)
+    def _page_welcome(self, lay) -> None:
+        lay.addWidget(title("Hi, I'm Tora"))
+        lay.addWidget(lede(
+            "I sit next to your cursor, look at your screen when you ask, and talk you "
+            "through whatever you're doing - and point at what to click.\n\n"
+            "A few quick questions and we're set."))
 
-        self.subtitle = QLabel("")
-        self.subtitle.setObjectName("subtitle")
-        self.subtitle.setWordWrap(True)
-        layout.addWidget(self.subtitle)
+    def _page_name(self, lay) -> None:
+        lay.addWidget(title("What should I call you?"))
+        self.name_edit = QLineEdit(cfg.profile()[0])
+        self.name_edit.setPlaceholderText("Your first name")
+        self.name_edit.setMaxLength(40)
+        lay.addWidget(self.name_edit)
 
-        self.status = QLabel("")
-        self.status.setObjectName("status")
-        self.status.setWordWrap(True)
-        layout.addSpacing(8)
-        layout.addWidget(self.status)
+    def _page_uses(self, lay) -> None:
+        lay.addWidget(title("What do you use this PC for?"))
+        lay.addWidget(lede("Pick any - it helps me start from your world."))
+        grid = QGridLayout()
+        grid.setSpacing(8)
+        chosen = set(cfg.profile()[1])
+        self.use_chips: list[QPushButton] = []
+        for i, use in enumerate(USES):
+            chip = button(use.replace("&", "&&"))       # a lone & would become a shortcut marker
+            chip.setProperty("use", use)
+            chip.setCheckable(True)
+            chip.setChecked(use in chosen)
+            chip.setStyleSheet(
+                "QPushButton:checked { background: rgba(10, 132, 255, 0.22);"
+                f" border: 1px solid {T.ACCENT}; color: {T.TEXT}; }}")
+            grid.addWidget(chip, i // 2, i % 2)
+            self.use_chips.append(chip)
+        lay.addLayout(grid)
 
-        self.progress = QProgressBar()
-        self.progress.setRange(0, 0)     # indeterminate — it's one request
-        self.progress.hide()
-        layout.addWidget(self.progress)
+    def _page_connect(self, lay) -> None:
+        from account import settings
+        lay.addWidget(title("Connect to Gemini"))
+        lay.addWidget(lede("Tora thinks with Google's Gemini. Sign in to your HeyTora account, "
+                           "or use your own Gemini key."))
+        self.connect_status = label("", "faint", wrap=True)
 
-        layout.addStretch(1)
-
-        btn_row = QHBoxLayout()
-        btn_row.setSpacing(10)
-
-        self.skip_btn = QPushButton("Skip")
-        self.skip_btn.setObjectName("secondary")
-        self.skip_btn.clicked.connect(self._on_skip)
-        btn_row.addWidget(self.skip_btn)
-
-        btn_row.addStretch(1)
-
-        self.alt_btn = QPushButton("")
-        self.alt_btn.setObjectName("secondary")
-        self.alt_btn.clicked.connect(self._on_alt)
-        self.alt_btn.hide()
-        btn_row.addWidget(self.alt_btn)
-
-        self.action_btn = QPushButton("Get started")
-        self.action_btn.clicked.connect(self._on_action)
-        btn_row.addWidget(self.action_btn)
-
-        layout.addLayout(btn_row)
-
-        self._set_step("welcome")
-
-    # ── State machine ────────────────────────────────────────────────────────
-
-    def _set_step(self, step: str):
-        self._step = step
-        self.progress.hide()
-        self.alt_btn.hide()
-        self.skip_btn.show()
-        self.action_btn.setEnabled(True)
-        hk = _pretty_hotkey()
-
-        if step == "welcome":
-            self.title.setText("Welcome to HeyTora")
-            self.subtitle.setText(
-                f"Tora sits next to your cursor, watches your screen and "
-                f"talks you through whatever you're doing.\n\n"
-                f"Hold {hk} and ask a question — Tora answers when you "
-                f"stop talking, and points at what it means."
-            )
-            self.status.setText("")
-            self.action_btn.setText("Get started")
-
-        elif step == "key":
-            self.title.setText("One key, and you're done")
-            self.subtitle.setText(
-                "HeyTora runs on Google's Gemini models — the conversation, "
-                "reading your screen, hearing you and speaking back are all "
-                "Gemini.\n\n"
-                "Get a free key from Google AI Studio and paste it in. "
-                "Nothing to install and nothing to download."
-            )
-            self._refresh_key_status()
-            self.action_btn.setText(
-                "Continue" if cfg.has_key() else "Paste an API key…"
-            )
-            if cfg.has_key():
-                self.alt_btn.setText("Change key…")
-                self.alt_btn.show()
-
-        elif step == "verify":
-            self.title.setText("Checking your key…")
-            self.subtitle.setText(
-                "One request to Google to confirm the key works and the "
-                "models Tora needs are reachable."
-            )
-            self.status.setText("Connecting…")
-            self.progress.show()
-            self.action_btn.setEnabled(False)
-            self._start_verify_worker()
-
-        elif step == "done":
-            self.title.setText("You're all set")
-            self.subtitle.setText(
-                f"Hold {hk} and ask Tora something about what's on your "
-                f"screen. Try \"where do I change the font size?\" or "
-                f"\"what am I looking at?\"\n\n"
-                f"Everything else lives in the tray icon: the voice, whether "
-                f"Tora listens for its name, web search, and a diagnostics "
-                f"report if anything misbehaves."
-            )
-            self.skip_btn.hide()
-            self.action_btn.setText("Finish")
-
-    def _refresh_key_status(self):
-        if cfg.has_key():
-            self.status.setText("✓  A Google API key is saved.")
+        if settings.configured():
+            card = Card("Sign in to HeyTora", "The account you made on the website - "
+                                             "we'll email you a 6-digit code.")
+            self.email_edit = QLineEdit(self._account.email)
+            self.email_edit.setPlaceholderText("you@example.com")
+            self.send_btn = button("Send code", "primary")
+            self.send_btn.setFixedWidth(120)
+            self.send_btn.clicked.connect(self._send_code)
+            row = QHBoxLayout()
+            row.setSpacing(8)
+            row.addWidget(self.email_edit, 1)
+            row.addWidget(self.send_btn)
+            card.body.addLayout(row)
+            self.code_row = QWidget()
+            code_lay = QHBoxLayout(self.code_row)
+            code_lay.setContentsMargins(0, 0, 0, 0)
+            code_lay.setSpacing(8)
+            self.code_edit = QLineEdit()
+            self.code_edit.setPlaceholderText("6-digit code")
+            self.code_edit.setMaxLength(8)
+            self.signin_btn = button("Sign in", "primary")
+            self.signin_btn.setFixedWidth(120)
+            self.signin_btn.clicked.connect(self._sign_in)
+            code_lay.addWidget(self.code_edit, 1)
+            code_lay.addWidget(self.signin_btn)
+            self.code_row.hide()
+            card.body.addWidget(self.code_row)
+            if settings.website_url():
+                make = button("No account yet? Create one", "link")
+                make.clicked.connect(lambda: QDesktopServices.openUrl(QUrl(settings.website_url())))
+                card.body.addWidget(make, 0, Qt.AlignmentFlag.AlignLeft)
+            lay.addWidget(card)
         else:
-            self.status.setText(
-                "No key yet — Tora cannot answer anything without one."
-            )
+            self.email_edit = self.code_edit = None
 
-    # ── Buttons ──────────────────────────────────────────────────────────────
+        key_card = Card("Use my own Gemini key", "Free from aistudio.google.com/app/apikey. "
+                                                 "Straight to Google, no HeyTora limits.")
+        self.key_edit = QLineEdit()
+        self.key_edit.setEchoMode(QLineEdit.EchoMode.Password)
+        self.key_edit.setPlaceholderText("Paste your Gemini API key")
+        self.key_btn = button("Use this key")
+        self.key_btn.setFixedWidth(120)
+        self.key_btn.clicked.connect(self._use_key)
+        row = QHBoxLayout()
+        row.setSpacing(8)
+        row.addWidget(self.key_edit, 1)
+        row.addWidget(self.key_btn)
+        key_card.body.addLayout(row)
+        lay.addWidget(key_card)
+        lay.addWidget(self.connect_status)
 
-    def _on_action(self):
-        s = self._step
-        if s == "welcome":
-            self._set_step("key")
-        elif s == "key":
-            if cfg.has_key():
-                self._set_step("verify")
-            else:
-                self._open_keys_dialog()
-        elif s in ("verify", "key_retry"):
-            self._set_step("done")
-        elif s == "done":
-            mark_setup_complete()
-            self.close()
+    def _page_mic(self, lay) -> None:
+        lay.addWidget(title("Let's check your microphone"))
+        lay.addWidget(lede("Say something - the bar should move."))
+        self.mic_select = Select(width=420)
+        self.mic_ids: list[int] = []
+        lay.addWidget(self.mic_select)
+        self.level_meter = Meter(0.0, height=8)
+        lay.addWidget(self.level_meter)
+        self.mic_note = label("", "faint", wrap=True)
+        lay.addWidget(self.mic_note)
+        shortcut = Card("How to talk to me",
+                        f"Hold {_pretty_hotkey()}, ask, and let go. I answer out loud, "
+                        f"and point at what I mean.")
+        lay.addWidget(shortcut)
 
-    def _on_alt(self):
-        if self._step in ("key", "key_retry"):
-            self._open_keys_dialog()
+    def _page_startup(self, lay) -> None:
+        lay.addWidget(title("Start with Windows?"))
+        lay.addWidget(lede("So I'm there whenever you need me - you can change it any time "
+                           "in Settings."))
+        self.startup_row = ToggleRow("Start HeyTora when Windows starts",
+                                     "For you only - no admin rights needed.", True, first=True)
+        lay.addWidget(self.startup_row)
 
-    def _on_skip(self):
-        if self._step == "welcome":
-            self._set_step("key")
-        elif self._step in ("key", "verify", "key_retry"):
-            self._set_step("done")
+    def _page_done(self, lay) -> None:
+        self.done_title = title("You're all set")
+        lay.addWidget(self.done_title)
+        self.done_text = lede("")
+        lay.addWidget(self.done_text)
+
+    # ── navigation ──────────────────────────────────────────────────────────────
+
+    def page(self) -> str:
+        return PAGES[self.stack.currentIndex()]
+
+    def _go(self, name: str) -> None:
+        if self.page() == "mic" and name != "mic":
+            self._stop_mic()
+        self.stack.setCurrentWidget(self.pages[name])
+        i = PAGES.index(name)
+        self.steps.setText("" if name in ("welcome", "done") else f"Step {i} of {len(PAGES) - 2}")
+        self.back_btn.setVisible(name not in ("welcome", "done"))
+        self.skip_btn.setVisible(name in ("name", "uses", "connect", "mic"))
+        self.next_btn.setText({"welcome": "Get started", "done": "Finish"}.get(name, "Continue"))
+        if name == "connect":
+            self._refresh_connect()
+        elif name == "mic":
+            self._start_mic()
+        elif name == "done":
+            self._fill_done()
+
+    def _next(self) -> None:
+        name = self.page()
+        if name == "name" or (name == "uses" and self.sender() is self.next_btn):
+            self._save_profile()
+        if name == "startup":
+            self._save_startup()
+        if name == "done":
+            self._finish()
+            return
+        self._go(PAGES[PAGES.index(name) + 1])
+
+    def _back(self) -> None:
+        self._go(PAGES[max(0, PAGES.index(self.page()) - 1)])
+
+    def _finish(self) -> None:
+        mark_setup_complete()
+        self._stop_mic()
+        self.completed.emit()
+        self.close()
+
+    def closeEvent(self, event) -> None:
+        self._stop_mic()
+        super().closeEvent(event)
+
+    # ── name and uses ───────────────────────────────────────────────────────────
+
+    def _save_profile(self) -> None:
+        uses = [c.property("use") for c in self.use_chips if c.isChecked()]
+        cfg.set_profile(self.name_edit.text(), uses)
+
+    # ── connect ─────────────────────────────────────────────────────────────────
+
+    def _refresh_connect(self) -> None:
+        if self._account.signed_in() and cfg.access_mode() == "account":
+            self.connect_status.setText(f"✓  Signed in as {self._account.email}.")
+        elif cfg.access_mode() == "own_key" and cfg.google_api_key:
+            self.connect_status.setText("✓  Using your own Gemini key.")
         else:
-            mark_setup_complete()
-            self.close()
+            self.connect_status.setText("")
 
-    def _open_keys_dialog(self):
-        from ui.api_keys_dialog import ApiKeysDialog
-        dlg = ApiKeysDialog(self)
-        dlg.keys_saved.connect(self._on_keys_saved)
-        dlg.finished.connect(lambda _=0: self._refresh_key_status())
-        dlg.show()
-        self._keys_dialog = dlg    # keep a reference so Qt doesn't GC it
-
-    def _on_keys_saved(self):
-        self._refresh_key_status()
-        if cfg.has_key():
-            self._set_step("verify")
-
-    # ── Verification ─────────────────────────────────────────────────────────
-
-    def _start_verify_worker(self):
-        """Confirm the key works, off the UI thread.
-
-        Runs on its own event loop in a worker thread — the wizard can open
-        before the manager exists, so there is no shared loop to borrow.
-        """
-        def _worker():
-            async def _check():
-                from ai import gemini
-                from ai.gemini import Models
-                try:
-                    if not await gemini.health_check():
-                        return False, (
-                            "Google rejected that key. Check it was copied in "
-                            "full, and that the Generative Language API is "
-                            "enabled for the project it belongs to."
-                        )
-                    from ai.model_registry import refresh
-                    models = await refresh()
-                    return True, (
-                        f"✓  Key works — {len(models)} models available.\n\n"
-                        f"Conversation:  {Models.REALTIME}\n"
-                        f"Reading your screen:  {Models.VISION_FAST} "
-                        f"/ {Models.VISION_DEEP}\n"
-                        f"Hearing you:  {Models.STT}\n"
-                        f"Speaking:  {Models.TTS}"
-                    )
-                except Exception as e:
-                    return False, f"Could not reach Google: {e}"
-                finally:
-                    await gemini.aclose()
-
+    def _run(self, job: str, work: Callable[[], str]) -> None:
+        """Do `work` off the UI thread; its return (or error) comes back to _on_result."""
+        def go():
             try:
-                ok, msg = asyncio.run(_check())
-            except Exception as e:
-                ok, msg = False, str(e)
-            self.finished_signal.emit(ok, msg)
+                self._result.emit(job, True, work() or "")
+            except Exception as e:  # noqa: BLE001 - shown to the user, in words
+                self._result.emit(job, False, str(e))
+        threading.Thread(target=go, daemon=True).start()
 
-        self._worker = threading.Thread(target=_worker, daemon=True)
-        self._worker.start()
+    def _send_code(self) -> None:
+        self._email = self.email_edit.text().strip()
+        self.send_btn.setEnabled(False)
+        self.connect_status.setText("Sending a code…")
+        self._run("code", lambda: self._account.send_code(self._email))
 
-    def _on_finished(self, ok: bool, msg: str):
-        self.progress.hide()
-        self.status.setText(msg)
-        self.action_btn.setEnabled(True)
-        if ok:
-            self.title.setText("Key verified")
-            self.subtitle.setText("")
-            self.action_btn.setText("Continue")
+    def _sign_in(self) -> None:
+        code = self.code_edit.text().strip()
+        self.signin_btn.setEnabled(False)
+        self.connect_status.setText("Signing in…")
+
+        def work() -> str:
+            summary = self._account.verify(self._email, code)
+            cfg.set_access_mode("account")
+            return plan_line(summary)
+        self._run("signin", work)
+
+    def _use_key(self) -> None:
+        key = self.key_edit.text().strip()
+        if not key:
+            self.connect_status.setText("Paste your key first.")
+            return
+        self.key_btn.setEnabled(False)
+        self.connect_status.setText("Checking your key…")
+
+        def work() -> str:
+            ok, words = self._check_key(key)
+            if not ok:
+                raise RuntimeError(words)
+            cfg.set_api_key("GOOGLE_API_KEY", key)
+            cfg.set_access_mode("own_key")
+            return words
+        self._run("key", work)
+
+    def _on_result(self, job: str, ok: bool, message: str) -> None:
+        if job == "code":
+            self.send_btn.setEnabled(True)
+            if ok:
+                self.code_row.show()
+                self.code_edit.setFocus()
+                self.connect_status.setText(f"Code sent to {self._email} - it can take a minute.")
+            else:
+                self.connect_status.setText(message)
+        elif job == "signin":
+            self.signin_btn.setEnabled(True)
+            if ok:
+                self._connected = True
+                self.connect_status.setText(f"✓  Signed in. {message}")
+            else:
+                self.connect_status.setText(message)
+        elif job == "key":
+            self.key_btn.setEnabled(True)
+            if ok:
+                self._connected = True
+                self.key_edit.clear()
+                self.connect_status.setText("✓  Your key works - you're connected.")
+            else:
+                self.connect_status.setText(message)
+
+    # ── microphone ──────────────────────────────────────────────────────────────
+
+    def _start_mic(self) -> None:
+        try:
+            import sounddevice as sd
+            devices = [(i, d.get("name", ""), i == sd.default.device[0])
+                       for i, d in enumerate(sd.query_devices()) if d.get("max_input_channels", 0) > 0]
+        except Exception:  # noqa: BLE001 - no audio stack
+            devices = []
+        self.mic_select.blockSignals(True)
+        self.mic_select.clear()
+        self.mic_ids = [i for i, _n, _d in devices]
+        for _i, name, default in devices:
+            self.mic_select.addItem(name + ("  (default)" if default else ""))
+        current = cfg.mic_device_index
+        pick = (self.mic_ids.index(current) if current in self.mic_ids
+                else next((k for k, (_i, _n, d) in enumerate(devices) if d), 0))
+        if devices:
+            self.mic_select.setCurrentIndex(pick)
+        self.mic_select.blockSignals(False)
+        try:
+            self.mic_select.currentIndexChanged.disconnect()
+        except TypeError:
+            pass
+        self.mic_select.currentIndexChanged.connect(self._pick_mic)
+        if not devices:
+            self.mic_note.setText("No microphone found. Plug one in - you can choose it later "
+                                  "in Settings.")
+            return
+        self.mic_note.setText("")
+        self._open_stream(self.mic_ids[pick])
+        self._meter_timer = QTimer(self)
+        self._meter_timer.timeout.connect(lambda: self.level_meter.set_fraction(min(1.0, self._level * 6)))
+        self._meter_timer.start(50)
+
+    def _open_stream(self, device: int) -> None:
+        self._stop_stream()
+        try:
+            import numpy as np
+            import sounddevice as sd
+
+            def hear(data, _frames, _time, _status):
+                self._level = float(np.sqrt(np.mean(np.square(data.astype("float32")))))
+
+            self._stream = sd.InputStream(device=device, channels=1, samplerate=16000,
+                                          dtype="float32", callback=hear)
+            self._stream.start()
+        except Exception:  # noqa: BLE001
+            self._stream = None
+            self.mic_note.setText("That microphone couldn't be opened - try another one.")
+
+    def _pick_mic(self, k: int) -> None:
+        if 0 <= k < len(self.mic_ids):
+            device = self.mic_ids[k]
+            cfg.mic_device_index = device
+            cfg._write_env("MIC_DEVICE_INDEX", str(device))
+            self._open_stream(device)
+
+    def _stop_stream(self) -> None:
+        stream, self._stream = self._stream, None
+        if stream is not None:
+            try:
+                stream.stop()
+                stream.close()
+            except Exception:  # noqa: BLE001
+                pass
+
+    def _stop_mic(self) -> None:
+        self._stop_stream()
+        timer = getattr(self, "_meter_timer", None)
+        if timer is not None:
+            timer.stop()
+        self._level = 0.0
+
+    # ── start with Windows, and done ────────────────────────────────────────────
+
+    def _save_startup(self) -> None:
+        try:
+            from ui import autostart
+            autostart.set_enabled(self.startup_row.switch.isChecked())
+        except Exception:  # noqa: BLE001 - a nicety, never a blocker
+            pass
+
+    def _fill_done(self) -> None:
+        name = cfg.profile()[0]
+        self.done_title.setText(f"You're all set, {name}" if name else "You're all set")
+        if not cfg.has_key():
+            how = ("You're not connected yet - open the tray icon's menu and run setup again "
+                   "to sign in or add a key.")
         else:
-            self.title.setText("That key didn't work")
-            self.subtitle.setText("")
-            self.action_btn.setText("Continue anyway")
-            self.alt_btn.setText("Try another key…")
-            self.alt_btn.show()
-            self._step = "key_retry"
+            how = (f"Hold {_pretty_hotkey()} and ask me anything about what's on your screen - "
+                   f"try \"where do I change the font size?\"")
+        self.done_text.setText(how + "\n\nEverything else is in the tray icon by the clock.")
 
 
-def maybe_show_setup_wizard(parent=None) -> "SetupWizard | None":
-    """Open the wizard on first run.
+def plan_line(summary: dict) -> str:
+    """"Free plan - 25 talk messages and 25 agent messages a month." from /me."""
+    plan = (summary.get("plan") or "free").capitalize()
+    limits = summary.get("limits") or {}
+    parts = []
+    if "talk" in limits:
+        parts.append("unlimited talk" if limits["talk"] is None else f"{limits['talk']} talk messages")
+    if "agent" in limits:
+        parts.append("unlimited agent messages" if limits["agent"] is None
+                     else f"{limits['agent']} agent messages")
+    return f"{plan} plan" + (f" - {' and '.join(parts)} a month." if parts else ".")
 
-    Also opens when there is no key at all, however many times Tora has
-    been launched: without one nothing works, and a silent do-nothing app is
-    a worse answer than a window explaining why.
-    """
+
+def maybe_show_setup_wizard(parent=None) -> Optional[SetupWizard]:
+    """Open the wizard on first run - and whenever Tora has no way to reach
+    Gemini, however many times it has been launched: a silent do-nothing app
+    is a worse answer than a window explaining why."""
     if setup_already_ran() and cfg.has_key():
         return None
-
     w = SetupWizard(parent)
     w.show()
     return w

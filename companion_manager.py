@@ -182,6 +182,16 @@ question mark."""
 
     from config import _REALTIME_RULES, _TECHNICAL_RULES
     base = cfg.custom_instructions.strip()
+    # Who the user is, from the first launch: their name, and what they use
+    # the PC for - so answers start from their world.
+    name, uses = cfg.profile()
+    if name or uses:
+        about = []
+        if name:
+            about.append(f"The user's name is {name}; use it now and then, naturally.")
+        if uses:
+            about.append("They mainly use this PC for: " + ", ".join(uses) + ".")
+        ctx_lines = [*ctx_lines, " ".join(about)]
     base = base.replace("{{CONTEXT}}", chr(10).join(ctx_lines))
     base = base.replace("{{TODAY}}", today)
     # The realtime model calls tools; the cascade writes tags into its text.
@@ -189,6 +199,15 @@ question mark."""
     # [ARROW:...] read aloud, or a tool the model was never told it has.
     rules = _REALTIME_RULES if realtime else _TECHNICAL_RULES
     return base + rules + _code_addendum(code_active) + extra
+
+
+def _plan_words(detail: str) -> str:
+    """The server's own sentence about a used-up allowance, without the
+    "Gemini 402 [model]:" an error string starts with."""
+    text = (detail or "").strip()
+    if text.lower().startswith("gemini ") and ": " in text:
+        text = text.split(": ", 1)[1]
+    return text
 
 
 def _code_addendum(active: bool) -> str:
@@ -334,6 +353,7 @@ class CompanionManager(QObject):
         # to the span between hotkey down and hotkey up.
         self._realtime = None
         self._rt_streaming = False
+        self._rt_on_demand = False          # this question opened its own session (metered plan)
         self._rt_audio: deque[bytes] = deque()
         self._heard_buf: list[str] = []
         # Increments per realtime turn so a watchdog can tell whether the turn
@@ -489,9 +509,50 @@ class CompanionManager(QObject):
         # toast: the HTTP pool, and the live conversation itself. The first
         # question then costs exactly what the tenth does.
         self._submit(self._warm_up())
+        self._submit(self._account_warm_up())
         self._submit(self._realtime_connect())
         # Refresh a stale model cache in the background (weekly at most).
         self._submit(self._refresh_stale_models())
+
+    def on_access_changed(self) -> None:
+        """Signed in or out of HeyTora, or switched between an account and an
+        own key (the first launch, Settings): take it up now, no restart -
+        the live voice, the plan, and the agents' providers."""
+        self._problem_kind = ""
+        self._problem_detail = ""
+        self._problem_told = {}
+        self.sig_account_problem.emit("", "")
+        conv = self._realtime
+        if conv is not None and self._loop and self._loop.is_running():
+            try:
+                asyncio.run_coroutine_threadsafe(conv.close(), self._loop)
+            except Exception:  # noqa: BLE001
+                pass
+        self._submit(self._account_warm_up())
+        self._submit(self._realtime_connect())
+        mgr = self._agents
+        if mgr is not None:
+            try:
+                from agents.bootstrap import rewire_providers
+                live = rewire_providers(mgr)
+                _log.info("agents rewired for the new access (%s)", "live" if live else "no provider")
+            except Exception:  # noqa: BLE001
+                _log.exception("could not rewire the agents after an access change")
+
+    async def _account_warm_up(self) -> None:
+        """HeyTora account: read the plan once at start-up, so whether talk
+        is counted is known before the first question (and a lapsed sign-in
+        is said straight away, not on the first question)."""
+        if gemini.own_key():
+            return
+        try:
+            from account.service import account
+            if account().signed_in():
+                await account().asummary(force=True)
+                if not self._metered_talk():
+                    await self._realtime_connect()      # Pro / Max: open it now, as before
+        except Exception as e:  # noqa: BLE001
+            gemini.report_problem(e)
 
     async def _warm_up(self):
         try:
@@ -948,14 +1009,44 @@ class CompanionManager(QObject):
                 lines.append(f"{who}: {text[:240]}")
         return chr(10).join(lines)[-limit:]
 
-    async def _realtime_connect(self) -> bool:
+    def _metered_talk(self) -> bool:
+        """HeyTora account on a plan that counts talk messages (Free)?"""
+        if gemini.own_key():
+            return False
+        try:
+            from account.service import account
+            return account().talk_metered()
+        except Exception:  # noqa: BLE001
+            return True
+
+    # On a metered plan the session closes this long after an answer, so the
+    # next question takes a new voice pass - a new talk message. A quick
+    # follow-up inside the window rides on the same one.
+    METERED_IDLE_CLOSE_S = 20.0
+
+    async def _close_metered_session(self, turn_seq: int) -> None:
+        await asyncio.sleep(self.METERED_IDLE_CLOSE_S)
+        conv = self._realtime
+        if (conv is None or self._turn_seq != turn_seq or conv.speaking
+                or self._state != AppState.IDLE or not self._metered_talk()):
+            return
+        _log.info("metered plan: closing the idle voice session")
+        await conv.close()
+
+    async def _realtime_connect(self, on_demand: bool = False) -> bool:
         """Open the conversation before anyone asks anything.
 
         Called at startup and after a drop. The handshake and setup exchange
         are the better part of a second; paying that here means the first
-        question does not.
+        question does not. `on_demand`: the user is asking right now (how a
+        metered plan opens it).
         """
         if not cfg.realtime() or not cfg.has_key():
+            return False
+        if not on_demand and self._metered_talk():
+            # On a plan that counts talk (Free) a voice pass is a talk
+            # message, so the session opens when the user asks something,
+            # not at start-up or after a drop.
             return False
         try:
             return await self._get_realtime().connect(
@@ -1029,6 +1120,9 @@ class CompanionManager(QObject):
             self._record_turn(heard, said)
         self._heard_buf = []
         self._emit_state(AppState.IDLE)
+        if self._metered_talk():
+            # Metered plan: the next question takes a new voice pass.
+            self._submit(self._close_metered_session(self._turn_seq))
 
     def _on_realtime_lost(self, reason: str) -> None:
         """The session dropped. Reconnect quietly, in the background."""
@@ -1060,9 +1154,16 @@ class CompanionManager(QObject):
         # A limit on one model, not the account (LG-04): nothing to top up.
         "quota": ("Google's daily limit for one of Tora's models is used up on "
                   "this key. It resets within a day; everything else still works."),
+        # HeyTora account (2026-10-01). "plan" is shown with the server's own
+        # words, which say which allowance and how much (_problem_detail).
+        "plan": ("This month's allowance on your HeyTora plan is used up. Upgrade "
+                 "on the HeyTora website, or use your own Gemini key in Settings."),
+        "signin": ("Sign in to HeyTora to keep talking: tray icon → Sign in to "
+                   "HeyTora, or use your own Gemini key."),
     }
     _PROBLEM_RENOTIFY_S = 600.0
     _problem_kind = ""
+    _problem_detail = ""          # the server's words for a "plan" problem
     _problem_told = None          # kind -> when it was last shown
 
     def _account_problem(self, kind: str, detail: str) -> None:
@@ -1076,6 +1177,9 @@ class CompanionManager(QObject):
                 self.sig_account_problem.emit("", "")
             return
         self._problem_kind = kind
+        if kind == "plan":
+            # The server says which allowance and how much; Google's prefix off.
+            self._problem_detail = _plan_words(detail) or self._PROBLEM_WORDS["plan"]
         told = self._problem_told
         if told is None:
             told = self._problem_told = {}
@@ -1084,14 +1188,16 @@ class CompanionManager(QObject):
             return
         told[kind] = now
         _log.warning("account problem (%s): %s", kind, (detail or "")[:200])
-        self.sig_account_problem.emit(kind, self._PROBLEM_WORDS.get(kind, detail))
+        words = self._problem_detail if kind == "plan" else self._PROBLEM_WORDS.get(kind, detail)
+        self.sig_account_problem.emit(kind, words)
 
     def _show_failure(self, error) -> bool:
         """Put a failed request's REASON on screen, in words a person can act
         on. True when it was one of the known kinds; the caller shows the
         raw error otherwise."""
         kind = gemini.problem_of(error)
-        words = self._PROBLEM_WORDS.get(kind)
+        words = (_plan_words(str(error)) or self._PROBLEM_WORDS.get(kind)) if kind == "plan" \
+            else self._PROBLEM_WORDS.get(kind)
         if not words:
             return False
         self.sig_response_chunk.emit(words)
@@ -1123,7 +1229,9 @@ class CompanionManager(QObject):
         if conv is None:
             return
         if not conv.ready:
-            deadline = time.monotonic() + 3.0
+            # Opened on the question (a metered plan) also asks HeyTora's
+            # server for the voice pass first, so it is given longer.
+            deadline = time.monotonic() + (8.0 if getattr(self, "_rt_on_demand", False) else 3.0)
             while (not conv.ready and self._rt_streaming
                    and time.monotonic() < deadline):
                 await asyncio.sleep(0.05)
@@ -2831,7 +2939,15 @@ class CompanionManager(QObject):
         # handshake a moment in _realtime_stream rather than sending this
         # question down the 25-second cascade.
         connecting = bool(conv is not None and not ready and conv.connecting)
-        self._rt_streaming = ready or connecting
+        # A metered plan opens the session now, on the question - the mic is
+        # already buffering, and _realtime_stream waits for it.
+        on_demand = (not ready and not connecting and cfg.realtime()
+                     and cfg.has_key() and self._metered_talk())
+        if on_demand:
+            self._get_realtime()
+            self._submit(self._realtime_connect(on_demand=True))
+        self._rt_on_demand = on_demand
+        self._rt_streaming = ready or connecting or on_demand
         _log.info("turn: %s", "realtime" if ready
                   else "realtime (waiting for session)" if connecting
                   else "cascade (no live session)")
@@ -2920,6 +3036,15 @@ class CompanionManager(QObject):
             return
 
         if len(pcm) < 3200:
+            self._emit_state(AppState.IDLE)
+            return
+        if not gemini.own_key() and self._problem_kind in ("plan", "signin"):
+            # The voice pass was refused: this month's talk is used up, or
+            # the sign-in has lapsed. The slower route would only spend the
+            # dictation allowance on the same question - say why instead.
+            words = self._PROBLEM_WORDS.get(self._problem_kind) or ""
+            self.sig_response_chunk.emit(self._problem_detail or words)
+            self.sig_response_done.emit(self._problem_detail or words)
             self._emit_state(AppState.IDLE)
             return
         await self._cascade_turn(pcm)
