@@ -185,7 +185,7 @@ class SetupWizard(QDialog):
 
         if settings.configured():
             card = Card("Sign in to HeyTora", "The account you made on the website - "
-                                             "we'll email you a 6-digit code.")
+                                             "we'll email you a sign-in code.")
             self.email_edit = QLineEdit(self._account.email)
             self.email_edit.setPlaceholderText("you@example.com")
             self.send_btn = button("Send code", "primary")
@@ -201,8 +201,8 @@ class SetupWizard(QDialog):
             code_lay.setContentsMargins(0, 0, 0, 0)
             code_lay.setSpacing(8)
             self.code_edit = QLineEdit()
-            self.code_edit.setPlaceholderText("6-digit code")
-            self.code_edit.setMaxLength(8)
+            self.code_edit.setPlaceholderText("Code from the email")
+            self.code_edit.setMaxLength(12)          # 6-10 digits, maybe pasted with spaces
             self.signin_btn = button("Sign in", "primary")
             self.signin_btn.setFixedWidth(120)
             self.signin_btn.clicked.connect(self._sign_in)

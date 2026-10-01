@@ -47,7 +47,11 @@ def _own_key_by_default(monkeypatch):
     for name in ("TORA_SUPABASE_URL", "TORA_SUPABASE_ANON_KEY", "TORA_WEBSITE_URL"):
         monkeypatch.delenv(name, raising=False)
     try:
-        from account import service
+        # The build carries the real project's address; a test never reaches
+        # it. Account tests point TORA_SUPABASE_URL at their fake server.
+        from account import service, settings
+        for name in ("_SUPABASE_URL", "_SUPABASE_ANON_KEY", "_WEBSITE_URL"):
+            monkeypatch.setattr(settings, name, "")
         service.reset(None)
     except Exception:  # noqa: BLE001 - a suite without the app still runs
         pass

@@ -14,10 +14,14 @@ from __future__ import annotations
 
 import os
 
-# e.g. "https://abcdefghijklmnop.supabase.co"
-_SUPABASE_URL = ""
+# HeyTora's Supabase project (the website uses the same one)
+_SUPABASE_URL = "https://uizwfpxzzkokyrkvjzkr.supabase.co"
 # the project's anon / publishable key (Supabase → Project Settings → API)
-_SUPABASE_ANON_KEY = ""
+_SUPABASE_ANON_KEY = (
+    "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InVpendmcHh6em"
+    "tva3lya3ZqemtyIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODk5NzUwODAsImV4cCI6MjEwNTU1MTA4MH0."
+    "w3ySeG3DTJMf6wzBpFflA5diDY7hzvbMYm3_q96aDfE"
+)
 # the website where people create an account and choose a plan
 _WEBSITE_URL = ""
 

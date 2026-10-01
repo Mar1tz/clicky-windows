@@ -16,7 +16,7 @@ you control — and the app signs in instead.
 | Part | Where | What it does |
 | --- | --- | --- |
 | Account + plan | your website, same Supabase project | creates the account; sets `profiles.plan` (`free` / `pro` / `max`) and `profiles.plan_status` when someone picks or pays for a plan |
-| Sign-in | the app (first launch, or Settings) | email + 6-digit code (Supabase Auth OTP), only for accounts that already exist |
+| Sign-in | the app (first launch, or Settings) | email + one-time code (Supabase Auth OTP; this project sends 8 digits), only for accounts that already exist |
 | `heytora` server function | `supabase/functions/heytora/index.ts` | holds `GEMINI_API_KEY`; checks the user, spends their plan, then mints **voice passes**, issues **agent tickets**, and forwards the other Gemini calls |
 | Plans & counting | `supabase/migrations/0003_heytora_plans.sql` | the three plans' allowances and `heytora_consume()`, the only thing that spends one |
 
