@@ -32,18 +32,31 @@ Your friend:
 
 ## Full installer (`Setup-HeyTora.exe`)
 
-1. Install [Inno Setup 6](https://jrsoftware.org/isdl.php) (free)
+1. Install [Inno Setup 6](https://jrsoftware.org/isdl.php) (free) - or, with
+   no admin rights needed:
+   `winget install --id JRSoftware.InnoSetup -e --scope user`
 2. Run:
    ```bat
    build.bat installer
    ```
+   (or, after a PyInstaller build: `"%LOCALAPPDATA%\Programs\Inno Setup 6\ISCC.exe" installer.iss`)
 3. Output: `dist\Setup-HeyTora.exe` — a single self-extracting installer
+   (~190 MB; version from `MyAppVersion` in `installer.iss`)
 
 Your friend runs `Setup-HeyTora.exe`:
-- Pick install location (default: `C:\Program Files\HeyTora`)
-- Choose: desktop shortcut? launch on Windows startup?
-- Next → Install → Finish
-- Uninstall works through Windows Settings like any other app
+- No admin rights needed: it installs for them, in
+  `%LOCALAPPDATA%\Programs\HeyTora` (it offers "all users" too, which asks
+  for admin)
+- Choose: desktop shortcut? launch when Windows starts?
+- Next → Install → Finish, with "Launch HeyTora" ticked
+- Start menu: HeyTora, and Uninstall HeyTora; it is listed in Settings →
+  Apps like any other app
+- Installing a newer one over it closes the running HeyTora first
+- "Launch when Windows starts" is the same switch as Settings → "Start
+  HeyTora when Windows starts" (one registry entry, so never two copies);
+  uninstalling removes it only if it starts that installed copy
+- Uninstalling leaves the user's data (`%LOCALAPPDATA%\HeyTora`: logs,
+  history, agent databases) and their `.env` keys behind
 
 ---
 
