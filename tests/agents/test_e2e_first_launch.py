@@ -48,6 +48,12 @@ def _wizard(account, **kw):
     return w
 
 
+def _sign_in(service):
+    """HeyTora needs an account: the steps after "connect" are behind a sign-in."""
+    service.account.send_code("amy@example.com")
+    service.account.verify("amy@example.com", "123456")
+
+
 def _until(qapp, done, timeout=5.0):
     end = time.monotonic() + timeout
     while not done() and time.monotonic() < end:
@@ -58,6 +64,7 @@ def _until(qapp, done, timeout=5.0):
 
 def test_the_pages_in_order(qapp, service):
     from ui.setup_wizard import PAGES
+    _sign_in(service)
     w = _wizard(service.account)
     seen = [w.page()]
     for _ in PAGES[1:]:
@@ -126,6 +133,7 @@ def test_or_their_own_gemini_key(qapp, service):
     def check(key):
         checked.append(key)
         return True, "Key works."
+    _sign_in(service)                                    # a key is on top of an account, not instead
     w = _wizard(service.account, check_key=check)
     w._go("connect")
     w.key_edit.setText("their-own-key")
@@ -137,6 +145,7 @@ def test_or_their_own_gemini_key(qapp, service):
 
 def test_a_bad_key_is_not_kept(qapp, service):
     from config import cfg
+    _sign_in(service)
     w = _wizard(service.account, check_key=lambda _k: (False, "Google didn't accept that key."))
     w._go("connect")
     w.key_edit.setText("wrong")
@@ -223,9 +232,11 @@ def _state(**kw):
     return base
 
 
-def test_the_account_card_shows_the_plan_and_this_months_use(qapp):
+def test_the_account_card_shows_the_plan_and_this_months_use(qapp, monkeypatch):
     from PyQt6.QtWidgets import QPushButton
+    from ui import app_pages
     from ui.app_pages import SettingsPage
+    monkeypatch.setattr(app_pages, "confirm_sign_out", lambda _parent: True)
     bridge = _Bridge(_state())
     page = SettingsPage(bridge)
     page.refresh()
@@ -238,6 +249,18 @@ def test_the_account_card_shows_the_plan_and_this_months_use(qapp):
     buttons["Manage plan"].click()
     buttons["Sign out"].click()
     assert "website" in bridge.done and "sign out" in bridge.done and "refresh" in bridge.done
+
+
+def test_sign_out_asks_first_because_it_closes_heytora(qapp, monkeypatch):
+    from PyQt6.QtWidgets import QPushButton
+    from ui import app_pages
+    asked = []
+    monkeypatch.setattr(app_pages, "confirm_sign_out", lambda _parent: asked.append(1) or False)
+    bridge = _Bridge(_state())
+    page = app_pages.SettingsPage(bridge)
+    page.refresh()
+    next(b for b in page.findChildren(QPushButton) if b.text() == "Sign out").click()
+    assert asked == [1] and "sign out" not in bridge.done, "Cancel keeps them signed in"
 
 
 def test_unlimited_talk_on_pro(qapp):
@@ -261,12 +284,25 @@ def test_signed_out_offers_to_sign_in(qapp):
     assert "setup" in bridge.done
 
 
-def test_own_key_mode_says_so_and_offers_an_account(qapp):
+def test_own_key_mode_is_still_a_signed_in_account(qapp):
     from PyQt6.QtWidgets import QPushButton
     from ui.app_pages import SettingsPage
     bridge = _Bridge(_state(mode="own_key", own_key=True))
     page = SettingsPage(bridge)
     page.refresh()
-    assert "Using your own Gemini key" in _texts(page)
+    texts = _texts(page)
+    assert "Using your own Gemini key" in texts and "amy@example.com" in texts
+    buttons = {b.text(): b for b in page.findChildren(QPushButton)}
+    assert "Sign out" in buttons
+    buttons["Use my plan instead"].click()
+    assert bridge.done[-1] == ("mode", "account") and "setup" not in bridge.done, "already signed in"
+
+
+def test_own_key_mode_signed_out_offers_an_account(qapp):
+    from PyQt6.QtWidgets import QPushButton
+    from ui.app_pages import SettingsPage
+    bridge = _Bridge(_state(mode="own_key", own_key=True, signed_in=False))
+    page = SettingsPage(bridge)
+    page.refresh()
     next(b for b in page.findChildren(QPushButton) if b.text() == "Use a HeyTora account instead").click()
     assert ("mode", "account") in bridge.done and "setup" in bridge.done

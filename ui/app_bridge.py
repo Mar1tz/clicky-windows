@@ -281,10 +281,14 @@ class AppBridge(QObject):
         threading.Thread(target=work, daemon=True).start()
 
     def account_sign_out(self) -> None:
+        """Sign out - and with no account, no HeyTora: the app restarts at the
+        sign-in window (main.py, ui/sign_in_gate.py)."""
         from account.service import account
         account().sign_out()
         self._account_summary = None
         self._access_changed()
+        from ui import sign_in_gate
+        sign_in_gate.lost()
 
     def set_access_mode(self, mode: str) -> None:
         """"account" or "own_key", for every launch, and taken up now."""

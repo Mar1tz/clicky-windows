@@ -303,7 +303,12 @@ class Account:
             r = http.request(method, settings.function_url(path), json=body,
                              headers={**self._apikey(), "Authorization": f"Bearer {token}"})
         if r.status_code == 401:
-            raise SignInNeeded()
+            # The server no longer accepts this sign-in (account deleted, signed
+            # out everywhere): forget it here too, so the app asks again.
+            with self._lock:
+                self._session, self._summary, self._ticket = None, None, None
+                store.clear()
+            raise SignInNeeded("Your sign-in has ended - sign in to HeyTora again.")
         if r.status_code in (402, 429):
             raise LimitReached(_heytora_info(r))
         if r.status_code >= 400:

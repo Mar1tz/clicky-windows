@@ -877,6 +877,19 @@ class VoicePage(Page):
 
 # ── Settings ──────────────────────────────────────────────────────────────────
 
+def confirm_sign_out(parent) -> bool:
+    """HeyTora needs an account: signing out closes it and opens the sign-in
+    window (ui/sign_in_gate.py) - so say that before doing it."""
+    from PyQt6.QtWidgets import QMessageBox
+    answer = QMessageBox.question(
+        parent, "Sign out of HeyTora?",
+        "HeyTora needs your account to work. Signing out closes it and opens the "
+        "sign-in window.",
+        QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
+        QMessageBox.StandardButton.Cancel)
+    return answer == QMessageBox.StandardButton.Yes
+
+
 class SettingsPage(Page):
     HEADING = "Settings"
     LEDE = "The rails. What Tora may touch, what runs without asking, and how she hears you."
@@ -897,16 +910,32 @@ class SettingsPage(Page):
         self._account_asked = False
         super().showEvent(event)
 
+    def _sign_out_button(self):
+        out = button("Sign out")
+        out.clicked.connect(lambda: confirm_sign_out(self) and self.bridge.account_sign_out())
+        return out
+
     def _account_card(self) -> Card:
         """The HeyTora account (1 Oct 2026) - who is signed in, the plan, and
         this month's use - or the user's own key."""
         br = self.bridge
         st = br.account_state()
         if st["mode"] == "own_key":
-            card = Card("Gemini access", "Your own Gemini key, straight to Google - no HeyTora limits.")
+            card = Card("Your HeyTora account", "Thinking with your own Gemini key, straight to "
+                                                "Google - no plan limits.")
+            first = True
+            if st["configured"] and st["signed_in"]:
+                card.add(Row(st["email"] or "Signed in", "Signed in", dot=T.OK,
+                             trailing=self._sign_out_button(), first=True))
+                first = False
             card.add(Row("Using your own Gemini key", "Change it in Setup → API keys.",
-                         dot=T.OK if st["own_key"] else T.WARN, first=True))
-            if st["configured"]:
+                         dot=T.OK if st["own_key"] else T.WARN, first=first))
+            if st["configured"] and st["signed_in"]:
+                switch = button("Use my plan instead")
+                switch.clicked.connect(lambda: br.set_access_mode("account"))
+                card.add(Row("Your HeyTora plan", "Think on your plan instead of your key.",
+                             trailing=switch))
+            elif st["configured"]:
                 switch = button("Use a HeyTora account instead")
                 switch.clicked.connect(lambda: (br.set_access_mode("account"), br.run_setup()))
                 card.add(Row("Have a HeyTora plan?", "Sign in and use it here.", trailing=switch))
@@ -929,11 +958,9 @@ class SettingsPage(Page):
 
         summary = st["summary"] or {}
         plan = (summary.get("plan") or "").capitalize()
-        out = button("Sign out")
-        out.clicked.connect(br.account_sign_out)
         card.add(Row(st["email"] or "Signed in",
                      f"{plan} plan" if plan else "Reading your plan…",
-                     dot=T.OK, trailing=out, first=True))
+                     dot=T.OK, trailing=self._sign_out_button(), first=True))
         if summary.get("error"):
             card.add(label(f"Couldn't read your plan: {summary['error']}", "faint", wrap=True))
         limits, usage = summary.get("limits") or {}, summary.get("usage") or {}

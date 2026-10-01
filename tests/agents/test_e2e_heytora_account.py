@@ -43,6 +43,7 @@ class FakeHeyTora:
         self.link_code = "link-code-1"          # what the email's link brings back
         self.challenge = None                   # PKCE, from the last sign-in email
         self.redirect_to = None
+        self.ended = False                      # the server no longer accepts the sign-in
 
     def session(self) -> dict:
         self.issued += 1
@@ -76,6 +77,9 @@ class FakeHeyTora:
             return httpx.Response(200, json=self.session())
         if path == "/auth/v1/logout":
             return httpx.Response(204)
+        if self.ended and "/functions/v1/heytora" in path:
+            return httpx.Response(401, json={"error": {"code": 401, "status": "HEYTORA_SIGNIN",
+                                                       "message": "Sign in to HeyTora to keep talking."}})
         if path.endswith("/heytora/me"):
             return httpx.Response(200, json={"plan": self.plan, "limits": self.limits,
                                              "usage": self.usage})

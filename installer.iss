@@ -12,7 +12,7 @@
 ; ────────────────────────────────────────────────────────────────────
 
 #define MyAppName        "HeyTora"
-#define MyAppVersion     "1.6.0"
+#define MyAppVersion     "1.6.1"
 #define MyAppPublisher   "HeyTora"
 #define MyAppExeName     "HeyTora.exe"
 
@@ -91,6 +91,13 @@ Name: "{autodesktop}\{#MyAppName}";              Filename: "{app}\{#MyAppExeName
 ; developer's "start with Windows" for HeyTora run from source is the same
 ; value name, and an uninstall must not switch that off.
 Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: string; ValueName: "{#MyAppName}"; ValueData: """{app}\{#MyAppExeName}"""; Tasks: startupicon
+
+[UninstallDelete]
+; Uninstalling signs out and forgets the first-launch answers, so a
+; reinstall starts at the first launch and its sign-in (ui/sign_in_gate.py).
+; Memory, history and the user's own key (.env) in the same folder are kept.
+Type: files; Name: "{localappdata}\HeyTora\account.bin"
+Type: files; Name: "{localappdata}\HeyTora\setup_complete.flag"
 
 [Run]
 ; Offer to launch HeyTora after install

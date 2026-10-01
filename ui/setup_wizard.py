@@ -8,11 +8,12 @@ whenever Tora has no way to reach Gemini. Seven short pages:
   Windows → done
 
 "Connect" is the one that matters: sign in to the HeyTora account made on
-the website (an emailed code, no password) - Gemini then runs through
-HeyTora's server on that account's plan, and the business key never comes
-to this PC - or paste one's own Gemini key, straight to Google. A build
-without HeyTora's service filled in (account/settings.py) offers only the
-key.
+the website (an emailed link, no password). It cannot be skipped - no
+account, no HeyTora (ui/sign_in_gate.py) - and Gemini then runs through
+HeyTora's server on that account's plan, so the business key never comes
+to this PC. Once signed in, the user may think with their own Gemini key
+instead, straight to Google. A build without HeyTora's service filled in
+(account/settings.py) has no accounts and offers only the key.
 
 The name and what the PC is for go into Tora's instructions (cfg.profile),
 so the first answer already starts from the user's world.
@@ -88,7 +89,7 @@ class SetupWizard(QDialog):
     completed = pyqtSignal()                       # finished: access may have changed
     _result = pyqtSignal(str, bool, str)           # (job, ok, message) from a worker thread
 
-    def __init__(self, parent=None, *, account=None,
+    def __init__(self, parent=None, *, account=None, start: str = "welcome",
                  check_key: Callable[[str], tuple[bool, str]] = _check_own_key):
         super().__init__(parent)
         self.setWindowTitle("Welcome to HeyTora")
@@ -99,6 +100,8 @@ class SetupWizard(QDialog):
             from account.service import account as _app_account
             account = _app_account()
         self._account = account
+        from account import settings
+        self._gated = settings.configured()        # HeyTora accounts: signing in is a must
         self._check_key = check_key
         self._email = ""
         self._connected = cfg.has_key()
@@ -108,7 +111,7 @@ class SetupWizard(QDialog):
 
         self._result.connect(self._on_result)
         self._build()
-        self._go("welcome")
+        self._go(start if start in PAGES else "welcome")
 
     # ── layout ────────────────────────────────────────────────────────────────
 
@@ -179,14 +182,18 @@ class SetupWizard(QDialog):
 
     def _page_connect(self, lay) -> None:
         from account import settings
-        lay.addWidget(title("Connect to Gemini"))
-        lay.addWidget(lede("Tora thinks with Google's Gemini. Sign in to your HeyTora account, "
-                           "or use your own Gemini key."))
+        if self._gated:
+            lay.addWidget(title("Sign in to HeyTora"))
+            lay.addWidget(lede("HeyTora works with your HeyTora account - the one you made on "
+                               "the website. We email you a link: click it and you're in."))
+        else:
+            lay.addWidget(title("Connect to Gemini"))
+            lay.addWidget(lede("Tora thinks with Google's Gemini - add your own Gemini key."))
         self.connect_status = label("", "faint", wrap=True)
 
         if settings.configured():
-            card = Card("Sign in to HeyTora", "The account you made on the website - "
-                                             "we'll email you a sign-in link.")
+            card = Card("Your HeyTora account", "Your email address - we'll email you a "
+                                                "sign-in link.")
             self.email_edit = QLineEdit(self._account.email)
             self.email_edit.setPlaceholderText("you@example.com")
             self.send_btn = button("Send code", "primary")
@@ -219,8 +226,12 @@ class SetupWizard(QDialog):
         else:
             self.email_edit = self.code_edit = None
 
-        key_card = Card("Use my own Gemini key", "Free from aistudio.google.com/app/apikey. "
-                                                 "Straight to Google, no HeyTora limits.")
+        key_card = Card(
+            "Optional: think with my own Gemini key" if self._gated else "Use my own Gemini key",
+            ("Once you're signed in. Free from aistudio.google.com/app/apikey - straight to "
+             "Google, no plan limits." if self._gated else
+             "Free from aistudio.google.com/app/apikey. Straight to Google."))
+        self.key_card = key_card
         self.key_edit = QLineEdit()
         self.key_edit.setEchoMode(QLineEdit.EchoMode.Password)
         self.key_edit.setPlaceholderText("Paste your Gemini API key")
@@ -276,7 +287,9 @@ class SetupWizard(QDialog):
         i = PAGES.index(name)
         self.steps.setText("" if name in ("welcome", "done") else f"Step {i} of {len(PAGES) - 2}")
         self.back_btn.setVisible(name not in ("welcome", "done"))
-        self.skip_btn.setVisible(name in ("name", "uses", "connect", "mic"))
+        skippable = ("name", "uses", "mic") if self._gated else ("name", "uses", "connect", "mic")
+        self.skip_btn.setVisible(name in skippable)
+        self.next_btn.setEnabled(True)
         self.next_btn.setText({"welcome": "Get started", "done": "Finish"}.get(name, "Continue"))
         if name == "connect":
             self._refresh_connect()
@@ -287,6 +300,9 @@ class SetupWizard(QDialog):
 
     def _next(self) -> None:
         name = self.page()
+        if name == "connect" and self._gated and not self._account.signed_in():
+            self.connect_status.setText("Sign in first - HeyTora needs your account.")
+            return
         if name == "name" or (name == "uses" and self.sender() is self.next_btn):
             self._save_profile()
         if name == "startup":
@@ -311,6 +327,17 @@ class SetupWizard(QDialog):
         self._stop_catcher()
         super().closeEvent(event)
 
+    def reject(self) -> None:                       # the window's X, or the gate giving up
+        self._stop_mic()
+        self._stop_catcher()
+        super().reject()
+
+    def keyPressEvent(self, event) -> None:
+        # Esc would close the first launch - and, before a sign-in, the app.
+        if event.key() == Qt.Key.Key_Escape:
+            return
+        super().keyPressEvent(event)
+
     # ── name and uses ───────────────────────────────────────────────────────────
 
     def _save_profile(self) -> None:
@@ -320,12 +347,24 @@ class SetupWizard(QDialog):
     # ── connect ─────────────────────────────────────────────────────────────────
 
     def _refresh_connect(self) -> None:
-        if self._account.signed_in() and cfg.access_mode() == "account":
+        signed_in = self._account.signed_in()
+        if signed_in and cfg.access_mode() == "account":
             self.connect_status.setText(f"✓  Signed in as {self._account.email}.")
-        elif cfg.access_mode() == "own_key" and cfg.google_api_key:
-            self.connect_status.setText("✓  Using your own Gemini key.")
+        elif cfg.access_mode() == "own_key" and cfg.google_api_key and (signed_in or not self._gated):
+            who = f"Signed in as {self._account.email}, using" if signed_in else "Using"
+            self.connect_status.setText(f"✓  {who} your own Gemini key.")
         else:
             self.connect_status.setText("")
+        self._connect_locks()
+
+    def _connect_locks(self) -> None:
+        """Gated: no Continue, and no own key, until signed in."""
+        if not self._gated:
+            return
+        signed_in = self._account.signed_in()
+        if self.page() == "connect":
+            self.next_btn.setEnabled(signed_in)
+        self.key_card.setEnabled(signed_in)
 
     def _run(self, job: str, work: Callable[[], str]) -> None:
         """Do `work` off the UI thread; its return (or error) comes back to _on_result."""
@@ -407,6 +446,7 @@ class SetupWizard(QDialog):
                 self._stop_catcher()
                 self.code_row.hide()
                 self.connect_status.setText(f"✓  Signed in. {message}")
+                self._connect_locks()
                 self.raise_()                       # the link was clicked in a browser
                 self.activateWindow()
             else:

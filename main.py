@@ -49,6 +49,7 @@ from ui.overlay import (
 )
 from hotkey import GlobalHotkeyMonitor, StopHotkey
 from companion_manager import CompanionManager
+from ui import sign_in_gate
 
 
 STATE_TO_CURSOR_MODE = {
@@ -223,6 +224,14 @@ def main():
     from ui import autostart
     autostart.migrate_legacy()
 
+    # ── No HeyTora account, no HeyTora ────────────────────────────────────────
+    # Before the overlay, the hotkey, the microphone or the agents exist: no
+    # sign-in, only the sign-in window - and closing it closes the app.
+    door = sign_in_gate.gate()
+    if door == "closed":
+        return
+    sign_in_gate.relay()                     # on this thread, before anything can lose the sign-in
+
     # ── Core components ───────────────────────────────────────────────────────
     manager = CompanionManager()
     panel   = CompanionPanel()
@@ -285,6 +294,27 @@ def main():
     # Out of credit / a refused key (APP-02): a warning in the tray menu and
     # one notification - never 77 silent failures.
     manager.sig_account_problem.connect(tray.set_account_problem)
+
+    # A sign-in that ends while HeyTora runs - Settings → Sign out, or the
+    # server no longer accepting it - closes this copy and opens a fresh one
+    # at the sign-in window, instead of carrying on unlocked.
+    def _account_problem(kind: str):
+        if kind != "signin":
+            return
+        if sign_in_gate.required():
+            sign_in_gate.lost()
+        else:
+            sign_in_gate.check_in_background()      # the server said no: does the sign-in stand?
+    manager.sig_account_problem.connect(_account_problem)
+
+    def _sign_in_lost():
+        if not sign_in_gate.required():
+            return
+        import logging as _lg
+        _lg.getLogger("tora").info("signed out - restarting at the sign-in window")
+        sign_in_gate.restart()
+        tray.on_quit.emit()
+    sign_in_gate.relay().lost.connect(_sign_in_lost)
 
     # Panel → Manager
     panel.on_model_changed.connect(manager.set_model)
@@ -538,6 +568,8 @@ def main():
     # is not held up; wire its UI when it says it is ready.
     manager.sig_agents_ready.connect(lambda: _wire_agents(manager, tray))
     manager.start()        # begin ambient mic + wake-word scanning; brings up agents
+    if door == "ok":
+        sign_in_gate.check_in_background()   # still an account the server accepts?
 
     providers = cfg.describe()
     _hk = "+".join(p.strip().capitalize() for p in cfg.hotkey.split("+"))
@@ -559,6 +591,8 @@ def main():
         if os.environ.get("TORA_FORCE_SETUP", "").strip() in ("1", "true", "yes"):
             wiz = SetupWizard()
             wiz.show()
+        elif door == "signed_in":
+            wiz = None                        # the gate just showed it
         else:
             wiz = maybe_show_setup_wizard()
         if wiz is not None:
