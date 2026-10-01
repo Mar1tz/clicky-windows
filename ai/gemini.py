@@ -118,20 +118,33 @@ _SIGNIN_BODY = json.dumps({"error": {"code": 401, "status": "HEYTORA_SIGNIN",
                                      "message": "Sign in to HeyTora to keep talking."}})
 
 
-async def _route() -> tuple[str, dict, dict]:
+async def _route(answer: bool = False) -> tuple[str, dict, dict]:
     """(root, query params, headers) for a REST call: Google with the user's
     own key, or HeyTora's server with their sign-in - the business key is
-    added there and never reaches this machine."""
+    added there and never reaches this machine.
+
+    `answer`: a call that makes the model answer (generateContent and its
+    streamed kind). On HeyTora those run on a window ticket - this
+    question's talk message, or the agent's - and the server refuses them
+    without one. Embeddings and the model list need none.
+    """
     if own_key():
         return API_ROOT, {"key": api_key()}, {}
-    from account.service import AccountError, account
+    from account.service import AccountError, LimitReached, account
+    kind = _kind.get()
     try:
         token = await account().atoken()
+        headers = {"Authorization": f"Bearer {token}", "x-heytora-kind": kind}
+        if answer:
+            headers["x-heytora-ticket"] = await account().aticket(
+                "agent" if kind == "agent" else "talk")
+    except LimitReached as e:
+        raise GeminiError(402, json.dumps({"error": {"code": 402, "status": "HEYTORA_LIMIT",
+                                                     "message": str(e), "heytora": e.info}})) from e
     except AccountError as e:
         raise GeminiError(401, json.dumps({"error": {"code": 401, "status": "HEYTORA_SIGNIN",
                                                      "message": str(e)}})) from e
-    return account().proxy_root(), {}, {"Authorization": f"Bearer {token}",
-                                        "x-heytora-kind": _kind.get()}
+    return account().proxy_root(), {}, headers
 
 
 class GeminiError(RuntimeError):
@@ -274,7 +287,11 @@ def problem_of(error: Any) -> str:
     # HeyTora's own server first: the plan's allowance for the month is used
     # up, or the user must sign in again. Neither is Google's billing.
     named = type(error).__name__
-    if named == "LimitReached" or "heytora_limit" in body or "heytora_limit" in text:
+    # Its other refusals - a window ended (HEYTORA_TICKET), a model or a
+    # request it does not forward - are the plan's rules too, shown in the
+    # server's own words; never "your credits ran out" or "bad key".
+    if named == "LimitReached" or any(f"heytora_{w}" in body or f"heytora_{w}" in text
+                                      for w in ("limit", "ticket", "model", "request")):
         return "plan"
     if named in ("SignInNeeded", "NotConfigured") or "heytora_signin" in body \
             or "heytora_signin" in text:
@@ -357,7 +374,7 @@ BUSY_RETRY_DELAYS = (1.0, 2.0)
 
 async def _post(path: str, body: dict, timeout: float) -> httpx.Response:
     async def once() -> httpx.Response:
-        root, params, headers = await _route()
+        root, params, headers = await _route(answer=path.endswith(":generateContent"))
         extra = {"headers": headers} if headers else {}      # own key: exactly as before
         try:
             return await client().post(f"{root}/{path}", params=params, json=body,
@@ -368,7 +385,11 @@ async def _post(path: str, body: dict, timeout: float) -> httpx.Response:
             return await client().post(f"{root}/{path}", params=params, json=body,
                                        timeout=timeout, **extra)
 
-    r = await once()
+    try:
+        r = await once()
+    except GeminiError as e:              # HeyTora said no before Google was asked
+        report_problem(e)
+        raise
     for delay in BUSY_RETRY_DELAYS:
         if r.status_code not in (429, 503) or problem_of(r.text) != "busy":
             break
@@ -562,7 +583,7 @@ async def _sse(model: str, body: dict, timeout: float) -> AsyncIterator[dict]:
     while True:
         started = False
         try:
-            root, params, headers = await _route()
+            root, params, headers = await _route(answer=True)
             async with client().stream(
                 "POST",
                 f"{root}/{_url(model, 'streamGenerateContent')}",

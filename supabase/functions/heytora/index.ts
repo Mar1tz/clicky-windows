@@ -1,54 +1,69 @@
-// HeyTora's server function: the ONLY place the business Gemini key lives.
+// HeyTora's server function: the ONLY place the business Gemini key lives,
+// and the only judge of what a plan allows. The app is easy to modify, so
+// nothing it says about itself is trusted here:
 //
-// The desktop app signs in to the user's HeyTora account (Supabase Auth) and
-// sends its Gemini requests here instead of to Google. This function checks
-// who they are, spends their plan (public.heytora_consume, migration 0003),
-// and then either
+//   POST /ticket       {kind: "talk"|"agent", new?}  a WINDOW ticket. A talk
+//                      message is a talk window (Free 10 min, Pro/Max 30), an
+//                      agent message an agent window (30 min). The open one
+//                      is handed back at no charge; `new` starts the next.
+//   POST /voice-pass   {kind: "talk"|"dictation", model, new?}  a Gemini Live
+//                      ephemeral token - one session, locked to that model,
+//                      ending with its talk window (or after the plan's
+//                      dictation minutes). Talk passes come with the window's
+//                      ticket. The app then talks straight to Google.
+//   POST /agent-ticket the agent window's ticket (older apps).
+//   GET  /me           the plan, its allowances and this month's use.
+//   *    /v1beta/...   a Gemini REST call, forwarded with the key added:
+//                      the app's model families only; answers (generate)
+//                      need a window ticket; every call is counted, and its
+//                      real cost - Google's token counts - is recorded
+//                      against the plan's hidden monthly ceiling.
 //
-//   POST /voice-pass    mints a short-lived voice pass (a Gemini Live
-//                       "ephemeral token": one session, minutes long) so the
-//                       app talks - or dictates - straight to Google, as fast
-//                       as with a key, and nothing to steal;
-//   POST /agent-ticket  issues an agent ticket - one agent message on the
-//                       plan, good for 30 minutes of agent work;
-//   GET  /me            the plan, its limits and this month's usage;
-//   *    /v1beta/...    forwards a Gemini REST call (generateContent, the
-//                       streamed kind, embeddings, the model list) with the
-//                       key added here.
+// The rules are in migration 0004 (heytora_window / heytora_pass /
+// heytora_consume) and rules.ts. Secrets: GEMINI_API_KEY,
+// HEYTORA_TICKET_SECRET. Optional: HEYTORA_TALK_MODELS,
+// HEYTORA_DICTATION_MODELS, HEYTORA_PRICES.
 //
-// Secrets (supabase secrets set ...):
-//   GEMINI_API_KEY          the business key
-//   HEYTORA_TICKET_SECRET   any long random string; signs agent tickets
-// Optional:
-//   HEYTORA_LIVE_MODELS     comma list of models a voice pass may open
-//
-// Deploy:  supabase functions deploy heytora
-// (JWT verification stays ON: every request must carry a signed-in user.)
+// Deploy:  supabase functions deploy heytora --use-api   (JWT verification on)
 
 import { createClient } from "npm:@supabase/supabase-js@2";
+import {
+  checkGenerate, costMicro, estimateTokens, family, makeTicket, MAX_BODY_BYTES, prices, readTicket,
+  UsageReader,
+} from "./rules.ts";
 
 const GOOGLE = "https://generativelanguage.googleapis.com";
 const KEY = Deno.env.get("GEMINI_API_KEY") ?? "";
 const TICKET_SECRET = Deno.env.get("HEYTORA_TICKET_SECRET") ?? "";
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL") ?? "";
 const ANON_KEY = Deno.env.get("SUPABASE_ANON_KEY") ?? "";
-const LIVE_MODELS = new Set(
-  (Deno.env.get("HEYTORA_LIVE_MODELS") ?? "gemini-3.8-live,gemini-3.5-transcribe-live")
-    .split(",").map((m) => m.trim()).filter(Boolean),
-);
-const TICKET_MINUTES = 30;
+const SERVICE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
+const list = (name: string, fallback: string) =>
+  new Set((Deno.env.get(name) ?? fallback).split(",").map((m) => m.trim()).filter(Boolean));
+const VOICE_MODELS: Record<string, Set<string>> = {
+  talk: list("HEYTORA_TALK_MODELS", "gemini-3.8-live"),
+  dictation: list("HEYTORA_DICTATION_MODELS", "gemini-3.5-transcribe-live"),
+};
+const PRICES = prices(Deno.env.get("HEYTORA_PRICES"));
 
-// Only these Gemini REST paths may be forwarded: model calls and the model
-// list. No files, no tuning, no caches - nothing that stores anything on the
-// business account.
+// Only these Gemini REST paths: model calls and the model list. No files,
+// no tuning, no caches - nothing that stores anything on the business account.
 const REST_PATH =
-  /^v1(beta|alpha)?\/models(\/[A-Za-z0-9._-]+(:(generateContent|streamGenerateContent|batchEmbedContents|embedContent|countTokens))?)?$/;
+  /^v1(beta|alpha)?\/models(\/([A-Za-z0-9._-]+)(:(generateContent|streamGenerateContent|batchEmbedContents|embedContent|countTokens))?)?$/;
+
+// Recording what a call cost runs after the answer has gone back.
+declare const EdgeRuntime: { waitUntil(p: Promise<unknown>): void } | undefined;
+function later(p: Promise<unknown>): void {
+  const done = p.catch((e) => console.error("heytora: metering", e));
+  try {
+    EdgeRuntime?.waitUntil(done);
+  } catch {
+    // not in the edge runtime: the promise runs on regardless
+  }
+}
 
 function json(status: number, body: unknown): Response {
-  return new Response(JSON.stringify(body), {
-    status,
-    headers: { "content-type": "application/json" },
-  });
+  return new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
 }
 
 // Errors look like Google's ({"error": {...}}), so the app's existing error
@@ -60,60 +75,56 @@ function refuse(status: number, code: string, message: string, heytora: unknown 
 const WORDS: Record<string, string> = {
   talk: "talk messages", dictation: "dictations", agent: "agent messages", calls: "requests",
 };
+const own = "switch to your own Gemini key in Settings";
 
 function limitResponse(info: Record<string, unknown>): Response {
-  if (info.reason === "rate") {
-    return refuse(429, "HEYTORA_LIMIT", "That's a lot at once - give it a minute and try again.", info);
-  }
   const kind = WORDS[String(info.kind)] ?? "allowance";
-  const plan = String(info.plan ?? "").replace(/^./, (c) => c.toUpperCase());
-  const message = info.reason === "not_in_plan"
-    ? `Your ${plan} plan doesn't include ${kind}.`
-    : `You've used all ${info.limit} ${kind} on the ${plan} plan this month. ` +
-      "Upgrade on the HeyTora website, or switch to your own Gemini key in Settings.";
-  return refuse(402, "HEYTORA_LIMIT", message, info);
-}
-
-// -- agent tickets: HMAC-signed, so no table is needed to check one ----------------------------------------
-
-async function hmac(text: string): Promise<string> {
-  const key = await crypto.subtle.importKey(
-    "raw", new TextEncoder().encode(TICKET_SECRET), { name: "HMAC", hash: "SHA-256" }, false, ["sign"],
-  );
-  const sig = new Uint8Array(await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(text)));
-  return btoa(String.fromCharCode(...sig)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
-}
-
-async function makeTicket(uid: string): Promise<{ ticket: string; expires: number }> {
-  const expires = Math.floor(Date.now() / 1000) + TICKET_MINUTES * 60;
-  const id = crypto.randomUUID();
-  return { ticket: `${id}.${expires}.${await hmac(`${uid}.${id}.${expires}`)}`, expires };
-}
-
-async function ticketOk(uid: string, ticket: string | null): Promise<boolean> {
-  if (!ticket) return false;
-  const [id, expires, sig] = ticket.split(".");
-  if (!id || !expires || !sig || Number(expires) < Date.now() / 1000) return false;
-  return sig === await hmac(`${uid}.${id}.${expires}`);
+  const plan = String(info.plan ?? "free").replace(/^./, (c) => c.toUpperCase());
+  const paid = plan !== "Free";
+  switch (info.reason) {
+    case "rate":
+      return refuse(429, "HEYTORA_LIMIT", "That's a lot at once - give it a minute and try again.", info);
+    case "day":
+      return refuse(402, "HEYTORA_LIMIT",
+        `That's today's fair-use limit for ${kind} on the ${plan} plan - it resets at midnight (UTC). ` +
+          `Or ${own}.`, info);
+    case "budget":
+      return refuse(402, "HEYTORA_LIMIT", paid
+        ? `You've reached this month's fair-use limit on the ${plan} plan. It resets on the 1st - or ${own}.`
+        : `You've used this month's free allowance. Upgrade on the HeyTora website, or ${own}.`, info);
+    case "passes":
+    case "window":
+      return refuse(402, "HEYTORA_LIMIT", "That conversation has ended - ask again.", info);
+    case "not_in_plan":
+      return refuse(402, "HEYTORA_LIMIT", `Your ${plan} plan doesn't include ${kind}.`, info);
+    default:
+      return refuse(402, "HEYTORA_LIMIT",
+        `You've used all ${info.limit} ${kind} on the ${plan} plan this month. ` +
+          `Upgrade on the HeyTora website, or ${own}.`, info);
+  }
 }
 
 // -- voice passes (Gemini Live ephemeral tokens) ------------------------------------------------------------
 
-// Google's docs give two shapes for creating one; whichever answers is kept.
+// Google's docs give more than one shape for creating one; the one that
+// answers is kept. The model is locked in with fieldMask "model" - without
+// the mask Google ignores the lock (checked 1 Oct 2026).
 let passShape = 0;
 const PASS_SHAPES: Array<{ version: string; path: string; wrap: boolean }> = [
   { version: "v1beta", path: "auth_tokens", wrap: false },
   { version: "v1alpha", path: "auth_tokens", wrap: false },
   { version: "v1alpha", path: "auth_tokens", wrap: true },
-  { version: "v1beta", path: "authTokens:create", wrap: true },
 ];
 
-async function mintPass(): Promise<{ token: string; url: string; expires: string }> {
+async function mintPass(model: string, endsAt: number): Promise<{ token: string; url: string }> {
   const now = Date.now();
+  const ends = Math.max(now + 60_000, Math.min(endsAt * 1000, now + 120 * 60_000));
   const fields = {
-    uses: 1,                                                    // one session
-    expireTime: new Date(now + 30 * 60_000).toISOString(),      // the session may run 30 min
-    newSessionExpireTime: new Date(now + 2 * 60_000).toISOString(), // must open within 2 min
+    uses: 1, // one session
+    expireTime: new Date(ends).toISOString(), // Google closes the session then
+    newSessionExpireTime: new Date(Math.min(now + 2 * 60_000, ends)).toISOString(),
+    bidiGenerateContentSetup: { model: `models/${model}` },
+    fieldMask: "model",
   };
   let lastError = "";
   for (let i = 0; i < PASS_SHAPES.length; i++) {
@@ -130,14 +141,13 @@ async function mintPass(): Promise<{ token: string; url: string; expires: string
         passShape = (passShape + i) % PASS_SHAPES.length;
         return {
           token,
-          expires: fields.expireTime,
           url: `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.${shape.version}` +
             ".GenerativeService.BidiGenerateContentConstrained",
         };
       }
     }
     lastError = `${r.status} ${text.slice(0, 300)}`;
-    if (r.status !== 400 && r.status !== 404) break;            // only a wrong shape is worth another try
+    if (r.status !== 400 && r.status !== 404) break; // only a wrong shape is worth another try
   }
   throw new Error(`Google refused the voice pass: ${lastError}`);
 }
@@ -145,7 +155,9 @@ async function mintPass(): Promise<{ token: string; url: string; expires: string
 // -- the function -------------------------------------------------------------------------------------------
 
 Deno.serve(async (req: Request): Promise<Response> => {
-  if (!KEY || !TICKET_SECRET) return refuse(500, "HEYTORA_SETUP", "The server is missing its secrets.");
+  if (!KEY || !TICKET_SECRET || !SERVICE_KEY) {
+    return refuse(500, "HEYTORA_SETUP", "The server is missing its secrets.");
+  }
 
   const url = new URL(req.url);
   const path = url.pathname.replace(/^.*?\/heytora\/?/, "");
@@ -158,64 +170,171 @@ Deno.serve(async (req: Request): Promise<Response> => {
   const user = who?.user;
   if (!user) return refuse(401, "HEYTORA_SIGNIN", "Sign in to HeyTora to keep talking.");
 
-  const consume = async (kind: string, meta: Record<string, unknown> = {}) => {
-    const { data, error } = await db.rpc("heytora_consume", { p_kind: kind, p_quantity: 1, p_meta: meta });
-    if (error) throw new Error(error.message);
+  const rpc = async (fn: string, args: Record<string, unknown>) => {
+    const { data, error } = await db.rpc(fn, args);
+    if (error) throw new Error(`${fn}: ${error.message}`);
     return data as Record<string, unknown>;
   };
+  const ticketFor = async (kind: string, w: Record<string, unknown>) => ({
+    ticket: await makeTicket(TICKET_SECRET, user.id, {
+      kind, window: String(w.window), expires: Number(w.expires_at),
+    }),
+    expires_at: Number(w.expires_at),
+  });
 
   try {
     if (path === "me" && req.method === "GET") {
-      const { data, error } = await db.rpc("get_usage_summary");
-      if (error) throw new Error(error.message);
-      return json(200, data);
+      return json(200, await rpc("get_usage_summary", {}));
+    }
+
+    if ((path === "ticket" || path === "agent-ticket") && req.method === "POST") {
+      const body = await req.json().catch(() => ({}));
+      const kind = path === "agent-ticket" ? "agent" : body?.kind === "agent" ? "agent" : "talk";
+      const w = await rpc("heytora_window", { p_kind: kind, p_new: body?.new === true });
+      if (!w.ok) return limitResponse(w);
+      return json(200, { ...(await ticketFor(kind, w)), kind, usage: w });
     }
 
     if (path === "voice-pass" && req.method === "POST") {
       const body = await req.json().catch(() => ({}));
       const kind = body?.kind === "dictation" ? "dictation" : "talk";
       const model = String(body?.model ?? "");
-      if (!LIVE_MODELS.has(model)) return refuse(400, "HEYTORA_MODEL", `Not a voice model: ${model}`);
-      const usage = await consume(kind, { model });
-      if (!usage.ok) return limitResponse(usage);
-      const pass = await mintPass();
-      return json(200, { token: pass.token, url: pass.url, expires_at: pass.expires, usage });
-    }
-
-    if (path === "agent-ticket" && req.method === "POST") {
-      const usage = await consume("agent");
-      if (!usage.ok) return limitResponse(usage);
-      const { ticket, expires } = await makeTicket(user.id);
-      return json(200, { ticket, expires_at: expires, usage });
+      if (!VOICE_MODELS[kind].has(model)) {
+        return refuse(400, "HEYTORA_MODEL", `Not a ${kind} model: ${model}`);
+      }
+      if (kind === "dictation") {
+        const usage = await rpc("heytora_consume", { p_kind: "dictation", p_quantity: 1, p_meta: { model } });
+        if (!usage.ok) return limitResponse(usage);
+        const minutes = Number((usage.limits as Record<string, unknown>)?.dictation_minutes ?? 10);
+        const endsAt = Date.now() / 1000 + Math.min(Math.max(minutes, 1), 120) * 60;
+        const pass = await mintPass(model, endsAt);
+        delete usage.limits;
+        return json(200, { ...pass, expires_at: endsAt, usage });
+      }
+      // Talk: the pass lives inside a talk window - a new one unless the app
+      // says it is the same question (a reconnect) - and ends with it.
+      const w = await rpc("heytora_window", { p_kind: "talk", p_new: body?.new !== false });
+      if (!w.ok) return limitResponse(w);
+      const p = await rpc("heytora_pass", { p_window: Number(w.window), p_model: model });
+      if (!p.ok) return limitResponse({ ...p, plan: w.plan });
+      const pass = await mintPass(model, Number(p.expires_at));
+      const t = await ticketFor("talk", w);
+      return json(200, {
+        ...pass, expires_at: Number(p.expires_at), ticket: t.ticket, ticket_expires_at: t.expires_at, usage: w,
+      });
     }
 
     // Everything else: forward a Gemini REST call with the business key.
-    if (!REST_PATH.test(path)) return refuse(404, "HEYTORA_PATH", `Not something HeyTora forwards: ${path}`);
-    const kind = req.headers.get("x-heytora-kind") ?? "talk";
-    const ticket = req.headers.get("x-heytora-ticket");
-    if (kind === "agent" && !(await ticketOk(user.id, ticket))) {
-      return refuse(402, "HEYTORA_LIMIT", "Your agent ticket has expired - ask again.",
-        { reason: "ticket", kind: "agent" });
+    const route = path.match(REST_PATH);
+    if (!route) return refuse(404, "HEYTORA_PATH", `Not something HeyTora forwards: ${path}`);
+    const model = route[3] ?? "";
+    const method = route[5] ?? "";
+    const fam = model ? family(model) : "list";
+    if (!fam) return refuse(403, "HEYTORA_MODEL", `HeyTora doesn't forward ${model}.`);
+
+    // Answers need a window: a talk message or an agent message the plan
+    // has paid for. Its kind - not the app's label - is what is recorded.
+    let kind = "talk";
+    let ticketId = "";
+    const answers = method === "generateContent" || method === "streamGenerateContent";
+    if (answers) {
+      const t = await readTicket(TICKET_SECRET, user.id, req.headers.get("x-heytora-ticket"), Date.now() / 1000);
+      if (!t) {
+        return refuse(402, "HEYTORA_TICKET", "That conversation has ended - ask again.",
+          { reason: "ticket", kind: req.headers.get("x-heytora-kind") ?? "talk" });
+      }
+      kind = t.kind;
+      ticketId = t.window;
     }
-    const usage = await consume("calls", { kind, path: path.slice(0, 120), ticket: ticket?.split(".")[0] });
-    if (!usage.ok) return limitResponse(usage);
+
+    let payload: ArrayBuffer | string | undefined;
+    if (req.method !== "GET" && req.method !== "HEAD") {
+      const raw = await req.arrayBuffer();
+      if (raw.byteLength > MAX_BODY_BYTES) {
+        return refuse(413, "HEYTORA_REQUEST", "That request is too large to forward.");
+      }
+      payload = raw;
+      if (answers) {
+        let parsed: unknown;
+        try {
+          parsed = JSON.parse(new TextDecoder().decode(raw));
+        } catch {
+          return refuse(400, "HEYTORA_REQUEST", "Not a model request.");
+        }
+        const checked = checkGenerate(parsed);
+        if (!checked.ok) return refuse(checked.status, checked.code, checked.message);
+        payload = JSON.stringify(checked.body);
+      }
+    }
+
+    const usage = await rpc("heytora_consume", {
+      p_kind: "calls", p_quantity: 1, p_meta: { kind, model, method, window: ticketId || undefined },
+    });
+    // The request count and the cost ceiling are the server's own: either
+    // one running out reads as the month's allowance being used.
+    if (!usage.ok) {
+      return limitResponse(usage.reason === "limit" ? { ...usage, reason: "budget" } : usage);
+    }
 
     const query = new URLSearchParams(url.search);
-    query.delete("key");                                  // never a key from the client
+    query.delete("key"); // never a key from the client
     const qs = query.toString();
     const upstream = await fetch(`${GOOGLE}/${path}${qs ? `?${qs}` : ""}`, {
       method: req.method,
-      headers: {
-        "content-type": req.headers.get("content-type") ?? "application/json",
-        "x-goog-api-key": KEY,
-      },
-      body: req.method === "GET" || req.method === "HEAD" ? undefined : await req.arrayBuffer(),
+      headers: { "content-type": req.headers.get("content-type") ?? "application/json", "x-goog-api-key": KEY },
+      body: payload,
     });
-    // Streamed straight through, so a streamed answer starts at once.
-    return new Response(upstream.body, {
-      status: upstream.status,
-      headers: { "content-type": upstream.headers.get("content-type") ?? "application/json" },
-    });
+    const type = upstream.headers.get("content-type") ?? "application/json";
+
+    // What it cost: service role, after the answer is on its way.
+    const admin = createClient(SUPABASE_URL, SERVICE_KEY, { auth: { persistSession: false } });
+    const record = async (input: number, output: number) => {
+      const micro = costMicro(PRICES, fam, input, output);
+      if (!micro && !input && !output) return;
+      const { error } = await admin.rpc("heytora_record_cost", {
+        p_user: user.id, p_kind: kind, p_model: model, p_in: input, p_out: output, p_micro: micro,
+      });
+      if (error) throw new Error(error.message);
+    };
+
+    if (!model) {
+      // The model list: only what HeyTora forwards, so the app offers nothing else.
+      const data = await upstream.json().catch(() => ({}));
+      if (Array.isArray(data?.models)) {
+        data.models = data.models.filter((m: { name?: string }) => family(String(m?.name ?? "")));
+      }
+      return json(upstream.status, data);
+    }
+    if (!upstream.ok || !upstream.body) {
+      return new Response(upstream.body, { status: upstream.status, headers: { "content-type": type } });
+    }
+    if (method === "embedContent" || method === "batchEmbedContents") {
+      const bytes = typeof payload === "string" ? payload.length : (payload?.byteLength ?? 0);
+      later(record(estimateTokens(bytes), 0));
+      return new Response(upstream.body, { status: upstream.status, headers: { "content-type": type } });
+    }
+    if (method === "streamGenerateContent") {
+      // Streamed straight through, so the answer starts at once; a copy is
+      // read alongside for the token counts in its chunks.
+      const [toApp, toMeter] = upstream.body.tee();
+      later((async () => {
+        const reader = new UsageReader();
+        const decoder = new TextDecoder();
+        for await (const chunk of toMeter) reader.push(decoder.decode(chunk, { stream: true }));
+        const used = reader.used();
+        if (used) await record(used.input, used.output);
+      })());
+      return new Response(toApp, { status: upstream.status, headers: { "content-type": type } });
+    }
+    // A plain answer (generateContent, countTokens): read whole, counted, passed on.
+    const text = await upstream.text();
+    if (answers) {
+      const reader = new UsageReader();
+      reader.push(text);
+      const used = reader.used();
+      if (used) later(record(used.input, used.output));
+    }
+    return new Response(text, { status: upstream.status, headers: { "content-type": type } });
   } catch (e) {
     console.error("heytora:", e);
     return refuse(502, "HEYTORA_SERVER", "HeyTora's server had a problem - try again.");

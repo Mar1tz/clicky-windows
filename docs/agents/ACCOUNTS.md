@@ -17,37 +17,56 @@ you control — and the app signs in instead.
 | --- | --- | --- |
 | Account + plan | your website, same Supabase project | creates the account; sets `profiles.plan` (`free` / `pro` / `max`) and `profiles.plan_status` when someone picks or pays for a plan |
 | Sign-in | the app (first launch, or Settings) | email + one-time code (Supabase Auth OTP; this project sends 8 digits), only for accounts that already exist |
-| `heytora` server function | `supabase/functions/heytora/index.ts` | holds `GEMINI_API_KEY`; checks the user, spends their plan, then mints **voice passes**, issues **agent tickets**, and forwards the other Gemini calls |
-| Plans & counting | `supabase/migrations/0003_heytora_plans.sql` | the three plans' allowances and `heytora_consume()`, the only thing that spends one |
+| `heytora` server function | `supabase/functions/heytora/index.ts` (+ `rules.ts`) | holds `GEMINI_API_KEY`; checks the user, opens **windows** on their plan, mints **voice passes**, and forwards model calls - counting what each really cost |
+| Plans & counting | `supabase/migrations/0003_heytora_plans.sql`, `0004_heytora_metering.sql` | the plans' allowances and ceilings, and the only functions that spend them |
 
 **Live voice is still direct.** For talk and dictation the server mints a
-voice pass — a Gemini Live *ephemeral token*: one session, opened within
-2 minutes, at most 30 minutes long — and the app connects straight to Google
-with it. Same speed as a key; nothing worth stealing.
+voice pass — a Gemini Live *ephemeral token*: one session, locked to its
+model, ended by Google at the moment the pass ends — and the app connects
+straight to Google with it. Same speed as a key; nothing worth stealing.
 
 **Everything else goes through the server**: reading the screen, planning
 walkthroughs, the step voice, embeddings, the agents. The server adds the key.
-Only model calls are forwarded (no files, tuning or caches).
+Only the app's model families are forwarded (flash, flash-lite, pro, TTS,
+embeddings) — no files, tuning, caches, search grounding, image or video
+models — and an answer is capped at 16k tokens.
 
-## What each plan allows (per calendar month, UTC)
+## What each plan allows
+
+The app is easy to modify, so **the server decides** (migration 0004). What a
+user buys is counted as a *window* the server opens and closes:
 
 | | Free | Pro ($20) | Max ($100) |
 | --- | --- | --- | --- |
-| Talk | 25 conversations | unlimited | unlimited |
-| Dictation | 300 | unlimited | unlimited |
-| Agent messages | 25 | 150 | 1,000 |
-| Other requests (hidden backstop) | 1,500 | 30,000 | 150,000 |
+| Talk messages / month | 25 | unlimited | unlimited |
+| Dictations / month | 300 | unlimited | unlimited |
+| Agent messages / month | 25 | 150 | 1,000 |
+| *A talk message lasts at most* | *10 min* | *30 min* | *30 min* |
+| *Hidden: daily fair use (talk / dictation / agent)* | *25 / 100 / 10* | *300 / 500 / 50* | *600 / 1,000 / 200* |
+| *Hidden: monthly cost ceiling (what Google charges you)* | *$2* | *$12* | *$60* |
+| *Hidden: requests / month* | *1,500* | *30,000* | *150,000* |
 
-- **Talk** — one voice pass. On Free the app opens the voice session when the
-  user asks and closes it after 20 s quiet, so one question = one talk
-  message (a quick follow-up inside 20 s rides on it). Pro and Max keep the
-  session open as before.
-- **Agent message** — one agent ticket: up to 30 minutes of agent work.
-- **Backstop** — never on the price list; stops any plan being used to drain
-  the key. Every plan also has a per-minute brake.
-- A lapsed or cancelled subscription (`plan_status` not `active`/`trialing`)
-  counts as Free. Change the numbers in the `plans` table at any time — no new
-  download needed.
+- **Talk message** — a talk window. The app opens a new one for each new
+  question on Free (a quick follow-up on the open session rides on it); the
+  voice pass and every call made for that question run on its **ticket**,
+  and all of it stops when the window ends — Google itself closes the voice
+  session then. At most 3 voice passes per window on Free (6 on Pro/Max), so
+  one talk message can't become many parallel sessions.
+- **Agent message** — an agent window: up to 30 minutes of agent work.
+- **Every answer needs a ticket.** A model call without a valid window
+  ticket is refused, and the server records the ticket's kind — never the
+  app's own label — so agent work can't pass itself off as talk.
+- **Cost ceiling** — every forwarded call's real token counts (from Google's
+  own `usageMetadata`) are priced and recorded in `usage_costs`; once a
+  month's total reaches the plan's `budget_usd`, forwarded calls stop until
+  the 1st. Prices are on the high side of Google's list (`rules.ts`); set the
+  `HEYTORA_PRICES` secret to change them. Live voice isn't in this total
+  (it goes straight to Google) — it is held by the passes and windows above.
+- **Per-minute brake** on every plan, and a lapsed or cancelled subscription
+  (`plan_status` not `active`/`trialing`) counts as Free.
+- All of these numbers are in `public.plans.limits` — change them any time,
+  no new download needed. The app and website only ever see talk, dictation
+  and agent (`get_usage_summary`).
 
 When an allowance runs out, the user is told which one and what to do
 (upgrade on the website, or use their own key) — in the caption, the tray and
@@ -59,7 +78,7 @@ Project `uizwfpxzzkokyrkvjzkr` (eu-west-1), shared with the website.
 
 | Step | State |
 | --- | --- |
-| Database: `0001`, `0002`, `0003` | applied (0001 was already there) |
+| Database: `0001` – `0004` | applied (0001 was already there; 0004 on 2 Oct) |
 | Secrets `GEMINI_API_KEY`, `HEYTORA_TICKET_SECRET` | set (Management API; never in git) |
 | Function `heytora` | deployed, JWT verification on |
 | Redirect URLs | `http://127.0.0.1:*/heytora/signed-in` — **the website must keep this entry** when it adds its own |
@@ -99,7 +118,9 @@ keep the link in it (the website and the app both use it):
 
 ### Changing things later
 
-* Allowances: edit `public.plans.limits` — no new download needed.
+* Allowances and ceilings: edit `public.plans.limits` — no new download needed.
+* What each user's calls cost this month: `select user_id, sum(cost_micro)/1e6 as usd from usage_costs
+  where created_at >= date_trunc('month', now()) group by 1 order by 2 desc;`
 * A plan change from the website: set `profiles.plan` / `plan_status` with the
   service role key, on the website's server only.
 * Redeploy the function: `supabase functions deploy heytora --project-ref uizwfpxzzkokyrkvjzkr --use-api`.

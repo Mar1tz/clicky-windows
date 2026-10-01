@@ -1019,6 +1019,16 @@ class CompanionManager(QObject):
         except Exception:  # noqa: BLE001
             return True
 
+    @staticmethod
+    def _new_talk() -> None:
+        """Tell the account a new question starts: on HeyTora's server it is a
+        new talk window - a talk message - however the answer is made."""
+        try:
+            from account.service import account
+            account().new_talk()
+        except Exception:  # noqa: BLE001 - own key, or no account module
+            pass
+
     # On a metered plan the session closes this long after an answer, so the
     # next question takes a new voice pass - a new talk message. A quick
     # follow-up inside the window rides on the same one.
@@ -2941,8 +2951,14 @@ class CompanionManager(QObject):
         connecting = bool(conv is not None and not ready and conv.connecting)
         # A metered plan opens the session now, on the question - the mic is
         # already buffering, and _realtime_stream waits for it.
+        metered = self._metered_talk()
         on_demand = (not ready and not connecting and cfg.realtime()
-                     and cfg.has_key() and self._metered_talk())
+                     and cfg.has_key() and metered)
+        if metered and not ready:
+            # A new question, not a follow-up on the open session: a new talk
+            # message. Said before the pass is asked for, or it would ride on
+            # the last question's window.
+            self._new_talk()
         if on_demand:
             self._get_realtime()
             self._submit(self._realtime_connect(on_demand=True))

@@ -44,6 +44,31 @@ class FakeHeyTora:
         self.challenge = None                   # PKCE, from the last sign-in email
         self.redirect_to = None
         self.ended = False                      # the server no longer accepts the sign-in
+        # Windows (migration 0004): a talk / agent message is a window the
+        # server opens; an open one is handed back at no charge.
+        self.window_minutes = {"talk": 10, "agent": 30}
+        self.windows: dict[str, tuple[int, float]] = {}
+        self.opened = {"talk": 0, "agent": 0}
+        self.window_seq = 0
+        self.pass_refusal = ""                  # "passes" / "window": refuse a reused window once
+
+    def window(self, kind: str, new: bool) -> tuple[int, float, bool]:
+        held = self.windows.get(kind)
+        if held and not new and held[1] > time.time():
+            return held[0], held[1], True
+        self.window_seq += 1
+        self.opened[kind] += 1
+        held = (self.window_seq, time.time() + 60 * self.window_minutes[kind])
+        self.windows[kind] = held
+        return held[0], held[1], False
+
+    @staticmethod
+    def ticket(kind: str, window: int, ends: float) -> str:
+        return f"{kind}.{window}.{int(ends)}.sig"
+
+    def valid(self, ticket: str) -> bool:
+        parts = (ticket or "").split(".")
+        return len(parts) == 4 and parts[0] in self.windows and int(parts[1]) == self.windows[parts[0]][0]             and int(parts[2]) > time.time()
 
     def session(self) -> dict:
         self.issued += 1
@@ -89,15 +114,37 @@ class FakeHeyTora:
                 return httpx.Response(402, json={"error": {
                     "code": 402, "status": "HEYTORA_LIMIT", "heytora": info,
                     "message": "You've used all 25 talk messages on the Free plan this month."}})
+            reply = {"token": "auth_tokens/one-session", "expires_at": time.time() + 600,
+                     "url": "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage."
+                            "v1beta.GenerativeService.BidiGenerateContentConstrained",
+                     "usage": {"ok": True, "kind": body.get("kind"), "used": 4, "limit": 25}}
+            if body.get("kind") == "talk":
+                if self.pass_refusal and body.get("new") is False:
+                    info = {"ok": False, "reason": self.pass_refusal, "kind": "talk"}
+                    self.pass_refusal = ""
+                    return httpx.Response(402, json={"error": {
+                        "code": 402, "status": "HEYTORA_LIMIT", "heytora": info,
+                        "message": "That conversation has ended - ask again."}})
+                window, ends, reused = self.window("talk", body.get("new", True) is not False)
+                reply |= {"ticket": self.ticket("talk", window, ends), "ticket_expires_at": ends,
+                          "usage": {"ok": True, "kind": "talk", "window": window, "reused": reused,
+                                    **({} if reused else {"used": self.opened["talk"], "limit": 25})}}
+            return httpx.Response(200, json=reply)
+        if path.endswith("/heytora/ticket") or path.endswith("/heytora/agent-ticket"):
+            kind = "agent" if path.endswith("agent-ticket") else body.get("kind", "talk")
+            window, ends, reused = self.window(kind, bool(body.get("new")))
             return httpx.Response(200, json={
-                "token": "auth_tokens/one-session", "expires_at": "later",
-                "url": "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage."
-                       "v1beta.GenerativeService.BidiGenerateContentConstrained",
-                "usage": {"ok": True, "kind": body.get("kind"), "used": 4, "limit": 25}})
-        if path.endswith("/heytora/agent-ticket"):
-            return httpx.Response(200, json={"ticket": "t1.9999999999.sig",
-                                             "expires_at": time.time() + 1800,
-                                             "usage": {"kind": "agent", "used": 1, "limit": 25}})
+                "ticket": self.ticket(kind, window, ends), "expires_at": ends, "kind": kind,
+                "usage": {"ok": True, "kind": kind, "window": window, "reused": reused,
+                          **({} if reused else {"used": self.opened[kind], "limit": 25})}})
+        if "/heytora/v1beta/models" in path:
+            if path.endswith(":generateContent") or path.endswith(":streamGenerateContent"):
+                if not self.valid(request.headers.get("x-heytora-ticket", "")):
+                    return httpx.Response(402, json={"error": {
+                        "code": 402, "status": "HEYTORA_TICKET", "heytora": {"reason": "ticket"},
+                        "message": "That conversation has ended - ask again."}})
+                return httpx.Response(200, json={"candidates": [{"content": {"parts": [{"text": "ok"}]}}]})
+            return httpx.Response(200, json={"models": []})
         return httpx.Response(404, json={"error": {"message": f"no {path}"}})
 
     def paths(self) -> list[str]:
@@ -283,7 +330,7 @@ def test_a_voice_pass_opens_one_session_straight_to_google(heytora):
     assert talk.startswith("wss://generativelanguage.googleapis.com/") and "Constrained" in talk
     assert talk.endswith("?access_token=auth_tokens/one-session") and "key=" not in talk
     passes = [b for _m, p, _h, b in heytora.fake.calls if p.endswith("/voice-pass")]
-    assert passes == [{"kind": "talk", "model": Models.REALTIME},
+    assert passes == [{"kind": "talk", "model": Models.REALTIME, "new": True},
                       {"kind": "dictation", "model": Models.STT}]
     assert dictate
 
@@ -307,8 +354,10 @@ def test_an_agent_ticket_is_one_agent_message_for_half_an_hour(heytora):
     _signed_in(heytora)
     first = asyncio.run(heytora.account.agent_headers())
     second = asyncio.run(heytora.account.agent_headers())
-    assert first["x-heytora-ticket"] == second["x-heytora-ticket"] == "t1.9999999999.sig"
-    assert heytora.fake.paths().count("/functions/v1/heytora/agent-ticket") == 1
+    assert first["x-heytora-ticket"] == second["x-heytora-ticket"]
+    assert first["x-heytora-ticket"].startswith("agent.1.")
+    assert heytora.fake.paths().count("/functions/v1/heytora/ticket") == 1
+    assert heytora.fake.opened["agent"] == 1
     assert first["x-heytora-kind"] == "agent" and first["Authorization"].startswith("Bearer ")
 
 
@@ -365,7 +414,7 @@ def test_the_agents_think_through_the_server_with_a_ticket(heytora):
     assert reply.text == "done"
     req = seen[0]
     assert str(req.url).startswith(PROXY + "/models/")
-    assert "x-goog-api-key" not in req.headers and req.headers["x-heytora-ticket"] == "t1.9999999999.sig"
+    assert "x-goog-api-key" not in req.headers and req.headers["x-heytora-ticket"].startswith("agent.")
 
 
 def test_signed_in_the_agents_get_a_real_provider(heytora):

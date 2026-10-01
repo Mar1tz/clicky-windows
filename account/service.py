@@ -15,10 +15,12 @@ What goes where, and why:
   * Everything else - seeing the screen, planning a walkthrough, the step
     voice, embeddings, the agents - goes through the server, which adds the
     key (proxy_root). The app never holds it.
-  * The plan's limits are counted on the server, where a patched app cannot
-    reach them: a voice pass is a talk message (or a dictation), an agent
-    ticket is an agent message (half an hour of agent work), and every
-    forwarded call counts against a generous hidden backstop.
+  * The plan is counted on the server, where a modified app cannot reach
+    it (migration 0004). A talk message is a talk WINDOW the server opens -
+    the voice pass and every call made for that question run on its ticket
+    and end with it; an agent message is an agent window. The app says when
+    a new question starts (new_talk); the server never lets a window grow.
+    Every forwarded call also counts against hidden monthly ceilings.
 
 Network calls are blocking (httpx.Client) and thread-safe; the async
 wrappers run them on a worker thread, so any event loop - the manager's, or
@@ -45,7 +47,7 @@ _log = logging.getLogger("tora.account")
 
 REFRESH_EARLY_S = 90          # refresh a session this long before it expires
 SUMMARY_TTL_S = 60            # the plan and usage are re-read at most this often
-TICKET_SPARE_S = 120          # renew an agent ticket this long before it expires
+TICKET_SPARE_S = 30           # a window ticket this close to its end is asked for again
 
 
 class AccountError(Exception):
@@ -100,6 +102,7 @@ class VoicePass:
     url: str                  # the constrained Live websocket, without the token
     token: str                # access_token for it
     usage: dict = field(default_factory=dict)
+    ticket: str = ""          # talk: the window's ticket, for the calls made for this question
 
     def address(self) -> str:
         return f"{self.url}?access_token={self.token}"
@@ -112,7 +115,9 @@ class Account:
         self._session: Optional[dict] = store.load()
         self._summary: Optional[dict] = None
         self._summary_at = 0.0
-        self._ticket: Optional[tuple[str, float]] = None
+        self._tickets: dict[str, tuple[str, float]] = {}   # kind -> (window ticket, ends)
+        self._new_talk = False                              # the next talk window is a new question
+        self._window_locks = {"talk": threading.Lock(), "agent": threading.Lock()}
         self._verifier: Optional[str] = None          # PKCE: the secret half of a link sign-in
 
     # -- state -------------------------------------------------------------------------------------------
@@ -188,7 +193,7 @@ class Account:
     def sign_out(self) -> None:
         with self._lock:
             session, self._session = self._session, None
-            self._summary, self._ticket = None, None
+            self._summary, self._tickets, self._new_talk = None, {}, False
             store.clear()
         if session and settings.configured():
             try:
@@ -263,25 +268,75 @@ class Account:
         return (summary.get("limits") or {}).get("talk", 0) is not None
 
     def voice_pass(self, kind: str, model: str) -> VoicePass:
-        """A one-session pass to talk (or dictate) straight to Google."""
-        data = self._call("POST", "voice-pass", {"kind": kind, "model": model})
-        usage = data.get("usage") or {}
-        self._note_usage(usage)
-        return VoicePass(url=data["url"], token=data["token"], usage=usage)
+        """A one-session pass to talk (or dictate) straight to Google.
+
+        Talk: the pass lives in a talk window - a new one for a new question
+        (new_talk, or none open), otherwise this question's (a reconnect) -
+        and Google ends the session when the window ends.
+        """
+        if kind != "talk":
+            data = self._call("POST", "voice-pass", {"kind": kind, "model": model})
+            usage = data.get("usage") or {}
+            self._note_usage(usage)
+            return VoicePass(url=data["url"], token=data["token"], usage=usage)
+        with self._window_locks["talk"]:
+            with self._lock:
+                new = self._new_talk or not self._held("talk")
+            body = {"kind": "talk", "model": model, "new": new}
+            try:
+                data = self._call("POST", "voice-pass", body)
+            except LimitReached as e:
+                # This question's window has just ended, or has had its passes:
+                # the next question it is.
+                if new or e.info.get("reason") not in ("passes", "window"):
+                    raise
+                data = self._call("POST", "voice-pass", {**body, "new": True})
+            usage = data.get("usage") or {}
+            self._note_usage(usage)
+            with self._lock:
+                self._new_talk = False
+                if data.get("ticket"):
+                    self._tickets["talk"] = (data["ticket"], float(data.get("ticket_expires_at") or 0))
+            return VoicePass(url=data["url"], token=data["token"], usage=usage,
+                             ticket=data.get("ticket", ""))
 
     async def avoice_pass(self, kind: str, model: str) -> VoicePass:
         return await asyncio.to_thread(self.voice_pass, kind, model)
 
+    def new_talk(self) -> None:
+        """A new question on a plan that counts talk messages: the next talk
+        window - a voice pass, or the first call made for it - is a new one."""
+        with self._lock:
+            self._new_talk = True
+
+    def ticket(self, kind: str = "talk") -> str:
+        """The ticket of the window this work belongs to: "talk" (a talk
+        message) or "agent" (an agent message, half an hour of agent work).
+        The open window's ticket costs nothing; a new window is counted."""
+        with self._window_locks[kind]:
+            with self._lock:
+                new = kind == "talk" and self._new_talk
+                if not new and self._held(kind):
+                    return self._tickets[kind][0]
+            data = self._call("POST", "ticket", {"kind": kind, "new": new})
+            self._note_usage(data.get("usage") or {})
+            with self._lock:
+                if kind == "talk":
+                    self._new_talk = False
+                self._tickets[kind] = (data["ticket"], float(data.get("expires_at") or 0))
+                return data["ticket"]
+
+    async def aticket(self, kind: str = "talk") -> str:
+        return await asyncio.to_thread(self.ticket, kind)
+
+    def _held(self, kind: str) -> bool:
+        """A ticket for `kind` with some life left in it? (Call with _lock held.)"""
+        held = self._tickets.get(kind)
+        return bool(held and time.time() < held[1] - TICKET_SPARE_S)
+
     def agent_ticket(self) -> str:
         """An agent ticket - one agent message: up to half an hour of agent work."""
-        with self._lock:
-            if self._ticket and time.time() < self._ticket[1] - TICKET_SPARE_S:
-                return self._ticket[0]
-        data = self._call("POST", "agent-ticket", {})
-        self._note_usage(data.get("usage") or {})
-        with self._lock:
-            self._ticket = (data["ticket"], float(data.get("expires_at") or time.time() + 1800))
-            return self._ticket[0]
+        return self.ticket("agent")
 
     async def agent_headers(self) -> dict:
         """Headers for an agent's call through the server."""
@@ -306,7 +361,7 @@ class Account:
             # The server no longer accepts this sign-in (account deleted, signed
             # out everywhere): forget it here too, so the app asks again.
             with self._lock:
-                self._session, self._summary, self._ticket = None, None, None
+                self._session, self._summary, self._tickets = None, None, {}
                 store.clear()
             raise SignInNeeded("Your sign-in has ended - sign in to HeyTora again.")
         if r.status_code in (402, 429):
