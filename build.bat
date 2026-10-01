@@ -78,6 +78,8 @@ if /i "%1"=="installer" (
     where iscc >nul 2>&1
     if errorlevel 1 (
         set "ISCC=C:\Program Files ^(x86^)\Inno Setup 6\ISCC.exe"
+        REM winget installs it for this user only
+        if not exist "!ISCC!" set "ISCC=%LOCALAPPDATA%\Programs\Inno Setup 6\ISCC.exe"
         if not exist "!ISCC!" (
             echo [WARN] Inno Setup not found. Install from https://jrsoftware.org/isdl.php
             echo        Then re-run:  build.bat installer
