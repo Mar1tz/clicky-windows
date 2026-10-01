@@ -104,6 +104,7 @@ class SetupWizard(QDialog):
         self._connected = cfg.has_key()
         self._level = 0.0
         self._stream = None
+        self._catcher = None                       # account.loopback.LinkCatcher, while signing in
 
         self._result.connect(self._on_result)
         self._build()
@@ -185,7 +186,7 @@ class SetupWizard(QDialog):
 
         if settings.configured():
             card = Card("Sign in to HeyTora", "The account you made on the website - "
-                                             "we'll email you a sign-in code.")
+                                             "we'll email you a sign-in link.")
             self.email_edit = QLineEdit(self._account.email)
             self.email_edit.setPlaceholderText("you@example.com")
             self.send_btn = button("Send code", "primary")
@@ -201,7 +202,7 @@ class SetupWizard(QDialog):
             code_lay.setContentsMargins(0, 0, 0, 0)
             code_lay.setSpacing(8)
             self.code_edit = QLineEdit()
-            self.code_edit.setPlaceholderText("Code from the email")
+            self.code_edit.setPlaceholderText("Or type the code, if the email has one")
             self.code_edit.setMaxLength(12)          # 6-10 digits, maybe pasted with spaces
             self.signin_btn = button("Sign in", "primary")
             self.signin_btn.setFixedWidth(120)
@@ -301,11 +302,13 @@ class SetupWizard(QDialog):
     def _finish(self) -> None:
         mark_setup_complete()
         self._stop_mic()
+        self._stop_catcher()
         self.completed.emit()
         self.close()
 
     def closeEvent(self, event) -> None:
         self._stop_mic()
+        self._stop_catcher()
         super().closeEvent(event)
 
     # ── name and uses ───────────────────────────────────────────────────────────
@@ -336,8 +339,27 @@ class SetupWizard(QDialog):
     def _send_code(self) -> None:
         self._email = self.email_edit.text().strip()
         self.send_btn.setEnabled(False)
-        self.connect_status.setText("Sending a code…")
-        self._run("code", lambda: self._account.send_code(self._email))
+        self.connect_status.setText("Sending the email…")
+        if self._catcher is None:
+            from account.loopback import LinkCatcher
+            self._catcher = LinkCatcher(self._link_arrived)
+        back_to = self._catcher.start()            # "" if it can't listen: the code still works
+        self._run("code", lambda: self._account.send_code(self._email, redirect_to=back_to))
+
+    def _link_arrived(self, code: str) -> tuple[bool, str]:
+        """The email's link, clicked: runs on the catcher's thread; the browser shows the words."""
+        try:
+            summary = self._account.verify_link(code)
+        except Exception as e:  # noqa: BLE001 - shown in the browser and here, in words
+            self._result.emit("signin", False, str(e))
+            return False, str(e)
+        cfg.set_access_mode("account")
+        self._result.emit("signin", True, plan_line(summary))
+        return True, "You can close this tab - HeyTora is ready."
+
+    def _stop_catcher(self) -> None:
+        if self._catcher is not None:
+            self._catcher.stop()
 
     def _sign_in(self) -> None:
         code = self.code_edit.text().strip()
@@ -373,14 +395,20 @@ class SetupWizard(QDialog):
             if ok:
                 self.code_row.show()
                 self.code_edit.setFocus()
-                self.connect_status.setText(f"Code sent to {self._email} - it can take a minute.")
+                self.connect_status.setText(f"Email sent to {self._email} - click the sign-in link in "
+                                            "it and this window signs you in. It can take a minute.")
             else:
+                self._stop_catcher()
                 self.connect_status.setText(message)
         elif job == "signin":
             self.signin_btn.setEnabled(True)
             if ok:
                 self._connected = True
+                self._stop_catcher()
+                self.code_row.hide()
                 self.connect_status.setText(f"✓  Signed in. {message}")
+                self.raise_()                       # the link was clicked in a browser
+                self.activateWindow()
             else:
                 self.connect_status.setText(message)
         elif job == "key":

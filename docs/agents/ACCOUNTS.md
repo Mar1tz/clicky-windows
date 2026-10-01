@@ -53,27 +53,56 @@ When an allowance runs out, the user is told which one and what to do
 (upgrade on the website, or use their own key) — in the caption, the tray and
 Settings → "Your HeyTora account" (which shows the plan and this month's use).
 
-## Switching it on — once
+## Status — live since 1 Oct 2026
 
-1. **Database.** In the Supabase SQL editor (or `supabase db push`), run
-   `supabase/migrations/0001_auth_usage.sql` (if not already) and then
-   `0003_heytora_plans.sql`. If your website already has its own `profiles`
-   table, it needs `plan` (text, one of `free`/`pro`/`max`) and
-   `plan_status` (`active`, `trialing`, `past_due`, `canceled`) — or tell
-   Claude where it keeps the plan and the two functions are adapted.
-2. **Email codes.** Supabase → Authentication → Email: keep Email enabled, and
-   make the "Magic Link" email template show the code: `{{ .Token }}`.
-3. **Secrets** (never in the app, never in git):
-   ```
-   supabase secrets set GEMINI_API_KEY=<the business key> HEYTORA_TICKET_SECRET=<a long random string>
-   ```
-4. **Deploy the function**: `supabase functions deploy heytora` (JWT
-   verification stays on).
-5. **Tell the app where it is** — `account/settings.py`: the project URL, the
-   anon/publishable key (public by design), and the website URL. Then build a
-   new installer (`build.bat installer`).
+Project `uizwfpxzzkokyrkvjzkr` (eu-west-1), shared with the website.
 
-Until step 5, a build offers only "use my own Gemini key".
+| Step | State |
+| --- | --- |
+| Database: `0001`, `0002`, `0003` | applied (0001 was already there) |
+| Secrets `GEMINI_API_KEY`, `HEYTORA_TICKET_SECRET` | set (Management API; never in git) |
+| Function `heytora` | deployed, JWT verification on |
+| Redirect URLs | `http://127.0.0.1:*/heytora/signed-in` — **the website must keep this entry** when it adds its own |
+| `account/settings.py` | project URL + anon key (public by design) |
+| Email sender | **still Supabase's built-in one** — see below |
+
+Checked live with throwaway users (made with the admin API, no email sent,
+deleted after): sign-in, refresh, sign-out; plan summary; talk and
+dictation voice passes opening at Google; agent tickets; forwarded calls,
+and the refusals (no sign-in, no ticket, files API, a user giving
+themselves a plan, the 26th Free talk message).
+
+### Signing in: the link, or the code
+
+Supabase's built-in email sender sends a **link** only — a free project on it
+may not change the email. So the app catches the link itself
+(`account/loopback.py`): it asks for the email with a PKCE challenge and
+`redirect_to=http://127.0.0.1:<port>/heytora/signed-in`, serves that one
+page while it waits, and swaps the code the browser brings back for a
+session. Clicking "Sign in" in the email on the same PC is enough. The
+code box stays for when the email shows a code.
+
+### Before real customers: an email sender
+
+The built-in sender delivers only to the Supabase organisation's own team
+addresses, two emails an hour. For customers, set up custom SMTP
+(Authentication → Emails → SMTP; e.g. Resend, Postmark, SES — needs a
+domain you own). Then the "Magic Link" template can show the code as well;
+keep the link in it (the website and the app both use it):
+
+```html
+<h2>Your HeyTora sign-in code</h2>
+<p>Type this code into HeyTora:</p>
+<p style="font-size:28px;font-weight:700;letter-spacing:6px">{{ .Token }}</p>
+<p>Or <a href="{{ .ConfirmationURL }}">sign in with this link</a>.</p>
+```
+
+### Changing things later
+
+* Allowances: edit `public.plans.limits` — no new download needed.
+* A plan change from the website: set `profiles.plan` / `plan_status` with the
+  service role key, on the website's server only.
+* Redeploy the function: `supabase functions deploy heytora --project-ref uizwfpxzzkokyrkvjzkr --use-api`.
 
 ## Your own key
 

@@ -93,6 +93,23 @@ def test_signing_in_to_heytora_from_the_first_launch(qapp, service):
     assert cfg.access_mode() == "account" and service.account.signed_in()
 
 
+def test_clicking_the_link_in_the_email_signs_the_wizard_in(qapp, service):
+    from config import cfg
+    w = _wizard(service.account)
+    w._go("connect")
+    w.email_edit.setText("amy@example.com")
+    w.send_btn.click()
+    _until(qapp, lambda: w.code_row.isVisibleTo(w))
+    assert "click the sign-in link" in w.connect_status.text()
+    back_to = service.fake.redirect_to
+    assert back_to and back_to.startswith("http://127.0.0.1:")
+    page = httpx.get(back_to, params={"code": "link-code-1"}, trust_env=False, timeout=10)
+    assert "signed in to HeyTora" in page.text
+    _until(qapp, lambda: "Signed in" in w.connect_status.text())
+    assert cfg.access_mode() == "account" and service.account.signed_in()
+    assert not w.code_row.isVisibleTo(w)
+
+
 def test_no_account_sends_them_to_the_website(qapp, service):
     w = _wizard(service.account)
     w._go("connect")

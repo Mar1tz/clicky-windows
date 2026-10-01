@@ -53,6 +53,7 @@ hidden = [
     # HeyTora accounts (sign-in, the server function's client) and the
     # per-monitor pixel maths - both imported inside functions.
     "account",
+    "account.loopback",
     "account.service",
     "account.settings",
     "account.store",

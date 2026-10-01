@@ -9,6 +9,9 @@ network or the user's profile.
 from __future__ import annotations
 
 import asyncio
+import base64
+import fnmatch
+import hashlib
 import json
 import re
 import time
@@ -37,6 +40,9 @@ class FakeHeyTora:
         self.limits = {"talk": 25, "dictation": 300, "agent": 25, "calls": 1500}
         self.usage = {"talk": 3}
         self.talk_refused = False
+        self.link_code = "link-code-1"          # what the email's link brings back
+        self.challenge = None                   # PKCE, from the last sign-in email
+        self.redirect_to = None
 
     def session(self) -> dict:
         self.issued += 1
@@ -51,10 +57,18 @@ class FakeHeyTora:
         if path == "/auth/v1/otp":
             if body.get("email") not in self.accounts:
                 return httpx.Response(422, json={"msg": "Signups not allowed for otp"})
+            self.challenge = body.get("code_challenge")
+            self.redirect_to = request.url.params.get("redirect_to")
             return httpx.Response(200, json={})
         if path == "/auth/v1/verify":
             if body.get("token") != self.code:
                 return httpx.Response(403, json={"msg": "Token has expired or is invalid"})
+            return httpx.Response(200, json=self.session())
+        if path == "/auth/v1/token" and request.url.params.get("grant_type") == "pkce":
+            digest = hashlib.sha256(body.get("code_verifier", "").encode()).digest()
+            challenge = base64.urlsafe_b64encode(digest).decode().rstrip("=")
+            if body.get("auth_code") != self.link_code or challenge != self.challenge:
+                return httpx.Response(400, json={"msg": "invalid flow state, no valid flow state found"})
             return httpx.Response(200, json=self.session())
         if path == "/auth/v1/token":
             if not self.refresh_ok:
@@ -152,6 +166,67 @@ def test_a_wrong_code_says_so(heytora):
     with pytest.raises(AccountError, match="didn't work"):
         heytora.account.verify("amy@example.com", "000000")
     assert not heytora.account.signed_in()
+
+
+def test_the_emails_link_signs_in_on_this_pc(heytora):
+    """Supabase's own email sender sends a link, not a code. The link brings
+    the browser back to 127.0.0.1 with a one-time code that only this app can
+    use - it holds the PKCE verifier behind the challenge it sent."""
+    from account.loopback import REDIRECT_PATTERN, LinkCatcher
+    seen = []
+
+    def arrived(code):
+        seen.append(code)
+        heytora.account.verify_link(code)
+        return True, ""
+
+    catcher = LinkCatcher(arrived)
+    back_to = catcher.start()
+    try:
+        assert re.fullmatch(r"http://127\.0\.0\.1:\d+/heytora/signed-in", back_to)
+        assert fnmatch.fnmatch(back_to, REDIRECT_PATTERN), "on the project's Redirect URLs list"
+        heytora.account.send_code("amy@example.com", redirect_to=back_to)
+        otp = next(b for _m, p, _h, b in heytora.fake.calls if p == "/auth/v1/otp")
+        assert otp["code_challenge_method"] == "s256" and len(otp["code_challenge"]) == 43
+        assert heytora.fake.redirect_to == back_to and not heytora.account.signed_in()
+
+        page = httpx.get(back_to, params={"code": "link-code-1"}, trust_env=False, timeout=10)
+        assert "signed in to HeyTora" in page.text and seen == ["link-code-1"]
+        assert heytora.account.signed_in() and heytora.account.email == "amy@example.com"
+        end = time.monotonic() + 5
+        while catcher.url and time.monotonic() < end:
+            time.sleep(0.02)
+        assert catcher.url == "", "one link, one sign-in: the catcher stops"
+    finally:
+        catcher.stop()
+
+
+def test_a_link_only_works_for_the_app_that_asked(heytora):
+    from account.service import AccountError
+    with pytest.raises(AccountError, match="earlier request"):
+        heytora.account.verify_link("link-code-1")              # this app asked for nothing
+    heytora.account.send_code("amy@example.com", redirect_to="http://127.0.0.1:5/heytora/signed-in")
+    heytora.fake.link_code = "someone-elses-link"
+    with pytest.raises(AccountError, match="didn't work"):
+        heytora.account.verify_link("link-code-1")
+    assert not heytora.account.signed_in()
+
+
+def test_a_used_or_expired_link_says_so_in_the_browser():
+    from account.loopback import LinkCatcher
+    calls = []
+    catcher = LinkCatcher(lambda code: (calls.append(code), (True, ""))[1])
+    url = catcher.start()
+    try:
+        r = httpx.get(url, params={"error": "access_denied",
+                                   "error_description": "Email link is invalid or has expired"},
+                      trust_env=False, timeout=10)
+        assert "didn't sign you in" in r.text and "has expired" in r.text and "Send a new one" in r.text
+        other = httpx.get(url.replace("/heytora/signed-in", "/favicon.ico"), trust_env=False, timeout=10)
+        assert other.status_code == 404
+        assert calls == [] and catcher.url == url, "still waiting for the right link"
+    finally:
+        catcher.stop()
 
 
 def test_the_sign_in_is_kept_encrypted_and_survives_a_restart(heytora):

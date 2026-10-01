@@ -3,9 +3,11 @@
 
 What goes where, and why:
 
-  * Sign-in is Supabase Auth with a one-time code by email - the same account
-    the user created on the website. "create_user" is off: an account and its
-    plan are made on the website, the app only signs in to one.
+  * Sign-in is Supabase Auth by email - the same account the user created on
+    the website. "create_user" is off: an account and its plan are made on
+    the website, the app only signs in to one. The email has a link (caught
+    on this PC by account/loopback.py and swapped for a session with PKCE)
+    and, once the project has its own email sender, a code to type.
   * Live voice (talk) and dictation connect STRAIGHT to Google with a voice
     pass: a short-lived token the server mints with the business key, good
     for one session (voice_pass). As fast as a key, and nothing to steal: it
@@ -25,11 +27,15 @@ a wizard's throwaway one - can call them.
 from __future__ import annotations
 
 import asyncio
+import base64
+import hashlib
 import logging
+import secrets
 import threading
 import time
 from dataclasses import dataclass, field
 from typing import Optional
+from urllib.parse import urlencode
 
 import httpx
 
@@ -107,6 +113,7 @@ class Account:
         self._summary: Optional[dict] = None
         self._summary_at = 0.0
         self._ticket: Optional[tuple[str, float]] = None
+        self._verifier: Optional[str] = None          # PKCE: the secret half of a link sign-in
 
     # -- state -------------------------------------------------------------------------------------------
 
@@ -125,13 +132,26 @@ class Account:
 
     # -- signing in --------------------------------------------------------------------------------------
 
-    def send_code(self, email: str) -> None:
-        """Email a one-time code to an EXISTING account."""
+    def send_code(self, email: str, redirect_to: str = "") -> None:
+        """Email a sign-in to an EXISTING account: a link, and a code if the email shows one.
+
+        With `redirect_to` (account/loopback.py's address) the link brings the
+        browser back to this PC with a one-time code for verify_link().
+        """
         self._need_config()
         email = (email or "").strip().lower()
         if "@" not in email or "." not in email.split("@")[-1]:
             raise AccountError("That doesn't look like an email address.")
-        r = self._auth_post("otp", {"email": email, "create_user": False})
+        body: dict = {"email": email, "create_user": False}
+        path = "otp"
+        if redirect_to:
+            verifier = secrets.token_urlsafe(48)
+            challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest())
+            body |= {"code_challenge": challenge.decode().rstrip("="), "code_challenge_method": "s256"}
+            path = "otp?" + urlencode({"redirect_to": redirect_to})
+            with self._lock:
+                self._verifier = verifier
+        r = self._auth_post(path, body)
         if r.status_code >= 400:
             text = r.text.lower()
             if "signup" in text or "not found" in text or "not allowed" in text:
@@ -146,6 +166,22 @@ class Account:
                                        "token": code})
         if r.status_code >= 400:
             raise AccountError("That code didn't work - it may have expired. Send a new one.")
+        self._keep(r.json())
+        return self.summary(force=True)
+
+    def verify_link(self, auth_code: str) -> dict:
+        """The email's link came back to this PC: swap its one-time code for a session."""
+        self._need_config()
+        with self._lock:
+            verifier = self._verifier
+        if not verifier:
+            raise AccountError("That link is from an earlier request - send a new one from HeyTora.")
+        r = self._auth_post("token?grant_type=pkce", {"auth_code": auth_code, "code_verifier": verifier})
+        if r.status_code >= 400:
+            raise AccountError("That link didn't work - it may have expired or been used. "
+                               "Send a new one from HeyTora.")
+        with self._lock:
+            self._verifier = None
         self._keep(r.json())
         return self.summary(force=True)
 
