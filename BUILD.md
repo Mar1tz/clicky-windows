@@ -127,6 +127,26 @@ pip install pyinstaller
 
 ---
 
+## Publishing a new version (the download page)
+
+The public download lives in its own repository, **github.com/Qwickly/heytora**
+(the installers and the page only - never this source). The page is
+https://qwickly.github.io/heytora/ and its button links to
+
+    https://github.com/Qwickly/heytora/releases/latest/download/Setup-HeyTora.exe
+
+which always serves the newest release - so keep the file name
+`Setup-HeyTora.exe` (no version in it). For a new version:
+
+1. Bump `MyAppVersion` in `installer.iss`, then `build.bat installer`.
+2. Publish it:
+   ```bat
+   gh release create v1.6.0 dist\Setup-HeyTora.exe --repo Qwickly/heytora --title "HeyTora 1.6.0" --notes "What changed" --latest
+   ```
+3. In that repo's `index.html`, update the version, size and SHA-256
+   (`certutil -hashfile dist\Setup-HeyTora.exe SHA256`) shown under the button,
+   and push. The button itself needs no change.
+
 ## Signing the installer (optional)
 
 To avoid the Windows SmartScreen warning, you need an **Authenticode code-signing certificate**:
