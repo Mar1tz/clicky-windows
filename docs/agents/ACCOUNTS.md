@@ -46,14 +46,16 @@ user buys is counted as a *window* the server opens and closes:
 | *Hidden: monthly cost ceiling (what Google charges you)* | *$2* | *$12* | *$60* |
 | *Hidden: requests / month* | *1,500* | *30,000* | *150,000* |
 
-- **Talk message** — a talk window. The app opens a new one for each new
-  question, on every plan, the moment it is asked (a follow-up within 20 s
-  of an answer, on the open session, rides on it) - so the count moves with
-  use on unlimited plans too; the
-  voice pass and every call made for that question run on its **ticket**,
-  and all of it stops when the window ends — Google itself closes the voice
-  session then. At most 3 voice passes per window on Free (6 on Pro/Max), so
-  one talk message can't become many parallel sessions.
+- **Talk message** — every time the user talks, on every plan, counted the
+  moment Tora hears them (a press with nothing said counts nothing). It is a
+  talk window: the voice pass and every call made for that question run on
+  its **ticket**, and all of it stops when the window ends — Google itself
+  closes the voice session then. At most 3 voice passes per window on Free
+  (6 on Pro/Max), so one talk message can't become many parallel sessions.
+- **The voice waiting for a question** (Pro/Max open it at start-up and after
+  a drop) is a *standby* window, kind `voice` (migration 0007): never a talk
+  message, a hidden daily ceiling, and no ticket — it can carry the voice,
+  never an answer. Free has none: its voice opens on the question.
 - **Agent message** — an agent window: up to 30 minutes of agent work.
 - **Wake word** — with "say Tora" on, speech near the PC is checked for the
   name by the dictation model. Each check is its own kind, `wake` (migration
@@ -117,7 +119,7 @@ Project `uizwfpxzzkokyrkvjzkr` (eu-west-1), shared with the website.
 
 | Step | State |
 | --- | --- |
-| Database: `0001` – `0006` | applied (0001 was already there; 0004 – 0006 on 2 Oct) |
+| Database: `0001` – `0007` | applied (0001 was already there; 0004 – 0007 on 2 Oct) |
 | Secrets `GEMINI_API_KEY`, `HEYTORA_TICKET_SECRET` | set (Management API; never in git) |
 | Function `heytora` | deployed, JWT verification on |
 | Redirect URLs | `http://127.0.0.1:*/heytora/signed-in` — **the website must keep this entry** when it adds its own |

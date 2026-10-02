@@ -259,3 +259,30 @@ def test_settings_says_todays_use(qapp):
     page = SettingsPage(_Bridge(_state(summary=summary)))
     page.refresh()
     assert "Talk:  7 of 25 messages this month · 18 left · 2 today" in _texts(page)
+
+
+def test_talking_moves_settings_in_place(qapp, heytora):
+    """Reported 2 Oct: "I'm on the Settings page, I talk, the values don't
+    change." Every time the user talks is a talk message, counted when Tora
+    hears it; the plan card is swapped in place - the rest of Settings (a
+    switch, something half-typed, the scroll) is left alone."""
+    from PyQt6.QtWidgets import QWidget
+    from ui.app_bridge import AppBridge
+    from ui.app_window import ToraApp
+    _signed_in(heytora)
+    w = ToraApp(AppBridge())
+    try:
+        w.show()
+        w.show_page("settings")
+        _until(qapp, lambda: "Talk:  3 of 25 messages this month · 22 left" in _texts(w))
+        page = w._pages["settings"]
+        untouched = page.body.widget().findChildren(QWidget)[0]
+        for n in (1, 2, 3):                           # three questions, one after another
+            heytora.account.new_talk()
+            heytora.account.ticket("talk")            # what _count_question does when Tora hears them
+            _until(qapp, lambda n=n: f"Talk:  {n} of 25 messages this month · {25 - n} left · {n} today"
+                   in _texts(w))
+        assert untouched in page.body.widget().findChildren(QWidget), "the page was not rebuilt"
+        assert heytora.fake.opened["talk"] == 3
+    finally:
+        w.close()

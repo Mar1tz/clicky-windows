@@ -243,7 +243,13 @@ class ToraApp(QWidget):
         page = self._stack.currentWidget()
         if (page is not None and getattr(page, "LIVE", False)
                 and set(getattr(page, "TOPICS", ())) & topics):
-            page.refresh()
+            # A page that can redraw just what changed (Settings: the plan)
+            # does; anything else is rebuilt.
+            partial = getattr(page, "refresh_topics", None)
+            if partial is not None:
+                partial(topics)
+            else:
+                page.refresh()
 
     def showEvent(self, event) -> None:
         """Back on screen after being closed: the page shows what is true now,

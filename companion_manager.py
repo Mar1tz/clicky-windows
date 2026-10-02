@@ -1034,17 +1034,10 @@ class CompanionManager(QObject):
         except Exception:  # noqa: BLE001
             return True
 
-    # A question asked this soon after an answer, on the session still open,
-    # is a follow-up: it rides on the last talk message.
-    FOLLOW_UP_S = 20.0
-    _answered_at = 0.0
-
-    def _is_new_question(self, ready: bool) -> bool:
-        """A new talk message? On a HeyTora plan, unless it follows up an
-        answer on the open session within FOLLOW_UP_S."""
-        if gemini.own_key():
-            return False
-        return not (ready and time.monotonic() - self._answered_at < self.FOLLOW_UP_S)
+    @staticmethod
+    def _is_new_question() -> bool:
+        """A new talk message? Every time the user talks, on a HeyTora plan."""
+        return not gemini.own_key()
 
     async def _open_talk_window(self) -> None:
         """Count the question now (its talk window), not at its first call to
@@ -1108,7 +1101,19 @@ class CompanionManager(QObject):
     def _on_realtime_heard(self, text: str) -> None:
         if not self._heard_buf:
             self._rearm_desktop_control()
+            self._count_question()
         self._heard_buf.append(text)
+
+    def _count_question(self) -> None:
+        """Tora has heard the user: if this question's talk message is not
+        counted yet (no pass opened it), count it now - so the plan moves the
+        moment someone talks, and a press with nothing said counts nothing."""
+        try:
+            from account.service import account
+            if not gemini.own_key() and account().talk_pending():
+                self._submit(self._open_talk_window())
+        except Exception:  # noqa: BLE001 - counting must never stop the answer
+            _log.debug("could not count the question", exc_info=True)
 
     @staticmethod
     def _rearm_desktop_control() -> None:
@@ -2993,14 +2998,13 @@ class CompanionManager(QObject):
         metered = self._metered_talk()
         on_demand = (not ready and not connecting and cfg.realtime()
                      and cfg.has_key() and metered)
-        if self._is_new_question(ready):
-            # Every question is a talk message, on every plan, counted the
-            # moment it is asked - so the plan moves with use. Said before
-            # the pass is asked for, or it would ride on the last question's
-            # window. Without a pass to open it, the window opens now.
+        if self._is_new_question():
+            # Every time the user talks is a talk message, on every plan.
+            # Said before the pass is asked for (Free opens the voice now),
+            # or it would ride on the last question's window; counted when
+            # Tora hears them (_count_question) or at the first call made for
+            # the answer, whichever comes first.
             self._new_talk()
-            if not on_demand:
-                self._submit(self._open_talk_window())
         if on_demand:
             self._get_realtime()
             self._submit(self._realtime_connect(on_demand=True))
@@ -4670,12 +4674,6 @@ class CompanionManager(QObject):
             pass
 
     def _emit_state(self, state: AppState):
-        try:
-            was = self._state
-        except (AttributeError, RuntimeError):           # a bare manager in a test
-            was = None
-        if state is AppState.IDLE and was in (AppState.SPEAKING, AppState.THINKING):
-            self._answered_at = time.monotonic()        # follow-ups are measured from here
         self._state = state
         # Wake-word scanning only means anything while Tora is idle: a wake
         # word during THINKING or SPEAKING is refused by _claim_begin. Left

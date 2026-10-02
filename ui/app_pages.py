@@ -104,12 +104,18 @@ class Page(QWidget):
         pass
 
     def refresh(self) -> None:
-        """Rebuild the body from what is true now (live pages only)."""
+        """Rebuild the body from what is true now (live pages only), staying
+        where the page was scrolled to - a page that redraws while someone
+        reads it must not jump back to the top."""
         if not self.LIVE:
             return
+        bar = self.body.verticalScrollBar()
+        was = bar.value()
         self.body.clear()
         self.build()
         self.body.finish()
+        if was:
+            QTimer.singleShot(0, lambda: bar.setValue(min(was, bar.maximum())))
 
     def action(self, text: str, kind: str = "ghost"):
         b = button(text, kind)
@@ -959,6 +965,22 @@ class SettingsPage(Page):
         super().showEvent(event)
         self.bridge.refresh_account()
 
+    def refresh_topics(self, topics: set) -> None:
+        """The plan moved (every question moves it): only the account card is
+        swapped. The rest of Settings - a switch being reached for, something
+        half-typed, where the page is scrolled to - stays exactly as it is."""
+        slot = getattr(self, "_account_slot", None)
+        if slot is None or not slot.layout():
+            self.refresh()
+            return
+        lay = slot.layout()
+        while lay.count():
+            old = lay.takeAt(0).widget()
+            if old is not None:
+                old.setParent(None)
+                old.deleteLater()
+        lay.addWidget(self._account_card())
+
     def _sign_out_button(self):
         out = button("Sign out")
         out.clicked.connect(lambda: confirm_sign_out(self) and self.bridge.account_sign_out())
@@ -1094,8 +1116,13 @@ class SettingsPage(Page):
                             "this way is marked in its task's activity.", "faint", wrap=True))
         self.body.add(approvals)
         # The HeyTora account (or own key): second, after the approvals that
-        # APP-14 put first.
-        self.body.add(self._account_card())
+        # APP-14 put first. In a slot of its own, so the plan can move with
+        # every question without the page around it being rebuilt.
+        self._account_slot = QWidget()
+        slot = QVBoxLayout(self._account_slot)
+        slot.setContentsMargins(0, 0, 0, 0)
+        slot.addWidget(self._account_card())
+        self.body.add(self._account_slot)
 
         # The workforce's own settings widget - the one "Agent settings…" in
         # the tray opens: workspace, what runs without asking, plan first,

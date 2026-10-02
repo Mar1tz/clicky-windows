@@ -52,6 +52,7 @@ class FakeHeyTora:
         self.window_seq = 0
         self.pass_refusal = ""                  # "passes" / "window": refuse a reused window once
         self.clock_offset = 0.0                 # the server's clock minus this PC's
+        self.standby = 0                        # standby passes (0007): the voice waiting, uncounted
 
     def window(self, kind: str, new: bool) -> tuple[int, float, bool]:
         held = self.windows.get(kind)
@@ -122,6 +123,15 @@ class FakeHeyTora:
                      "url": "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage."
                             "v1beta.GenerativeService.BidiGenerateContentConstrained",
                      "usage": {"ok": True, "kind": body.get("kind"), "used": 4, "limit": 25}}
+            if body.get("kind") == "talk" and body.get("standby"):
+                if self.limits.get("talk") is not None:          # Free: no standby
+                    return httpx.Response(402, json={"error": {
+                        "code": 402, "status": "HEYTORA_LIMIT", "message": "not in plan",
+                        "heytora": {"ok": False, "reason": "not_in_plan", "kind": "voice"}}})
+                self.standby += 1
+                reply |= {"standby": True, "now": time.time() + self.clock_offset,
+                          "usage": {"ok": True, "kind": "voice", "used": self.standby, "limit": None}}
+                return httpx.Response(200, json=reply)
             if body.get("kind") == "talk":
                 if self.pass_refusal and body.get("new") is False:
                     info = {"ok": False, "reason": self.pass_refusal, "kind": "talk"}
@@ -336,7 +346,8 @@ def test_a_voice_pass_opens_one_session_straight_to_google(heytora):
     assert talk.startswith("wss://generativelanguage.googleapis.com/") and "Constrained" in talk
     assert talk.endswith("?access_token=auth_tokens/one-session") and "key=" not in talk
     passes = [b for _m, p, _h, b in heytora.fake.calls if p.endswith("/voice-pass")]
-    assert passes == [{"kind": "talk", "model": Models.REALTIME, "new": True},
+    assert passes == [{"kind": "talk", "model": Models.REALTIME, "standby": True},   # no question yet
+                      {"kind": "talk", "model": Models.REALTIME, "new": True},       # Free: no standby
                       {"kind": "dictation", "model": Models.STT}]
     assert dictate
 

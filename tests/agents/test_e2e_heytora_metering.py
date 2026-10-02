@@ -76,23 +76,46 @@ def test_the_next_question_is_the_next_talk_message(heytora):
 
 
 def test_a_reconnect_rides_on_the_open_window(heytora):
-    """Pro keeps the voice open: a dropped session reconnects in its window."""
+    """A dropped session reconnects in its question's window."""
     acc = heytora.account
     _signed_in(heytora)
+    acc.new_talk()
     acc.voice_pass("talk", "gemini-3.8-live")
     acc.voice_pass("talk", "gemini-3.8-live")       # no new question: a reconnect
-    passes = [b["new"] for _m, p, _h, b in heytora.fake.calls if p.endswith("/voice-pass")]
+    passes = [b.get("new") for _m, p, _h, b in heytora.fake.calls if p.endswith("/voice-pass")]
     assert passes == [True, False] and heytora.fake.opened["talk"] == 1
+
+
+def _pro(heytora):
+    heytora.fake.limits = {"talk": None, "dictation": None, "agent": 150}
+    heytora.account.summary(force=True)
+
+
+def test_the_voice_waiting_for_a_question_is_not_a_talk_message(heytora):
+    """Pro/Max open the voice at start-up and after a drop: a standby pass,
+    never a talk message (reported 2 Oct: the count rose on launch)."""
+    _signed_in(heytora)
+    _pro(heytora)
+    vp = heytora.account.voice_pass("talk", "gemini-3.8-live")
+    assert heytora.fake.standby == 1 and heytora.fake.opened["talk"] == 0 and vp.ticket == ""
+    assert heytora.account.plan_state()["summary"]["usage"].get("talk") in (None, 3), "unchanged"
+
+
+def test_free_has_no_standby_so_its_voice_opens_on_a_question(heytora):
+    _signed_in(heytora)
+    heytora.account.voice_pass("talk", "gemini-3.8-live")
+    assert heytora.fake.standby == 0 and heytora.fake.opened["talk"] == 1
 
 
 @pytest.mark.parametrize("reason", ["passes", "window"])
 def test_a_used_up_window_starts_the_next(heytora, reason):
     acc = heytora.account
     _signed_in(heytora)
+    acc.new_talk()
     acc.voice_pass("talk", "gemini-3.8-live")
     heytora.fake.pass_refusal = reason
     acc.voice_pass("talk", "gemini-3.8-live")
-    passes = [b["new"] for _m, p, _h, b in heytora.fake.calls if p.endswith("/voice-pass")]
+    passes = [b.get("new") for _m, p, _h, b in heytora.fake.calls if p.endswith("/voice-pass")]
     assert passes == [True, False, True] and heytora.fake.opened["talk"] == 2
 
 
@@ -185,33 +208,35 @@ def test_a_new_free_question_opens_a_new_talk_message_before_the_pass(heytora, m
     assert ("_realtime_connect", True) in order, "flagged before the voice pass is asked for"
 
 
-def test_a_follow_up_on_the_open_session_rides_on_it(heytora, monkeypatch):
-    import time
+def test_every_time_the_user_talks_is_a_talk_message(heytora, monkeypatch):
+    """Even right after an answer, on the open session (reported 2 Oct:
+    quick questions did not move the count)."""
     from config import cfg
     _signed_in(heytora)
     monkeypatch.setattr(cfg, "realtime", lambda: True)
-    m, order = _capture_manager(heytora, ready=True)
-    m._answered_at = time.monotonic() - 5            # Tora answered five seconds ago
+    m, _order = _capture_manager(heytora, ready=True)
     m._begin_capture()
-    assert heytora.account._new_talk is False
-    assert not any(name == "_open_talk_window" for name, _f in order)
+    assert heytora.account.talk_pending()
 
 
-def test_unlimited_talk_counts_every_question_too(heytora, monkeypatch):
-    """Pro/Max keep the voice open, so no pass marks a question: the window
-    opens as it is asked - and the plan moves with use (reported 2 Oct)."""
-    import time
+def test_a_question_is_counted_when_tora_hears_it(heytora, monkeypatch):
+    """Pro/Max keep the voice open, so no pass marks a question: it is
+    counted the moment Tora hears the first words - once - and a press with
+    nothing said counts nothing."""
     from config import cfg
     _signed_in(heytora)
-    heytora.fake.limits = {"talk": None, "dictation": None, "agent": 150}
-    heytora.account.summary(force=True)
+    _pro(heytora)
     monkeypatch.setattr(cfg, "realtime", lambda: True)
     m, order = _capture_manager(heytora, ready=True)
-    m._answered_at = time.monotonic() - 600          # the last answer was ten minutes ago
     m._begin_capture()
-    assert ("_open_talk_window", True) in order, "a new talk message, opened now"
+    assert not any(name == "_open_talk_window" for name, _f in order), "nothing heard yet"
+    m._heard_buf = []
+    m._rearm_desktop_control = lambda: None
+    m._on_realtime_heard("where is")
+    m._on_realtime_heard(" the font menu")
+    assert [name for name, _f in order].count("_open_talk_window") == 1
     asyncio.run(m._open_talk_window())
-    assert heytora.fake.opened["talk"] == 1 and heytora.account._new_talk is False
+    assert heytora.fake.opened["talk"] == 1 and not heytora.account.talk_pending()
 
 
 def test_a_question_on_a_used_up_plan_is_said_not_swallowed(heytora, monkeypatch):

@@ -470,8 +470,12 @@ class Account:
         """A one-session pass to talk (or dictate) straight to Google.
 
         Talk: the pass lives in a talk window - a new one for a new question
-        (new_talk, or none open), otherwise this question's (a reconnect) -
-        and Google ends the session when the window ends.
+        (new_talk), otherwise this question's (a reconnect) - and Google ends
+        the session when the window ends. With no question at all (Pro/Max
+        opening the voice ahead of one, or reconnecting while idle) it is a
+        STANDBY pass: an uncounted "voice" window (0007), no ticket - the
+        question is counted when it is asked. A plan without standby (Free)
+        gets a talk window instead.
         """
         if kind != "talk":
             data = self._call("POST", "voice-pass", {"kind": kind, "model": model})
@@ -480,16 +484,24 @@ class Account:
             return VoicePass(url=data["url"], token=data["token"], usage=usage)
         with self._window_locks["talk"]:
             with self._lock:
-                new = self._new_talk or not self._held("talk")
-            body = {"kind": "talk", "model": model, "new": new}
+                pending, held = self._new_talk, self._held("talk")
+            if not pending and not held:
+                body = {"kind": "talk", "model": model, "standby": True}
+            else:
+                body = {"kind": "talk", "model": model, "new": pending}
             try:
                 data = self._call("POST", "voice-pass", body)
             except LimitReached as e:
-                # This question's window has just ended, or has had its passes:
-                # the next question it is.
-                if new or e.info.get("reason") not in ("passes", "window"):
+                reason = e.info.get("reason")
+                if body.get("standby") and reason == "not_in_plan":
+                    # No standby on this plan: the voice opens on a question.
+                    body = {"kind": "talk", "model": model, "new": True}
+                elif reason in ("passes", "window") and not body.get("new"):
+                    # This window has just ended, or has had its passes: the next.
+                    body = {**body, "new": True}
+                else:
                     raise
-                data = self._call("POST", "voice-pass", {**body, "new": True})
+                data = self._call("POST", "voice-pass", body)
             self._clock(data)
             usage = data.get("usage") or {}
             self._note_usage(usage)
@@ -503,6 +515,11 @@ class Account:
 
     async def avoice_pass(self, kind: str, model: str) -> VoicePass:
         return await asyncio.to_thread(self.voice_pass, kind, model)
+
+    def talk_pending(self) -> bool:
+        """A new question has started and its talk message is not counted yet."""
+        with self._lock:
+            return self._new_talk
 
     def new_talk(self) -> None:
         """A new question on a plan that counts talk messages: the next talk
@@ -557,8 +574,9 @@ class Account:
         new talk window, an agent window, a dictation - so the screens move
         with every question, not only when the plan is read again."""
         kind = usage.get("kind")
-        if not kind or usage.get("used") is None or usage.get("reused"):
-            return
+        if kind not in ("talk", "dictation", "agent", "wake") or usage.get("used") is None \
+                or usage.get("reused"):
+            return                        # standby windows and passes are not the user's use
         _log.info("%s: %s of %s this month%s", _KIND_WORDS.get(kind, kind), usage["used"],
                   "unlimited" if usage.get("limit") is None else usage["limit"],
                   f" (window {usage['window']})" if usage.get("window") else "")

@@ -10,8 +10,11 @@
 //                      ephemeral token - one session, locked to that model,
 //                      ending with its talk window (or after the plan's
 //                      dictation minutes; a wake-word check: one minute).
-//                      Talk passes come with the window's ticket. The app
-//                      then talks straight to Google.
+//                      Talk passes come with the window's ticket. With
+//                      {standby: true} (Pro/Max keeping the voice open for
+//                      the next question) the pass lives in an uncounted
+//                      "voice" window and comes with no ticket (0007).
+//                      The app then talks straight to Google.
 //   POST /agent-ticket the agent window's ticket (older apps).
 //   GET  /me           the plan, its allowances and this month's use.
 //   *    /v1beta/...   a Gemini REST call, forwarded with the key added:
@@ -220,12 +223,22 @@ Deno.serve(async (req: Request): Promise<Response> => {
         return json(200, { ...pass, expires_at: endsAt, now: Date.now() / 1000, usage });
       }
       // Talk: the pass lives inside a talk window - a new one unless the app
-      // says it is the same question (a reconnect) - and ends with it.
-      const w = await rpc("heytora_window", { p_kind: "talk", p_new: body?.new !== false });
+      // says it is the same question (a reconnect) - and ends with it. A
+      // standby pass (the voice waiting for a question) lives in a "voice"
+      // window instead: not a talk message, and no ticket for answers.
+      const standby = body?.standby === true;
+      const w = await rpc("heytora_window", standby
+        ? { p_kind: "voice", p_new: body?.new === true }
+        : { p_kind: "talk", p_new: body?.new !== false });
       if (!w.ok) return limitResponse(w);
       const p = await rpc("heytora_pass", { p_window: Number(w.window), p_model: model });
       if (!p.ok) return limitResponse({ ...p, plan: w.plan });
       const pass = await mintPass(model, Number(p.expires_at));
+      if (standby) {
+        return json(200, {
+          ...pass, expires_at: Number(p.expires_at), now: Date.now() / 1000, standby: true, usage: w,
+        });
+      }
       const t = await ticketFor("talk", w);
       return json(200, {
         ...pass, expires_at: Number(p.expires_at), ticket: t.ticket, ticket_expires_at: t.expires_at,
