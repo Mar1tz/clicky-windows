@@ -291,7 +291,7 @@ def test_the_trays_check_for_updates_says_what_it_found(qapp, tmp_path, monkeypa
         monkeypatch.setattr(service, "_updater", u)
         tray = TrayManager()
         try:
-            assert any(a.text() == "Check for updates" for a in tray._tray.contextMenu().actions())
+            assert "Check for updates" in tray.menu_texts()
             tray._tray.showMessage = lambda title, text, *_a: said.append(text)
             tray.check_for_updates()
             end = time.monotonic() + 10
@@ -313,7 +313,7 @@ def test_the_tray_offers_the_update(qapp, tmp_path, monkeypatch):
     try:
         tray._refresh_updates()
         assert tray._update_item == "ready:1.7.0"
-        texts = [a.text() for a in tray._tray.contextMenu().actions()]
+        texts = tray.menu_texts()
         assert any("Restart to update to HeyTora 1.7.0" in t for t in texts)
     finally:
         tray.hide_icon()

@@ -106,15 +106,8 @@ def test_the_tray_shows_what_was_saved(qapp, tmp_path, monkeypatch):
     tray = TrayManager()
     try:
         assert tray._privacy_enabled is False and tray._slow_enabled is True
-        texts = []
-
-        def walk(menu):
-            for action in menu.actions():
-                texts.append(action.text())
-                if action.menu() is not None:
-                    walk(action.menu())
-
-        walk(tray._tray.contextMenu())
+        texts = tray.menu_texts()
+        assert texts, "the popup has rows"
         assert not any("Multilingual" in t for t in texts), \
             "a switch that did nothing is not offered"
     finally:

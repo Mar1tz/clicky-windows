@@ -220,6 +220,11 @@ def main():
     app.setQuitOnLastWindowClosed(False)
     app.setApplicationName("HeyTora")
     app.setApplicationDisplayName("HeyTora - AI Companion")
+    # The site's typeface and palette (ui/tokens.py), before the first
+    # window - the sign-in gate below is already in the new look.
+    from ui import app_theme, tokens
+    app.setFont(tokens.app_font())
+    app_theme.apply(tokens.resolve(cfg.theme()))
     # A "start with Windows" set before the rename lives under the old name.
     from ui import autostart
     autostart.migrate_legacy()
@@ -369,7 +374,7 @@ def main():
     # as the tray item it stands for, so the windows below still work too.
     app_window = {}
 
-    def _open_app():
+    def _open_app(page: str = ""):
         try:
             if "w" not in app_window:
                 from ui.app_bridge import AppBridge
@@ -378,13 +383,30 @@ def main():
                 # change it makes goes down the tray's own path (APP-10).
                 w = ToraApp(AppBridge(manager, tray, panel))
                 app_window["w"] = w
-            app_window["w"].open_at()
+            app_window["w"].open_at(page)
         except Exception as exc:          # noqa: BLE001 - never kill the tray
             import logging as _lg
             _lg.getLogger("tora").exception("could not open the app window")
             tray.show_notification("HeyTora", f"Couldn't open the app: {exc}")
 
-    tray.on_open_app.connect(_open_app)
+    tray.on_open_app.connect(lambda: _open_app())
+    tray.on_open_app_page.connect(_open_app)
+    tray.panel_visible = panel.isVisible
+
+    # Light/dark: the Settings choice, or Windows' own when it is "system".
+    # Every surface that styles itself from app_theme restyles in place.
+    app_theme.on_change(tray.retheme)
+    app_theme.on_change(lambda: app_window["w"].retheme() if "w" in app_window else None)
+
+    def _windows_theme_changed(*_):
+        if cfg.theme() == "system":
+            app_theme.refresh("system")
+        else:
+            tray.retheme()          # the taskbar's ink may have changed on its own
+    try:
+        app.styleHints().colorSchemeChanged.connect(_windows_theme_changed)
+    except Exception:                 # noqa: BLE001 - an older Qt: fixed at start-up
+        pass
 
     # Tray → UI / Manager
     tray.on_show_panel.connect(panel.show)

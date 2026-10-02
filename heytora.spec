@@ -119,6 +119,10 @@ import glob as _glob
 for _manifest in _glob.glob(os.path.join("extensions", "*", "manifest.json")):
     datas.append((_manifest, os.path.dirname(_manifest)))
 
+# The site's typeface and the wordmark (ui/tokens.py reads them from here).
+datas.append((os.path.join("assets", "fonts"), os.path.join("assets", "fonts")))
+datas.append((os.path.join("assets", "brand"), os.path.join("assets", "brand")))
+
 
 a = Analysis(
     ["main.py"],

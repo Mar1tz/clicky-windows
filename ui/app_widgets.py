@@ -79,8 +79,9 @@ class Dot(QWidget):
     """A small filled circle, optionally with a soft halo. Used for agent
     status, the state pill and the wordmark."""
 
-    def __init__(self, colour: str = T.OK, size: int = 8, glow: bool = False):
+    def __init__(self, colour: Optional[str] = None, size: int = 8, glow: bool = False):
         super().__init__()
+        colour = colour or T.OK
         self._colour = QColor(colour)
         self._glow = glow
         # The halo is twice the dot across. The widget used to be only 6 px
@@ -117,8 +118,9 @@ class Dot(QWidget):
 class Pill(QFrame):
     """A rounded tag: "Running", "3 waiting", "Read only"."""
 
-    def __init__(self, text: str, colour: str = T.TEXT_DIM, *, dot: bool = False):
+    def __init__(self, text: str, colour: Optional[str] = None, *, dot: bool = False):
         super().__init__()
+        colour = colour or T.TEXT_DIM
         self._colour = colour
         self.setFixedHeight(22)
         lay = QHBoxLayout(self)
@@ -197,8 +199,9 @@ class Card(QFrame):
 class Metric(QFrame):
     """A number worth looking at: 3 running · R 48,210 · 12 exceptions."""
 
-    def __init__(self, value: str, caption: str, colour: str = T.TEXT):
+    def __init__(self, value: str, caption: str, colour: Optional[str] = None):
         super().__init__()
+        colour = colour or T.TEXT
         self.setObjectName("card")
         lay = QVBoxLayout(self)
         lay.setContentsMargins(16, 14, 16, 14)
@@ -251,6 +254,8 @@ class Switch(QWidget):
     def __init__(self, on: bool = False):
         super().__init__()
         self._on = on
+        self._pos = 1.0 if on else 0.0        # 0 = off, 1 = on; animated
+        self._anim = None
         self.setFixedSize(40, 22)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
 
@@ -260,8 +265,32 @@ class Switch(QWidget):
     def setChecked(self, on: bool) -> None:
         if on != self._on:
             self._on = on
-            self.update()
+            self._slide(1.0 if on else 0.0)
             self.toggled.emit(on)
+
+    def _slide(self, to: float) -> None:
+        """The thumb travels on the site's easing curve rather than jumping:
+        a switch that snaps reads as a checkbox in disguise."""
+        from PyQt6.QtCore import QVariantAnimation
+        from ui import tokens
+        if self._anim is not None:
+            self._anim.stop()
+        if not self.isVisible():
+            self._pos = to
+            self.update()
+            return
+        anim = QVariantAnimation(self)
+        anim.setStartValue(float(self._pos))
+        anim.setEndValue(float(to))
+        anim.setDuration(tokens.DURATION_FAST)
+        anim.setEasingCurve(tokens.ease())
+        anim.valueChanged.connect(self._moved)
+        anim.start()
+        self._anim = anim
+
+    def _moved(self, value) -> None:
+        self._pos = float(value)
+        self.update()
 
     def mousePressEvent(self, _event) -> None:
         self.setChecked(not self._on)
@@ -269,12 +298,20 @@ class Switch(QWidget):
     def paintEvent(self, _event) -> None:
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
-        track = QColor(T.ACCENT) if self._on else QColor(T.BORDER_STRONG)
+        off, on = QColor(T.BORDER_STRONG), QColor(T.ACCENT)
+        t = self._pos
+        track = QColor(int(off.red() + (on.red() - off.red()) * t),
+                       int(off.green() + (on.green() - off.green()) * t),
+                       int(off.blue() + (on.blue() - off.blue()) * t))
         p.setBrush(track)
         p.setPen(Qt.PenStyle.NoPen)
         p.drawRoundedRect(QRectF(0, 0, 40, 22), 11, 11)
-        x = 20.0 if self._on else 2.0
-        p.setBrush(QColor("#FFFFFF" if self._on else T.TEXT_DIM))
+        x = 2.0 + 18.0 * t
+        # A white thumb in both states, as iOS draws it, with a hairline
+        # shadow so it still has an edge on a light track.
+        p.setBrush(QColor(0, 0, 0, 30))
+        p.drawEllipse(QRectF(x, 2.6, 18, 18))
+        p.setBrush(QColor("#FFFFFF"))
         p.drawEllipse(QRectF(x, 2, 18, 18))
         p.end()
 
@@ -442,7 +479,7 @@ def shadow(widget: QWidget, blur: int = 40, alpha: int = 160) -> None:
     effect = QGraphicsDropShadowEffect(widget)
     effect.setBlurRadius(blur)
     effect.setOffset(0, 8)
-    effect.setColor(QColor(0, 0, 0, alpha))
+    effect.setColor(QColor(0, 0, 0, min(alpha, T.PALETTE.shadow_alpha)))
     widget.setGraphicsEffect(effect)
 
 
@@ -554,3 +591,40 @@ def nav_icon(kind: str, colour: str, size: int = 16, dpr: float = 2.0) -> QPixma
 
     p.end()
     return px
+
+
+# ── wordmark ──────────────────────────────────────────────────────────────────
+
+def wordmark_pixmap(height: int = 24, ink: str = "", swoosh: str = "",
+                    dpr: float = 2.0) -> QPixmap:
+    """The site's lockup - lowercase `heytora` with the swoosh through it -
+    at `height` px. The letters take the page's ink, so it reads on either
+    ground; the swoosh keeps the logo's blue."""
+    from PyQt6.QtCore import QByteArray
+    from PyQt6.QtSvg import QSvgRenderer
+    from ui import tokens
+    svg = (tokens.assets_dir() / "brand" / "wordmark.svg").read_text(encoding="utf-8")
+    svg = svg.replace("{INK}", ink or T.TEXT).replace("{SWOOSH}", swoosh or tokens.LOGO_BLUE)
+    renderer = QSvgRenderer(QByteArray(svg.encode("utf-8")))
+    vb = renderer.viewBoxF()
+    width = round(height * vb.width() / vb.height())
+    px = QPixmap(int(width * dpr), int(height * dpr))
+    px.setDevicePixelRatio(dpr)
+    px.fill(QColor(0, 0, 0, 0))
+    p = QPainter(px)
+    p.setRenderHint(QPainter.RenderHint.Antialiasing)
+    renderer.render(p, QRectF(0, 0, width, height))
+    p.end()
+    return px
+
+
+def wordmark(height: int = 24) -> QLabel:
+    lab = QLabel()
+    lab.setObjectName("wordmarkImage")
+    lab.setAccessibleName("heytora")
+    try:
+        lab.setPixmap(wordmark_pixmap(height))
+    except Exception:  # noqa: BLE001 - no SVG module or file: the name in type
+        lab.setText("heytora")
+        lab.setObjectName("wordmark")
+    return lab

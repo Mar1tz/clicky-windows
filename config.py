@@ -539,6 +539,18 @@ class Config:
         os.environ[env] = value
         self._write_env(env, value)
 
+    # ── Appearance ───────────────────────────────────────────────────────
+
+    def theme(self) -> str:
+        """"system" (follow Windows), "light" or "dark" - ui/tokens.py."""
+        raw = os.environ.get("TORA_THEME", "").strip().lower()
+        return raw if raw in ("system", "light", "dark") else "system"
+
+    def set_theme(self, mode: str) -> None:
+        mode = mode if mode in ("system", "light", "dark") else "system"
+        os.environ["TORA_THEME"] = mode
+        self._write_env("TORA_THEME", mode)
+
     # ── Microphone mode ──────────────────────────────────────────────────
 
     def ambient_mic(self) -> bool:

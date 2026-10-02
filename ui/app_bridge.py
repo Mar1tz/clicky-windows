@@ -223,6 +223,18 @@ class AppBridge(QObject):
         from ui import autostart
         return autostart.set_enabled(on)
 
+    def theme(self) -> str:
+        """Settings > Appearance: "system" | "light" | "dark"."""
+        from config import cfg
+        return cfg.theme()
+
+    def set_theme(self, mode: str) -> None:
+        """Save the choice and restyle every open surface now."""
+        from config import cfg
+        from ui import app_theme
+        cfg.set_theme(mode)
+        app_theme.refresh(cfg.theme())
+
     def auto_approve(self) -> bool:
         """Settings > Approvals: do agents and desktop actions go ahead
         without the approval box? The running workforce says; without one,

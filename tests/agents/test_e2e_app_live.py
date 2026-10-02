@@ -122,8 +122,11 @@ def test_the_tray_changes_a_switch_as_a_click_would(qapp):
         tray.on_toggle_privacy.connect(emitted.append)
         tray.apply_switch("privacy_guard", False)
         assert emitted == [False] and tray._privacy_enabled is False
-        assert tray._privacy_action.isChecked() is False
-        assert "OFF" in tray._privacy_action.text()
+        # Privacy guard's switch lives in the app now, not the tray popup;
+        # what the tray holds is the state, and that is what was changed.
+        tray.apply_switch("web_search", False)
+        tray._build_menu()
+        assert tray._popup.entry("Web search").on is False
     finally:
         tray.hide_icon()
 

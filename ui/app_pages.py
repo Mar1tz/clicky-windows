@@ -70,7 +70,7 @@ class Page(QWidget):
         # See ToraApp: a QWidget subclass paints no stylesheet background
         # without this, and a page sits directly on the translucent window.
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
-        self.setStyleSheet(f"QWidget#page {{ background: {T.BG}; }}")
+        # Its background is `QWidget#page` in app_theme.qss(), so it follows the theme.
         self.setObjectName("page")
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
@@ -1275,6 +1275,14 @@ class SettingsPage(Page):
                           "For you only - no admin rights needed.", br.autostart())
         start.switch.toggled.connect(br.set_autostart)
         look.add(start)
+        modes = (("system", "Match Windows"), ("light", "Light"), ("dark", "Dark"))
+        theme = Select(*(words for _m, words in modes), width=180)
+        keys = [m for m, _w in modes]
+        theme.setCurrentIndex(keys.index(br.theme()) if br.theme() in keys else 0)
+        theme.currentIndexChanged.connect(
+            lambda k: br.set_theme(keys[k]) if 0 <= k < len(keys) else None)
+        look.add(Row("Appearance", "Light is heytora.com's soft grey; dark is its black.",
+                     trailing=theme))
         self.body.add(look)
 
 

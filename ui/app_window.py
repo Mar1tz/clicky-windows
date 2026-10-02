@@ -38,7 +38,7 @@ from PyQt6.QtWidgets import (
 
 from ui import app_theme as T
 from ui.app_pages import PAGES
-from ui.app_widgets import Dot, label, nav_icon
+from ui.app_widgets import Dot, label, nav_icon, wordmark
 
 
 class _NavItem(QPushButton):
@@ -60,7 +60,10 @@ class _NavItem(QPushButton):
         self.toggled.connect(self._paint_icon)
 
     def _paint_icon(self, on: bool) -> None:
-        self.setIcon(QIcon(nav_icon(self._kind, T.TEXT if on else T.TEXT_DIM)))
+        self.setIcon(QIcon(nav_icon(self._kind, T.ACCENT if on else T.TEXT_DIM)))
+
+    def repaint_icon(self) -> None:
+        self._paint_icon(self.isChecked())
 
 
 class ToraApp(QWidget):
@@ -113,14 +116,15 @@ class ToraApp(QWidget):
         self.show_page(PAGES[0][0])
 
     def _dark_titlebar(self) -> None:
-        """Ask DWM for a dark title bar, so the native frame is not a bright
-        white band above a near-black app. Silently does nothing off Windows
-        or on a build that does not know the attribute."""
+        """Match the native title bar to the theme: dark over the black
+        palette, light over the soft grey - a white band above a black app
+        (or the reverse) is the first thing that looks unfinished. Silently
+        does nothing off Windows or on a build that does not know it."""
         try:
             import ctypes
             hwnd = int(self.winId())
             for attribute in (20, 19):       # 20 = Win11/late Win10, 19 = early
-                value = ctypes.c_int(1)
+                value = ctypes.c_int(1 if T.is_dark() else 0)
                 ok = ctypes.windll.dwmapi.DwmSetWindowAttribute(
                     ctypes.c_void_p(hwnd), ctypes.c_int(attribute),
                     ctypes.byref(value), ctypes.sizeof(value))
@@ -139,19 +143,16 @@ class ToraApp(QWidget):
         lay.setContentsMargins(12, 18, 12, 14)
         lay.setSpacing(4)
 
-        mark = QHBoxLayout()
-        mark.setContentsMargins(8, 0, 0, 0)
-        mark.setSpacing(10)
-        mark.addWidget(Dot(T.ACCENT, 9, glow=True), 0,
-                       Qt.AlignmentFlag.AlignVCenter)
-        words = QVBoxLayout()
-        words.setSpacing(0)
-        words.addWidget(label("HEYTORA", "wordmark"))
-        words.addWidget(label("YOUR COMPUTER, EXPLAINED", "wordmarkSub"))
-        mark.addLayout(words)
-        mark.addStretch(1)
+        # The site's lockup, not the name typed in caps: the app and
+        # heytora.com should be recognisably the same thing at a glance.
+        mark = QVBoxLayout()
+        mark.setContentsMargins(12, 2, 0, 0)
+        mark.setSpacing(6)
+        self._wordmark = wordmark(26)
+        mark.addWidget(self._wordmark, 0, Qt.AlignmentFlag.AlignLeft)
+        mark.addWidget(label("YOUR COMPUTER, EXPLAINED", "wordmarkSub"))
         lay.addLayout(mark)
-        lay.addSpacing(22)
+        lay.addSpacing(24)
 
         group = QButtonGroup(self)
         group.setExclusive(True)
@@ -221,6 +222,26 @@ class ToraApp(QWidget):
         heading = next((t for k, t, *_ in PAGES if k == key), "")
         self.setWindowTitle(f"HeyTora  ·  {heading}")
         self.page_changed.emit(key)
+
+    def retheme(self) -> None:
+        """Windows (or Settings) switched light/dark: restyle in place.
+
+        The pages are kept rather than rebuilt - the Agents page embeds a
+        live panel - so this re-applies the sheet, repaints what is painted
+        by hand and refreshes the page on screen."""
+        from ui.app_widgets import wordmark_pixmap
+        self.setStyleSheet(T.qss())
+        for button in self._buttons.values():
+            button.repaint_icon()
+        if self._wordmark.pixmap() is not None and not self._wordmark.pixmap().isNull():
+            self._wordmark.setPixmap(wordmark_pixmap(26))
+        self.set_state(self.bridge.state() if hasattr(self.bridge, "state") else "idle")
+        if self.isVisible():
+            self._dark_titlebar()
+        page = self._stack.currentWidget()
+        if page is not None:
+            page.refresh()
+        self.update()
 
     def set_state(self, state_name: str) -> None:
         """Mirror the companion's AppState in the sidebar pill."""
