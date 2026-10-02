@@ -125,9 +125,18 @@ def test_a_required_version_is_flagged(tmp_path):
 
 
 def test_from_source_there_is_nothing_to_update(tmp_path):
-    u, spawned = _updater(tmp_path, FakeSite(), installed=False)
-    assert u.state()["state"] == "dev" and u.check_soon(force=True) is False
+    site = FakeSite()
+    u, spawned = _updater(tmp_path, site, installed=False)
+    assert u.state()["state"] == "dev" and u.check_soon() is False, "never by itself"
     assert u.at_startup(auto=True) == "" and spawned == []
+
+
+def test_check_for_updates_from_source_says_what_is_published(tmp_path):
+    site = FakeSite(version="1.7.0")
+    u, spawned = _updater(tmp_path, site, installed=False)
+    st = _check(u)
+    assert st["state"] == "dev" and st["latest"] == "1.7.0" and st["checked_at"]
+    assert site.downloads == 0 and spawned == [] and u.install_now() is False, "nothing to install over"
 
 
 # -- installing over the existing app ------------------------------------------------------------------------------
@@ -245,11 +254,16 @@ def test_settings_shows_the_download_as_it_happens(qapp):
     assert "Downloading HeyTora 1.7.0…" in texts and "You have 1.6.4 · 42%" in texts
 
 
-def test_settings_up_to_date_and_check_now(qapp):
-    bridge, texts, buttons = _card(qapp)
-    assert "Up to date." in texts
-    buttons["Check now"].click()
+def test_settings_up_to_date_and_check_for_updates(qapp):
+    bridge, texts, buttons = _card(qapp, checked_at=time.time())
+    assert "Up to date · checked just now." in texts
+    buttons["Check for updates"].click()
     assert bridge.done == ["check"]
+
+
+def test_settings_says_it_is_checking(qapp):
+    _bridge, texts, buttons = _card(qapp, busy=True)
+    assert "Checking for updates…" in texts
 
 
 def test_settings_a_failed_update_points_to_the_download_page(qapp):
@@ -259,8 +273,34 @@ def test_settings_a_failed_update_points_to_the_download_page(qapp):
 
 
 def test_settings_from_source(qapp):
-    _bridge, texts, buttons = _card(qapp, state="dev")
-    assert any("Running from source" in t for t in texts) and "Restart to update" not in buttons
+    bridge, texts, buttons = _card(qapp, state="dev", latest="1.7.0", checked_at=time.time())
+    assert any("Running from source" in t and "Latest published: 1.7.0 (checked just now)." in t for t in texts)
+    assert "Restart to update" not in buttons
+    buttons["Check for updates"].click()
+    assert bridge.done == ["check"], "the button is there when run from source too"
+
+
+def test_the_trays_check_for_updates_says_what_it_found(qapp, tmp_path, monkeypatch):
+    from updates import service
+    from ui.tray import TrayManager
+    said = []
+    for n, (site, words) in enumerate(((FakeSite(version="1.6.4"), "You're up to date - HeyTora 1.6.4."),
+                                       (FakeSite(version="1.7.0"),
+                                        "HeyTora 1.7.0 is ready - tray → Restart to update."))):
+        u, _ = _updater(tmp_path / f"run{n}", site)
+        monkeypatch.setattr(service, "_updater", u)
+        tray = TrayManager()
+        try:
+            assert any(a.text() == "Check for updates" for a in tray._tray.contextMenu().actions())
+            tray._tray.showMessage = lambda title, text, *_a: said.append(text)
+            tray.check_for_updates()
+            end = time.monotonic() + 10
+            while (u.state()["busy"] or u.state()["state"] in ("idle", "checking")) and time.monotonic() < end:
+                time.sleep(0.02)
+            tray._refresh_updates()
+            assert said[-1] == words
+        finally:
+            tray.hide_icon()
 
 
 def test_the_tray_offers_the_update(qapp, tmp_path, monkeypatch):

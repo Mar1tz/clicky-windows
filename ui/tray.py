@@ -117,6 +117,7 @@ class TrayManager(QObject):
         # "ready:1.6.5" / "required:1.6.5" while an update waits to be installed.
         self._update_item = ""
         self._update_told: set[str] = set()
+        self._update_asked = False            # the user pressed "Check for updates": say what it found
         self.updates_changed.connect(self._refresh_updates)
         # The input device Tora listens on; None = the system default.
         self._active_mic_index = cfg.mic_device_index
@@ -398,6 +399,9 @@ class TrayManager(QObject):
 
         menu.addSeparator()
 
+        check = menu.addAction("Check for updates")
+        check.triggered.connect(self.check_for_updates)
+
         quit_action = menu.addAction("Quit HeyTora")
         quit_action.triggered.connect(self.on_quit)
 
@@ -648,6 +652,30 @@ class TrayManager(QObject):
             self._account_problem = kind
             self._build_menu()
 
+    def check_for_updates(self) -> None:
+        """The menu's "Check for updates": check now, and say what was found."""
+        try:
+            from updates import updater
+            started = updater().check_soon(force=True)
+        except Exception:  # noqa: BLE001
+            return
+        self._update_asked = True
+        if not started:
+            self._tray.showMessage("HeyTora", "Already checking for updates…",
+                                   QSystemTrayIcon.MessageIcon.Information, 3000)
+
+    def _update_found_words(self, st: dict) -> str:
+        if st["state"] == "ready":
+            return f"HeyTora {st['latest']} is ready - tray → Restart to update."
+        if st["state"] == "current":
+            return f"You're up to date - HeyTora {st['current']}."
+        if st["state"] == "dev":
+            if st["error"]:
+                return st["error"]
+            return (f"Running from source ({st['current']}). Latest published: {st['latest']}."
+                    if st["latest"] else f"Running from source ({st['current']}).")
+        return st["error"] or "Couldn't check for updates - try again in a moment."
+
     def _refresh_updates(self) -> None:
         """An update is ready (or no longer is): the menu's first item, and
         one notification per version."""
@@ -662,6 +690,14 @@ class TrayManager(QObject):
         if item != self._update_item:
             self._update_item = item
             self._build_menu()
+        if self._update_asked and not st.get("busy") and st["state"] not in ("checking", "downloading"):
+            # What the user's own check found - every answer, not only "ready".
+            self._update_asked = False
+            if st["state"] == "ready":
+                self._update_told.add(st["latest"])
+            self._tray.showMessage("HeyTora updates", self._update_found_words(st),
+                                   QSystemTrayIcon.MessageIcon.Information, 6000)
+            return
         if item and st["latest"] not in self._update_told:
             self._update_told.add(st["latest"])
             self._tray.showMessage(

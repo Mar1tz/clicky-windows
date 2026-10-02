@@ -935,6 +935,18 @@ class VoicePage(Page):
 
 # ── Settings ──────────────────────────────────────────────────────────────────
 
+def _checked_ago(when: float) -> str:
+    """"just now", "5 min ago", "3 h ago" - when updates were last checked.
+    (Not _ago: that is the Journal's "asked 3 days ago".)"""
+    import time
+    gone = max(0.0, time.time() - when)
+    if gone < 90:
+        return "just now"
+    if gone < 3600:
+        return f"{round(gone / 60)} min ago"
+    return f"{round(gone / 3600)} h ago"
+
+
 def confirm_sign_out(parent) -> bool:
     """HeyTora needs an account: signing out closes it and opens the sign-in
     window (ui/sign_in_gate.py) - so say that before doing it."""
@@ -1000,9 +1012,20 @@ class SettingsPage(Page):
                   "error": "", "auto": True}
         card = Card("Updates", "HeyTora keeps itself up to date - nothing to download, nothing to set up.")
         state, now, latest = st["state"], st["current"], st["latest"]
+
+        def check_button(kind: str = "ghost"):
+            b = button("Check for updates", kind)
+            b.clicked.connect(br.check_updates)
+            return b
+        checked = st.get("checked_at") or 0
+        ago = _checked_ago(checked) if checked else ""
         if state == "dev":
-            card.add(Row(f"HeyTora {now}", "Running from source: updates come from git, not from here.",
-                         dot=T.TEXT_DIM, first=True))
+            words = "Running from source: updates come from git, not from here."
+            if latest:
+                words += f" Latest published: {latest}" + (f" (checked {ago})." if ago else ".")
+            if st.get("error"):
+                words += f" {st['error']}"
+            card.add(Row(f"HeyTora {now}", words, dot=T.TEXT_DIM, trailing=check_button(), first=True))
             return card
         if state == "ready":
             go = button("Restart to update", "primary")
@@ -1018,21 +1041,21 @@ class SettingsPage(Page):
         elif state == "installing":
             card.add(Row(f"Installing HeyTora {latest}…", "HeyTora opens again in a moment.",
                          dot=T.ACCENT, first=True))
-        elif state == "checking":
+        elif state == "checking" or (st.get("busy") and state not in ("downloading", "ready")):
             card.add(Row(f"HeyTora {now}", "Checking for updates…", dot=T.OK, first=True))
         elif state == "failed":
             page = button("Download page")
             page.clicked.connect(br.open_download_page)
             card.add(Row(f"HeyTora {now}", st["error"] or "Couldn't update.", dot=T.WARN,
                          trailing=page, first=True))
-            again = button("Check again", "link")
-            again.clicked.connect(br.check_updates)
-            card.body.addWidget(again, 0, Qt.AlignmentFlag.AlignLeft)
+            card.body.addWidget(check_button("link"), 0, Qt.AlignmentFlag.AlignLeft)
         else:
-            check = button("Check now")
-            check.clicked.connect(br.check_updates)
-            card.add(Row(f"HeyTora {now}", "Up to date." if state == "current" else
-                         "Checks for updates every few hours.", dot=T.OK, trailing=check, first=True))
+            if state == "current":
+                words = "Up to date" + (f" · checked {ago}." if ago else ".")
+            else:
+                words = st.get("error") or "Checks for updates every few hours."
+            card.add(Row(f"HeyTora {now}", words, dot=T.WARN if st.get("error") else T.OK,
+                         trailing=check_button(), first=True))
         if st["notes"] and state in ("ready", "downloading"):
             card.add(label(f"What's new: {st['notes']}", "faint", wrap=True))
         auto = ToggleRow("Install updates automatically",

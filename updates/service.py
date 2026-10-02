@@ -24,7 +24,8 @@ keeps the folder, the shortcuts and the start-with-Windows choice:
 An installer that did not take (still the old version after it ran) is
 tried MAX_ATTEMPTS times, then left to the user, with the download page.
 
-Run from source there is nothing to install over: updates are off ("dev").
+Run from source there is nothing to install over: updates are off ("dev")
+- but "Check for updates" still says what is published.
 """
 from __future__ import annotations
 
@@ -132,11 +133,11 @@ class Updater:
     # -- what the screens show ------------------------------------------------------------------------
 
     def state(self) -> dict:
-        """{state, current, latest, notes, progress, error, required, checked_at}.
+        """{state, current, latest, notes, progress, error, required, checked_at, busy}.
         state: dev | idle | checking | current | downloading | ready | installing | failed."""
         with self._lock:
             rel = self._release
-            return {"state": self._state, "current": self.current,
+            return {"state": self._state, "current": self.current, "busy": self._busy,
                     "latest": rel.version if rel else "", "notes": rel.notes if rel else "",
                     "progress": self._progress, "error": self._error,
                     "required": self._required(rel), "checked_at": self._checked_at,
@@ -190,9 +191,11 @@ class Updater:
 
     def check_soon(self, force: bool = False) -> bool:
         """Check (and download) in the background, unless it was done in the
-        last CHECK_EVERY_S. True if a check was started."""
+        last CHECK_EVERY_S - or `force`: the user pressed "Check for updates"
+        (then even run from source, to say what is published). True if a
+        check was started."""
         with self._lock:
-            if not self.installed or self._busy or self._state in ("installing",):
+            if self._busy or self._state in ("installing",) or (not self.installed and not force):
                 return False
             if not force and self._checked_at and time.time() - self._checked_at < CHECK_EVERY_S:
                 return False
@@ -214,6 +217,10 @@ class Updater:
                 rel = Release.from_manifest(r.json())
             with self._lock:
                 self._release, self._checked_at = rel, time.time()
+            if not self.installed:
+                _log.info("run from source (%s); published: %s", self.current, rel.version)
+                self._set(state="dev")                # nothing to install over
+                return
             if not newer(rel.version, self.current):
                 _log.info("up to date (%s; published %s)", self.current, rel.version)
                 self._set(state="current")
@@ -233,11 +240,13 @@ class Updater:
             _log.info("update check failed: %s", e)
             with self._lock:
                 self._checked_at = time.time() - CHECK_EVERY_S + 30 * 60   # again in half an hour
-            self._set(state="failed" if self._release and newer(self._release.version, self.current)
+            self._set(state="dev" if not self.installed else
+                      "failed" if self._release and newer(self._release.version, self.current)
                       else "idle", error=f"Couldn't check for updates: {e}")
         finally:
             with self._lock:
                 self._busy = False
+            self._set()                               # busy is over: the screens hear it
 
     def _download(self, rel: Release) -> Path:
         """The installer, verified - or an exception. Reused if already here."""
