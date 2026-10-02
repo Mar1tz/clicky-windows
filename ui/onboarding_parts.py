@@ -25,56 +25,24 @@ from PyQt6.QtGui import (
     QBrush, QColor, QFont, QLinearGradient, QPainter, QPainterPath, QPen, QRadialGradient,
 )
 from PyQt6.QtWidgets import (
-    QFrame, QGraphicsDropShadowEffect, QHBoxLayout, QLabel, QPushButton, QSizePolicy,
+    QFrame, QHBoxLayout, QLabel, QPushButton, QSizePolicy,
     QVBoxLayout, QWidget,
 )
 
 from ui import app_theme as T
 from ui import tokens
 
-# ── the website's gradient families (heytora-web/src/components/home) ─────────
+# The website's gradient families, the paper greys and the stage live in
+# ui/tokens.py; they are re-exported here because the wizard reads O.STEP etc.
+from ui.tokens import CAPABILITY, PACK, PAPER as P, STAGE, STEP, VOICE_COLOURS  # noqa: E402,F401
+from ui.kit import drop_shadow, mix, soft_shadow, tween  # noqa: E402,F401
+from ui import kit  # noqa: E402
 
-# what-gradient.tsx: one family per capability. (wash, blobs)
-CAPABILITY = {
-    "ask":   ("#D7EBFF", ("#7CCBFF", "#00B6FD", "#1E7FE8", "#8FE3F0", "#E3B0FF")),
-    "show":  ("#D5DDFF", ("#2B63D6", "#6F7CF5", "#4F86E8", "#A48CFF", "#CFE9FF")),
-    "teach": ("#F1E0FA", ("#B89CFF", "#F0A6FF", "#E48AD8", "#FFC6DE", "#D9D2FF")),
-    "do":    ("#D6F4F0", ("#7FB6FF", "#39D5C6", "#2FB8C8", "#8FE8D6", "#BDF2E6")),
-    "build": ("#FBF3DD", ("#9CE9DA", "#FFE08A", "#F6B96B", "#FFF0C4", "#B6EE7A")),
-}
-
-# how.tsx: one family per step, used in order through the phases.
-STEP = (
-    ("#BDEBFF", ("#00B6FD", "#3D7BFF", "#7FE3D0", "#BDEBFF")),
-    ("#FFE3C4", ("#FF9A3C", "#FFC08A", "#DDF08A", "#FFE3C4")),
-    ("#D9D2FF", ("#8C7CFF", "#E9A2FF", "#FFC6DE", "#D9D2FF")),
-    ("#D6F7EE", ("#2FD0C0", "#B6EE7A", "#7CC8FF", "#D6F7EE")),
-)
-
-# packs.tsx: two-stop pack tiles.
-PACK = {
-    "ledger":    ("#00B6FD", "#3D7BFF"),
-    "briefcase": ("#FFA24C", "#FF6B6B"),
-    "cap":       ("#7CC4FF", "#00A3E8"),
-    "code":      ("#4A505B", "#1F2329"),
-    "chart":     ("#5B8CFF", "#1E4FD6"),
-    "video":     ("#FF6B6B", "#E0314B"),
-    "calendar":  ("#A99BFF", "#6F5BF5"),
-    "mic":       ("#C9A0FF", "#8C5BF5"),
-    "wallet":    ("#FFC27A", "#F28C3A"),
-}
-
-INK_ON_PALE = "#292929"
+INK_ON_PALE = P.ink
 
 
-def _font(px: int, weight: int = 400, spacing: float = 0.0) -> QFont:
-    f = QFont(tokens.font_family())
-    f.setPixelSize(max(1, int(round(px))))
-    f.setWeight(QFont.Weight(weight))
-    f.setHintingPreference(QFont.HintingPreference.PreferNoHinting)
-    if spacing:
-        f.setLetterSpacing(QFont.SpacingType.AbsoluteSpacing, spacing)
-    return f
+def _font(px: float, weight: int = 400, spacing: float = 0.0) -> QFont:
+    return kit.font(px, weight, spacing)
 
 
 def text(words: str, px: int = 14, weight: int = 400, colour: str = "",
@@ -172,54 +140,6 @@ class PhaseBar(QWidget):
         p.end()
 
 
-# ── motion ────────────────────────────────────────────────────────────────────
-
-def tween(owner: QWidget, attr: str, to: float, ms: int = 0) -> None:
-    """Move `owner.<attr>` to `to` on the site's curve, repainting as it goes.
-    Every animated piece below is a float from 0 to 1 and a paintEvent."""
-    anims = owner.__dict__.setdefault("_tweens", {})
-    old = anims.get(attr)
-    if old is not None:
-        old.stop()
-    start = float(getattr(owner, attr))
-    if abs(start - to) < 1e-3 or not owner.isVisible():
-        setattr(owner, attr, float(to))
-        owner.update()
-        return
-    a = QVariantAnimation(owner)
-    a.setStartValue(start)
-    a.setEndValue(float(to))
-    a.setDuration(ms or tokens.DURATION)
-    a.setEasingCurve(tokens.ease())
-
-    def step(v, _owner=owner, _attr=attr):
-        setattr(_owner, _attr, float(v))
-        _owner.update()
-    a.valueChanged.connect(step)
-    a.start()
-    anims[attr] = a
-
-
-def soft_shadow(p: QPainter, r: QRectF, radius: float, strength: float = 1.0) -> None:
-    """A soft drop shadow under a painted card: many faint layers, so it has
-    no edge of its own (two or three strong ones read as a second card)."""
-    p.save()
-    p.setPen(Qt.PenStyle.NoPen)
-    for i in range(10):
-        grow = 1.5 + i * 2.2
-        p.setBrush(QColor(0, 0, 0, int(7 * strength)))
-        p.drawRoundedRect(r.adjusted(-grow * 0.6, grow * 0.3 + 4, grow * 0.6, grow + 4),
-                          radius + grow * 0.6, radius + grow * 0.6)
-    p.restore()
-
-
-def mix(a: str, b: str, t: float, alpha: int = 255) -> QColor:
-    ca, cb = QColor(a), QColor(b)
-    return QColor(int(ca.red() + (cb.red() - ca.red()) * t),
-                  int(ca.green() + (cb.green() - ca.green()) * t),
-                  int(ca.blue() + (cb.blue() - ca.blue()) * t), alpha)
-
-
 # ── backgrounds ───────────────────────────────────────────────────────────────
 
 class GradientPanel(QWidget):
@@ -276,11 +196,11 @@ class Swoosh(QWidget):
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
         w, h = float(self.width()), float(self.height())
-        ground = "#141414" if self._dark else T.BG
+        ground = STAGE.ground if self._dark else T.BG
         p.fillRect(self.rect(), QColor(ground))
         a = 70 if self._dark else 46
         # Two soft pools of colour in the corners, then the ribbon over them.
-        for (fx, fy, colour) in ((0.0, 0.0, "#7CCBFF"), (1.0, 1.0, "#A48CFF")):
+        for (fx, fy, colour) in ((0.0, 0.0, tokens.RIBBON_POOLS[0]), (1.0, 1.0, tokens.RIBBON_POOLS[1])):
             g = QRadialGradient(QPointF(w * fx, h * fy), max(w, h) * 0.55)
             c = QColor(colour)
             c.setAlpha(a)
@@ -292,7 +212,7 @@ class Swoosh(QWidget):
         path.cubicTo(QPointF(0.22 * w, 0.30 * h), QPointF(0.45 * w, 1.05 * h), QPointF(0.66 * w, 0.58 * h))
         path.cubicTo(QPointF(0.80 * w, 0.26 * h), QPointF(0.95 * w, 0.20 * h), QPointF(1.12 * w, 0.30 * h))
         grad = QLinearGradient(QPointF(0, 0), QPointF(w, 0))
-        for stop, colour in ((0.0, "#00B6FD"), (0.45, tokens.BLUE), (1.0, "#A48CFF")):
+        for stop, colour in zip((0.0, 0.45, 1.0), tokens.RIBBON):
             c = QColor(colour)
             c.setAlpha(a + 10)
             grad.setColorAt(stop, c)
@@ -345,7 +265,7 @@ class Chip(QPushButton):
         inset = 1.0 + 1.5 * self._press
         r = QRectF(self.rect()).adjusted(inset, inset, -inset, -inset)
         base = mix(T.SURFACE, T.SURFACE_HOVER, self._hover * (1 - self._on))
-        fill = mix(base.name(), "#E6EFFF" if not T.is_dark() else "#13233F", self._on)
+        fill = mix(base.name(), tokens.BLUE_TINT if not T.is_dark() else tokens.BLUE_TINT_DARK, self._on)
         p.setBrush(fill)
         p.setPen(QPen(mix(T.BORDER_STRONG, T.ACCENT, self._on), 1.0 + 0.4 * self._on))
         p.drawRoundedRect(r, 10, 10)
@@ -410,7 +330,7 @@ class OptionCard(QFrame):
         t = self._on
         r = QRectF(self.rect()).adjusted(1, 1, -1, -1)
         base = mix(T.SURFACE, T.SURFACE_HOVER, self._hover * (1 - t))
-        p.setBrush(mix(base.name(), "#EAF2FF" if not T.is_dark() else "#13233F", t))
+        p.setBrush(mix(base.name(), tokens.BLUE_TINT if not T.is_dark() else tokens.BLUE_TINT_DARK, t))
         p.setPen(QPen(mix(T.BORDER_STRONG, T.ACCENT, t), 1.0 + 0.5 * t))
         p.drawRoundedRect(r, 12, 12)
         # the tick box, filling and drawing its tick as t goes 0 -> 1
@@ -419,7 +339,7 @@ class OptionCard(QFrame):
         p.setPen(QPen(mix(T.BORDER_STRONG, T.ACCENT, t), 1.4))
         p.drawRoundedRect(box, 5, 5)
         if t > 0.05:
-            pen = QPen(QColor("#FFFFFF"), 2)
+            pen = QPen(QColor(tokens.ON_COLOUR), 2)
             pen.setCapStyle(Qt.PenCapStyle.RoundCap)
             pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
             p.setPen(pen)
@@ -444,11 +364,7 @@ class TestCard(QFrame):
         super().__init__()
         self.setObjectName("testCard")
         self.setFixedWidth(width)
-        shadow = QGraphicsDropShadowEffect(self)
-        shadow.setBlurRadius(48)
-        shadow.setOffset(0, 12)
-        shadow.setColor(QColor(0, 0, 0, 45))
-        self.setGraphicsEffect(shadow)
+        drop_shadow(self, "float")
         self.setStyleSheet(f"QFrame#testCard {{ background: {T.SURFACE};"
                            f" border: 1px solid {T.BORDER}; border-radius: 16px; }}")
         self.lay = QVBoxLayout(self)
@@ -502,7 +418,7 @@ class Keycap(QWidget):
         p.setPen(Qt.PenStyle.NoPen)
         p.setBrush(side)
         p.drawRoundedRect(face.translated(0, drop), 10, 10)
-        p.setBrush(QColor("#EAF2FF" if self._lit else T.SURFACE))
+        p.setBrush(QColor(tokens.BLUE_TINT if self._lit else T.SURFACE))
         p.setPen(QPen(QColor(T.ACCENT if self._lit else T.BORDER_STRONG), 1.2))
         p.drawRoundedRect(face, 10, 10)
         p.setFont(_font(self._px, 600))
@@ -534,7 +450,7 @@ class GradientTile(QWidget):
         g = QLinearGradient(0, 0, s, s)
         a, b = QColor(self._a), QColor(self._b)
         if self._dim:
-            a, b = QColor("#D9D7D3"), QColor("#BDBAB5")
+            a, b = QColor(P.off_a), QColor(P.off_b)
         g.setColorAt(0, a)
         g.setColorAt(1, b)
         p.setBrush(QBrush(g))
@@ -545,7 +461,7 @@ class GradientTile(QWidget):
 
 
 def _glyph(p: QPainter, kind: str, s: float) -> None:
-    pen = QPen(QColor("#FFFFFF"), s * 0.055)
+    pen = QPen(QColor(tokens.ON_COLOUR), s * 0.055)
     pen.setCapStyle(Qt.PenCapStyle.RoundCap)
     pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
     p.setPen(pen)
@@ -705,8 +621,8 @@ class PackCard(QWidget):
         tile = QRectF(r.left() + 12, r.center().y() - s / 2, s, s)
         a, b = PACK.get(self.kind, PACK["ledger"])
         g = QLinearGradient(tile.topLeft(), tile.bottomRight())
-        g.setColorAt(0, mix("#D9D7D3", a, t))
-        g.setColorAt(1, mix("#BDBAB5", b, t))
+        g.setColorAt(0, mix(P.off_a, a, t))
+        g.setColorAt(1, mix(P.off_b, b, t))
         p.setBrush(QBrush(g))
         p.setPen(Qt.PenStyle.NoPen)
         p.drawRoundedRect(tile, s * 0.26, s * 0.26)
@@ -715,11 +631,11 @@ class PackCard(QWidget):
         _glyph(p, self.kind, s)
         p.restore()
         p.setFont(_font(14, 700))
-        p.setPen(mix("#8A8884", INK_ON_PALE, t))
+        p.setPen(mix(P.faint, INK_ON_PALE, t))
         p.drawText(QRectF(tile.right() + 12, r.top() + 12, r.width(), 20),
                    Qt.AlignmentFlag.AlignLeft, self._name)
         p.setFont(_font(12, 400))
-        p.setPen(mix("#9A9894", "#5C5C5C", t))
+        p.setPen(mix(P.ghost, P.dim, t))
         p.drawText(QRectF(tile.right() + 12, r.top() + 33, r.width(), 20),
                    Qt.AlignmentFlag.AlignLeft, f"“{self._phrase}”")
         p.end()
@@ -754,7 +670,7 @@ class CapabilityCard(QWidget):
         path = QPainterPath()
         path.addRoundedRect(r, 16, 16)
         p.setClipPath(path)
-        p.fillRect(r, QColor("#ECEAE6"))
+        p.fillRect(r, QColor(P.sunk))
         if t > 0.01:
             c = QColor(wash)
             c.setAlphaF(t)
@@ -771,7 +687,7 @@ class CapabilityCard(QWidget):
         p.setPen(QPen(QColor(0, 0, 0, 22), 1))
         p.setBrush(Qt.BrushStyle.NoBrush)
         p.drawRoundedRect(r, 16, 16)
-        ink = mix("#9A9894", INK_ON_PALE, t)
+        ink = mix(P.ghost, INK_ON_PALE, t)
         p.setPen(ink)
         p.setFont(_font(20, 700, -0.3))
         p.drawText(QRectF(18, 16, r.width() - 36, 30), Qt.AlignmentFlag.AlignLeft, self._title)
@@ -865,11 +781,11 @@ class ControlVisual(QWidget):
         p.setBrush(body)
         p.drawPath(dome)
         for cx, cy in ((58, 58), (102, 58)):
-            p.setBrush(QColor("#FFFFFF"))
+            p.setBrush(QColor(P.card))
             p.drawEllipse(QPointF(cx, cy), 16, 16)
             p.setBrush(ink)
             p.drawEllipse(QPointF(cx + self._look.x(), cy + 1 + self._look.y()), 7.5, 7.5)
-            p.setBrush(QColor("#FFFFFF"))
+            p.setBrush(QColor(P.card))
             p.drawEllipse(QPointF(cx + 2.5 + self._look.x(), cy - 2 + self._look.y()), 2, 2)
             # the lid, in the head's colour, lowering as she closes her eyes
             lid = 36 * (1 - self._awake)
@@ -889,8 +805,8 @@ class ControlVisual(QWidget):
                 p.setPen(Qt.PenStyle.NoPen)
         p.restore()
         # the card, in front of the head
-        soft_shadow(p, card, 16)
-        p.setBrush(QColor("#FFFFFF"))
+        soft_shadow(p, card, tokens.RADIUS_LG, "float")
+        p.setBrush(QColor(P.card))
         p.setPen(QPen(QColor(0, 0, 0, 18), 1))
         p.drawRoundedRect(card, 16, 16)
         # fingers on the rim
@@ -916,16 +832,16 @@ class ControlVisual(QWidget):
         inner = card.adjusted(20, 18, -20, -16)
         ask, done = 1 - self._done, self._done
         if ask > 0.01:
-            words(QRectF(inner.left(), inner.top(), inner.width(), 14), "TORA WANTS TO", 10, 600, "#8A8884", ask)
+            words(QRectF(inner.left(), inner.top(), inner.width(), 14), "TORA WANTS TO", 10, 600, P.faint, ask)
             words(QRectF(inner.left(), inner.top() + 18, inner.width(), 24),
                   "Export March's invoices", 16, 700, INK_ON_PALE, ask)
             words(QRectF(inner.left(), inner.top() + 44, inner.width(), 40),
-                  "Saves invoices-march.xlsx to Documents.", 12, 400, "#5C5C5C", ask)
+                  "Saves invoices-march.xlsx to Documents.", 12, 400, P.dim, ask)
             allow = QRectF(inner.right() - 74, inner.bottom() - 30, 74, 30)
             no = QRectF(allow.left() - 86, allow.top(), 78, 30)
             p.setOpacity(ask)
             p.setPen(Qt.PenStyle.NoPen)
-            p.setBrush(QColor("#EBE9E5"))
+            p.setBrush(QColor(P.fill))
             p.drawRoundedRect(no, 15, 15)
             p.setBrush(QColor(tokens.BLUE))
             p.drawRoundedRect(allow, 15, 15)
@@ -933,21 +849,21 @@ class ControlVisual(QWidget):
             p.setPen(QColor(INK_ON_PALE))
             p.drawText(no, Qt.AlignmentFlag.AlignCenter, "Not now")
             p.setFont(_font(12, 700))
-            p.setPen(QColor("#FFFFFF"))
+            p.setPen(QColor(tokens.ON_COLOUR))
             p.drawText(allow, Qt.AlignmentFlag.AlignCenter, "Allow")
             p.setOpacity(1.0)
         if done > 0.01:
-            words(QRectF(inner.left(), inner.top(), inner.width(), 14), "TORA DID", 10, 600, "#8A8884", done)
+            words(QRectF(inner.left(), inner.top(), inner.width(), 14), "TORA DID", 10, 600, P.faint, done)
             words(QRectF(inner.left(), inner.top() + 18, inner.width(), 24),
                   "Exported March's invoices", 16, 700, INK_ON_PALE, done)
             words(QRectF(inner.left(), inner.top() + 44, inner.width(), 40),
-                  "Still asks first before paying, sending, posting or deleting.", 12, 400, "#5C5C5C", done)
+                  "Still asks first before paying, sending, posting or deleting.", 12, 400, P.dim, done)
             bar = QRectF(inner.left(), inner.bottom() - 10, inner.width(), 6)
             p.setOpacity(done)
             p.setPen(Qt.PenStyle.NoPen)
-            p.setBrush(QColor("#EBE9E5"))
+            p.setBrush(QColor(P.fill))
             p.drawRoundedRect(bar, 3, 3)
-            p.setBrush(QColor("#22A55B"))
+            p.setBrush(QColor(P.ok))
             p.drawRoundedRect(QRectF(bar.left(), bar.top(), bar.width() * done, 6), 3, 3)
             p.setOpacity(1.0)
 
@@ -971,15 +887,15 @@ class _Paper(QWidget):
         # Inset far enough that the whole shadow is inside the widget: at
         # 6 px it ran past the bottom edge and was cut off square.
         r = QRectF(16, 6, self.width() - 32, self.height() - 34)
-        soft_shadow(p, r, 14, 0.45)
-        p.setBrush(QColor("#FFFFFF"))
+        soft_shadow(p, r, 14, "card", 0.6)
+        p.setBrush(QColor(P.card))
         p.setPen(QPen(QColor(0, 0, 0, 22), 1))
         p.drawRoundedRect(r, 14, 14)
         p.save()
         clip = QPainterPath()
         clip.addRoundedRect(r, 14, 14)
         p.setClipPath(clip)
-        p.setPen(QPen(QColor("#EEF3FB"), 1))
+        p.setPen(QPen(QColor(P.grid), 1))
         x = r.left() + 22.0
         while x < r.right():
             p.drawLine(QPointF(x, r.top()), QPointF(x, r.bottom()))
@@ -1002,12 +918,12 @@ class MathSheet(_Paper):
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
         r = self._card(p)
-        p.setPen(QColor("#5C5C5C"))
+        p.setPen(QColor(P.dim))
         p.setFont(_font(12, 600, 1.4))
         p.drawText(QRectF(r.left() + 28, r.top() + 18, 300, 18), Qt.AlignmentFlag.AlignLeft,
                    "SOLVE FOR X")
         p.setFont(_font(30, 500))
-        p.setPen(QColor("#1F3A68"))
+        p.setPen(QColor(P.pen))
         for i, line in enumerate(self.LINES):
             p.drawText(QRectF(r.left() + 60, r.top() + 50 + i * 50, r.width() - 120, 44),
                        Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft, line)
@@ -1043,7 +959,7 @@ class PrivacyVisual(ControlVisual):
     def _card_words(self, p: QPainter, card: QRectF) -> None:
         inner = card.adjusted(24, 22, -24, -18)
         p.setFont(_font(10, 600, 1.5))
-        p.setPen(QColor("#8A8884"))
+        p.setPen(QColor(P.faint))
         p.drawText(QRectF(inner.left(), inner.top(), inner.width(), 14), Qt.AlignmentFlag.AlignLeft,
                    "PRIVACY")
         p.setFont(_font(19, 700, -0.3))
@@ -1051,19 +967,13 @@ class PrivacyVisual(ControlVisual):
         p.drawText(QRectF(inner.left(), inner.top() + 22, inner.width(), 60),
                    Qt.AlignmentFlag.AlignLeft | Qt.TextFlag.TextWordWrap, self.CLAIM)
         p.setFont(_font(12, 400))
-        p.setPen(QColor("#5C5C5C"))
+        p.setPen(QColor(P.dim))
         p.drawText(QRectF(inner.left(), inner.top() + 84, inner.width(), 40),
                    Qt.AlignmentFlag.AlignLeft | Qt.TextFlag.TextWordWrap,
                    "Nothing is seen while you're not asking.")
 
 
 # ── make Tora yours: her colour and her voice ─────────────────────────────────
-
-# Each voice wears one of the website's colours, so the grid reads as a
-# palette rather than a list of names.
-VOICE_COLOURS = ("#00B6FD", "#6F7CF5", "#E48AD8", "#39D5C6", "#F6B96B", "#3D7BFF",
-                 "#A48CFF", "#FF9A3C", "#2FB8C8", "#F0A6FF", "#7FB6FF", "#9CE9DA")
-
 
 def play_voice(name: str) -> bool:
     """Play the bundled hello in this voice (assets/voices/). Never the
@@ -1184,8 +1094,7 @@ class FilledRibbon(Swoosh):
         path.cubicTo(QPointF(0.20 * w, 0.20 * h), QPointF(0.48 * w, 1.10 * h), QPointF(0.66 * w, 0.52 * h))
         path.cubicTo(QPointF(0.80 * w, 0.18 * h), QPointF(0.96 * w, 0.12 * h), QPointF(1.12 * w, 0.24 * h))
         grad = QLinearGradient(QPointF(0, 0), QPointF(w, 0))
-        for stop, colour in ((0.0, "#00B6FD"), (0.3, "#3D7BFF"), (0.55, "#8C7CFF"),
-                             (0.78, "#E9A2FF"), (1.0, "#FFC6DE")):
+        for stop, colour in zip((0.0, 0.3, 0.55, 0.78, 1.0), tokens.RIBBON_FILLED):
             grad.setColorAt(stop, QColor(colour))
         pen = QPen(QBrush(grad), max(130.0, h * 0.26))
         pen.setCapStyle(Qt.PenCapStyle.RoundCap)
@@ -1301,7 +1210,7 @@ class VoiceCarousel(QWidget):
         off = (1 - self._slide) * 40 * self._dir
         p.setOpacity(0.25 + 0.75 * self._slide)
         p.setFont(_font(12, 600, 1.5))
-        p.setPen(QColor("#5C5C5C"))
+        p.setPen(QColor(P.dim))
         p.drawText(QRectF(off, 4, w, 18), Qt.AlignmentFlag.AlignHCenter,
                    f"VOICE {self._index + 1} OF {len(self._voices)}")
         p.setFont(_font(46, 700, -1.0))
@@ -1344,7 +1253,7 @@ class VoiceCarousel(QWidget):
             p.setBrush(QColor(colour) if on else QColor(0, 0, 0, 40))
             p.drawEllipse(QPointF(dx + i * 14 + 7, 204), 4 if on else 3, 4 if on else 3)
         p.setFont(_font(12, 500))
-        p.setPen(QColor("#8A8884"))
+        p.setPen(QColor(P.faint))
         p.drawText(QRectF(0, 216, w, 18), Qt.AlignmentFlag.AlignHCenter, "Click to hear her again")
         p.end()
 
@@ -1373,14 +1282,15 @@ def stylesheet() -> str:
     QDialog {{ background: {T.BG}; }}
     QWidget#column {{ background: {T.SURFACE}; }}
     QPushButton#chip {{
-        background: {T.SURFACE}; border: 1px solid {T.BORDER_STRONG}; border-radius: 10px;
+        background: {T.SURFACE}; border: 1px solid {T.BORDER_STRONG}; border-radius: {tokens.RADIUS_SM}px;
         color: {T.TEXT}; font-size: 13px; font-weight: 500; padding: 8px 10px;
     }}
     QPushButton#chip:hover {{ background: {T.SURFACE_HOVER}; }}
     QPushButton#chip:checked {{ background: {T.ACCENT_SOFT}; border-color: {T.ACCENT}; }}
     QPushButton#continue {{
-        background: {T.ACCENT}; border: none; border-radius: 22px; color: #FFFFFF;
-        font-size: 14px; font-weight: 700; padding: 0px 24px; min-height: 44px;
+        background: {T.ACCENT}; border: none; border-radius: {tokens.pill(tokens.BUTTON_H["lg"])}px;
+        color: {tokens.ON_COLOUR}; font-size: 14px; font-weight: 700; padding: 0px 24px;
+        min-height: {tokens.BUTTON_H["lg"]}px;
     }}
     QPushButton#continue:hover {{ background: {T.ACCENT_HOVER}; }}
     QPushButton#continue:disabled {{ background: {T.BORDER_STRONG}; color: {T.SURFACE}; }}
@@ -1390,12 +1300,13 @@ def stylesheet() -> str:
     }}
     QPushButton#back:hover, QPushButton#skip:hover {{ color: {T.TEXT}; }}
     QPushButton#answer {{
-        background: {T.SURFACE_HOVER}; border: none; border-radius: 15px; color: {T.TEXT};
+        background: {T.SURFACE_HOVER}; border: none; border-radius: {tokens.pill(tokens.BUTTON_H["sm"])}px; color: {T.TEXT};
         font-size: 13px; font-weight: 600; min-height: 18px; padding: 6px 16px;
     }}
     QPushButton#answer:hover {{ background: {T.BORDER}; }}
     QPushButton#answerYes {{
-        background: {T.ACCENT}; border: none; border-radius: 15px; color: #FFFFFF;
+        background: {T.ACCENT}; border: none; border-radius: {tokens.pill(tokens.BUTTON_H["sm"])}px;
+        color: {tokens.ON_COLOUR};
         font-size: 13px; font-weight: 700; min-height: 18px; padding: 6px 18px;
     }}
     QPushButton#answerYes:hover {{ background: {T.ACCENT_HOVER}; }}

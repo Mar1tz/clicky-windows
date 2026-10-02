@@ -221,7 +221,7 @@ class TrayPopup(QWidget):
             QFrame#trayRow   {{ background: transparent; border: none; border-radius: 8px; }}
             QFrame#trayRow:hover {{ background: {T.SURFACE_HOVER}; }}
             QFrame#trayRow[notice="true"] {{ background: {T.ACCENT_SOFT}; }}
-            QFrame#trayRow[notice="true"]:hover {{ background: rgba(51, 128, 255, 0.20); }}
+            QFrame#trayRow[notice="true"]:hover {{ background: {T.ACCENT_PLATE}; }}
             QLabel#trayRowText {{ color: {T.TEXT}; font-size: 13px; font-weight: 500; background: transparent; }}
             QFrame#trayRow[notice="true"] QLabel#trayRowText {{ color: {T.ACCENT}; font-weight: 700; }}
             QLabel#trayRowTextOff {{ color: {T.TEXT_FAINT}; font-size: 13px; font-weight: 500; background: transparent; }}

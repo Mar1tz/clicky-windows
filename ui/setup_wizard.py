@@ -54,6 +54,7 @@ from PyQt6.QtWidgets import (
 
 from config import cfg
 from ui import app_theme as T
+from ui import kit, tokens
 from ui import onboarding_parts as O
 from ui.app_widgets import Meter, Select, ToggleRow, label
 
@@ -286,8 +287,9 @@ class SetupWizard(QDialog):
             go.setFixedWidth(360)
             go.clicked.connect(self._next)
             if dark:
-                go.setStyleSheet("QPushButton#continue { background: #F4F3F0; color: #141414; }"
-                                 "QPushButton#continue:hover { background: #FFFFFF; }")
+                go.setStyleSheet(f"QPushButton#continue {{ background: {O.STAGE.button};"
+                                 f" color: {O.STAGE.button_text}; }}"
+                                 f"QPushButton#continue:hover {{ background: {O.P.card}; }}")
             lay.addWidget(go, 0, Qt.AlignmentFlag.AlignHCenter)
             self._continue[name] = go
         return body, page
@@ -298,7 +300,8 @@ class SetupWizard(QDialog):
         b.setCursor(Qt.CursorShape.PointingHandCursor)
         b.clicked.connect(self._back)
         if dark:
-            b.setStyleSheet("QPushButton#back { color: #A1A1A1; } QPushButton#back:hover { color: #FAFAFA; }")
+            b.setStyleSheet(f"QPushButton#back {{ color: {O.STAGE.dim}; }}"
+                            f" QPushButton#back:hover {{ color: {O.STAGE.text}; }}")
         self._backs[name] = b
         return b
 
@@ -335,14 +338,8 @@ class SetupWizard(QDialog):
         card.setObjectName("signinCard")
         card.setFixedWidth(460)
         card.setStyleSheet(f"QFrame#signinCard {{ background: {T.SURFACE}; border: 1px solid {T.BORDER};"
-                           " border-radius: 18px; }")
-        from PyQt6.QtWidgets import QGraphicsDropShadowEffect
-        from PyQt6.QtGui import QColor
-        shadow = QGraphicsDropShadowEffect(card)
-        shadow.setBlurRadius(48)
-        shadow.setOffset(0, 12)
-        shadow.setColor(QColor(0, 0, 0, 45))
-        card.setGraphicsEffect(shadow)
+                           f" border-radius: {tokens.RADIUS_XL}px; }}")
+        kit.drop_shadow(card, "hero")
         body = QVBoxLayout(card)
         body.setContentsMargins(36, 32, 36, 30)
         body.setSpacing(12)
@@ -633,7 +630,7 @@ class SetupWizard(QDialog):
         body, page = self._test("payoff", dark=True, go_words="Continue")
         body.setAlignment(Qt.AlignmentFlag.AlignLeft)
         body.setContentsMargins(60, 10, 60, 0)
-        body.addWidget(O.text("Nice job.", 72, 700, "#FAFAFA", spacing=-1.5, wrap=False))
+        body.addWidget(O.text("Nice job.", 72, 700, O.STAGE.text, spacing=-1.5, wrap=False))
         body.addSpacing(28)
         self.payoff_lines = QVBoxLayout()
         self.payoff_lines.setSpacing(22)
@@ -655,8 +652,8 @@ class SetupWizard(QDialog):
             v = QVBoxLayout(box)
             v.setContentsMargins(0, 0, 0, 0)
             v.setSpacing(4)
-            v.addWidget(O.text(caption.upper(), 11, 600, "#A1A1A1", spacing=1.5, wrap=False))
-            v.addWidget(O.text(value, 44, 700, "#FAFAFA", spacing=-1.0, wrap=False))
+            v.addWidget(O.text(caption.upper(), 11, 600, O.STAGE.dim, spacing=1.5, wrap=False))
+            v.addWidget(O.text(value, 44, 700, O.STAGE.text, spacing=-1.0, wrap=False))
             # Pinned to what it asks for: next to the wrapping line below it,
             # the column's height-for-width pass gave it 55 px of its 76 and
             # sliced the number in half.
@@ -666,26 +663,20 @@ class SetupWizard(QDialog):
         # Short captions: at this size a two-line caption ran into its number.
         if "try" in self._answered:
             lay.addWidget(stat(f"{self._answered['try'][0]:.1f} seconds", "Tora found the mistake in"))
-        lay.addWidget(O.text("That's the whole idea: you never left the screen.", 16, 500, "#A1A1A1"))
+        lay.addWidget(O.text("That's the whole idea: you never left the screen.", 16, 500, O.STAGE.dim))
 
     # ── Personalize ───────────────────────────────────────────────────────────
 
     def _ribbon_card(self, name: str, width: int = 560) -> tuple[QVBoxLayout, QWidget]:
         """A centred white card on the ribbon - the Personalize screens."""
-        from PyQt6.QtGui import QColor
-        from PyQt6.QtWidgets import QGraphicsDropShadowEffect
         outer, page = self._test(name, go_words="Continue")
         outer.addSpacing(4)
         card = QFrame()
         card.setObjectName(f"{name}Card")
         card.setFixedWidth(width)
         card.setStyleSheet(f"QFrame#{name}Card {{ background: {T.SURFACE}; border: none;"
-                           " border-radius: 20px; }")
-        shadow = QGraphicsDropShadowEffect(card)
-        shadow.setBlurRadius(56)
-        shadow.setOffset(0, 14)
-        shadow.setColor(QColor(0, 0, 0, 45))
-        card.setGraphicsEffect(shadow)
+                           f" border-radius: {tokens.RADIUS_XL}px; }}")
+        kit.drop_shadow(card, "hero")
         body = QVBoxLayout(card)
         body.setContentsMargins(32, 28, 32, 26)
         body.setSpacing(12)
@@ -770,14 +761,8 @@ class SetupWizard(QDialog):
         card.setObjectName("doneCard")
         card.setFixedWidth(460)
         card.setStyleSheet(f"QFrame#doneCard {{ background: {T.SURFACE}; border: none;"
-                           " border-radius: 20px; }")
-        from PyQt6.QtWidgets import QGraphicsDropShadowEffect
-        from PyQt6.QtGui import QColor
-        shadow = QGraphicsDropShadowEffect(card)
-        shadow.setBlurRadius(60)
-        shadow.setOffset(0, 16)
-        shadow.setColor(QColor(0, 0, 0, 60))
-        card.setGraphicsEffect(shadow)
+                           f" border-radius: {tokens.RADIUS_XL}px; }}")
+        kit.drop_shadow(card, "hero")
         body = QVBoxLayout(card)
         body.setContentsMargins(36, 34, 36, 30)
         body.setSpacing(12)

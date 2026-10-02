@@ -35,10 +35,13 @@ from PyQt6.QtWidgets import QSizePolicy, QWidget
 from ui import tokens
 
 W, H = 560.0, 350.0
-INK = "#101828"
-SOFT = "#667085"
-LINE = "#EAECF0"
-FAINT = "#F2F4F7"
+# The scenes are drawn content: paper greys, light in both themes (tokens §Paper).
+INK = tokens.PAPER.ink
+SOFT = tokens.PAPER.dim
+LINE = tokens.PAPER.line
+FAINT = tokens.PAPER.ground
+WHITE = tokens.PAPER.card
+ON = tokens.ON_COLOUR
 TYPE_MS = 50
 
 # The site's three curves.
@@ -48,13 +51,24 @@ ISLAND = (0.32, 0.72, 0.0, 1.0)        # the pill opening and closing
 LINEAR = None
 
 # Per-scene colours (what.tsx LOOK): tile, pane, deep.
-LOOKS = (
-    ("#00B6FD", "#E4F4FF", "#0089C2"),  # Ask
-    ("#9D8CFF", "#EDEBFF", "#6A55E8"),  # Show me
-    ("#F29BD8", "#FCEAF6", "#C94A9E"),  # Teach me
-    ("#39D5C6", "#E1F7F3", "#139C8F"),  # Do it
-    ("#F5C451", "#FFF4DC", "#C58A06"),  # Build it
-)
+LOOKS = tokens.SCENE_LOOKS
+
+# The apps the scenes picture wear their own colours - a music player's
+# green, a spreadsheet's green, a PDF's red, album covers, a florist's site.
+# A depicted application is not a surface of ours (heytora-web BRAND.md §2):
+# its colours stop at its window's edge, and they live here and nowhere else.
+DEPICTED = {
+    "sheet": "#188038",
+    "pdf": "#E5252A",
+    "music": "#1DB954",
+    "bluetooth": "#0A84FF",
+    "browser": "#4285F4",
+    "covers": (("#F29BD8", "#F5C451"), ("#6A55E8", "#00B6FD")),
+    "suns": ("#FFE7A8", "#FFF1F6", "#E6F4FF"),
+    "hero": ("#FFE9EF", "#FFE2C2"),
+    "blooms": (("#FFB3C7", "#F06A93"), ("#FFE08A", "#F5B731")),
+    "tiles": ("#FDE2EA", "#FFF0D1", "#E8F5E9"),
+}
 
 
 def typing(text: str, start: int = 0, rest: int = 1000) -> int:
@@ -152,12 +166,8 @@ class Clock:
 # ── drawing helpers ───────────────────────────────────────────────────────────
 
 def font(px: float, weight: int = 400, italic: bool = False, serif: bool = False) -> QFont:
-    f = QFont("Georgia" if serif else tokens.font_family())
-    f.setPixelSize(max(1, int(round(px))))
-    f.setWeight(QFont.Weight(weight))
-    f.setItalic(italic)
-    f.setHintingPreference(QFont.HintingPreference.PreferNoHinting)
-    return f
+    from ui import kit
+    return kit.font(px, weight, italic=italic, family="Georgia" if serif else "")
 
 
 def text(p: QPainter, x: float, y: float, words: str, px: float, weight: int = 400,
@@ -188,12 +198,9 @@ def rrect(p: QPainter, r: QRectF, radius: float, fill, edge: Optional[str] = Non
 
 def card(p: QPainter, r: QRectF, alpha: float = 1.0) -> None:
     """A plain white window: soft-edged, no chrome (the site's Card)."""
-    p.setPen(Qt.PenStyle.NoPen)
-    for i in range(8):
-        g = 2 + i * 3.0
-        p.setBrush(QColor(16, 24, 40, int(6 * alpha)))
-        p.drawRoundedRect(r.adjusted(-g * 0.5, g * 0.4 + 6, g * 0.5, g + 6), 16 + g * 0.5, 16 + g * 0.5)
-    rrect(p, r, 16, "#FFFFFF", alpha=alpha)
+    from ui import kit
+    kit.soft_shadow(p, r, tokens.RADIUS_LG, "float", alpha)
+    rrect(p, r, tokens.RADIUS_LG, WHITE, alpha=alpha)
 
 
 def partial(p: QPainter, path: QPainterPath, t: float, pen: QPen) -> None:
@@ -210,7 +217,7 @@ def partial(p: QPainter, path: QPainterPath, t: float, pen: QPen) -> None:
     p.drawPath(sub)
 
 
-def tick_mark(p: QPainter, c: QPointF, size: float, colour: str = "#FFFFFF", t: float = 1.0) -> None:
+def tick_mark(p: QPainter, c: QPointF, size: float, colour: str = ON, t: float = 1.0) -> None:
     path = QPainterPath(QPointF(c.x() - size * 0.29, c.y() + size * 0.02))
     path.lineTo(c.x() - size * 0.10, c.y() + size * 0.21)
     path.lineTo(c.x() + size * 0.29, c.y() - size * 0.21)
@@ -236,7 +243,7 @@ def glyph_tile(p: QPainter, r: QRectF, fill: str, mark: str = "") -> None:
     """A plain app glyph where the site draws a brand's logo."""
     rrect(p, r, r.width() * 0.24, fill)
     if mark:
-        text(p, r.left(), r.top() + r.height() * 0.16, mark, r.height() * 0.5, 700, "#FFFFFF",
+        text(p, r.left(), r.top() + r.height() * 0.16, mark, r.height() * 0.5, 700, ON,
              r.width(), Qt.AlignmentFlag.AlignHCenter)
 
 
@@ -342,9 +349,9 @@ class Scene:
         p.setPen(Qt.PenStyle.NoPen)
         for i in range(6):
             g = 2 + i * 3.0
-            p.setBrush(QColor(16, 24, 40, 7))
+            p.setBrush(QColor(0, 0, 0, 7))
             p.drawRoundedRect(r.adjusted(-g * 0.4, g * 0.3 + 3, g * 0.4, g * 0.6 + 3), h / 2 + g, h / 2 + g)
-        rrect(p, r, h / 2, "#FFFFFF")
+        rrect(p, r, h / 2, WHITE)
         op = self.v.get("iopen")
         dot = QColor(tokens.BLUE)
         if op < 0.99:
@@ -440,9 +447,9 @@ def draw_cursor(p: QPainter, x: float, y: float, scale: float = 1.0) -> None:
         path.lineTo(px, py)
     path.closeSubpath()
     p.setPen(Qt.PenStyle.NoPen)
-    p.setBrush(QColor(16, 24, 40, 50))
+    p.setBrush(QColor(0, 0, 0, 50))
     p.drawPath(path.translated(0, 2))
-    p.setBrush(QColor("#FFFFFF"))
+    p.setBrush(QColor(WHITE))
     pen = QPen(QColor(INK), 1.3)
     pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
     p.setPen(pen)
@@ -492,7 +499,7 @@ class AskScene(Scene):
         if n == 0:
             r = QRectF(120, 80, 320, 226)
             card(p, r)
-            header(p, r.left() + 24, r.top() + 24, "Trip budget", "#188038", "▦")
+            header(p, r.left() + 24, r.top() + 24, "Trip budget", DEPICTED["sheet"], "▦")
             y = r.top() + 60
             for k, (item, cost) in enumerate(self.ROWS):
                 text(p, r.left() + 24, y + 9, item, 13.5)
@@ -537,8 +544,8 @@ class AskScene(Scene):
         else:
             r = QRectF(140, 74, 280, 256)
             card(p, r)
-            rrect(p, QRectF(r.left() + 24, r.top() + 24, 26, 20), 4, "#E5252A")
-            text(p, r.left() + 24, r.top() + 28.5, "PDF", 8.5, 700, "#FFFFFF", 26, Qt.AlignmentFlag.AlignHCenter)
+            rrect(p, QRectF(r.left() + 24, r.top() + 24, 26, 20), 4, DEPICTED["pdf"])
+            text(p, r.left() + 24, r.top() + 28.5, "PDF", 8.5, 700, ON, 26, Qt.AlignmentFlag.AlignHCenter)
             text(p, r.left() + 60, r.top() + 24.5, "Flat lease.pdf", 14, 600)
             text(p, r.left() + 24, r.top() + 48, "Page 3 of 12", 11, 400, SOFT)
             text(p, r.left() + 24, r.top() + 74, "4. Ending the lease early", 13, 600)
@@ -555,10 +562,10 @@ class AskScene(Scene):
                         c.setAlphaF(0.4)
                         rrect(p, QRectF(r.left() + 18, y - 5, (wl + 12) * hl, 17), 4, c)
                 grey = self.v.get("grey") if i in (5, 6) else 0
-                col = QColor("#E4E7EC")
+                col = QColor(LINE)
                 if grey:
-                    col = QColor(int(0xE4 + (0x98 - 0xE4) * grey), int(0xE7 + (0xA2 - 0xE7) * grey),
-                                 int(0xEC + (0xB3 - 0xEC) * grey))
+                    from ui import kit
+                    col = kit.mix(LINE, tokens.PAPER.faint, grey)
                 rrect(p, QRectF(r.left() + 24, y, wl, 7), 3.5, col)
                 y += 16
 
@@ -682,7 +689,7 @@ class ShowScene(Scene):
         d = self.v.get("dialog")
         if d > 0.01:
             p.setOpacity(d)
-            rrect(p, local, 16, QColor(16, 24, 40, 18))
+            rrect(p, local, tokens.RADIUS_LG, QColor(0, 0, 0, 18))
             dr = QRectF(108, 58 + 8 * (1 - d), 220, 156)
             card(p, dr)
             text(p, dr.left() + 16, dr.top() + 16, "Export video", 13, 600)
@@ -697,7 +704,7 @@ class ShowScene(Scene):
             if e > 0.01:
                 rrect(p, QRectF(btn.left(), btn.top(), btn.width() * e, btn.height()), 8, self.deep)
             text(p, btn.left(), btn.top() + 7, "Exported" if self.exported else "Export", 12, 500,
-                 "#FFFFFF", btn.width(), Qt.AlignmentFlag.AlignHCenter)
+                 WHITE, btn.width(), Qt.AlignmentFlag.AlignHCenter)
             p.setOpacity(1.0)
         # Tora's mark: the ring that travels, and the step it is on
         ring = self.v.get("ring")
@@ -719,11 +726,11 @@ class ShowScene(Scene):
             p.setFont(font(11.5))
             tw = p.fontMetrics().horizontalAdvance(words) + 38
             tr = QRectF(rr.left(), rr.bottom() + 8, tw, 26)
-            rrect(p, tr, 13, "#0C0C0E")
+            rrect(p, tr, 13, INK)
             p.setBrush(QColor(self.tile))
             p.drawEllipse(QPointF(tr.left() + 13, tr.center().y()), 9, 9)
             text(p, tr.left() + 4, tr.top() + 6, str(self.step + 1), 10.5, 600, INK, 18, Qt.AlignmentFlag.AlignHCenter)
-            text(p, tr.left() + 28, tr.top() + 5.5, words, 11.5, 400, "#FFFFFF", tw)
+            text(p, tr.left() + 28, tr.top() + 5.5, words, 11.5, 400, ON, tw)
             p.setOpacity(1.0)
         press = self.v.get("press")
         s = 1 - 0.18 * math.sin(math.pi * press) if press < 1 else 1.0
@@ -894,8 +901,10 @@ class DoScene(Scene):
             self.v.set("conn", 1, 800, EASE, delay=600)
 
     def _cover(self, p: QPainter, r: QRectF, k: int) -> None:
-        stops = ((self.deep, self.tile), ("#F29BD8", "#F5C451"), ("#6A55E8", "#00B6FD"))[k % 3]
-        sun = ((0.70, 0.72, "#FFE7A8", 0.18), (0.30, 0.34, "#FFF1F6", 0.15), (0.64, 0.40, "#E6F4FF", 0.17))[k % 3]
+        stops = ((self.deep, self.tile),) + DEPICTED["covers"]
+        stops = stops[k % 3]
+        suns = DEPICTED["suns"]
+        sun = ((0.70, 0.72, suns[0], 0.18), (0.30, 0.34, suns[1], 0.15), (0.64, 0.40, suns[2], 0.17))[k % 3]
         g = QLinearGradient(r.topLeft(), r.bottomRight())
         g.setColorAt(0, QColor(stops[0]))
         g.setColorAt(1, QColor(stops[1]))
@@ -911,7 +920,7 @@ class DoScene(Scene):
             r = QRectF(130, 80, 300, 238)
             card(p, r)
             p.setPen(Qt.PenStyle.NoPen)
-            p.setBrush(QColor("#1DB954"))
+            p.setBrush(QColor(DEPICTED["music"]))
             p.drawEllipse(QRectF(r.left() + 20, r.top() + 20, 20, 20))
             text(p, r.left() + 50, r.top() + 20.5, "Now playing", 14, 600)
             cover = QRectF(r.left() + 20, r.top() + 56, 84, 84)
@@ -944,7 +953,7 @@ class DoScene(Scene):
             p.setPen(Qt.PenStyle.NoPen)
             p.setBrush(QColor(INK))
             p.drawEllipse(QPointF(cx, cy), 16, 16)
-            p.setBrush(QColor("#FFFFFF"))
+            p.setBrush(QColor(WHITE))
             p.drawRect(QRectF(cx - 5, cy - 6, 3, 12))
             p.drawRect(QRectF(cx + 2, cy - 6, 3, 12))
             glow = self.v.get("skipglow")
@@ -972,19 +981,19 @@ class DoScene(Scene):
             text(p, r.left() + 20, r.top() + 54, "Bluetooth & devices", 17, 600)
             row = QRectF(r.left() + 20, r.top() + 92, r.width() - 40, 52)
             rrect(p, row, 12, FAINT)
-            rrect(p, QRectF(row.left() + 14, row.top() + 13, 26, 26), 13, "#0A84FF")
-            text(p, row.left() + 14, row.top() + 16, "ᛒ", 15, 700, "#FFFFFF", 26, Qt.AlignmentFlag.AlignHCenter)
+            rrect(p, QRectF(row.left() + 14, row.top() + 13, 26, 26), 13, DEPICTED["bluetooth"])
+            text(p, row.left() + 14, row.top() + 16, "ᛒ", 15, 700, ON, 26, Qt.AlignmentFlag.AlignHCenter)
             text(p, row.left() + 52, row.top() + 9, "Bluetooth", 13, 600)
             on = self.v.get("on")
             text(p, row.left() + 52, row.top() + 27, "Off", 11, 400, SOFT, alpha=1 - on)
             text(p, row.left() + 52, row.top() + 27, "On", 11, 400, SOFT, alpha=on)
             sw = QRectF(row.right() - 14 - 40, row.center().y() - 11, 40, 22)
-            off_c, on_c = QColor("#D0D5DD"), QColor(self.deep)
+            off_c, on_c = QColor(tokens.PAPER.edge), QColor(self.deep)
             mixc = QColor(int(off_c.red() + (on_c.red() - off_c.red()) * on),
                           int(off_c.green() + (on_c.green() - off_c.green()) * on),
                           int(off_c.blue() + (on_c.blue() - off_c.blue()) * on))
             rrect(p, sw, 11, mixc)
-            p.setBrush(QColor("#FFFFFF"))
+            p.setBrush(QColor(WHITE))
             p.drawEllipse(QRectF(sw.left() + 3 + 18 * on, sw.top() + 3, 16, 16))
             conn = self.v.get("conn")
             if conn > 0.01:
@@ -1089,7 +1098,7 @@ class BuildScene(Scene):
                     p.setBrush(col)
                     rad = 8 * (0.4 + 0.6 * done)
                     p.drawEllipse(c, rad, rad)
-                    tick_mark(p, c, 13, "#FFFFFF", done)
+                    tick_mark(p, c, 13, ON, done)
                 text(p, r.left() + 46, y + 5, step, 13, 400, INK if (done > 0.5 or running) else SOFT)
             bar = QRectF(r.left() + 20, r.top() + 70 + 4 * 29 + 12, r.width() - 40, 5)
             rrect(p, bar, 2.5, FAINT)
@@ -1102,15 +1111,15 @@ class BuildScene(Scene):
             clip = QPainterPath()
             clip.addRoundedRect(r, 16, 16)
             p.setClipPath(clip)
-            rrect(p, top, 0, "#F9FAFB")
+            rrect(p, top, 0, FAINT)
             p.restore()
             p.setPen(QPen(QColor(LINE), 1))
             p.drawLine(QPointF(r.left(), top.bottom()), QPointF(r.right(), top.bottom()))
             p.setPen(Qt.PenStyle.NoPen)
-            p.setBrush(QColor("#4285F4"))
+            p.setBrush(QColor(DEPICTED["browser"]))
             p.drawEllipse(QRectF(r.left() + 14, top.top() + 10, 16, 16))
             url = QRectF(r.left() + 40, top.top() + 7, r.width() - 54, 22)
-            rrect(p, url, 11, "#FFFFFF", LINE)
+            rrect(p, url, 11, WHITE, LINE)
             text(p, url.left() + 12, url.top() + 4, "bloomandstem.shop", 11, 400, SOFT)
 
             def rise(k: str):
@@ -1125,17 +1134,17 @@ class BuildScene(Scene):
             hero = QRectF(r.left() + 16, top.bottom() + 40 + dy, r.width() - 32, 118)
             p.setOpacity(v)
             g = QLinearGradient(hero.topLeft(), hero.bottomRight())
-            g.setColorAt(0, QColor("#FFE9EF"))
-            g.setColorAt(1, QColor("#FFE2C2"))
+            g.setColorAt(0, QColor(DEPICTED["hero"][0]))
+            g.setColorAt(1, QColor(DEPICTED["hero"][1]))
             p.setBrush(QBrush(g))
             p.setPen(Qt.PenStyle.NoPen)
             p.drawRoundedRect(hero, 12, 12)
             text(p, hero.left() + 16, hero.top() + 14, "Fresh flowers,\ncut this morning.", 19, 600, w=200, serif=True)
             rrect(p, QRectF(hero.left() + 16, hero.top() + 72, 92, 24), 12, INK)
-            text(p, hero.left() + 16, hero.top() + 77, "Shop bouquets", 10.5, 500, "#FFFFFF", 92, Qt.AlignmentFlag.AlignHCenter)
-            for (fx, fy, rad, a, b) in ((hero.right() - 64, hero.bottom() - 47, 27, "#FFB3C7", "#F06A93"),
-                                        (hero.right() - 116, hero.bottom() - 56, 20, "#FFE08A", "#F5B731"),
-                                        (hero.right() - 34, hero.bottom() - 74, 18, "#FFFFFF", self.tile)):
+            text(p, hero.left() + 16, hero.top() + 77, "Shop bouquets", 10.5, 500, ON, 92, Qt.AlignmentFlag.AlignHCenter)
+            for (fx, fy, rad, a, b) in ((hero.right() - 64, hero.bottom() - 47, 27) + DEPICTED["blooms"][0],
+                                        (hero.right() - 116, hero.bottom() - 56, 20) + DEPICTED["blooms"][1],
+                                        (hero.right() - 34, hero.bottom() - 74, 18, WHITE, self.tile)):
                 rg = QRadialGradient(QPointF(fx - rad * 0.2, fy - rad * 0.2), rad)
                 rg.setColorAt(0, QColor(a))
                 rg.setColorAt(1, QColor(b))
@@ -1143,7 +1152,7 @@ class BuildScene(Scene):
                 p.drawEllipse(QPointF(fx, fy), rad, rad)
             p.setOpacity(1.0)
             cw = (r.width() - 32 - 20) / 3
-            for i, col in enumerate(("#FDE2EA", "#FFF0D1", "#E8F5E9")):
+            for i, col in enumerate(DEPICTED["tiles"]):
                 v, dy = rise(f"r{2 + i}")
                 rrect(p, QRectF(r.left() + 16 + i * (cw + 10), hero.bottom() + 10 + dy, cw, 38), 9, col, alpha=v)
 

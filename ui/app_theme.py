@@ -29,9 +29,15 @@ OK = WARN = DANGER = BUSY = ""
 ACCENT        = tokens.BLUE    # the cursor's blue, in every theme
 ACCENT_HOVER  = tokens.BLUE_HOVER
 ACCENT_PRESS  = tokens.BLUE_PRESS
-ACCENT_SOFT   = "rgba(51, 128, 255, 0.12)"
-ACCENT_EDGE   = "rgba(51, 128, 255, 0.55)"
-ON_ACCENT     = "#FFFFFF"
+def _rgba(hex_colour: str, alpha: float) -> str:
+    h = hex_colour.lstrip("#")
+    return f"rgba({int(h[0:2], 16)}, {int(h[2:4], 16)}, {int(h[4:6], 16)}, {alpha})"
+
+
+ACCENT_SOFT   = _rgba(tokens.BLUE, 0.12)    # a selection's plate
+ACCENT_EDGE   = _rgba(tokens.BLUE, 0.55)    # a focused edge
+ACCENT_PLATE  = _rgba(tokens.BLUE, 0.20)    # a notice row under the pointer
+ON_ACCENT     = tokens.ON_COLOUR
 
 # State colours, keyed by AppState.name.lower() so the status pill can take
 # whatever the manager emits without a translation table. Thinking is the
@@ -94,8 +100,9 @@ apply(tokens.LIGHT)
 WINDOW_W, WINDOW_H = 1180, 760
 WINDOW_MIN_W, WINDOW_MIN_H = 940, 600
 RADIUS        = 14             # the window and its big surfaces
-RADIUS_CARD   = 12             # the site's large plates
-RADIUS_SMALL  = 8              # the site's --radius
+RADIUS_CARD   = tokens.RADIUS_MD    # the site's large plates
+RADIUS_SMALL  = tokens.RADIUS_SM    # the site's --radius
+BUTTON_PILL   = tokens.pill(tokens.BUTTON_H["md"])
 SIDEBAR_W     = 244
 TITLEBAR_H    = 44
 GUTTER        = 32             # page padding
@@ -200,7 +207,7 @@ def qss() -> str:
     /* Buttons are full-radius pills, as on the site. The primary is the
        cursor's blue; everything else is an outline in the page's own ink. */
     QPushButton#primary {{
-        background: {ACCENT}; border: none; border-radius: 17px;
+        background: {ACCENT}; border: none; border-radius: {BUTTON_PILL}px;
         color: {ON_ACCENT}; font-size: 13px; font-weight: 700;
         padding: 8px 18px; min-height: 18px;
     }}
@@ -209,13 +216,13 @@ def qss() -> str:
     QPushButton#primary:disabled {{ background: {BORDER_STRONG}; color: {TEXT_FAINT}; }}
     QPushButton#ghost {{
         background: {SURFACE}; border: 1px solid {BORDER_STRONG};
-        border-radius: 17px; color: {TEXT};
+        border-radius: {BUTTON_PILL}px; color: {TEXT};
         font-size: 13px; font-weight: 600; padding: 7px 16px; min-height: 18px;
     }}
     QPushButton#ghost:hover {{ background: {SURFACE_HOVER}; }}
     QPushButton#danger {{
         background: transparent; border: 1px solid {DANGER};
-        border-radius: 17px; color: {DANGER};
+        border-radius: {BUTTON_PILL}px; color: {DANGER};
         font-size: 13px; font-weight: 600; padding: 7px 16px; min-height: 18px;
     }}
     QPushButton#danger:hover {{ background: {SURFACE_HOVER}; }}
@@ -231,7 +238,7 @@ def qss() -> str:
        rest. A named rule above still wins wherever it applies. */
     QPushButton {{
         background: {SURFACE}; border: 1px solid {BORDER_STRONG};
-        border-radius: 15px; color: {TEXT};
+        border-radius: {tokens.pill(tokens.BUTTON_H['sm'])}px; color: {TEXT};
         font-size: 13px; font-weight: 600; padding: 6px 14px;
     }}
     QPushButton:hover {{ background: {SURFACE_HOVER}; }}

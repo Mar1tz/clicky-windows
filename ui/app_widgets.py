@@ -23,6 +23,7 @@ from PyQt6.QtWidgets import (
 )
 
 from ui import app_theme as T
+from ui import tokens
 
 
 # ── text ──────────────────────────────────────────────────────────────────────
@@ -311,7 +312,7 @@ class Switch(QWidget):
         # shadow so it still has an edge on a light track.
         p.setBrush(QColor(0, 0, 0, 30))
         p.drawEllipse(QRectF(x, 2.6, 18, 18))
-        p.setBrush(QColor("#FFFFFF"))
+        p.setBrush(QColor(tokens.ON_COLOUR))
         p.drawEllipse(QRectF(x, 2, 18, 18))
         p.end()
 
@@ -475,12 +476,10 @@ def columns(*widgets: QWidget, spacing: int = T.GAP) -> QHBoxLayout:
     return lay
 
 
-def shadow(widget: QWidget, blur: int = 40, alpha: int = 160) -> None:
-    effect = QGraphicsDropShadowEffect(widget)
-    effect.setBlurRadius(blur)
-    effect.setOffset(0, 8)
-    effect.setColor(QColor(0, 0, 0, min(alpha, T.PALETTE.shadow_alpha)))
-    widget.setGraphicsEffect(effect)
+def shadow(widget: QWidget, level: str = "float") -> None:
+    """A floating widget's shadow, from the elevation scale (ui/kit.py)."""
+    from ui import kit
+    kit.drop_shadow(widget, level)
 
 
 # ── navigation icons ──────────────────────────────────────────────────────────

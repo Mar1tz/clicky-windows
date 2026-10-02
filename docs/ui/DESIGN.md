@@ -59,6 +59,54 @@ glass recipe. It is not a reason to put glass anywhere new.
   appends `applicationDisplayName` to every window title, so set the title
   once.
 
+## 3A. Where the values live
+
+Every colour, radius, shadow and button size is a name in **`ui/tokens.py`**;
+**`ui/kit.py`** is how they are drawn (the tween, colour mix, font, and the
+one soft shadow). A UI file never writes a colour, a radius or a shadow as a
+number - `tests/agents/test_e2e_design_tokens.py` fails if it does. To change
+the look, change a token; to add one, add it to tokens.py and this section
+together.
+
+**The three blues, one job each.**
+
+| Token | Hex | Its job, and only this |
+|---|---|---|
+| `BLUE` | `#3380FF` | The accent: primary buttons, switches on, focus, selection, links, progress, the "active" dot. Tora's cursor by default |
+| `LOGO_BLUE` | `#00B6FD` | The wordmark's swoosh, and the first stop of the ribbon |
+| `ICON_BLUE` | `#009EFD` | The app icon (`assets/brand/heytora-icon.svg`); lives in that file |
+
+`BLUE_TINT` / `BLUE_TINT_DARK` fill a chosen chip or card; `ON_COLOUR`
+(white) is type and glyphs on a blue, a pack tile or a deep gradient.
+
+**Frame vs paper.** The *frame* (window, sidebar, page ground, the app's
+own cards and controls) follows light/dark through `app_theme` (`T.BG`,
+`T.SURFACE`, `T.TEXT`...). *Paper* is content the app draws - the equation
+card, the peeker's card, pack and capability cards on a gradient, the
+windows in the tour scenes - and stays light in both themes (`PAPER.card`,
+`.ink`, `.dim`, `.faint`, `.line`, `.edge`...). `STAGE` is the one dark
+moment in the light flow ("Nice job.").
+
+**Depicted apps keep their own colours.** A picture of someone else's
+app - the tour's music player, spreadsheet, PDF, album covers, the
+florist's site - wears that app's colours, and they live in one map,
+`tour_scenes.DEPICTED`, and nowhere else (heytora-web BRAND.md §2).
+
+**Scales.**
+
+| | Values | Use |
+|---|---|---|
+| Radius | `RADIUS_SM` 8 · `MD` 12 · `LG` 16 · `XL` 20 · `pill(h)` | inputs and cells · cards, chips, wells · floating cards and pictured windows · the one card a screen is about · buttons |
+| Button height | `BUTTON_H` sm 30 · md 34 · lg 44 | answers inside a card · the app · a screen's one action |
+| Shadow | `SHADOW` card · float · hero | a drawn card on colour · tests, popups, pickers · sign-in, You're set, Personalize |
+
+A pill's radius is `pill(h)` = one under half the height: Qt drops a
+radius above half and the button goes square.
+
+The families (`CAPABILITY`, `STEP`, `PACK`, `SCENE_LOOKS`, `VOICE_COLOURS`)
+and the ribbon (`RIBBON`, `RIBBON_POOLS`, `RIBBON_FILLED`) are in tokens.py
+too, copied from heytora-web.
+
 ## 4. Colour
 
 ### Frame
@@ -323,8 +371,9 @@ Seen in Wispr Flow (2 Oct 2026), for stage 5. Not built yet.
 |---|---|---|
 | 1 | Tokens, fonts, light/dark, main window restyle, tray click + popup | Done |
 | 4 | Onboarding rebuilt to §7 | Built; needs a live run on a clean profile |
-| 2 | Frame: title-only headers, window title, Home hero gradient card | Next |
+| 2 | Frame: title-only headers (all nine pages still have a description line), window title, Home hero gradient card | Next |
 | 3 | Content colour: pack tiles on Extensions/Accounting/Agents, capability colours | |
+| 4A | Consolidation: every value into `ui/tokens.py`, one `ui/kit.py`, a test that keeps it (§3A) | Done |
 | 5 | Glass and the pill: §7A pill with snap targets, result card, pop sound, captions optional; tray popup to glass; panel, captions and buddy onto shared tokens; `agents/ui/orbs.py` (worker 1) | |
 
 Each stage: a mock-up screenshot first, then code, then this table updated.
