@@ -3,6 +3,7 @@
     python tools/release.py 1.6.5 --notes "What changed, in a sentence or two"
     python tools/release.py 1.6.6 --notes "..." --required      # old copies must update
     python tools/release.py 1.6.5 --notes "..." --dry-run       # build and check, publish nothing
+    python tools/release.py 1.6.5 --notes "..." --skip-build    # publish what the dry run built
 
 In order - each step only after the one before it worked:
 
@@ -95,20 +96,35 @@ def main() -> int:
     ap.add_argument("--required", action="store_true", help="copies older than this must update")
     ap.add_argument("--min-version", default=None, help="copies older than this must update")
     ap.add_argument("--dry-run", action="store_true", help="build and check; publish nothing")
+    ap.add_argument("--skip-build", action="store_true",
+                    help="publish the installer already in dist (after a --dry-run), checked again")
     args = ap.parse_args()
 
     version, was = args.version.strip().lstrip("v"), current_version()
-    if parse(version) <= parse(was):
-        sys.exit(f"{version} is not newer than {was} (version.py)")
+    if parse(version) < parse(was):
+        sys.exit(f"{version} is older than {was} (version.py)")
+    # The same version again is fine after a dry run or a failed run (the
+    # bump is already done) - but never one that is already published.
+    published = subprocess.run(["gh", "release", "view", f"v{version}", "--repo", REPO],
+                               capture_output=True, text=True)
+    if published.returncode == 0:
+        sys.exit(f"v{version} is already published - pick the next version")
 
     print(f"1. version {was} -> {version}")
     set_version(version)
 
-    print("2. building - about ten minutes")
-    started = time.time()
-    run(["cmd", "/c", "build.bat", "installer"])
-    if not INSTALLER.exists() or INSTALLER.stat().st_mtime < started:
-        sys.exit("build.bat did not make a new dist\\Setup-HeyTora.exe")
+    if args.skip_build:
+        print("2. not building: the installer already in dist, checked again")
+        if not INSTALLER.exists():
+            sys.exit("no dist\\Setup-HeyTora.exe - run without --skip-build")
+    else:
+        print("2. building - about ten minutes")
+        started = time.time()
+        # By its full path, and /d: a Command Processor AutoRun on this PC must
+        # not move cmd somewhere build.bat isn't (it did, 1 Oct 2026).
+        run(["cmd", "/d", "/c", str(ROOT / "build.bat"), "installer"])
+        if not INSTALLER.exists() or INSTALLER.stat().st_mtime < started:
+            sys.exit("build.bat did not make a new dist\\Setup-HeyTora.exe")
     if product_version(INSTALLER) != version:
         sys.exit(f"the installer says {product_version(INSTALLER)!r}, not {version}")
     if (ROOT / "dist" / "HeyTora" / ".env").exists():

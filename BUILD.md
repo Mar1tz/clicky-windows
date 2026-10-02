@@ -127,25 +127,35 @@ pip install pyinstaller
 
 ---
 
-## Publishing a new version (the download page)
+## Publishing a new version — every installed copy updates itself
 
-The public download lives in its own repository, **github.com/Qwickly/heytora**
-(the installers and the page only - never this source). The page is
-https://qwickly.github.io/heytora/ and its button links to
+One command builds, checks and publishes a version:
 
-    https://github.com/Qwickly/heytora/releases/latest/download/Setup-HeyTora.exe
+```bat
+python toolselease.py 1.6.6 --notes "What changed, in a sentence or two"
+```
 
-which always serves the newest release - so keep the file name
-`Setup-HeyTora.exe` (no version in it). For a new version:
+It sets the version (`version.py` and `installer.iss`, nothing else), builds,
+checks the installer (its version; no `.env` in the build), creates the GitHub
+release on **github.com/Qwickly/heytora** (installers and the page only -
+never this source), updates the download page (https://qwickly.github.io/heytora/)
+and **`latest.json`** beside it, and commits the version bump here.
 
-1. Bump `MyAppVersion` in `installer.iss`, then `build.bat installer`.
-2. Publish it:
-   ```bat
-   gh release create v1.6.0 dist\Setup-HeyTora.exe --repo Qwickly/heytora --title "HeyTora 1.6.0" --notes "What changed" --latest
-   ```
-3. In that repo's `index.html`, update the version, size and SHA-256
-   (`certutil -hashfile dist\Setup-HeyTora.exe SHA256`) shown under the button,
-   and push. The button itself needs no change.
+`latest.json` is what every installed HeyTora reads (`updates/service.py`) at
+start-up and every few hours. A newer version downloads in the background, is
+checked against the published SHA-256, and installs **over the existing app**,
+silently: when the user picks "Restart to update" (tray, Settings), or by
+itself the next time HeyTora starts or as it is quit. Nobody visits the
+download page again.
+
+* `--required` — copies older than this version ask to update at once
+  ("HeyTora needs an update"). Use it when the server changes in a way old
+  apps can't follow.
+* `--dry-run` — build and check, publish nothing; `--skip-build` then
+  publishes that same installer.
+* The installer keeps its name, `Setup-HeyTora.exe`, so the page's button
+  (`.../releases/latest/download/Setup-HeyTora.exe`) never changes.
+* Needs `gh` signed in to an account that can publish to Qwickly/heytora.
 
 ## Signing the installer (optional)
 

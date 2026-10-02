@@ -286,6 +286,9 @@ def test_the_installer_reopens_heytora_after_a_silent_update():
     assert 'Flags: nowait skipifnotsilent; Check: ShouldRelaunch' in iss
     assert "{param:RELAUNCH|1}" in iss and "{param:UPDATE|0}" in iss and "Sleep(2500)" in iss
     assert "CloseApplications=yes" in iss
+    # An update leaves "start with Windows" as the user left it in Settings
+    # (the first install's task would switch it back on - found live, 2 Oct).
+    assert "Tasks: startupicon; Check: NotUpdate" in iss
 
 
 def test_the_release_tool_changes_only_the_version(tmp_path, monkeypatch):

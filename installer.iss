@@ -12,7 +12,7 @@
 ; ────────────────────────────────────────────────────────────────────
 
 #define MyAppName        "HeyTora"
-#define MyAppVersion     "1.6.4"
+#define MyAppVersion     "1.6.5"
 #define MyAppPublisher   "HeyTora"
 #define MyAppExeName     "HeyTora.exe"
 
@@ -90,7 +90,10 @@ Name: "{autodesktop}\{#MyAppName}";              Filename: "{app}\{#MyAppExeName
 ; Uninstalling removes it (in [Code]) - but only if it starts THIS copy: a
 ; developer's "start with Windows" for HeyTora run from source is the same
 ; value name, and an uninstall must not switch that off.
-Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: string; ValueName: "{#MyAppName}"; ValueData: """{app}\{#MyAppExeName}"""; Tasks: startupicon
+; An update the app installs over itself leaves it alone: the user may have
+; switched it off in Settings since, and the task remembered from the first
+; install would switch it back on (found 2 Oct 2026).
+Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: string; ValueName: "{#MyAppName}"; ValueData: """{app}\{#MyAppExeName}"""; Tasks: startupicon; Check: NotUpdate
 
 [UninstallDelete]
 ; Uninstalling signs out and forgets the first-launch answers, so a
@@ -123,6 +126,11 @@ end;
 function ShouldRelaunch(): Boolean;
 begin
   Result := ExpandConstant('{param:RELAUNCH|1}') <> '0';
+end;
+
+function NotUpdate(): Boolean;
+begin
+  Result := ExpandConstant('{param:UPDATE|0}') <> '1';
 end;
 
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
