@@ -57,7 +57,34 @@ def test_the_sign_in_page_cannot_be_skipped(qapp, service):
     w._refresh_connect()
     assert w.next_btn.isEnabled() and w.key_card.isEnabled()
     w._next()
-    assert w.page() == "mic"
+    assert w.page() == "work"
+
+
+def test_after_a_sign_out_signing_in_is_all_it_asks(qapp, service):
+    from ui import setup_wizard
+    setup_wizard.mark_setup_complete()
+    w = _wizard(service.account, start="connect")
+    finished = []
+    w.completed.connect(lambda: finished.append(1))
+    _sign_in(service)
+    w._refresh_connect()
+    assert w.next_btn.text() == "Finish"
+    w._next()
+    assert finished == [1], "the questions were answered last time"
+
+
+def test_the_gate_lets_heytora_start_after_the_mic_test(qapp, service):
+    from ui import sign_in_gate
+
+    def act(w):
+        _sign_in(service)
+        w._go("mic")
+        w._next()                                        # Yes: on to "Getting Tora ready"
+    result, made = _gate_with(service, act)
+    assert result == "signed_in"
+    assert made[0].isVisible() and made[0].page() == "ready", "the window stays for the second half"
+    assert sign_in_gate.open_wizard() is made[0]
+    made[0].close()
 
 
 def test_esc_does_not_close_it(qapp, service):

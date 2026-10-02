@@ -1,8 +1,10 @@
-"""The first launch (1 Oct 2026): getting to know the user, and connecting.
+"""The first launch: signing in, getting to know the user, proving it works.
 
-name → what the PC is for → sign in to HeyTora (or an own Gemini key) →
-microphone → start with Windows → done. And Settings' account card: the
-plan and this month's use. No real microphone, network or profile.
+Five phases (docs/ui/DESIGN.md §7): sign in → what you do → what Tora should
+help with → approvals → mic test → [the app starts] → shortcut test → ask
+Tora about a pretend screen → let her show you → what was measured → start
+with Windows → done. And Settings' account card: the plan and this month's
+use. No real microphone, hotkey, network or profile.
 """
 from __future__ import annotations
 
@@ -67,23 +69,31 @@ def test_the_pages_in_order(qapp, service):
     _sign_in(service)
     w = _wizard(service.account)
     seen = [w.page()]
-    for _ in PAGES[1:]:
+    while w.page() != "done":
         w._next()
         seen.append(w.page())
-    assert seen == list(PAGES) == ["welcome", "name", "uses", "connect", "mic", "startup", "done"]
+    # Nothing was measured on the Learn screens (no app attached): there is
+    # no celebration of nothing, so "payoff" is passed over.
+    assert seen == [p for p in PAGES if p != "payoff"] == [
+        "welcome", "connect", "work", "help", "control", "mic", "ready",
+        "shortcut", "ask", "show", "personal", "done"]
 
 
 def test_the_name_and_what_the_pc_is_for_are_kept(qapp, service):
     from config import cfg
     w = _wizard(service.account)
-    w._next()                                            # name
+    w._go("work")
+    assert not w.next_btn.isEnabled(), "Continue waits for an answer"
     w.name_edit.setText("  Amy  ")
-    w._next()                                            # uses
     for chip in w.use_chips:
-        chip.setChecked(chip.property("use") in ("Accounting & money", "Coding"))
-    assert any(c.text() == "Accounting && money" for c in w.use_chips), "& shown, not a shortcut"
+        chip.setChecked(chip.property("use") in ("Accounting", "Design & video"))
+    assert any(c.text() == "Design && video" for c in w.use_chips), "& shown, not a shortcut"
+    assert w.next_btn.isEnabled()
+    lit = [c.kind for c in w.pack_cards if not c.tile._dim]
+    assert set(lit) == {"ledger", "video"}, "the picture answers back"
     w.next_btn.click()
-    assert cfg.profile() == ("Amy", ["Coding", "Accounting & money"])
+    assert cfg.profile() == ("Amy", ["Accounting", "Design & video"])
+    assert w.page() == "help"
 
 
 def test_signing_in_to_heytora_from_the_first_launch(qapp, service):
@@ -169,7 +179,7 @@ def test_start_with_windows_and_finishing(qapp, service, monkeypatch):
     monkeypatch.setattr(autostart, "set_enabled", lambda on: switched.append(on) or True)
     w = _wizard(service.account)
     w.completed.connect(lambda: finished.append(1))
-    w._go("startup")
+    w._go("personal")
     assert w.startup_row.switch.isChecked(), "on unless they turn it off"
     w._next()
     assert switched == [True] and w.page() == "done"
@@ -350,3 +360,132 @@ def test_own_key_mode_signed_out_offers_an_account(qapp):
     page.refresh()
     next(b for b in page.findChildren(QPushButton) if b.text() == "Use a HeyTora account instead").click()
     assert ("mode", "account") in bridge.done and "setup" in bridge.done
+
+
+# -- the second half: the running app ----------------------------------------------------------------
+
+class _Live:
+    """What main.py hands the wizard once the app runs - recorded."""
+
+    def __init__(self):
+        from PyQt6.QtCore import QObject, pyqtSignal
+
+        class Signals(QObject):
+            state = pyqtSignal(object)
+            point = pyqtSignal(float, float, str)
+            guide = pyqtSignal(int, int, str)
+        self._s = Signals()
+        self.state, self.point, self.guide = self._s.state, self._s.point, self._s.guide
+        self.claimed = None
+        self.wake = []
+
+    def claim_hotkey(self, down, up):
+        self.claimed = (down, up)
+
+    def release_hotkey(self):
+        self.claimed = None
+
+    def set_wake(self, on):
+        self.wake.append(on)
+
+
+def _app_state(name):
+    from ui.panel import AppState
+    return AppState[name]
+
+
+def test_the_app_starts_after_the_mic_test_and_the_window_carries_on(qapp, service):
+    _sign_in(service)
+    w = _wizard(service.account)
+    started = []
+    w.ready.connect(lambda: started.append(1))
+    w._go("mic")
+    w._next()
+    assert w.page() == "ready" and started == [1], "the gate lets the app start here"
+    w.attach(_Live())
+    _until(qapp, lambda: w.page() == "shortcut")
+
+
+def test_opened_from_a_running_app_there_is_no_waiting(qapp, service):
+    _sign_in(service)
+    w = _wizard(service.account)
+    w.attach(_Live())
+    w._go("mic")
+    w._next()
+    assert w.page() == "shortcut"
+
+
+def test_holding_the_shortcut_lights_the_key_and_starts_nothing(qapp, service):
+    _sign_in(service)
+    w = _wizard(service.account)
+    live = _Live()
+    w.attach(live)
+    w._go("shortcut")
+    assert live.claimed, "the hotkey is borrowed: no conversation starts"
+    assert not w.next_btn.isEnabled(), "proven by holding it"
+    down, up = live.claimed
+    down()
+    _until(qapp, lambda: w.keycap.lit())
+    assert w.next_btn.isEnabled()
+    up()
+    _until(qapp, lambda: not w.keycap.lit())
+    w._next()
+    assert w.page() == "ask" and live.claimed is None, "given back"
+
+
+def test_asking_tora_is_measured_and_celebrated(qapp, service):
+    _sign_in(service)
+    w = _wizard(service.account)
+    live = _Live()
+    w.attach(live)
+    w._go("ask")
+    assert not w.next_btn.isEnabled()
+    live.state.emit(_app_state("LISTENING"))
+    live.state.emit(_app_state("THINKING"))
+    live.point.emit(100.0, 200.0, "Export")
+    assert w._pointed_after is not None and "seconds" in w.ask_status.text()
+    assert w.next_btn.isEnabled()
+    w._next()
+    assert w.page() == "show"
+    live.guide.emit(1, 3, "Click Contoso")
+    live.guide.emit(3, 3, "Click Send")
+    assert w.next_btn.isEnabled() and w._steps_walked == 3
+    w._next()
+    assert w.page() == "payoff"
+    words = [lab.text() for lab in w.pages["payoff"].findChildren(type(w.ask_status))]
+    assert any("3 steps" in t for t in words) and any("seconds" in t for t in words)
+
+
+def test_learn_screens_can_be_skipped(qapp, service):
+    _sign_in(service)
+    w = _wizard(service.account)
+    w.attach(_Live())
+    w._go("ask")
+    assert w.skip_btn.isVisibleTo(w)
+    w.skip_btn.click()
+    assert w.page() == "show"
+    w.skip_btn.click()
+    assert w.page() == "personal", "nothing measured, nothing celebrated"
+
+
+def test_the_personal_switches_go_to_the_running_app(qapp, service, monkeypatch):
+    from ui import autostart
+    monkeypatch.setattr(autostart, "set_enabled", lambda on: True)
+    _sign_in(service)
+    w = _wizard(service.account)
+    live = _Live()
+    w.attach(live)
+    w._go("personal")
+    w.wake_row.switch.setChecked(True)
+    w._next()
+    assert live.wake == [True]
+
+
+def test_closing_after_the_app_started_counts_as_done(qapp, service):
+    from ui import setup_wizard
+    _sign_in(service)
+    w = _wizard(service.account)
+    w.attach(_Live())
+    w._go("ask")
+    w.close()
+    assert setup_wizard.setup_already_ran()

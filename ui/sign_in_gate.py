@@ -51,6 +51,11 @@ def gate(wizard_factory=None) -> str:
     loop = QEventLoop()
     wiz.completed.connect(loop.quit)
     wiz.finished.connect(loop.quit)
+    # The first half is done (signed in, mic tested): the app starts, and
+    # the same window carries on once main.py attach()es it (open_wizard()).
+    ready = getattr(wiz, "ready", None)
+    if ready is not None:
+        ready.connect(loop.quit)
     wiz.show()
     wiz.raise_()
     wiz.activateWindow()
@@ -63,6 +68,18 @@ def gate(wizard_factory=None) -> str:
 
 
 _keep: list = []        # the gate's wizard outlives its loop until the app is up
+
+
+def open_wizard():
+    """The gate's first-launch window, if it is still open and waiting for
+    the running app (main.py attach()es it); else None."""
+    for wiz in reversed(_keep):
+        try:
+            if wiz.isVisible():
+                return wiz
+        except RuntimeError:             # deleted on the C++ side
+            continue
+    return None
 
 
 class _Relay(QObject):

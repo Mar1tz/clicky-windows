@@ -531,6 +531,7 @@ def main():
         from ui.setup_wizard import SetupWizard
         wiz = SetupWizard()
         wiz.completed.connect(_access_changed)
+        wiz.attach(live)                      # the app is running: no "getting ready"
         wiz.show()
         _setup_keepalive[0] = wiz
     tray.on_run_setup.connect(_run_setup_again)
@@ -643,11 +644,37 @@ def main():
     _update_timer.start()
 
     # ── Global hotkey ─────────────────────────────────────────────────────────
-    hotkey = GlobalHotkeyMonitor(
-        on_press=manager.on_hotkey_press,
-        on_release=manager.on_hotkey_release,
-    )
+    # The first launch's shortcut test borrows it (ui/setup_wizard.py): while
+    # claimed, holding the hotkey lights the key there instead of starting a
+    # conversation. Called on the keyboard hook's thread.
+    _hotkey_claim: list = []
+
+    def _hotkey_press():
+        (_hotkey_claim[0][0] if _hotkey_claim else manager.on_hotkey_press)()
+
+    def _hotkey_release():
+        (_hotkey_claim[0][1] if _hotkey_claim else manager.on_hotkey_release)()
+
+    hotkey = GlobalHotkeyMonitor(on_press=_hotkey_press, on_release=_hotkey_release)
     hotkey.start()
+
+    # What the first launch's second half needs from the running app.
+    def _claim_hotkey(down, up):
+        _hotkey_claim[:] = [(down, up)]
+
+    def _show_panel(on: bool):
+        (panel.show if on else panel.hide)()
+
+    from types import SimpleNamespace
+    live = SimpleNamespace(
+        claim_hotkey=_claim_hotkey,
+        release_hotkey=_hotkey_claim.clear,
+        state=manager.sig_state_changed,
+        point=manager.sig_point_at,
+        guide=manager.sig_guide_progress,
+        set_wake=lambda on: tray.apply_switch("wake_word", on),
+        show_panel=_show_panel,
+    )
 
     # Esc = cancel the answer in progress (stops speech instantly), and the
     # kill switch for any agent that has the mouse - see _wire_agents.
@@ -688,11 +715,15 @@ def main():
             wiz = SetupWizard()
             wiz.show()
         elif door == "signed_in":
-            wiz = None                        # the gate just showed it
+            # The gate's window, waiting on "Getting Tora ready": it carries
+            # on with the real shortcut and cursor now the app is up.
+            wiz = sign_in_gate.open_wizard()
         else:
             wiz = maybe_show_setup_wizard()
         if wiz is not None:
             wiz.completed.connect(_access_changed)
+            wiz.completed.connect(lambda: _open_app("home"))
+            wiz.attach(live)
             _setup_keepalive[0] = wiz       # keep a reference so it isn't GC'd
     except Exception as e:
         print(f"[setup-wizard] skipped: {e}")
