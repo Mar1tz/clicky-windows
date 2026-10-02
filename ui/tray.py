@@ -66,6 +66,10 @@ class TrayManager(QObject):
     # The HeyTora plan or its use changed - emitted from any thread by the
     # account (main.py wires account().on_change to it); handled on Qt's.
     plan_changed          = pyqtSignal()
+    # The updater's state changed (any thread; main.py wires it) and the
+    # user's "Restart to update".
+    updates_changed       = pyqtSignal()
+    on_install_update     = pyqtSignal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -110,6 +114,10 @@ class TrayManager(QObject):
         # "Free plan - 18 talk messages left": the first line of the menu.
         self._plan_line = ""
         self.plan_changed.connect(self._refresh_plan)
+        # "ready:1.6.5" / "required:1.6.5" while an update waits to be installed.
+        self._update_item = ""
+        self._update_told: set[str] = set()
+        self.updates_changed.connect(self._refresh_updates)
         # The input device Tora listens on; None = the system default.
         self._active_mic_index = cfg.mic_device_index
 
@@ -128,6 +136,13 @@ class TrayManager(QObject):
 
         providers = cfg.describe()
         account_mode = cfg.access_mode() == "account"
+        if self._update_item:
+            kind, version = self._update_item.split(":", 1)
+            upd = menu.addAction(f"⚠  Update required - restart to update to HeyTora {version}"
+                                 if kind == "required" else
+                                 f"⬆  Restart to update to HeyTora {version}")
+            upd.triggered.connect(self.on_install_update)
+            menu.addSeparator()
         if not cfg.has_key() and account_mode:
             # A HeyTora account, signed out: the wizard signs in (or takes a key).
             warn = menu.addAction("⚠  Sign in to HeyTora…")
@@ -632,6 +647,29 @@ class TrayManager(QObject):
         if kind != self._account_problem:
             self._account_problem = kind
             self._build_menu()
+
+    def _refresh_updates(self) -> None:
+        """An update is ready (or no longer is): the menu's first item, and
+        one notification per version."""
+        try:
+            from updates import updater
+            st = updater().state()
+        except Exception:  # noqa: BLE001 - the tray must never break on updates
+            return
+        item = ""
+        if st["state"] == "ready":
+            item = f"{'required' if st['required'] else 'ready'}:{st['latest']}"
+        if item != self._update_item:
+            self._update_item = item
+            self._build_menu()
+        if item and st["latest"] not in self._update_told:
+            self._update_told.add(st["latest"])
+            self._tray.showMessage(
+                "HeyTora update ready",
+                f"HeyTora {st['latest']} is ready. " + (
+                    "It installs the next time HeyTora starts - or now: tray → Restart to update."
+                    if cfg.switch("auto_update") else "Tray → Restart to update when it suits you."),
+                QSystemTrayIcon.MessageIcon.Information, 8000)
 
     def _refresh_plan(self) -> None:
         """The plan changed: the menu's first line follows it, and anything

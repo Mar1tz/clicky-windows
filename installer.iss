@@ -102,10 +102,28 @@ Type: files; Name: "{localappdata}\HeyTora\setup_complete.flag"
 [Run]
 ; Offer to launch HeyTora after install
 Filename: "{app}\{#MyAppExeName}"; Description: "Launch {#MyAppName}"; Flags: nowait postinstall skipifsilent
+; An update the app installed over itself (updates/service.py: /VERYSILENT
+; /UPDATE=1) opens HeyTora again - unless it was installed as HeyTora was
+; being quit (/RELAUNCH=0).
+Filename: "{app}\{#MyAppExeName}"; Flags: nowait skipifnotsilent; Check: ShouldRelaunch
 
 [Code]
 const
   RunKey = 'Software\Microsoft\Windows\CurrentVersion\Run';
+
+function InitializeSetup(): Boolean;
+begin
+  // The app starts this installer and then closes itself: give it a moment
+  // to let go of its files (CloseApplications catches anything left).
+  if ExpandConstant('{param:UPDATE|0}') = '1' then
+    Sleep(2500);
+  Result := True;
+end;
+
+function ShouldRelaunch(): Boolean;
+begin
+  Result := ExpandConstant('{param:RELAUNCH|1}') <> '0';
+end;
 
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
 var

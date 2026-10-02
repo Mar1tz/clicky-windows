@@ -517,6 +517,9 @@ class Config:
         # Settings > Approvals (APP-14): agents and desktop actions go ahead
         # without the approval box. Off until the user turns it on.
         "auto_approve":  ("TORA_AGENT_AUTO_APPROVE", False),
+        # Settings > Updates: a downloaded update installs by itself - the
+        # next time HeyTora starts, or as it is quit (updates/service.py).
+        "auto_update":   ("TORA_AUTO_UPDATE", True),
     }
 
     def switch(self, name: str) -> bool:

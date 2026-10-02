@@ -87,9 +87,12 @@ def test_the_manager_starts_as_it_was_left(tmp_path, monkeypatch):
     from companion_manager import CompanionManager
 
     # Each saved switch is read where its owner starts: the companion's in
-    # its __init__, the workforce's (auto_approve, APP-14) when it is built.
+    # its __init__, the workforce's (auto_approve, APP-14) when it is built,
+    # the updater's (auto_update) in main() before anything is shown.
+    from pathlib import Path
     starts = (inspect.getsource(CompanionManager.__init__)
-              + inspect.getsource(bootstrap.build_agent_manager))
+              + inspect.getsource(bootstrap.build_agent_manager)
+              + (Path(__file__).resolve().parents[2] / "main.py").read_text(encoding="utf-8"))
     for name in SWITCHES:
         assert (f'cfg.switch("{name}")' in starts
                 or f'_switched_on("{name}")' in starts), f"{name} is not read at start"

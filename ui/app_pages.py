@@ -952,7 +952,10 @@ class SettingsPage(Page):
     HEADING = "Settings"
     LEDE = "The rails. What Tora may touch, what runs without asking, and how she hears you."
     LIVE = True
-    TOPICS = frozenset({"account"})          # the plan and usage arrive after the page is drawn
+    # The plan and usage arrive after the page is drawn, and move with every
+    # question; an update downloads in the background. Both are redrawn in
+    # place (refresh_topics) - never the whole page.
+    TOPICS = frozenset({"account", "updates"})
 
     # The allowances shown, in the user's words. "calls" is a hidden backstop.
     _USAGE = (("talk", "Talk", "messages"), ("agent", "Agent", "messages"),
@@ -966,20 +969,78 @@ class SettingsPage(Page):
         self.bridge.refresh_account()
 
     def refresh_topics(self, topics: set) -> None:
-        """The plan moved (every question moves it): only the account card is
-        swapped. The rest of Settings - a switch being reached for, something
-        half-typed, where the page is scrolled to - stays exactly as it is."""
-        slot = getattr(self, "_account_slot", None)
-        if slot is None or not slot.layout():
-            self.refresh()
-            return
-        lay = slot.layout()
-        while lay.count():
-            old = lay.takeAt(0).widget()
-            if old is not None:
-                old.setParent(None)
-                old.deleteLater()
-        lay.addWidget(self._account_card())
+        """The plan moved (every question moves it), or an update did: only
+        that card is swapped. The rest of Settings - a switch being reached
+        for, something half-typed, where the page is scrolled to - stays
+        exactly as it is."""
+        for topic, slot_name, make in (("account", "_account_slot", self._account_card),
+                                       ("updates", "_updates_slot", self._updates_card)):
+            if topic not in topics:
+                continue
+            slot = getattr(self, slot_name, None)
+            if slot is None or not slot.layout():
+                self.refresh()
+                return
+            lay = slot.layout()
+            while lay.count():
+                old = lay.takeAt(0).widget()
+                if old is not None:
+                    old.setParent(None)
+                    old.deleteLater()
+            lay.addWidget(make())
+
+    def _updates_card(self) -> Card:
+        """HeyTora keeps itself up to date (updates/service.py): which version
+        this is, what is happening, and the one switch."""
+        br = self.bridge
+        try:
+            st = br.update_state()
+        except Exception:  # noqa: BLE001 - a bridge without updates
+            st = {"state": "dev", "current": "", "latest": "", "notes": "", "progress": 0.0,
+                  "error": "", "auto": True}
+        card = Card("Updates", "HeyTora keeps itself up to date - nothing to download, nothing to set up.")
+        state, now, latest = st["state"], st["current"], st["latest"]
+        if state == "dev":
+            card.add(Row(f"HeyTora {now}", "Running from source: updates come from git, not from here.",
+                         dot=T.TEXT_DIM, first=True))
+            return card
+        if state == "ready":
+            go = button("Restart to update", "primary")
+            go.clicked.connect(br.install_update)
+            card.add(Row(f"HeyTora {latest} is ready", f"You have {now}. " + (
+                "It installs by itself the next time HeyTora starts - or now."
+                if st["auto"] else "Restart to update when it suits you."),
+                dot=T.ACCENT, trailing=go, first=True))
+        elif state == "downloading":
+            card.add(Row(f"Downloading HeyTora {latest}…", f"You have {now} · {round(st['progress'] * 100)}%",
+                         dot=T.ACCENT, first=True))
+            card.body.addWidget(Meter(st["progress"]))
+        elif state == "installing":
+            card.add(Row(f"Installing HeyTora {latest}…", "HeyTora opens again in a moment.",
+                         dot=T.ACCENT, first=True))
+        elif state == "checking":
+            card.add(Row(f"HeyTora {now}", "Checking for updates…", dot=T.OK, first=True))
+        elif state == "failed":
+            page = button("Download page")
+            page.clicked.connect(br.open_download_page)
+            card.add(Row(f"HeyTora {now}", st["error"] or "Couldn't update.", dot=T.WARN,
+                         trailing=page, first=True))
+            again = button("Check again", "link")
+            again.clicked.connect(br.check_updates)
+            card.body.addWidget(again, 0, Qt.AlignmentFlag.AlignLeft)
+        else:
+            check = button("Check now")
+            check.clicked.connect(br.check_updates)
+            card.add(Row(f"HeyTora {now}", "Up to date." if state == "current" else
+                         "Checks for updates every few hours.", dot=T.OK, trailing=check, first=True))
+        if st["notes"] and state in ("ready", "downloading"):
+            card.add(label(f"What's new: {st['notes']}", "faint", wrap=True))
+        auto = ToggleRow("Install updates automatically",
+                         "When an update is ready it installs by itself - the next time HeyTora "
+                         "starts, or as you quit it. HeyTora keeps everything you set.", st["auto"])
+        auto.switch.toggled.connect(br.set_auto_update)
+        card.add(auto)
+        return card
 
     def _sign_out_button(self):
         out = button("Sign out")
@@ -1123,6 +1184,11 @@ class SettingsPage(Page):
         slot.setContentsMargins(0, 0, 0, 0)
         slot.addWidget(self._account_card())
         self.body.add(self._account_slot)
+        self._updates_slot = QWidget()
+        slot = QVBoxLayout(self._updates_slot)
+        slot.setContentsMargins(0, 0, 0, 0)
+        slot.addWidget(self._updates_card())
+        self.body.add(self._updates_slot)
 
         # The workforce's own settings widget - the one "Agent settings…" in
         # the tray opens: workspace, what runs without asking, plan first,

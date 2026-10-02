@@ -58,6 +58,11 @@ hidden = [
     "account.settings",
     "account.store",
     "screen.monitors",
+
+    # Keeping itself up to date (imported inside main()).
+    "updates",
+    "updates.service",
+    "version",
 ]
 
 # ── The agent workforce. CompanionManager imports agents.bootstrap lazily

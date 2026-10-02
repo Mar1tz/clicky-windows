@@ -270,6 +270,56 @@ class AppBridge(QObject):
         self._watch_account()
         account().refresh_soon(0 if force else 60)
 
+    # ── updates (updates/service.py) ───────────────────────────────────────
+
+    def update_state(self) -> dict:
+        """What the Updates card shows - never the network."""
+        from config import cfg
+        from updates import updater
+        self._watch_updates()
+        st = updater().state()
+        st["auto"] = cfg.switch("auto_update")
+        return st
+
+    def check_updates(self) -> None:
+        from updates import updater
+        self._watch_updates()
+        updater().check_soon(force=True)
+
+    def install_update(self) -> None:
+        """Restart to update - the tray's path, so main.py closes HeyTora."""
+        if self.tray is not None and hasattr(self.tray, "on_install_update"):
+            self.tray.on_install_update.emit()
+
+    def set_auto_update(self, on: bool) -> None:
+        from config import cfg
+        cfg.set_switch("auto_update", bool(on))
+        self.changed.emit("updates")
+
+    def open_download_page(self) -> None:
+        from PyQt6.QtCore import QUrl
+        from PyQt6.QtGui import QDesktopServices
+        from updates.service import DOWNLOAD_PAGE
+        QDesktopServices.openUrl(QUrl(DOWNLOAD_PAGE))
+
+    def _watch_updates(self) -> None:
+        """The updater's changes (any thread) become the "updates" topic."""
+        if getattr(self, "_watching_updates", False):
+            return
+        self._watching_updates = True
+        import weakref
+        from updates import updater
+        me = weakref.ref(self)
+
+        def heard() -> None:
+            bridge = me()
+            if bridge is not None:
+                try:
+                    bridge.changed.emit("updates")
+                except RuntimeError:
+                    pass
+        updater().on_change(heard)
+
     def _watch_account(self) -> None:
         """The account's plan changes (any thread) become the "account" topic.
         Held weakly: a bridge that is gone is simply not told."""

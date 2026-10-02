@@ -39,7 +39,7 @@ def _ensure_std_streams() -> None:
 _ensure_std_streams()
 
 from PyQt6.QtWidgets import QApplication
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, QTimer
 
 from config import cfg
 from ui.tray import TrayManager
@@ -224,6 +224,16 @@ def main():
     from ui import autostart
     autostart.migrate_legacy()
 
+    # ── Updates (updates/service.py) ──────────────────────────────────────────
+    # An update downloaded last time installs before anything is shown: the
+    # installer runs over this app, silently, and opens HeyTora again on the
+    # new version. Run from source, there is nothing to update.
+    from updates import updater as _updater
+    upd = _updater()
+    update_outcome = upd.at_startup(auto=cfg.switch("auto_update"))
+    if update_outcome == "installing":
+        return
+
     # ── No HeyTora account, no HeyTora ────────────────────────────────────────
     # Before the overlay, the hotkey, the microphone or the agents exist: no
     # sign-in, only the sign-in window - and closing it closes the app.
@@ -237,6 +247,19 @@ def main():
     panel   = CompanionPanel()
     overlay = CursorOverlay()
     tray    = TrayManager()
+
+    def _shutdown():
+        """Close HeyTora: the tray, the companion, the app."""
+        tray.hide_icon()
+        manager.shutdown()
+        app.quit()
+
+    def _quit():
+        """Quit from the tray. An update that is ready installs on the way
+        out (no reopening) when updates install by themselves."""
+        if cfg.switch("auto_update") and upd.ready():
+            upd.install_now(relaunch=False)
+        _shutdown()
 
     # ── Wire signals ──────────────────────────────────────────────────────────
 
@@ -324,7 +347,7 @@ def main():
         import logging as _lg
         _lg.getLogger("tora").info("signed out - restarting at the sign-in window")
         sign_in_gate.restart()
-        tray.on_quit.emit()
+        _shutdown()                           # not _quit: no update installs under the new copy
     sign_in_gate.relay().lost.connect(_sign_in_lost)
 
     # Panel → Manager
@@ -555,7 +578,47 @@ def main():
             tray.show_notification("Diagnostics failed", str(e))
     tray.on_diagnostics.connect(_save_diagnostics)
 
-    tray.on_quit.connect(lambda: (tray.hide_icon(), manager.shutdown(), app.quit()))
+    tray.on_quit.connect(_quit)
+
+    # ── Updates, while running ────────────────────────────────────────────────
+    # Checked a little after start-up and every few hours (CHECK_EVERY_S); a
+    # newer version downloads in the background. Ready: the tray and
+    # Settings offer "Restart to update" - or it installs by itself next
+    # time. One the server requires is asked for at once.
+    upd.on_change(tray.updates_changed.emit)
+    tray.updates_changed.emit()
+
+    def _install_update():
+        if upd.install_now(relaunch=True):
+            _shutdown()
+    tray.on_install_update.connect(_install_update)
+    if update_outcome == "updated":
+        tray.show_notification("HeyTora updated", f"You're on HeyTora {upd.current} now.")
+
+    _required_asked = set()
+
+    def _required_update():
+        st = upd.state()
+        if not (st["required"] and st["state"] == "ready") or st["latest"] in _required_asked:
+            return
+        _required_asked.add(st["latest"])
+        from PyQt6.QtWidgets import QMessageBox
+        box = QMessageBox(QMessageBox.Icon.Information, "HeyTora needs an update",
+                          f"HeyTora {st['latest']} is ready, and this version can't keep working "
+                          "without it. It installs in a moment and HeyTora opens again.")
+        now = box.addButton("Update now", QMessageBox.ButtonRole.AcceptRole)
+        box.addButton("Later", QMessageBox.ButtonRole.RejectRole)
+        box.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, True)
+        box.exec()
+        if box.clickedButton() is now:
+            _install_update()
+    tray.updates_changed.connect(_required_update)
+
+    QTimer.singleShot(15_000, upd.check_soon)
+    _update_timer = QTimer(app)
+    _update_timer.setInterval(60 * 60 * 1000)           # check_soon itself waits CHECK_EVERY_S
+    _update_timer.timeout.connect(upd.check_soon)
+    _update_timer.start()
 
     # ── Global hotkey ─────────────────────────────────────────────────────────
     hotkey = GlobalHotkeyMonitor(
