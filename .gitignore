@@ -29,3 +29,6 @@ assets/icon.ico
 Thumbs.db
 Desktop.ini
 .DS_Store
+
+# The Supabase CLIs own scratch folder (its link to the project)
+supabase/.temp/
