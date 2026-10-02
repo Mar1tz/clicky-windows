@@ -101,7 +101,7 @@ class AppBridge(QObject):
         from config import cfg
         try:
             import sounddevice as sd
-            index = cfg.mic_device_index
+            index = cfg.mic_device()
             info = sd.query_devices(index if index is not None else None, kind="input")
             return str(info.get("name", "")).strip()
         except Exception:  # noqa: BLE001 - no audio stack is not an error here
@@ -199,7 +199,7 @@ class AppBridge(QObject):
     def mic_index(self) -> Optional[int]:
         """The device Tora listens on; None = the system default."""
         from config import cfg
-        return cfg.mic_device_index
+        return cfg.mic_device()
 
     def set_mic(self, index: int) -> None:
         if self.tray is not None and hasattr(self.tray, "pick_mic"):

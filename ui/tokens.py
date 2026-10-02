@@ -43,6 +43,22 @@ BLUE_PRESS = "#2A6FE0"
 # The logo's swoosh. Kept for the wordmark only.
 LOGO_BLUE = "#00B6FD"
 
+# What Tora's cursor may wear (Make Tora yours). One colour from each of the
+# website's gradient families; the first is the default and the app's accent.
+# The app's accent does not follow the choice - only the cursor does.
+CURSOR_COLOURS = (
+    ("blue", "Blue", "#3380FF"),
+    ("cyan", "Sky", "#00B6FD"),
+    ("violet", "Violet", "#8C7CFF"),
+    ("pink", "Rose", "#E48AD8"),
+    ("teal", "Teal", "#2FB8C8"),
+    ("amber", "Amber", "#F29B38"),
+)
+
+
+def cursor_hex(key: str) -> str:
+    return next((h for k, _n, h in CURSOR_COLOURS if k == key), CURSOR_COLOURS[0][2])
+
 
 @dataclass(frozen=True)
 class Palette:

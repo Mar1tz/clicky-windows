@@ -25,6 +25,21 @@ from PyQt6.QtGui import (QBrush, QColor, QConicalGradient, QFont, QFontMetricsF,
 BLUE_LIGHT = QColor(0x86, 0xC0, 0xFF)
 BLUE = QColor(0x3D, 0x8B, 0xFF)
 BLUE_DEEP = QColor(0x24, 0x5C, 0xE8)
+_DEFAULT = (QColor(BLUE_LIGHT), QColor(BLUE), QColor(BLUE_DEEP))
+
+
+def set_colour(hex_colour: str) -> None:
+    """Tora wears another colour (Settings / Make Tora yours). The light
+    and deep ends of her gradient are worked out from it; the cursor blue
+    keeps the exact values above."""
+    global BLUE_LIGHT, BLUE, BLUE_DEEP
+    c = QColor(hex_colour)
+    if not c.isValid() or c.name().lower() == "#3380ff":
+        BLUE_LIGHT, BLUE, BLUE_DEEP = (QColor(x) for x in _DEFAULT)
+        return
+    BLUE = c
+    BLUE_LIGHT = c.lighter(145)
+    BLUE_DEEP = c.darker(125)
 INK = QColor(0x0B, 0x16, 0x30)                 # shadows: a blue-black, not grey
 
 SIDE = 19.0                                    # the triangle's side

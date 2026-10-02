@@ -20,12 +20,15 @@ def taskbar_is_light() -> bool:
 
 
 def _make_tray_icon(active: bool) -> QIcon:
-    """The site's mark in the taskbar's own ink, with the one blue dot while
-    Tora is listening, thinking or speaking (heytora-web BRAND.md: the dot
-    is the product's "on" signal). A plain circle if the SVG is missing.
-    Must be called AFTER QApplication exists (Qt requirement)."""
+    """HeyTora's icon (assets/brand/heytora-icon.svg), with a small dot
+    while Tora is listening, thinking or speaking (heytora-web BRAND.md: the
+    dot is the product's "on" signal). The icon is its own blue, which reads
+    on a light or a dark taskbar; the dot gets a ring in the taskbar's
+    colour so it stays separate from it. A plain circle if the SVG is
+    missing. Must be called AFTER QApplication exists (Qt requirement)."""
     from ui import tokens
-    ink = "#1A1A1A" if taskbar_is_light() else "#FAFAFA"
+    ground = "#F3F3F3" if taskbar_is_light() else "#202020"
+    ink = "#009EFD"
     icon = QIcon()
     for side in (16, 20, 24, 32, 40, 48, 64):
         px = QPixmap(QSize(side, side))
@@ -35,16 +38,18 @@ def _make_tray_icon(active: bool) -> QIcon:
         try:
             from PyQt6.QtCore import QByteArray, QRectF
             from PyQt6.QtSvg import QSvgRenderer
-            svg = (tokens.assets_dir() / "brand" / "mark.svg").read_text(encoding="utf-8")
-            QSvgRenderer(QByteArray(svg.replace("{INK}", ink).encode("utf-8"))).render(
-                painter, QRectF(0, 0, side, side))
+            svg = (tokens.assets_dir() / "brand" / "heytora-icon.svg").read_text(encoding="utf-8")
+            QSvgRenderer(QByteArray(svg.encode("utf-8"))).render(painter, QRectF(0, 0, side, side))
         except Exception:  # noqa: BLE001
             painter.setBrush(QBrush(QColor(ink)))
             painter.setPen(Qt.PenStyle.NoPen)
             painter.drawEllipse(side // 8, side // 8, side * 3 // 4, side * 3 // 4)
         if active:
             d = max(5, side * 3 // 8)
+            ring = max(1, side // 16)
             painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(QBrush(QColor(ground)))
+            painter.drawEllipse(side - d - ring, side - d - ring, d + ring * 2, d + ring * 2)
             painter.setBrush(QBrush(QColor(tokens.BLUE)))
             painter.drawEllipse(side - d, side - d, d, d)
         painter.end()
@@ -153,7 +158,7 @@ class TrayManager(QObject):
         self._update_asked = False            # the user pressed "Check for updates": say what it found
         self.updates_changed.connect(self._refresh_updates)
         # The input device Tora listens on; None = the system default.
-        self._active_mic_index = cfg.mic_device_index
+        self._active_mic_index = cfg.mic_device()
 
         self._build_menu()
         self._tray.activated.connect(self._on_activated)

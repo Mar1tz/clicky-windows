@@ -57,7 +57,7 @@ def test_the_sign_in_page_cannot_be_skipped(qapp, service):
     w._refresh_connect()
     assert w.next_btn.isEnabled() and w.key_card.isEnabled()
     w._next()
-    assert w.page() == "work"
+    assert w.page() == "welcome", "signed in: on to hello"
 
 
 def test_after_a_sign_out_signing_in_is_all_it_asks(qapp, service):
@@ -122,7 +122,7 @@ def test_a_fresh_install_gets_the_whole_first_launch(qapp, service):
     assert not setup_wizard.setup_already_ran()
     pages = []
     result, _made = _gate_with(service, lambda w: (pages.append(w.page()), w.close()))
-    assert pages == ["welcome"] and result == "closed"
+    assert pages == ["connect"] and result == "closed", "signing in comes first"
 
 
 def test_after_a_sign_out_it_opens_at_signing_in(qapp, service):

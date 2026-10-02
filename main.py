@@ -225,6 +225,12 @@ def main():
     from ui import app_theme, tokens
     app.setFont(tokens.app_font())
     app_theme.apply(tokens.resolve(cfg.theme()))
+    from ui.overlay import set_cursor_colour
+    set_cursor_colour(tokens.cursor_hex(cfg.cursor_colour()))   # Make Tora yours
+    from PyQt6.QtGui import QIcon
+    _icon = tokens.assets_dir() / "brand" / "heytora-icon.svg"
+    if _icon.exists():
+        app.setWindowIcon(QIcon(str(_icon)))    # every window's title bar and taskbar button
     # A "start with Windows" set before the rename lives under the old name.
     from ui import autostart
     autostart.migrate_legacy()
@@ -671,8 +677,11 @@ def main():
         release_hotkey=_hotkey_claim.clear,
         state=manager.sig_state_changed,
         point=manager.sig_point_at,
-        guide=manager.sig_guide_progress,
+        draw=manager.sig_draw,
         set_wake=lambda on: tray.apply_switch("wake_word", on),
+        set_switch=tray.apply_switch,
+        set_voice=tray.pick_voice,
+        set_route=tray.pick_route,
         show_panel=_show_panel,
     )
 

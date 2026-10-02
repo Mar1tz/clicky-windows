@@ -478,7 +478,7 @@ class CompanionManager(QObject):
         self._listener = AmbientListener(
             on_level=self._handle_level,
             on_wake=self._handle_wake,
-            device=cfg.mic_device_index,
+            device=cfg.mic_device(),         # by name: device numbers move (config.py)
             ambient=cfg.ambient_mic(),
             wake_transcriber=self._transcribe_blocking,
         )
@@ -2633,10 +2633,15 @@ class CompanionManager(QObject):
         if drawn:
             self._pointed_this_turn = True
 
+        # Where each highlight is, in the draw tool's 0-1000 coordinates.
+        # The voice model never sees the screen: without these, a drawing it
+        # adds after a look is a guess - in the first launch it ringed empty
+        # space beside the line this look had boxed correctly.
         return {
             "answer": look.answer,
             "observations": look.observations[:8],
             "highlighted_on_screen": [a.label for a in look.actions[:4]],
+            "highlights": [{"label": a.label, "tag": a.as_tag()} for a in look.actions[:4]],
         }
 
     async def _tool_draw(self, args: dict) -> dict:
@@ -4791,7 +4796,7 @@ class CompanionManager(QObject):
 
     def set_mic_device(self, device_index: int):
         """Tray callback — switch input device without restarting the app."""
-        cfg.mic_device_index = device_index if device_index >= 0 else None
+        cfg.set_mic_device(device_index)     # saved with its name, not just its number
         try:
             self._listener.stop()
         except Exception:
@@ -4800,7 +4805,7 @@ class CompanionManager(QObject):
         self._listener = AmbientListener(
             on_level=self._handle_level,
             on_wake=self._handle_wake,
-            device=cfg.mic_device_index,
+            device=cfg.mic_device(),
             ambient=cfg.ambient_mic(),
         )
         try:

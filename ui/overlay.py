@@ -53,6 +53,15 @@ TRI_ROTATION_DEG = -35.0
 # #3380FF
 CURSOR_BLUE = QColor(0x33, 0x80, 0xFF)
 
+
+def set_cursor_colour(hex_colour: str) -> None:
+    """The colour Tora wears (Make Tora yours): the pointer, its halo and
+    rings. Read at paint time, so the next frame shows it."""
+    global CURSOR_BLUE
+    c = QColor(hex_colour)
+    CURSOR_BLUE = c if c.isValid() else QColor(0x33, 0x80, 0xFF)
+    buddy.set_colour(CURSOR_BLUE.name())
+
 # Teaching-annotation palette. The LLM picks colors by name; default is the
 # Tora blue. Chosen for contrast on both light and dark content.
 ANNOT_COLORS = {

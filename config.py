@@ -539,7 +539,63 @@ class Config:
         os.environ[env] = value
         self._write_env(env, value)
 
+    # ── Microphone device ────────────────────────────────────────────────
+    #
+    # Windows numbers audio devices by their place in a list, and the list
+    # moves whenever a headset, a Bluetooth device or a monitor comes or goes.
+    # A saved number alone ended up pointing at a monitor's SPEAKERS ("Not an
+    # input device: DELL ST2220L") and every ask failed with a mic error. So
+    # the name is saved with it, and the number is looked up again each time.
+
+    def mic_device(self) -> Optional[int]:
+        """The input device to open now, or None for the system default."""
+        name = os.environ.get("MIC_DEVICE_NAME", "").strip()
+        index = self.mic_device_index
+        if index is None and not name:
+            return None
+        try:
+            import sounddevice as sd
+            devices = list(sd.query_devices())
+        except Exception:  # noqa: BLE001 - no audio stack: let the default try
+            return None
+        inputs = {i for i, d in enumerate(devices) if d.get("max_input_channels", 0) > 0}
+        if name:
+            if index in inputs and devices[index].get("name") == name:
+                return index
+            same = [i for i in sorted(inputs) if devices[i].get("name") == name]
+            return same[0] if same else None
+        return index if index in inputs else None
+
+    def set_mic_device(self, index: Optional[int]) -> None:
+        """Listen on this device from now on (None or <0: the system default)."""
+        name = ""
+        if index is not None and index >= 0:
+            try:
+                import sounddevice as sd
+                name = sd.query_devices(index).get("name", "")
+            except Exception:  # noqa: BLE001
+                name = ""
+        else:
+            index = None
+        self.mic_device_index = index
+        for env, value in (("MIC_DEVICE_INDEX", "" if index is None else str(index)),
+                           ("MIC_DEVICE_NAME", name)):
+            if value:
+                os.environ[env] = value
+            else:
+                os.environ.pop(env, None)
+            self._write_env(env, value)
+
     # ── Appearance ───────────────────────────────────────────────────────
+
+    def cursor_colour(self) -> str:
+        """The colour key Tora's cursor wears (ui/tokens.CURSOR_COLOURS)."""
+        return os.environ.get("TORA_CURSOR_COLOUR", "").strip().lower() or "blue"
+
+    def set_cursor_colour(self, key: str) -> None:
+        key = (key or "blue").strip().lower()
+        os.environ["TORA_CURSOR_COLOUR"] = key
+        self._write_env("TORA_CURSOR_COLOUR", key)
 
     def theme(self) -> str:
         """"system" (follow Windows), "light" or "dark" - ui/tokens.py."""

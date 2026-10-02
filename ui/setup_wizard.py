@@ -8,11 +8,17 @@ beside a picture that answers back, and test screens the user passes by
 doing the real thing - talking, holding the shortcut, asking Tora about a
 screen and watching her point.
 
-    Sign up       welcome · connect · work · help
-    Permissions   control · mic
+    Sign up       connect · welcome · work
+    Permissions   privacy · mic
     Set up        ready · shortcut
-    Learn         ask · show · payoff
-    Personalize   personal · done
+    Learn         try · payoff
+    Personalize   voice · personal · done
+
+The steps prove what Tora is - she hears you (mic), the key works
+(shortcut), she sees, points and explains (try: "what's wrong with this
+equation?" on a sum with one wrong line) - rather than copying another
+app's list. The Learn asks are real
+asks: they count against the plan like any other question.
 
 It runs in two halves. Up to the mic test it needs nothing but the window:
 the sign-in gate (ui/sign_in_gate.py) shows it before the overlay, the
@@ -99,19 +105,6 @@ PACKS = (
     ("video", "Creators", "Where's the export setting?"),
 )
 
-# What the user wants help with - option cards, and the capability cards
-# that come into colour beside them.
-HELP = (
-    ("ask", "Ask", "Ask about anything on screen", "Out loud, about whatever you're looking at.",
-     "What's this error?"),
-    ("show", "Show me", "Point me to it", "Tora points at the button, the menu or the cell.",
-     "Where's the export?"),
-    ("teach", "Teach me", "Walk me through it", "Step by step, waiting for you at each one.",
-     "Walk me through charts"),
-    ("do", "Do it", "Do it for me", "Agents take on whole jobs, and ask before anything big.",
-     "Send these invoices"),
-)
-
 # Three things to try, by what the user does. Generic ones fill the rest.
 TRY = {
     "Accounting": "Where do I reconcile this account?",
@@ -127,12 +120,13 @@ TRY = {
 TRY_ALWAYS = ("Where do I change the font size?", "What does this button do?",
               "Show me how to add a chart here.")
 
-PAGES = ("welcome", "connect", "work", "help", "control", "mic",
-         "ready", "shortcut", "ask", "show", "payoff", "personal", "done")
-PHASE = {"welcome": 0, "connect": 0, "work": 0, "help": 0, "control": 1, "mic": 1,
-         "ready": 2, "shortcut": 2, "ask": 3, "show": 3, "payoff": 3,
-         "personal": 4, "done": 4}
-LIVE_PAGES = ("shortcut", "ask", "show", "payoff")   # need the running app
+PAGES = ("connect", "welcome", "work", "privacy", "mic",
+         "ready", "shortcut", "try", "payoff", "voice", "personal", "done")
+PHASE = {"connect": 0, "welcome": 0, "work": 0, "privacy": 1, "mic": 1,
+         "ready": 2, "shortcut": 2, "try": 3, "payoff": 3,
+         "voice": 4, "personal": 4, "done": 4}
+LIVE_PAGES = ("shortcut", "try", "payoff")   # need the running app
+LEARN = ("try",)
 
 
 def _check_own_key(key: str) -> tuple[bool, str]:
@@ -180,9 +174,11 @@ class SetupWizard(QDialog):
         self._catcher = None                       # account.loopback.LinkCatcher, while signing in
         self._live = None                          # the running app, once attach()ed
         self._asked_at = 0.0                       # when the question ended (Learn screens)
-        self._pointed_after: Optional[float] = None
-        self._steps_walked = 0
-        self._show_done = False
+        # Learn page -> (seconds from question to answer, "pointed" | "drew")
+        self._answered: dict[str, tuple[float, str]] = {}
+        self._learn_words: dict[str, QWidget] = {}
+        self._voice = cfg.voice or ""
+        self._colour = cfg.cursor_colour()
         self._finished = False
 
         self._continue: dict[str, QPushButton] = {}
@@ -194,7 +190,9 @@ class SetupWizard(QDialog):
         self._result.connect(self._on_result)
         self._hotkey.connect(self._on_hotkey)
         self._build()
-        self._go(start if start in PAGES else "welcome")
+        # Signing in comes first, whatever the caller asked for: a fresh
+        # install and a sign-out both open on it.
+        self._go(start if start in PAGES and start != "welcome" else PAGES[0])
 
     # ── the buttons tests and callers reach for ──────────────────────────────
 
@@ -321,18 +319,36 @@ class SetupWizard(QDialog):
                               "out loud, and I'll answer and point at it."))
         body.addWidget(O.line("A few quick questions, a couple of tries, and we're set."))
         self._continue["welcome"].setText("Get started")
-        cards = QGridLayout()
-        cards.setSpacing(18)
-        for i, (key, title, *_rest, example) in enumerate(HELP[:2]):
-            card = O.CapabilityCard(key, title, example)
-            card.set_on(True)
-            cards.addWidget(card, 0, i)
-        panel.body.addLayout(cards)
+        # The website's five "What it does" scenes, moving (ui/tour_scenes.py).
+        from ui.tour_scenes import TourCarousel
+        self.carousel = TourCarousel()
+        panel.body.setContentsMargins(24, 24, 24, 12)
+        panel.body.addWidget(self.carousel)
         return page
 
     def _page_connect(self) -> QWidget:
         from account import settings
-        body, panel, page = self._question("connect", O.STEP[0])
+        from ui.app_widgets import wordmark
+        outer, page = self._test("connect")
+        outer.addSpacing(10)
+        card = QFrame()
+        card.setObjectName("signinCard")
+        card.setFixedWidth(460)
+        card.setStyleSheet(f"QFrame#signinCard {{ background: {T.SURFACE}; border: 1px solid {T.BORDER};"
+                           " border-radius: 18px; }")
+        from PyQt6.QtWidgets import QGraphicsDropShadowEffect
+        from PyQt6.QtGui import QColor
+        shadow = QGraphicsDropShadowEffect(card)
+        shadow.setBlurRadius(48)
+        shadow.setOffset(0, 12)
+        shadow.setColor(QColor(0, 0, 0, 45))
+        card.setGraphicsEffect(shadow)
+        body = QVBoxLayout(card)
+        body.setContentsMargins(36, 32, 36, 30)
+        body.setSpacing(12)
+        body.addWidget(wordmark(28), 0, Qt.AlignmentFlag.AlignLeft)
+        body.addSpacing(10)
+        outer.addLayout(self._centre(card))
         if self._gated:
             body.addWidget(O.heading("Sign in to HeyTora."))
             body.addWidget(O.line("With the account you made on heytora.com. We email you a "
@@ -400,10 +416,13 @@ class SetupWizard(QDialog):
         kl.addLayout(row)
         body.addWidget(self.key_card)
         body.addWidget(self.connect_status)
-
-        card = O.CapabilityCard("ask", "Ask", "Where do I change the margins?")
-        card.set_on(True)
-        panel.body.addWidget(card, 0, Qt.AlignmentFlag.AlignCenter)
+        body.addSpacing(8)
+        go = QPushButton("Continue")
+        go.setObjectName("continue")
+        go.setCursor(Qt.CursorShape.PointingHandCursor)
+        go.clicked.connect(self._next)
+        body.addWidget(go)
+        self._continue["connect"] = go
         return page
 
     def _page_work(self) -> QWidget:
@@ -452,79 +471,23 @@ class SetupWizard(QDialog):
         if self.page() == "work":
             self.next_btn.setEnabled(bool(kinds))
 
-    def _page_help(self) -> QWidget:
-        body, panel, page = self._question("help", O.STEP[2])
-        body.addWidget(O.heading("What should Tora help with?"))
-        body.addWidget(O.line("Pick any. Everything stays available later."))
+    def _page_privacy(self) -> QWidget:
+        body, panel, page = self._question("privacy", O.STEP[2])
+        body.addWidget(O.heading("We look when you ask."))
+        body.addWidget(O.line("Not before. Tora sees your screen only when you ask her "
+                              "something, and only to answer it."))
         body.addSpacing(6)
-        self.help_cards: list[O.OptionCard] = []
-        for key, _title, head, sub, _ex in HELP:
-            card = O.OptionCard(head, sub, value=key, checked=key in ("ask", "show"))
-            card.toggled.connect(self._help_changed)
-            body.addWidget(card)
-            self.help_cards.append(card)
-        grid = QGridLayout()
-        grid.setSpacing(18)
-        self.capability_cards: list[O.CapabilityCard] = []
-        for i, (key, title, *_r, example) in enumerate(HELP):
-            cc = O.CapabilityCard(key, title, example)
-            grid.addWidget(cc, i // 2, i % 2)
-            self.capability_cards.append(cc)
-        panel.body.addLayout(grid)
-        self._help_changed()
-        return page
-
-    def _help_changed(self, *_a) -> None:
-        on = {c.value for c in self.help_cards if c.isChecked()}
-        for cc in self.capability_cards:
-            cc.set_on(cc.key in on)
-        if self.page() == "help":
-            self.next_btn.setEnabled(bool(on))
-
-    # ── Permissions ───────────────────────────────────────────────────────────
-
-    def _page_control(self) -> QWidget:
-        body, panel, page = self._question("control", O.CAPABILITY["do"])
-        body.addWidget(O.heading("You stay in charge."))
-        body.addWidget(O.line("Tora looks at your screen only when you ask. For anything she "
-                              "does, you choose how much she checks with you first."))
-        body.addSpacing(6)
-        auto = cfg.switch("auto_approve")
-        self.ask_first = O.OptionCard("Ask me first", "Tora shows what she's about to do and "
-                                      "waits for your OK.", checked=not auto)
-        self.go_ahead = O.OptionCard("Go ahead without asking", "Still asks, every time, before "
-                                     "paying, sending, posting or deleting.", checked=auto)
-        # One or the other, like radio buttons.
-        self.ask_first.toggled.connect(lambda on: self.go_ahead.setChecked(not on))
-        self.go_ahead.toggled.connect(lambda on: self.ask_first.setChecked(not on))
-        body.addWidget(self.ask_first)
-        body.addWidget(self.go_ahead)
+        self.guard_card = O.OptionCard(
+            "Skip private windows",
+            "Tora won't look at password managers, banking or private browsing, "
+            "even when you ask.", checked=cfg.switch("privacy_guard"))
+        body.addWidget(self.guard_card)
         body.addWidget(O.text("You can change this any time in Settings.", 12, 400, T.TEXT_FAINT))
-
-        # The picture: the approval box, as Tora shows it.
-        box = QFrame()
-        box.setObjectName("approval")
-        box.setFixedWidth(340)
-        box.setStyleSheet("QFrame#approval { background: #FFFFFF; border: 1px solid rgba(0,0,0,18);"
-                          " border-radius: 16px; }")
-        bl = QVBoxLayout(box)
-        bl.setContentsMargins(20, 18, 20, 18)
-        bl.setSpacing(8)
-        bl.addWidget(O.text("TORA WANTS TO", 10, 600, "#8A8884", spacing=1.5))
-        bl.addWidget(O.text("Export March's invoices to Excel", 15, 700, O.INK_ON_PALE))
-        bl.addWidget(O.text("Saves invoices-march.xlsx to your Documents.", 12, 400, "#5C5C5C"))
-        btns = QHBoxLayout()
-        btns.addStretch(1)
-        no = QPushButton("Not now")
-        no.setStyleSheet("QPushButton { background: #EBE9E5; border: none; border-radius: 14px;"
-                         " color: #292929; padding: 6px 14px; font-weight: 600; }")
-        yes = QPushButton("Allow")
-        yes.setStyleSheet(f"QPushButton {{ background: {T.ACCENT}; border: none; border-radius: 14px;"
-                          " color: #FFFFFF; padding: 6px 16px; font-weight: 700; }")
-        btns.addWidget(no)
-        btns.addWidget(yes)
-        bl.addLayout(btns)
-        panel.body.addWidget(box, 0, Qt.AlignmentFlag.AlignCenter)
+        # The website's privacy card: the peeker asleep on the claim, waking
+        # while the pointer is on it.
+        self.privacy_visual = O.PrivacyVisual()
+        panel.body.setContentsMargins(12, 12, 12, 12)
+        panel.body.addWidget(self.privacy_visual)
         return page
 
     def _page_mic(self) -> QWidget:
@@ -546,7 +509,11 @@ class SetupWizard(QDialog):
         change = QPushButton("Change microphone")
         change.setObjectName("answer")
         change.setCursor(Qt.CursorShape.PointingHandCursor)
-        change.clicked.connect(lambda: (self.mic_select.show(), change.hide()))
+        change.clicked.connect(lambda: (self.mic_select.show(), change.hide(),
+                                        self.mic_select.showPopup()))
+        self._change_mic = change
+        self.mic_name = O.text("", 12, 500, T.TEXT_DIM)
+        card.lay.insertWidget(2, self.mic_name)
         yes = QPushButton("Yes")
         yes.setObjectName("answerYes")
         yes.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -614,31 +581,53 @@ class SetupWizard(QDialog):
 
     # ── Learn ─────────────────────────────────────────────────────────────────
 
-    def _page_ask(self) -> QWidget:
-        body, page = self._test("ask", skip=True, go_words="Continue")
-        body.addWidget(O.heading("Ask Tora about your screen.", centre=True))
-        body.addWidget(O.line(f"Hold {_pretty_hotkey()} and ask: “Where do I export this?”",
-                              centre=True))
-        body.addSpacing(22)
-        self.ask_app = O.PretendApp()
-        body.addLayout(self._centre(self.ask_app))
-        body.addSpacing(14)
-        self.ask_status = O.text("", 13, 600, T.TEXT_DIM, centre=True)
-        body.addWidget(self.ask_status)
+    def _learn_page(self, name: str, title: str, suggestion: str, content: QWidget) -> QWidget:
+        """A Learn screen. The words above the content hide while the
+        shortcut is held: Tora reads the whole screen, and given the chance
+        she reads the instructions out instead of looking at the content."""
+        from PyQt6.QtWidgets import QGraphicsOpacityEffect
+        body, page = self._test(name, skip=True, go_words="Continue")
+        words = QWidget()
+        wl = QVBoxLayout(words)
+        wl.setContentsMargins(0, 0, 0, 0)
+        wl.setSpacing(12)
+        wl.addWidget(O.heading(title, centre=True))
+        wl.addWidget(O.line(f"Hold {_pretty_hotkey()} and say: {suggestion}", centre=True))
+        fade = QGraphicsOpacityEffect(words)
+        fade.setOpacity(1.0)
+        words.setGraphicsEffect(fade)
+        words.fade = fade
+        self._learn_words[name] = words
+        body.addWidget(words)
+        body.addSpacing(18)
+        body.addLayout(self._centre(content))
+        body.addSpacing(12)
+        status = O.text("", 13, 600, T.TEXT_DIM, centre=True)
+        body.addWidget(status)
+        setattr(self, f"{name}_status", status)
         return page
 
-    def _page_show(self) -> QWidget:
-        body, page = self._test("show", skip=True, go_words="Continue")
-        body.addWidget(O.heading("Let Tora show you.", centre=True))
-        body.addWidget(O.line(f"Hold {_pretty_hotkey()} and say: “Show me how to send the "
-                              "Contoso invoice.”", centre=True))
-        body.addSpacing(22)
-        self.show_app = O.PretendApp()
-        body.addLayout(self._centre(self.show_app))
-        body.addSpacing(14)
-        self.show_status = O.text("", 13, 600, T.TEXT_DIM, centre=True)
-        body.addWidget(self.show_status)
-        return page
+    def _page_try(self) -> QWidget:
+        self.math_sheet = O.MathSheet()
+        # Said in full: "where did I go wrong?" alone left her unsure what
+        # "it" was. Naming the equation gives her the subject.
+        return self._learn_page("try", "Ask Tora about this.",
+                                "“Hey Tora, what's wrong with this equation?”", self.math_sheet)
+
+    def _hide_words(self, name: str, hidden: bool) -> None:
+        words = self._learn_words.get(name)
+        if words is None:
+            return
+        from PyQt6.QtCore import QPropertyAnimation
+        from ui import tokens
+        anim = QPropertyAnimation(words.fade, b"opacity", words)
+        anim.setStartValue(words.fade.opacity())
+        anim.setEndValue(0.0 if hidden else 1.0)
+        anim.setDuration(tokens.DURATION_FAST)
+        anim.start()
+        words._anim = anim
+        if not words.isVisible():
+            words.fade.setOpacity(0.0 if hidden else 1.0)
 
     def _page_payoff(self) -> QWidget:
         body, page = self._test("payoff", dark=True, go_words="Continue")
@@ -665,50 +654,138 @@ class SetupWizard(QDialog):
             box = QWidget()
             v = QVBoxLayout(box)
             v.setContentsMargins(0, 0, 0, 0)
-            v.setSpacing(2)
-            v.addWidget(O.text(caption.upper(), 11, 600, "#A1A1A1", spacing=1.5))
+            v.setSpacing(4)
+            v.addWidget(O.text(caption.upper(), 11, 600, "#A1A1A1", spacing=1.5, wrap=False))
             v.addWidget(O.text(value, 44, 700, "#FAFAFA", spacing=-1.0, wrap=False))
+            # Pinned to what it asks for: next to the wrapping line below it,
+            # the column's height-for-width pass gave it 55 px of its 76 and
+            # sliced the number in half.
+            box.setFixedHeight(box.sizeHint().height())
             return box
 
-        if self._pointed_after is not None:
-            lay.addWidget(stat(f"{self._pointed_after:.1f} seconds",
-                               "From your question to Tora pointing"))
-        if self._steps_walked:
-            lay.addWidget(stat(f"{self._steps_walked} steps", "Tora walked you through"))
+        # Short captions: at this size a two-line caption ran into its number.
+        if "try" in self._answered:
+            lay.addWidget(stat(f"{self._answered['try'][0]:.1f} seconds", "Tora found the mistake in"))
         lay.addWidget(O.text("That's the whole idea: you never left the screen.", 16, 500, "#A1A1A1"))
 
     # ── Personalize ───────────────────────────────────────────────────────────
 
+    def _ribbon_card(self, name: str, width: int = 560) -> tuple[QVBoxLayout, QWidget]:
+        """A centred white card on the ribbon - the Personalize screens."""
+        from PyQt6.QtGui import QColor
+        from PyQt6.QtWidgets import QGraphicsDropShadowEffect
+        outer, page = self._test(name, go_words="Continue")
+        outer.addSpacing(4)
+        card = QFrame()
+        card.setObjectName(f"{name}Card")
+        card.setFixedWidth(width)
+        card.setStyleSheet(f"QFrame#{name}Card {{ background: {T.SURFACE}; border: none;"
+                           " border-radius: 20px; }")
+        shadow = QGraphicsDropShadowEffect(card)
+        shadow.setBlurRadius(56)
+        shadow.setOffset(0, 14)
+        shadow.setColor(QColor(0, 0, 0, 45))
+        card.setGraphicsEffect(shadow)
+        body = QVBoxLayout(card)
+        body.setContentsMargins(32, 28, 32, 26)
+        body.setSpacing(12)
+        outer.addLayout(self._centre(card))
+        return body, page
+
+    def _page_voice(self) -> QWidget:
+        from ui import tokens
+        from audio.tts.gemini_tts import VOICES
+        body, page = self._ribbon_card("voice", 620)
+        body.setContentsMargins(32, 32, 32, 28)
+        body.addWidget(O.heading("Pick her voice.", centre=True))
+        body.addWidget(O.line("Use the arrows to hear each one.", centre=True))
+        self.voice_carousel = O.VoiceCarousel(VOICES, self._voice)
+        self.voice_carousel.changed.connect(self._pick_voice)
+        body.addLayout(self._centre(self.voice_carousel))
+        return page
+
     def _page_personal(self) -> QWidget:
-        body, panel, page = self._question("personal", O.STEP[3])
-        body.addWidget(O.heading("Make Tora yours."))
-        body.addWidget(O.line("All of these are in Settings too."))
-        body.addSpacing(6)
+        from ui import tokens
+        body, page = self._ribbon_card("personal", 560)
+        body.setSpacing(6)
+        body.setContentsMargins(30, 22, 30, 18)
+        body.addWidget(O.heading("Make her yours."))
+        row = QHBoxLayout()
+        row.setSpacing(6)
+        row.addWidget(O.text("Her colour", 14, 600, wrap=False))
+        self.tora_preview = O.ToraPreview()
+        self.tora_preview.set_colour(tokens.cursor_hex(self._colour))
+        self.tora_preview.setFixedSize(96, 62)       # room for her name bubble
+        row.addWidget(self.tora_preview)
+        row.addStretch(1)
+        self.swatches: list[O.Swatch] = []
+        for key, name, hex_colour in tokens.CURSOR_COLOURS:
+            sw = O.Swatch(key, name, hex_colour)
+            sw.set_on(key == self._colour)
+            sw.picked.connect(self._pick_colour)
+            row.addWidget(sw)
+            self.swatches.append(sw)
+        body.addLayout(row)
         self.startup_row = ToggleRow("Start HeyTora when Windows starts",
                                      "For you only. No admin rights needed.", True, first=True)
         self.wake_row = ToggleRow("Always listening",
-                                  "Wake on “Tora”. Off means she only hears you while the "
-                                  "shortcut is held.", cfg.ambient_mic())
+                                  "Wake on “Tora”, or only while the shortcut is held.",
+                                  cfg.ambient_mic())
         self.panel_row = ToggleRow("Show the floating panel",
                                    "The small glass window with the conversation in it.", False)
-        for row in (self.startup_row, self.wake_row, self.panel_row):
-            body.addWidget(row)
-        card = O.CapabilityCard("teach", "Teach me", "Walk me through pivot tables")
-        card.set_on(True)
-        panel.body.addWidget(card, 0, Qt.AlignmentFlag.AlignCenter)
+        for r in (self.startup_row, self.wake_row, self.panel_row):
+            body.addWidget(r)
+        answers = QHBoxLayout()
+        answers.addWidget(O.text("How she answers", 14, 600, wrap=False))
+        answers.addStretch(1)
+        self.route_select = Select("Live: answers in about a second",
+                                   "Classic: transcribe, think, then speak", width=300)
+        self.route_select.setCurrentIndex(0 if cfg.conversation_mode != "cascade" else 1)
+        answers.addWidget(self.route_select)
+        body.addSpacing(4)
+        body.addLayout(answers)
         return page
 
+    def _pick_colour(self, key: str) -> None:
+        from ui import tokens
+        self._colour = key
+        for sw in self.swatches:
+            sw.set_on(sw.key == key)
+        self.tora_preview.set_colour(tokens.cursor_hex(key))
+
+    def _pick_voice(self, name: str) -> None:
+        """The carousel moved to `name` (and is playing it)."""
+        self._voice = name
+
     def _page_done(self) -> QWidget:
-        body, panel, page = self._question("done", O.CAPABILITY["ask"])
+        page = O.FilledRibbon()
+        outer = QVBoxLayout(page)
+        outer.setContentsMargins(56, 30, 56, 36)
+        top = QHBoxLayout()
+        top.addWidget(self._back_button("done"))
+        top.addStretch(1)
+        outer.addLayout(top)
+        outer.addStretch(1)
+        card = QFrame()
+        card.setObjectName("doneCard")
+        card.setFixedWidth(460)
+        card.setStyleSheet(f"QFrame#doneCard {{ background: {T.SURFACE}; border: none;"
+                           " border-radius: 20px; }")
+        from PyQt6.QtWidgets import QGraphicsDropShadowEffect
+        from PyQt6.QtGui import QColor
+        shadow = QGraphicsDropShadowEffect(card)
+        shadow.setBlurRadius(60)
+        shadow.setOffset(0, 16)
+        shadow.setColor(QColor(0, 0, 0, 60))
+        card.setGraphicsEffect(shadow)
+        body = QVBoxLayout(card)
+        body.setContentsMargins(36, 34, 36, 30)
+        body.setSpacing(12)
         self.done_title = O.heading("You're set.")
         body.addWidget(self.done_title)
         self.done_text = O.line("")
         body.addWidget(self.done_text)
-        body.addSpacing(8)
-        self.try_list = QVBoxLayout()
-        self.try_list.setSpacing(8)
-        body.addLayout(self.try_list)
-        body.addSpacing(14)
+        body.addSpacing(6)
         hold = QHBoxLayout()
         hold.setSpacing(10)
         hold.addWidget(O.text("Hold", 14, 500, T.TEXT_DIM, wrap=False))
@@ -716,14 +793,15 @@ class SetupWizard(QDialog):
         hold.addWidget(O.text("and ask.", 14, 500, T.TEXT_DIM, wrap=False))
         hold.addStretch(1)
         body.addLayout(hold)
-        self._continue["done"].setText("Open HeyTora")
-        grid = QGridLayout()
-        grid.setSpacing(18)
-        for i, (key, title, *_r, example) in enumerate(HELP):
-            cc = O.CapabilityCard(key, title, example)
-            cc.set_on(True)
-            grid.addWidget(cc, i // 2, i % 2)
-        panel.body.addLayout(grid)
+        body.addSpacing(8)
+        go = QPushButton("Open HeyTora")
+        go.setObjectName("continue")
+        go.setCursor(Qt.CursorShape.PointingHandCursor)
+        go.clicked.connect(self._next)
+        body.addWidget(go)
+        self._continue["done"] = go
+        outer.addLayout(self._centre(card))
+        outer.addStretch(1)
         return page
 
     def _fill_done(self) -> None:
@@ -732,19 +810,14 @@ class SetupWizard(QDialog):
         if not cfg.has_key():
             self.done_text.setText("You're not connected yet. Run setup again from the tray icon "
                                    "to sign in or add a key.")
-        else:
-            self.done_text.setText("Three things to try first:")
-        while self.try_list.count():
-            w = self.try_list.takeAt(0).widget()
-            if w is not None:
-                w.setParent(None)
-                w.deleteLater()
-        picks = [TRY[u] for u in cfg.profile()[1] if u in TRY][:1]
-        for ask in (picks + [t for t in TRY_ALWAYS if t not in picks])[:3]:
-            bubble = O.text(f"“{ask}”", 14, 500)
-            bubble.setStyleSheet(f"color: {T.TEXT}; background: {T.BG}; border-radius: 10px;"
-                                 " padding: 10px 14px;")
-            self.try_list.addWidget(bubble)
+            return
+        # Not a list of sample questions - they all sounded like the same
+        # three. The point is that anything on the screen is fair game.
+        self.done_text.setText(
+            "Be curious. A form you're stuck on, an error, a recipe, a game, a spreadsheet, "
+            "a page in another language - if it's on your screen, Tora can help with it. "
+            "Ask the way you'd ask a friend sitting next to you. The odder the question, "
+            "the more you'll find out what she can do.")
 
     # ── navigation ──────────────────────────────────────────────────────────────
 
@@ -762,8 +835,8 @@ class SetupWizard(QDialog):
         self.stack.setCurrentWidget(self.pages[name])
         i = PAGES.index(name)
         self.phases.set_progress(PHASE[name], i / (len(PAGES) - 1))
-        if name == "welcome":
-            self._backs["welcome"].hide()
+        if name == "connect":
+            self._backs["connect"].hide()
         if self._signin_only and name == "connect":
             self._backs["connect"].hide()
             self._continue["connect"].setText("Finish")
@@ -774,8 +847,6 @@ class SetupWizard(QDialog):
             self._refresh_connect()
         elif name == "work":
             self._work_changed()
-        elif name == "help":
-            self._help_changed()
         elif name == "mic":
             self._start_mic()
         elif name == "ready":
@@ -786,10 +857,13 @@ class SetupWizard(QDialog):
             self.shortcut_help.hide()
             self.next_btn.setEnabled(False)          # proven by holding it
             self._claim_hotkey()
-        elif name in ("ask", "show"):
+        elif name in LEARN:
             self._arm_learn(name)
         elif name == "payoff":
             self._fill_payoff()
+        elif name == "voice":
+            self.voice_carousel.setFocus()
+            QTimer.singleShot(350, self.voice_carousel.play)
         elif name == "done":
             self._fill_done()
 
@@ -803,10 +877,13 @@ class SetupWizard(QDialog):
             return
         if name == "work":
             self._save_profile()
-        elif name == "help":
-            self._save_help()
-        elif name == "control":
-            cfg.set_switch("auto_approve", self.go_ahead.isChecked())
+        elif name == "privacy":
+            cfg.set_switch("privacy_guard", self.guard_card.isChecked())
+            live_switch = getattr(self._live, "set_switch", None)
+            if live_switch is not None:
+                live_switch("privacy_guard", self.guard_card.isChecked())
+        elif name == "voice":
+            self._save_voice()
         elif name == "personal":
             self._save_personal()
         elif name == "done":
@@ -819,14 +896,15 @@ class SetupWizard(QDialog):
             self._go("ready")
             self.ready.emit()                        # the gate lets the app start; attach() follows
             return
-        if nxt == "payoff" and self._pointed_after is None and not self._steps_walked:
-            nxt = "personal"                         # nothing was measured: no fake celebration
+        if nxt == "payoff" and not self._answered:
+            nxt = "voice"                            # nothing was measured: no fake celebration
         self._go(nxt)
 
     def _skip(self) -> None:
-        self._go({"ask": "show", "show": "payoff"}.get(self.page(), self.page()))
-        if self.page() == "payoff" and self._pointed_after is None and not self._steps_walked:
-            self._go("personal")
+        nxt = {"try": "payoff"}.get(self.page(), self.page())
+        if nxt == "payoff" and not self._answered:
+            nxt = "voice"
+        self._go(nxt)
 
     def _back(self) -> None:
         i = PAGES.index(self.page())
@@ -835,8 +913,8 @@ class SetupWizard(QDialog):
             # Back past the seam goes to the mic test, if the app runs;
             # the gate's half cannot be re-entered once the app has started.
             prev = "mic"
-        if prev == "payoff" and self._pointed_after is None and not self._steps_walked:
-            prev = "show"
+        if prev == "payoff" and not self._answered:
+            prev = "try"
         self._go(prev)
 
     def _finish(self) -> None:
@@ -880,16 +958,21 @@ class SetupWizard(QDialog):
             live.claim_hotkey(down, up) / live.release_hotkey()
             live.state      pyqtSignal(AppState)
             live.point      pyqtSignal(float, float, str)
-            live.guide      pyqtSignal(int, int, str)       (step, total, words)
-            live.set_wake(bool), live.show_panel(bool)      optional
+            live.draw       pyqtSignal(dict)                (Tora drew a shape)
+            live.set_wake(bool), live.show_panel(bool), live.set_voice(str),
+            live.set_route(str), live.set_switch(name, bool)   optional
 
         Waiting on "ready", the window moves straight on to the shortcut test.
         """
         self._live = live
         try:
             live.state.connect(self._on_state)
-            live.point.connect(self._on_point)
-            live.guide.connect(self._on_guide)
+            live.point.connect(lambda *_a: self._on_answer("pointed"))
+            # She may answer by pointing or by drawing on it (look_at_screen
+            # boxes what it found): either is an answer.
+            draw = getattr(live, "draw", None)
+            if draw is not None:
+                draw.connect(lambda *_a: self._on_answer("drew"))
         except Exception:  # noqa: BLE001 - a live with fewer signals still runs
             pass
         if self.page() == "ready":
@@ -915,48 +998,43 @@ class SetupWizard(QDialog):
             self.next_btn.setEnabled(True)
 
     def _arm_learn(self, name: str) -> None:
-        status = self.ask_status if name == "ask" else self.show_status
-        done = (self._pointed_after is not None) if name == "ask" else self._show_done
+        status = getattr(self, f"{name}_status")
+        done = name in self._answered
         self.next_btn.setEnabled(done)
-        status.setText("Done. Tora found it." if done else "Waiting for you to ask…")
+        self._hide_words(name, False)
+        status.setText("Done." if done else "Waiting for you to ask…")
 
     def _on_state(self, state) -> None:
         name = getattr(state, "name", str(state)).upper()
         page = self.page()
-        if page not in ("ask", "show"):
+        if page not in LEARN:
             return
-        status = self.ask_status if page == "ask" else self.show_status
+        status = getattr(self, f"{page}_status")
         if name == "LISTENING":
+            # The words go while the key is held, so the screenshot Tora takes
+            # holds the sum or the settings card, not "say: ...".
+            self._hide_words(page, True)
             status.setText("Listening…")
         elif name == "THINKING":
             self._asked_at = time.monotonic()        # the question has ended
             status.setText("Tora is looking at your screen…")
         elif name == "SPEAKING" and status.text().startswith("Tora is looking"):
             status.setText("Tora is answering…")
-        elif name == "IDLE" and page == "show" and self._steps_walked and not self._show_done:
-            self._show_done = True
-            status.setText(f"Done. Tora walked you through {self._steps_walked} steps.")
-            self.next_btn.setEnabled(True)
+        elif name == "IDLE" and page not in self._answered:
+            self._hide_words(page, False)            # nothing came of it: the words come back
+            status.setText("Try again, or skip.")
 
-    def _on_point(self, *_args) -> None:
-        if self.page() != "ask" or self._pointed_after is not None:
+    def _on_answer(self, how: str) -> None:
+        """Tora pointed or drew on a Learn screen: timed from the question."""
+        page = self.page()
+        if page not in LEARN or page in self._answered:
             return
-        if self._asked_at:
-            self._pointed_after = max(0.1, time.monotonic() - self._asked_at)
-            self.ask_status.setText(f"Tora pointed in {self._pointed_after:.1f} seconds.")
-        else:
-            self._pointed_after = 0.0
-            self.ask_status.setText("Tora pointed at it.")
+        secs = max(0.1, time.monotonic() - self._asked_at) if self._asked_at else 0.0
+        self._answered[page] = (secs, how)
+        status = getattr(self, f"{page}_status")
+        verb = {"pointed": "pointed at it", "drew": "marked it"}.get(how, how)
+        status.setText(f"Tora {verb} in {secs:.1f} seconds." if secs else f"Tora {verb}.")
         self.next_btn.setEnabled(True)
-
-    def _on_guide(self, step: int = 0, total: int = 0, *_rest) -> None:
-        if self.page() != "show":
-            return
-        self._steps_walked = max(self._steps_walked, int(total or step or 0))
-        self.show_status.setText(f"Step {step} of {total}. Follow Tora's cursor.")
-        if total and step >= total:
-            self._show_done = True
-            self.next_btn.setEnabled(True)
 
     # ── saving answers ────────────────────────────────────────────────────────
 
@@ -964,21 +1042,37 @@ class SetupWizard(QDialog):
         uses = [c.property("use") for c in self.use_chips if c.isChecked()]
         cfg.set_profile(self.name_edit.text(), uses)
 
-    def _save_help(self) -> None:
-        chosen = [c.value for c in self.help_cards if c.isChecked()]
-        try:
-            cfg._write_env("TORA_INTERESTS", ",".join(chosen))
-        except Exception:  # noqa: BLE001 - a nicety
-            pass
+    def _save_voice(self) -> None:
+        fn = getattr(self._live, "set_voice", None)
+        if fn is not None and self._voice:
+            try:
+                fn(self._voice)
+            except Exception:  # noqa: BLE001
+                pass
 
     def _save_personal(self) -> None:
+        from ui import tokens
+        cfg.set_cursor_colour(self._colour)
+        try:
+            from ui.overlay import set_cursor_colour
+            set_cursor_colour(tokens.cursor_hex(self._colour))     # repaints at once
+        except Exception:  # noqa: BLE001 - no overlay (tests): saved for next start
+            pass
         try:
             from ui import autostart
             autostart.set_enabled(self.startup_row.switch.isChecked())
         except Exception:  # noqa: BLE001 - a nicety, never a blocker
             pass
         live = self._live
+        route = "cascade" if self.route_select.currentIndex() == 1 else "realtime"
         if live is not None:
+            for attr, value in (("set_route", route),):
+                fn = getattr(live, attr, None)
+                if fn is not None and value:
+                    try:
+                        fn(value)
+                    except Exception:  # noqa: BLE001
+                        pass
             for attr, row in (("set_wake", self.wake_row), ("show_panel", self.panel_row)):
                 fn = getattr(live, attr, None)
                 if fn is not None:
@@ -1121,7 +1215,7 @@ class SetupWizard(QDialog):
         self.mic_ids = [i for i, _n, _d in devices]
         for _i, name, default in devices:
             self.mic_select.addItem(name + ("  (default)" if default else ""))
-        current = cfg.mic_device_index
+        current = cfg.mic_device()
         pick = (self.mic_ids.index(current) if current in self.mic_ids
                 else next((k for k, (_i, _n, d) in enumerate(devices) if d), 0))
         if devices:
@@ -1137,10 +1231,13 @@ class SetupWizard(QDialog):
                                   "in Settings.")
             return
         self.mic_note.setText("")
+        self.mic_select.hide()
+        self._change_mic.show()
+        self._say_mic()
         self._open_stream(self.mic_ids[pick])
         self._meter_timer = QTimer(self)
-        self._meter_timer.timeout.connect(lambda: self.mic_bars.push(min(1.0, self._level * 6)))
-        self._meter_timer.start(70)
+        self._meter_timer.timeout.connect(lambda: self.mic_bars.push(min(1.0, self._level * 7)))
+        self._meter_timer.start(55)
 
     def _open_stream(self, device: int) -> None:
         self._stop_stream()
@@ -1161,9 +1258,17 @@ class SetupWizard(QDialog):
     def _pick_mic(self, k: int) -> None:
         if 0 <= k < len(self.mic_ids):
             device = self.mic_ids[k]
-            cfg.mic_device_index = device
-            cfg._write_env("MIC_DEVICE_INDEX", str(device))
+            cfg.set_mic_device(device)          # with its name: numbers move
             self._open_stream(device)
+        # Picked: back to the button, saying which mic it is now.
+        self.mic_select.hide()
+        self._change_mic.show()
+        self._say_mic()
+
+    def _say_mic(self) -> None:
+        k = self.mic_select.currentIndex()
+        name = self.mic_select.itemText(k).replace("  (default)", "") if k >= 0 else ""
+        self.mic_name.setText(f"Listening on {name}" if name else "")
 
     def _stop_stream(self) -> None:
         stream, self._stream = self._stream, None

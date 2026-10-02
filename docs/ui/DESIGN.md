@@ -197,23 +197,36 @@ hand-drawn illustrations. Ours are §4–§6.
 
 ### 7.2 Our flow (built: `ui/setup_wizard.py`, `ui/onboarding_parts.py`)
 
-Five phases, thirteen screens. Q = split question layout, T = centred test layout.
+The steps prove what Tora is, rather than copying another app's list: she
+hears you, the key works, she sees and points, she explains and draws.
+Q = split question layout, T = centred test layout.
 
 | Phase | Page id | Screen | Layout | What proves it |
 |---|---|---|---|---|
-| Sign up | `welcome` | Hi, I'm Tora: what she does, in two lines | Q | Get started |
-| | `connect` | Sign in to HeyTora (emailed link or code); own Gemini key after | Q | Signed in. Continue is locked until then |
-| | `work` | Tell us about yourself: name, and what you do (chips) | Q | A chip. The panel's matching pack cards come into colour |
-| | `help` | What should Tora help with? Ask / Show me / Teach me / Do it | Q | A card. Its capability card comes into colour |
-| Permissions | `control` | You stay in charge: ask me first, or go ahead | Q | A choice (saved as the `auto_approve` switch) |
+| Sign up | `connect` | Sign in to HeyTora: a centred card with the logo, on the ribbon | T | Signed in. Continue is locked until then |
+| | `welcome` | Hi, I'm Tora. Picture: the website's five "What it does" scenes, moving (`ui/tour_scenes.py`, a port of heytora-web `home/tour-scenes.tsx`) | Q | Get started |
+| | `work` | Tell us about yourself: name, and what you do (chips). Matching pack cards slide in, in colour | Q | A chip |
+| Permissions | `privacy` | We look when you ask. Not before. The one real control: **Skip private windows** (the `privacy_guard` switch). Picture: the website's peeker, asleep on the claim, waking while the pointer is on the card | Q | A choice |
 | | `mic` | Test your microphone: "Do the bars move when you talk?" | T | [Change microphone] [Yes] |
 | Set up | `ready` | Getting Tora ready (only when opened by the sign-in gate) | T | The app has started |
-| | `shortcut` | Test your shortcut: "Does the key light up while you hold it?" | T | The key lit at least once. [No] explains |
-| Learn | `ask` | Ask Tora about your screen: a pretend invoices app; ask "where do I export this?" | T | Tora pointed (timed). Skip |
-| | `show` | Let Tora show you: "show me how to send the Contoso invoice" | T | The walkthrough finished. Skip |
+| | `shortcut` | Test your shortcut: "Does the key light up while you hold it?" | T | The key lit at least once |
+| Learn | `try` | Ask Tora about this: a worked sum with one wrong line. Said in full: "Hey Tora, what's wrong with this equation?" | T | Tora pointed (timed). Skip |
 | | `payoff` | Nice job (dark): only what was measured. Left out if nothing was | T | None, a moment |
-| Personalize | `personal` | Make Tora yours: start with Windows, always listening, floating panel | Q | Choices |
-| | `done` | You're set: three things to try, the hotkey as the one keycap | Q | Open HeyTora opens the app on Home |
+| Personalize | `voice` | Pick her voice: one voice at a time, big, its waveform in its own colour moving with the real clip; arrows or ←/→. Nothing else on the page | T | A choice |
+| | `personal` | Make her yours: her colour (six swatches, a live pointer), start with Windows, always listening, floating panel, how she answers (Live / Classic) | T | Choices |
+| | `done` | You're set: one card - an encouraging word (be curious; anything on screen is fair game), the hotkey keycap, Open HeyTora - on the ribbon filled with the site's colours | T | Opens the app on Home |
+
+**The words hide while the shortcut is held.** On a Learn screen the
+heading and "Hold Ctrl + Win and ask Tora: ..." fade out the moment Tora
+starts listening, and come back if nothing came of it. Tora reads the
+whole screen, and with the instruction showing she read it out instead
+of looking at the sum.
+
+**Not in the onboarding, on purpose.** "What should Tora help with?"
+(she does all of it anyway) and the approvals choice ("ask first" stays
+the default, in Settings; the moment to ask is the first time an agent
+needs it). A "use my data to improve Tora" choice waits until there is
+such a thing to switch.
 
 **Two halves.** The sign-in gate shows this window before the overlay,
 hotkey and voice exist. Up to `mic` it needs nothing else. Leaving `mic`
@@ -222,6 +235,14 @@ emits `ready`, the gate lets the app start, and `main.py` calls
 Opened from a running app (the tray's "Run setup again"), `attach` has
 already happened and `ready` is skipped. After a sign-out, the gate opens
 it at `connect` only, and signing in finishes it.
+
+**The Learn asks are real asks.** They count against the user's plan like
+any other question, so the first launch is no way around the limits.
+
+**Voices and colour.** The 12 hellos are recorded once by whoever
+releases (`assets/voices/make_voices.py`) and ship with the app: choosing
+a voice never spends a talk message. Tora's colour (`TORA_CURSOR_COLOUR`)
+changes only her pointer; the app's accent stays the cursor blue.
 
 **The shortcut test borrows the hotkey.** While `shortcut` is up,
 `main.py` routes the hotkey to the window (`claim_hotkey`), so holding it
@@ -238,11 +259,33 @@ Rules that carry over from Wispr Flow:
 - Any test can be redone from Settings.
 - Every Learn demo uses the **real** overlay and voice, not a recording.
 
+### 7.4 One Learn step
+
+Two second demos were tried and dropped. A triangle ("teach me how to
+find the missing side") sent Tora into planning an app walkthrough
+against a screen with no controls, and she stalled. A settings card of
+real switches worked but added length without proving anything new. The
+equation alone proves she sees, points and explains.
+
+**Drawing after a screen look.** On the equation she boxed the wrong
+line correctly (look_at_screen finds it in the image) and then drew a
+red circle around nothing: a `draw` call with coordinates the voice model
+made up, since look_at_screen answers in words. For 20 s after
+look_at_screen highlights something, coordinate drawings are skipped;
+anchored ones (`[CIRCLE:@Save]`) still draw (companion_manager
+`_tool_draw`). A drawing counts as an answer on the Learn screen, as a
+point does.
+
 ### 7.3 Decided
 
-- **Picture panel:** the step's gradient (§4) with real product cards on
-  it (pack cards, capability cards, the approval box). No illustrations
-  for now.
+- **Picture panel:** the step's gradient (§4) with something that answers
+  the choices: the carousel, pack cards, capability cards, the peeker, the
+  desktop. No illustrations for now. The carousel's images are PNGs in
+  `assets/onboarding/` (drawn by `assets/onboarding/make_slides.py`); a
+  real screenshot saved under the same name replaces one.
+- **Motion:** every choice animates on the site's curve (chips and cards
+  fill, ticks draw, pack cards slide in, capability cards lift). The test
+  screens' ground is HeyTora's ribbon in the site's cyan, blue and violet.
 - **No "where did you hear about us?"** screen.
 - **Payoff font:** Plus Jakarta Sans throughout; the moment comes from
   scale and the dark flip, not a serif.

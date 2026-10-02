@@ -171,9 +171,11 @@ def tool_declarations() -> list[dict]:
             "description": (
                 "Draw on the user's screen — arrows, circles, boxes, labels. "
                 "Draw ON what you are explaining. Coordinates are normalized "
-                "0-1000, so you need to know where things are: call "
-                "look_at_screen first unless you are drawing somewhere you "
-                "were just told about."
+                "0-1000, and you cannot see the screen yourself: take every "
+                "position from look_at_screen's `highlights` (each tag holds "
+                "its coordinates) and draw relative to those. Never invent "
+                "coordinates, and don't redraw what look_at_screen has "
+                "already highlighted."
             ),
             "parameters": {
                 "type": "object",

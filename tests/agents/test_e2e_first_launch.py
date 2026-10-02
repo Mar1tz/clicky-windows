@@ -1,9 +1,9 @@
 """The first launch: signing in, getting to know the user, proving it works.
 
-Five phases (docs/ui/DESIGN.md §7): sign in → what you do → what Tora should
-help with → approvals → mic test → [the app starts] → shortcut test → ask
-Tora about a pretend screen → let her show you → what was measured → start
-with Windows → done. And Settings' account card: the plan and this month's
+Five phases (docs/ui/DESIGN.md §7): sign in → hello → what you do →
+privacy → mic test → [the app starts] → shortcut test → ask Tora about a sum
+with a mistake → what was measured → her voice → her colour and the
+switches → done. And Settings' account card: the plan and this month's
 use. No real microphone, hotkey, network or profile.
 """
 from __future__ import annotations
@@ -75,8 +75,8 @@ def test_the_pages_in_order(qapp, service):
     # Nothing was measured on the Learn screens (no app attached): there is
     # no celebration of nothing, so "payoff" is passed over.
     assert seen == [p for p in PAGES if p != "payoff"] == [
-        "welcome", "connect", "work", "help", "control", "mic", "ready",
-        "shortcut", "ask", "show", "personal", "done"]
+        "connect", "welcome", "work", "privacy", "mic", "ready",
+        "shortcut", "try", "voice", "personal", "done"]
 
 
 def test_the_name_and_what_the_pc_is_for_are_kept(qapp, service):
@@ -93,7 +93,7 @@ def test_the_name_and_what_the_pc_is_for_are_kept(qapp, service):
     assert set(lit) == {"ledger", "video"}, "the picture answers back"
     w.next_btn.click()
     assert cfg.profile() == ("Amy", ["Accounting", "Design & video"])
-    assert w.page() == "help"
+    assert w.page() == "privacy"
 
 
 def test_signing_in_to_heytora_from_the_first_launch(qapp, service):
@@ -373,11 +373,14 @@ class _Live:
         class Signals(QObject):
             state = pyqtSignal(object)
             point = pyqtSignal(float, float, str)
-            guide = pyqtSignal(int, int, str)
+            draw = pyqtSignal(dict)
         self._s = Signals()
-        self.state, self.point, self.guide = self._s.state, self._s.point, self._s.guide
+        self.state, self.point, self.draw = self._s.state, self._s.point, self._s.draw
         self.claimed = None
         self.wake = []
+        self.voice = []
+        self.route = []
+        self.switched = []
 
     def claim_hotkey(self, down, up):
         self.claimed = (down, up)
@@ -387,6 +390,15 @@ class _Live:
 
     def set_wake(self, on):
         self.wake.append(on)
+
+    def set_voice(self, name):
+        self.voice.append(name)
+
+    def set_route(self, mode):
+        self.route.append(mode)
+
+    def set_switch(self, name, on):
+        self.switched.append((name, on))
 
 
 def _app_state(name):
@@ -430,7 +442,7 @@ def test_holding_the_shortcut_lights_the_key_and_starts_nothing(qapp, service):
     up()
     _until(qapp, lambda: not w.keycap.lit())
     w._next()
-    assert w.page() == "ask" and live.claimed is None, "given back"
+    assert w.page() == "try" and live.claimed is None, "given back"
 
 
 def test_asking_tora_is_measured_and_celebrated(qapp, service):
@@ -438,47 +450,58 @@ def test_asking_tora_is_measured_and_celebrated(qapp, service):
     w = _wizard(service.account)
     live = _Live()
     w.attach(live)
-    w._go("ask")
+    w._go("try")
     assert not w.next_btn.isEnabled()
     live.state.emit(_app_state("LISTENING"))
     live.state.emit(_app_state("THINKING"))
-    live.point.emit(100.0, 200.0, "Export")
-    assert w._pointed_after is not None and "seconds" in w.ask_status.text()
+    live.point.emit(100.0, 200.0, "line 2")
+    assert w._answered["try"][1] == "pointed" and "seconds" in w.try_status.text()
     assert w.next_btn.isEnabled()
     w._next()
-    assert w.page() == "show"
-    live.guide.emit(1, 3, "Click Contoso")
-    live.guide.emit(3, 3, "Click Send")
-    assert w.next_btn.isEnabled() and w._steps_walked == 3
-    w._next()
     assert w.page() == "payoff"
-    words = [lab.text() for lab in w.pages["payoff"].findChildren(type(w.ask_status))]
-    assert any("3 steps" in t for t in words) and any("seconds" in t for t in words)
+    words = [lab.text() for lab in w.pages["payoff"].findChildren(type(w.try_status))]
+    assert any("found the mistake" in t.lower() for t in words)
+
+
+def test_a_drawing_on_the_sum_is_an_answer_too(qapp, service):
+    """look_at_screen boxes the wrong line rather than pointing at it; the
+    page said "try again" while the box was on screen."""
+    _sign_in(service)
+    w = _wizard(service.account)
+    live = _Live()
+    w.attach(live)
+    w._go("try")
+    live.state.emit(_app_state("THINKING"))
+    live.draw.emit({"kind": "rect"})
+    live.state.emit(_app_state("IDLE"))
+    assert w._answered["try"][1] == "drew" and w.next_btn.isEnabled()
+    assert "again" not in w.try_status.text()
+
+
+def test_the_instructions_hide_while_the_shortcut_is_held(qapp, service):
+    """Tora reads the whole screen: with "ask Tora: ..." on it she read the
+    instruction out instead of looking at the sum."""
+    _sign_in(service)
+    w = _wizard(service.account)
+    live = _Live()
+    w.attach(live)
+    w._go("try")
+    words = w._learn_words["try"]
+    live.state.emit(_app_state("LISTENING"))
+    _until(qapp, lambda: words.fade.opacity() < 0.05)
+    live.state.emit(_app_state("IDLE"))                 # nothing came of it
+    _until(qapp, lambda: words.fade.opacity() > 0.95)
+    assert "again" in w.try_status.text()
 
 
 def test_learn_screens_can_be_skipped(qapp, service):
     _sign_in(service)
     w = _wizard(service.account)
     w.attach(_Live())
-    w._go("ask")
+    w._go("try")
     assert w.skip_btn.isVisibleTo(w)
     w.skip_btn.click()
-    assert w.page() == "show"
-    w.skip_btn.click()
-    assert w.page() == "personal", "nothing measured, nothing celebrated"
-
-
-def test_the_personal_switches_go_to_the_running_app(qapp, service, monkeypatch):
-    from ui import autostart
-    monkeypatch.setattr(autostart, "set_enabled", lambda on: True)
-    _sign_in(service)
-    w = _wizard(service.account)
-    live = _Live()
-    w.attach(live)
-    w._go("personal")
-    w.wake_row.switch.setChecked(True)
-    w._next()
-    assert live.wake == [True]
+    assert w.page() == "voice", "nothing measured, nothing celebrated"
 
 
 def test_closing_after_the_app_started_counts_as_done(qapp, service):
@@ -486,6 +509,107 @@ def test_closing_after_the_app_started_counts_as_done(qapp, service):
     _sign_in(service)
     w = _wizard(service.account)
     w.attach(_Live())
-    w._go("ask")
+    w._go("try")
     w.close()
     assert setup_wizard.setup_already_ran()
+
+
+# -- what the screens show back ------------------------------------------------------------------------
+
+def test_the_welcome_carousel_plays_the_websites_five_scenes(qapp, service):
+    """The website's "What it does" tour, ported (ui/tour_scenes.py): five
+    scenes, each stepping through its beats and then handing on."""
+    from ui import tour_scenes
+    w = _wizard(service.account)
+    w._go("welcome")
+    c = w.carousel
+    assert [n for n, _cls in tour_scenes.SCENES] == ["Ask", "Show me", "Teach me", "Do it", "Build it"]
+    scene = c.scene()
+    first = scene.clock.beat
+    scene.clock.t0 -= 60                                 # as if the beat's time were up
+    scene.advance()
+    assert scene.clock.beat != first, "the beats move on"
+    while not scene.done:
+        scene.clock.t0 -= 60
+        scene.advance()
+    c._tick()
+    assert c.index() == 1, "a finished scene hands on to the next"
+    c.go(4)
+    assert c.index() == 4 and c.scene().clock.beat == "listen", "each starts from its first frame"
+
+def test_privacy_saves_the_real_switch(qapp, service):
+    from config import cfg
+    _sign_in(service)
+    w = _wizard(service.account)
+    live = _Live()
+    w.attach(live)
+    w._go("privacy")
+    w.guard_card.setChecked(False)
+    w._next()
+    assert cfg.switch("privacy_guard") is False and live.switched == [("privacy_guard", False)]
+    assert w.page() == "mic"
+
+
+def test_her_voice_and_colour(qapp, service, monkeypatch):
+    from config import cfg
+    from ui import onboarding_parts as O
+    monkeypatch.setenv("TORA_CURSOR_COLOUR", "blue")       # restored after the test
+    played = []
+    monkeypatch.setattr(O, "play_voice", lambda name: played.append(name) or True)
+    _sign_in(service)
+    w = _wizard(service.account)
+    live = _Live()
+    w.attach(live)
+    w._go("voice")
+    start = w.voice_carousel.voice()
+    w.voice_carousel.go(1)
+    assert w.voice_carousel.voice() != start and played[-1] == w.voice_carousel.voice(), \
+        "moving on plays the next voice"
+    chosen = w.voice_carousel.voice()
+    w._next()
+    assert live.voice == [chosen] and w.page() == "personal"
+
+
+def test_the_last_switches_and_how_she_answers(qapp, service, monkeypatch):
+    from ui import autostart
+    monkeypatch.setattr(autostart, "set_enabled", lambda on: True)
+    _sign_in(service)
+    w = _wizard(service.account)
+    live = _Live()
+    w.attach(live)
+    monkeypatch.setenv("TORA_CURSOR_COLOUR", "blue")       # restored after the test
+    w._go("personal")
+    w._pick_colour("violet")
+    w.route_select.setCurrentIndex(1)
+    w.wake_row.switch.setChecked(True)
+    w._next()
+    from config import cfg
+    assert cfg.cursor_colour() == "violet"
+    assert live.route == ["cascade"] and live.wake == [True]
+    assert w.page() == "done"
+
+
+def test_every_voice_has_a_bundled_hello(qapp):
+    from audio.tts.gemini_tts import VOICES
+    from ui import tokens
+    missing = [v for v in VOICES if not (tokens.assets_dir() / "voices" / f"{v.lower()}.wav").exists()]
+    assert not missing, f"record them: python assets/voices/make_voices.py ({missing})"
+
+
+def test_picking_a_microphone_puts_the_button_back(qapp, service):
+    w = _wizard(service.account)
+    w._go("mic")
+    w.mic_ids = [3, 7]
+    w.mic_select.addItems(["Headset", "Desk mic"])
+    w._open_stream = lambda device: None
+    picked = []
+    from config import cfg
+    real = cfg.set_mic_device
+    cfg.set_mic_device = picked.append
+    try:
+        w._change_mic.click()
+        w._pick_mic(1)
+    finally:
+        cfg.set_mic_device = real
+    assert picked == [7]
+    assert not w.mic_select.isVisibleTo(w) and w._change_mic.isVisibleTo(w)
