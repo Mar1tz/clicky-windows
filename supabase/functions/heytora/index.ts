@@ -6,11 +6,12 @@
 //                      message is a talk window (Free 10 min, Pro/Max 30), an
 //                      agent message an agent window (30 min). The open one
 //                      is handed back at no charge; `new` starts the next.
-//   POST /voice-pass   {kind: "talk"|"dictation", model, new?}  a Gemini Live
+//   POST /voice-pass   {kind: "talk"|"dictation"|"wake", model, new?}  a Gemini Live
 //                      ephemeral token - one session, locked to that model,
 //                      ending with its talk window (or after the plan's
-//                      dictation minutes). Talk passes come with the window's
-//                      ticket. The app then talks straight to Google.
+//                      dictation minutes; a wake-word check: one minute).
+//                      Talk passes come with the window's ticket. The app
+//                      then talks straight to Google.
 //   POST /agent-ticket the agent window's ticket (older apps).
 //   GET  /me           the plan, its allowances and this month's use.
 //   *    /v1beta/...   a Gemini REST call, forwarded with the key added:
@@ -44,6 +45,7 @@ const VOICE_MODELS: Record<string, Set<string>> = {
   talk: list("HEYTORA_TALK_MODELS", "gemini-3.8-live"),
   dictation: list("HEYTORA_DICTATION_MODELS", "gemini-3.5-transcribe-live"),
 };
+VOICE_MODELS.wake = VOICE_MODELS.dictation; // "is that 'Tora'?" - the dictation model, briefly
 const PRICES = prices(Deno.env.get("HEYTORA_PRICES"));
 
 // Only these Gemini REST paths: model calls and the model list. No files,
@@ -74,6 +76,7 @@ function refuse(status: number, code: string, message: string, heytora: unknown 
 
 const WORDS: Record<string, string> = {
   talk: "talk messages", dictation: "dictations", agent: "agent messages", calls: "requests",
+  wake: "wake-word checks",
 };
 const own = "switch to your own Gemini key in Settings";
 
@@ -200,15 +203,17 @@ Deno.serve(async (req: Request): Promise<Response> => {
 
     if (path === "voice-pass" && req.method === "POST") {
       const body = await req.json().catch(() => ({}));
-      const kind = body?.kind === "dictation" ? "dictation" : "talk";
+      const kind = body?.kind === "dictation" || body?.kind === "wake" ? String(body.kind) : "talk";
       const model = String(body?.model ?? "");
       if (!VOICE_MODELS[kind].has(model)) {
         return refuse(400, "HEYTORA_MODEL", `Not a ${kind} model: ${model}`);
       }
-      if (kind === "dictation") {
-        const usage = await rpc("heytora_consume", { p_kind: "dictation", p_quantity: 1, p_meta: { model } });
+      if (kind !== "talk") {
+        // A dictation, or a wake-word check: one pass each, counted apart.
+        const usage = await rpc("heytora_consume", { p_kind: kind, p_quantity: 1, p_meta: { model } });
         if (!usage.ok) return limitResponse(usage);
-        const minutes = Number((usage.limits as Record<string, unknown>)?.dictation_minutes ?? 10);
+        const minutes = Number((usage.limits as Record<string, unknown>)?.[`${kind}_minutes`] ??
+          (kind === "wake" ? 1 : 10));
         const endsAt = Date.now() / 1000 + Math.min(Math.max(minutes, 1), 120) * 60;
         const pass = await mintPass(model, endsAt);
         delete usage.limits;

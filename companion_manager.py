@@ -570,21 +570,36 @@ class CompanionManager(QObject):
         except Exception:
             pass   # silent — not user-facing on startup
 
+    # A wake-word check refused by the plan (today's fair use of them) is not
+    # asked again for this long - not every few seconds for the rest of the day.
+    WAKE_REFUSED_PAUSE_S = 15 * 60
+    _wake_refused_until = 0.0
+
     def _transcribe_blocking(self, pcm: bytes) -> str:
         """Wake-word transcription, called from the listener's worker thread.
 
         Bridges onto the manager's loop so the shared HTTP client and its
         warm connection are reused rather than a fresh one per check. Bounded
         so a slow network cannot pile up wake-word threads.
+
+        On a HeyTora plan a check is its own kind ("wake", migration 0006):
+        never a dictation, so the dictation count is the user's dictations.
         """
         if not self._loop or not self._loop.is_running():
             return ""
+        if time.monotonic() < self._wake_refused_until:
+            return ""
+
+        async def check() -> str:
+            with gemini.request_kind("wake"):
+                return await self._get_stt().transcribe(pcm)
         try:
-            fut = asyncio.run_coroutine_threadsafe(
-                self._get_stt().transcribe(pcm), self._loop
-            )
+            fut = asyncio.run_coroutine_threadsafe(check(), self._loop)
             return fut.result(timeout=12) or ""
-        except Exception:
+        except Exception as e:  # noqa: BLE001
+            if type(e).__name__ == "LimitReached":
+                self._wake_refused_until = time.monotonic() + self.WAKE_REFUSED_PAUSE_S
+                _log.info("wake word paused for %d min: %s", self.WAKE_REFUSED_PAUSE_S // 60, e)
             return ""
 
     def _start_agents(self):
@@ -1018,6 +1033,30 @@ class CompanionManager(QObject):
             return account().talk_metered()
         except Exception:  # noqa: BLE001
             return True
+
+    # A question asked this soon after an answer, on the session still open,
+    # is a follow-up: it rides on the last talk message.
+    FOLLOW_UP_S = 20.0
+    _answered_at = 0.0
+
+    def _is_new_question(self, ready: bool) -> bool:
+        """A new talk message? On a HeyTora plan, unless it follows up an
+        answer on the open session within FOLLOW_UP_S."""
+        if gemini.own_key():
+            return False
+        return not (ready and time.monotonic() - self._answered_at < self.FOLLOW_UP_S)
+
+    async def _open_talk_window(self) -> None:
+        """Count the question now (its talk window), not at its first call to
+        the server - a question answered by voice alone makes none. A refusal
+        (Free's talk messages used up) is said like any other."""
+        try:
+            from account.service import AccountError, account
+            await account().aticket("talk")
+        except AccountError as e:
+            gemini.report_problem(e)
+        except Exception:  # noqa: BLE001 - counting must never stop the answer
+            _log.debug("could not open the talk window", exc_info=True)
 
     @staticmethod
     def _new_talk() -> None:
@@ -2954,11 +2993,14 @@ class CompanionManager(QObject):
         metered = self._metered_talk()
         on_demand = (not ready and not connecting and cfg.realtime()
                      and cfg.has_key() and metered)
-        if metered and not ready:
-            # A new question, not a follow-up on the open session: a new talk
-            # message. Said before the pass is asked for, or it would ride on
-            # the last question's window.
+        if self._is_new_question(ready):
+            # Every question is a talk message, on every plan, counted the
+            # moment it is asked - so the plan moves with use. Said before
+            # the pass is asked for, or it would ride on the last question's
+            # window. Without a pass to open it, the window opens now.
             self._new_talk()
+            if not on_demand:
+                self._submit(self._open_talk_window())
         if on_demand:
             self._get_realtime()
             self._submit(self._realtime_connect(on_demand=True))
@@ -4628,6 +4670,12 @@ class CompanionManager(QObject):
             pass
 
     def _emit_state(self, state: AppState):
+        try:
+            was = self._state
+        except (AttributeError, RuntimeError):           # a bare manager in a test
+            was = None
+        if state is AppState.IDLE and was in (AppState.SPEAKING, AppState.THINKING):
+            self._answered_at = time.monotonic()        # follow-ups are measured from here
         self._state = state
         # Wake-word scanning only means anything while Tora is idle: a wake
         # word during THINKING or SPEAKING is refused by _claim_begin. Left

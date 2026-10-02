@@ -135,8 +135,10 @@ class LiveSession:
                 raise RuntimeError("No Google API key. Add GOOGLE_API_KEY in Tray → API Key.")
             return f"{LIVE_WS}?key={key}"
         from account.service import account
-        from ai.gemini import Models
+        from ai.gemini import Models, _kind
         kind = "dictation" if self._model == Models.STT else "talk"
+        if kind == "dictation" and _kind.get() == "wake":
+            kind = "wake"                 # "is that 'Tora'?" - not a dictation (0006)
         voice_pass = await account().avoice_pass(kind, self._model)
         self.usage = voice_pass.usage
         return voice_pass.address()

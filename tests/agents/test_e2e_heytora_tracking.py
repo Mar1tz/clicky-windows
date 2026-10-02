@@ -78,7 +78,7 @@ def test_the_card_moves_with_every_question(qapp, heytora):
         _until(qapp, lambda: "Talk:  3 of 25 messages this month · 22 left" in _texts(w))
         heytora.account.new_talk()
         heytora.account.voice_pass("talk", "gemini-3.8-live")   # the server says: talk 1 this month
-        _until(qapp, lambda: "Talk:  1 of 25 messages this month · 24 left" in _texts(w))
+        _until(qapp, lambda: "Talk:  1 of 25 messages this month · 24 left · 1 today" in _texts(w))
     finally:
         w.close()
 
@@ -165,7 +165,10 @@ def test_the_tray_line(heytora):
     assert short_status(heytora.account.plan_state()["summary"]) == \
         "Free plan - 22 talk messages left, 25 agent messages left"
     pro = {"plan_name": "Pro", "limits": {"talk": None, "agent": 150}, "usage": {"agent": 149}}
-    assert short_status(pro) == "Pro plan - unlimited talk messages, 1 agent message left"
+    assert short_status(pro) == "Pro plan - 0 talk messages this month, 1 agent message left"
+    mx = {"plan_name": "Max", "limits": {"talk": None, "agent": 1000},
+          "usage": {"talk": 19}, "today": {"talk": 4}}
+    assert short_status(mx) == "Max plan - 19 talk messages this month (4 today), 1000 agent messages left"
 
 
 def test_the_tray_follows_the_plan(qapp, heytora):
@@ -210,3 +213,49 @@ def test_a_refused_ticket_is_asked_for_again_once(heytora, monkeypatch):
     r = asyncio.run(gemini._post("models/gemini-3.8-flash:generateContent", {"contents": []}, 10))
     assert r.status_code == 200 and len(seen) == 2 and seen[0] != seen[1]
     assert heytora.fake.opened["talk"] == 2
+
+
+# -- Home: the plan at a glance, live ---------------------------------------------------------------------------
+
+def _home(qapp, state):
+    from tests.agents.test_e2e_first_launch import _Bridge, _state
+    from ui.app_pages import HomePage
+
+    class HomeBridge(_Bridge):
+        """_Bridge keeps the account state in .state - which Home calls."""
+        def __init__(self, account):
+            super().__init__(account)
+            self.account = self.__dict__.pop("state")
+
+        def account_state(self):
+            return dict(self.account)
+    bridge = HomeBridge(_state(**state))
+    page = HomePage(bridge)
+    page.refresh()
+    return page, _texts(page)
+
+
+def test_home_shows_the_plan_moving_with_use(qapp):
+    max_plan = {"plan": "max", "plan_name": "Max", "limits": {"talk": None, "agent": 1000, "dictation": None},
+                "usage": {"talk": 19, "agent": 3, "dictation": 2}, "today": {"talk": 4},
+                "period_end": "2026-11-01T00:00:00+00:00", "fair_use": 0.05}
+    _page, texts = _home(qapp, {"summary": max_plan})
+    assert "Your Max plan" in texts and "starts again on 1 Nov" in texts
+    shown = [t.lower() for t in texts]                 # tiles print their captions in capitals
+    assert "19" in texts and "talk messages this month · 4 today" in shown
+    assert "997" in texts and "agent messages left" in shown
+    assert "5%" in texts and "overall use this month" in shown
+
+
+def test_home_has_no_plan_card_on_an_own_key(qapp):
+    _page, texts = _home(qapp, {"mode": "own_key"})
+    assert not any(t.startswith("Your ") and t.endswith(" plan") for t in texts)
+
+
+def test_settings_says_todays_use(qapp):
+    from tests.agents.test_e2e_first_launch import _Bridge, _state
+    from ui.app_pages import SettingsPage
+    summary = _state()["summary"] | {"today": {"talk": 2}}
+    page = SettingsPage(_Bridge(_state(summary=summary)))
+    page.refresh()
+    assert "Talk:  7 of 25 messages this month · 18 left · 2 today" in _texts(page)

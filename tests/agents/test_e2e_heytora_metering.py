@@ -186,23 +186,89 @@ def test_a_new_free_question_opens_a_new_talk_message_before_the_pass(heytora, m
 
 
 def test_a_follow_up_on_the_open_session_rides_on_it(heytora, monkeypatch):
+    import time
     from config import cfg
     _signed_in(heytora)
     monkeypatch.setattr(cfg, "realtime", lambda: True)
-    m, _order = _capture_manager(heytora, ready=True)
+    m, order = _capture_manager(heytora, ready=True)
+    m._answered_at = time.monotonic() - 5            # Tora answered five seconds ago
     m._begin_capture()
     assert heytora.account._new_talk is False
+    assert not any(name == "_open_talk_window" for name, _f in order)
 
 
-def test_unlimited_talk_does_not_open_a_window_per_question(heytora, monkeypatch):
+def test_unlimited_talk_counts_every_question_too(heytora, monkeypatch):
+    """Pro/Max keep the voice open, so no pass marks a question: the window
+    opens as it is asked - and the plan moves with use (reported 2 Oct)."""
+    import time
     from config import cfg
     _signed_in(heytora)
     heytora.fake.limits = {"talk": None, "dictation": None, "agent": 150}
     heytora.account.summary(force=True)
     monkeypatch.setattr(cfg, "realtime", lambda: True)
-    m, _order = _capture_manager(heytora, ready=False)
+    m, order = _capture_manager(heytora, ready=True)
+    m._answered_at = time.monotonic() - 600          # the last answer was ten minutes ago
     m._begin_capture()
-    assert heytora.account._new_talk is False, "Pro/Max: windows only by time, not per question"
+    assert ("_open_talk_window", True) in order, "a new talk message, opened now"
+    asyncio.run(m._open_talk_window())
+    assert heytora.fake.opened["talk"] == 1 and heytora.account._new_talk is False
+
+
+def test_a_question_on_a_used_up_plan_is_said_not_swallowed(heytora, monkeypatch):
+    from ai import gemini
+    _signed_in(heytora)
+    said = []
+    monkeypatch.setattr(gemini, "report_problem", lambda e: said.append(str(e)) or "plan")
+    heytora.account._transport = __import__("httpx").MockTransport(lambda r: __import__("httpx").Response(
+        402, json={"error": {"code": 402, "status": "HEYTORA_LIMIT", "heytora": {
+            "reason": "limit", "kind": "talk", "limit": 25, "plan": "free"}, "message": "used up"}})
+        if r.url.path.endswith("/ticket") else heytora.fake(r))
+    m, _order = _capture_manager(heytora, ready=False)
+    heytora.account.new_talk()
+    asyncio.run(m._open_talk_window())
+    assert said and "25 talk messages" in said[0]
+
+
+# -- the wake word is not a dictation --------------------------------------------------------------------------
+
+def test_a_wake_word_check_is_its_own_kind(heytora):
+    from ai import gemini
+    from ai.gemini import Models
+    from ai.gemini_live import LiveSession
+    _signed_in(heytora)
+
+    async def wake_check():
+        with gemini.request_kind("wake"):
+            return await LiveSession(Models.STT, {})._address()
+    asyncio.run(wake_check())
+    asyncio.run(LiveSession(Models.STT, {})._address())
+    kinds = [b["kind"] for _m, p, _h, b in heytora.fake.calls if p.endswith("/voice-pass")]
+    assert kinds == ["wake", "dictation"], "a dictation is still a dictation"
+
+
+def test_a_refused_wake_check_pauses_the_wake_word(heytora):
+    import threading
+    import time
+    from account.service import LimitReached
+    from companion_manager import CompanionManager
+    m = CompanionManager.__new__(CompanionManager)
+    loop = asyncio.new_event_loop()
+    threading.Thread(target=loop.run_forever, daemon=True).start()
+    asked = []
+
+    class Refusing:
+        async def transcribe(self, _pcm):
+            asked.append(1)
+            raise LimitReached({"reason": "day", "kind": "wake", "plan": "free"})
+    m._loop = loop
+    m._get_stt = lambda: Refusing()
+    try:
+        assert m._transcribe_blocking(b"x" * 3200) == ""
+        assert m._transcribe_blocking(b"x" * 3200) == ""
+        assert asked == [1], "not asked again every few seconds"
+        assert m._wake_refused_until > time.monotonic() + 600
+    finally:
+        loop.call_soon_threadsafe(loop.stop)
 
 
 # -- the server's rules ---------------------------------------------------------------------------------------

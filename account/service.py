@@ -127,12 +127,16 @@ def short_status(summary: dict) -> str:
     blocked = summary.get("blocked") or {}
     if blocked.get("all") == "budget":
         return f"{plan} plan - this month's use is up (resets {resets_on(summary)})"
+    today = summary.get("today") or {}
     parts = []
     for kind in ("talk", "agent"):
         if kind not in limits:
             continue
         if limits[kind] is None:
-            parts.append(f"unlimited {_UNITS[kind][1]}")
+            part = f"{_count(int(usage.get(kind) or 0), kind)} this month"
+            if today.get(kind):
+                part += f" ({today[kind]} today)"
+            parts.append(part)
         else:
             left = max(0, int(limits[kind]) - int(usage.get(kind) or 0))
             parts.append(f"{_count(left, kind)} left")

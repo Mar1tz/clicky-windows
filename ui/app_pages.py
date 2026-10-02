@@ -131,6 +131,54 @@ class HomePage(Page):
     def build_actions(self) -> None:
         self.action("Open panel").clicked.connect(self.bridge.show_panel)
 
+    def showEvent(self, event) -> None:
+        """On screen: the plan is read again (at most once a minute); every
+        question asked meanwhile moves it without a read."""
+        super().showEvent(event)
+        refresh = getattr(self.bridge, "refresh_account", None)
+        if refresh is not None:
+            refresh()
+
+    _PLAN_KINDS = (("talk", "talk messages"), ("agent", "agent messages"), ("dictation", "dictations"))
+
+    def _plan_card(self):
+        """The HeyTora plan at a glance, moving with every question - or None
+        (own key, no accounts, signed out, not read yet)."""
+        try:
+            st = self.bridge.account_state()
+        except Exception:  # noqa: BLE001 - a bridge without accounts: no plan card
+            return None
+        summary = st.get("summary")
+        if not (st.get("configured") and st.get("signed_in") and summary and st.get("mode") == "account"):
+            return None
+        from account.service import resets_on
+        limits, usage = summary.get("limits") or {}, summary.get("usage") or {}
+        today, blocked = summary.get("today") or {}, summary.get("blocked") or {}
+        tiles = []
+        for kind, unit in self._PLAN_KINDS:
+            if kind not in limits:
+                continue
+            used, limit = int(usage.get(kind) or 0), limits[kind]
+            if limit is None:
+                caption = f"{unit} this month"
+                if today.get(kind):
+                    caption += f" · {today[kind]} today"
+                tiles.append(Metric(str(used), caption))
+            else:
+                left = max(0, int(limit) - used)
+                tiles.append(Metric(str(left), f"{unit} left",
+                                    T.WARN if left <= 0.2 * int(limit) or blocked.get(kind) else T.TEXT))
+        fair = summary.get("fair_use")
+        if isinstance(fair, (int, float)):
+            tiles.append(Metric(f"{round(fair * 100)}%", "overall use this month",
+                                T.WARN if fair >= 0.8 else T.TEXT))
+        plan = summary.get("plan_name") or (summary.get("plan") or "").capitalize() or "HeyTora"
+        note = ("This month's use is up - " if blocked.get("all") == "budget" else "") + \
+            f"starts again on {resets_on(summary)}"
+        card = Card(f"Your {plan} plan", note)
+        card.body.addLayout(columns(*tiles))
+        return card
+
     def build(self) -> None:
         br = self.bridge
         state, problem = br.state(), br.problem()
@@ -162,6 +210,10 @@ class HomePage(Page):
             row.addWidget(Pill("Not connected", T.WARN, dot=True))
         hero.body.addLayout(row)
         self.body.add(hero)
+
+        plan = self._plan_card()
+        if plan is not None:
+            self.body.add(plan)
 
         agents, today, walk = br.agents(), br.today(), br.walkthrough()
         self.body.add_layout(columns(
@@ -993,6 +1045,9 @@ class SettingsPage(Page):
                 else:
                     left = max(0, int(limit) - used)
                     words = f"{used} of {limit} {unit} this month · " + (f"{left} left" if left else "all used")
+                done_today = int((summary.get("today") or {}).get(kind) or 0)
+                if done_today:
+                    words += f" · {done_today} today"
                 if blocked.get(kind) == "day":
                     words += " · today's fair use reached"
                 full = limit is not None and used >= int(limit)
