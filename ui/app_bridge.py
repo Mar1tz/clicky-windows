@@ -223,6 +223,20 @@ class AppBridge(QObject):
         from ui import autostart
         return autostart.set_enabled(on)
 
+    def sidebar_collapsed(self) -> bool:
+        from config import cfg
+        return cfg.sidebar_collapsed()
+
+    def set_sidebar_collapsed(self, shut: bool) -> None:
+        from config import cfg
+        cfg.set_sidebar_collapsed(shut)
+
+    def user_name(self) -> str:
+        """The name given at first launch, for Home's greeting and the
+        profile card ("" when none was)."""
+        from config import cfg
+        return cfg.profile()[0]
+
     def theme(self) -> str:
         """Settings > Appearance: "system" | "light" | "dark"."""
         from config import cfg

@@ -25,6 +25,9 @@ CONSOLIDATED = (
     "ui/onboarding_parts.py",
     "ui/setup_wizard.py",
     "ui/tray_popup.py",
+    "ui/app_shell.py",
+    "ui/app_popover.py",
+    "ui/window_frame.py",
 )
 
 

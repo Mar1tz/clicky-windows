@@ -607,6 +607,15 @@ class Config:
         os.environ["TORA_THEME"] = mode
         self._write_env("TORA_THEME", mode)
 
+    def sidebar_collapsed(self) -> bool:
+        """The app window's sidebar shut to icons (ui/app_window.py)."""
+        return os.environ.get("TORA_SIDEBAR", "").strip().lower() == "shut"
+
+    def set_sidebar_collapsed(self, shut: bool) -> None:
+        value = "shut" if shut else "open"
+        os.environ["TORA_SIDEBAR"] = value
+        self._write_env("TORA_SIDEBAR", value)
+
     # ── Microphone mode ──────────────────────────────────────────────────
 
     def ambient_mic(self) -> bool:

@@ -482,114 +482,65 @@ def shadow(widget: QWidget, level: str = "float") -> None:
     kit.drop_shadow(widget, level)
 
 
-# ── navigation icons ──────────────────────────────────────────────────────────
+# ── icons ─────────────────────────────────────────────────────────────────────
 #
-# Drawn rather than typed. The obvious way to get an icon into a sidebar is a
-# Unicode glyph, and on this machine "▣", "◍" and "⛭" came out as three
-# different sizes, one of them in colour — Segoe UI has no consistent set of
-# these, so the font falls back per character and the rail looks accidental.
-# Sixteen pixels of QPainter is exact, matches the stroke weight of the text
-# beside it, and takes the selection colour.
+# One outline set, Lucide (assets/icons, ISC licence), at one stroke weight:
+# a 2px stroke on a 24px grid is 1.5px at the 18px the shell draws them, the
+# weight of the 14px text beside them. Their stroke is `currentColor`, so a
+# colour is a string replace before the render - crisp at any scale, and the
+# same icon can be ink in one place and the accent in another.
+#
+# The set before this was nine glyphs painted with QPainter, and before that
+# Unicode characters that fell back to three different fonts.
 
 from PyQt6.QtGui import QPixmap   # noqa: E402  (grouped with its users)
 
+# Page and action -> icon file. A new page adds a line here.
+ICONS = {
+    "home": "house",
+    "agents": "bot",
+    "journal": "book-open",
+    "extensions": "blocks",
+    "accounting": "calculator",
+    "tora": "sparkles",
+    "settings": "settings",
+    "setup": "key-round",
+    "help": "circle-help",
+    "free_month": "gift",
+    "sidebar": "panel-left",
+    "profile": "circle-user-round",
+    "notifications": "bell",
+    "achievement": "award",
+    "support": "mail",
+    "report": "file-text",
+    "account": "external-link",
+    "sign_out": "log-out",
+}
 
-def nav_icon(kind: str, colour: str, size: int = 16, dpr: float = 2.0) -> QPixmap:
-    """A 1.6px-stroke line icon. `kind` keys are the page ids in app_pages."""
+_svg_cache: dict[str, str] = {}
+
+
+def icon(name: str, colour: str, size: int = 18, dpr: float = 2.0) -> QPixmap:
+    """A Lucide icon (`name` is its file, or a key of ICONS) in `colour`."""
+    from PyQt6.QtCore import QByteArray
+    from PyQt6.QtSvg import QSvgRenderer
+    name = ICONS.get(name, name)
+    if name not in _svg_cache:
+        _svg_cache[name] = (tokens.assets_dir() / "icons" / f"{name}.svg").read_text(encoding="utf-8")
+    svg = _svg_cache[name].replace("currentColor", QColor(colour).name())
     px = QPixmap(int(size * dpr), int(size * dpr))
     px.setDevicePixelRatio(dpr)
     px.fill(QColor(0, 0, 0, 0))
     p = QPainter(px)
     p.setRenderHint(QPainter.RenderHint.Antialiasing)
-    pen = QPen(QColor(colour))
-    pen.setWidthF(1.6)
-    pen.setCapStyle(Qt.PenCapStyle.RoundCap)
-    pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
-    p.setPen(pen)
-    p.setBrush(Qt.BrushStyle.NoBrush)
-    s = float(size)
-
-    if kind == "home":                     # a roof over a doorway
-        path = QPainterPath()
-        path.moveTo(s * .16, s * .46)
-        path.lineTo(s * .5, s * .17)
-        path.lineTo(s * .84, s * .46)
-        path.lineTo(s * .84, s * .84)
-        path.lineTo(s * .16, s * .84)
-        path.closeSubpath()
-        p.drawPath(path)
-        p.drawLine(QRectF(s * .40, s * .84, 0, 0).topLeft(),
-                   QRectF(s * .40, s * .58, 0, 0).topLeft())
-        p.drawLine(QRectF(s * .60, s * .84, 0, 0).topLeft(),
-                   QRectF(s * .60, s * .58, 0, 0).topLeft())
-        p.drawLine(QRectF(s * .40, s * .58, 0, 0).topLeft(),
-                   QRectF(s * .60, s * .58, 0, 0).topLeft())
-
-    elif kind == "agents":                 # three nodes, wired together
-        p.drawEllipse(QRectF(s * .38, s * .10, s * .24, s * .24))
-        p.drawEllipse(QRectF(s * .08, s * .64, s * .24, s * .24))
-        p.drawEllipse(QRectF(s * .68, s * .64, s * .24, s * .24))
-        p.drawLine(QRectF(s * .44, s * .34, 0, 0).topLeft(),
-                   QRectF(s * .26, s * .64, 0, 0).topLeft())
-        p.drawLine(QRectF(s * .56, s * .34, 0, 0).topLeft(),
-                   QRectF(s * .74, s * .64, 0, 0).topLeft())
-
-    elif kind == "extensions":             # four tiles, one pulled out
-        p.drawRect(QRectF(s * .12, s * .12, s * .30, s * .30))
-        p.drawRect(QRectF(s * .12, s * .56, s * .30, s * .30))
-        p.drawRect(QRectF(s * .56, s * .56, s * .30, s * .30))
-        pen2 = QPen(pen)
-        pen2.setStyle(Qt.PenStyle.DotLine)
-        p.setPen(pen2)
-        p.drawRect(QRectF(s * .56, s * .12, s * .30, s * .30))
-        p.setPen(pen)
-
-    elif kind == "accounting":             # a ledger column
-        p.drawRect(QRectF(s * .14, s * .14, s * .72, s * .72))
-        p.drawLine(QRectF(s * .14, s * .38, 0, 0).topLeft(),
-                   QRectF(s * .86, s * .38, 0, 0).topLeft())
-        p.drawLine(QRectF(s * .50, s * .38, 0, 0).topLeft(),
-                   QRectF(s * .50, s * .86, 0, 0).topLeft())
-
-    elif kind == "journal":                # a book with a spine
-        p.drawRect(QRectF(s * .20, s * .12, s * .60, s * .76))
-        p.drawLine(QRectF(s * .34, s * .12, 0, 0).topLeft(),
-                   QRectF(s * .34, s * .88, 0, 0).topLeft())
-
-    elif kind == "tutor":                  # a target
-        p.drawEllipse(QRectF(s * .12, s * .12, s * .76, s * .76))
-        p.drawEllipse(QRectF(s * .34, s * .34, s * .32, s * .32))
-        p.setBrush(QColor(colour))
-        p.drawEllipse(QRectF(s * .45, s * .45, s * .10, s * .10))
-        p.setBrush(Qt.BrushStyle.NoBrush)
-
-    elif kind == "voice":                  # a level meter
-        for x, top, bottom in ((.20, .34, .66), (.40, .16, .84),
-                               (.60, .26, .74), (.80, .40, .60)):
-            p.drawLine(QRectF(s * x, s * top, 0, 0).topLeft(),
-                       QRectF(s * x, s * bottom, 0, 0).topLeft())
-
-    elif kind == "settings":               # two sliders
-        p.drawLine(QRectF(s * .12, s * .34, 0, 0).topLeft(),
-                   QRectF(s * .88, s * .34, 0, 0).topLeft())
-        p.drawLine(QRectF(s * .12, s * .66, 0, 0).topLeft(),
-                   QRectF(s * .88, s * .66, 0, 0).topLeft())
-        p.setBrush(QColor(colour))
-        p.drawEllipse(QRectF(s * .58, s * .26, s * .16, s * .16))
-        p.drawEllipse(QRectF(s * .26, s * .58, s * .16, s * .16))
-        p.setBrush(Qt.BrushStyle.NoBrush)
-
-    else:                                  # setup: a key
-        p.drawEllipse(QRectF(s * .12, s * .34, s * .32, s * .32))
-        p.drawLine(QRectF(s * .44, s * .50, 0, 0).topLeft(),
-                   QRectF(s * .88, s * .50, 0, 0).topLeft())
-        p.drawLine(QRectF(s * .70, s * .50, 0, 0).topLeft(),
-                   QRectF(s * .70, s * .70, 0, 0).topLeft())
-        p.drawLine(QRectF(s * .82, s * .50, 0, 0).topLeft(),
-                   QRectF(s * .82, s * .66, 0, 0).topLeft())
-
+    QSvgRenderer(QByteArray(svg.encode("utf-8"))).render(p, QRectF(0, 0, size, size))
     p.end()
     return px
+
+
+def nav_icon(kind: str, colour: str, size: int = 18, dpr: float = 2.0) -> QPixmap:
+    """A page's icon. `kind` keys are the page ids in app_pages."""
+    return icon(kind, colour, size, dpr)
 
 
 # ── wordmark ──────────────────────────────────────────────────────────────────

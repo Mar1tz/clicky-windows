@@ -53,6 +53,9 @@ BLUE_TINT = "#EAF2FF"
 BLUE_TINT_DARK = "#13233F"
 # Type and glyphs on the blue, on a pack tile, on a gradient's deep end.
 ON_COLOUR = "#FFFFFF"
+# Windows' own red under the pointer on a title bar's close button. The
+# window draws its own title bar (ui/window_frame.py), so it says it here.
+WINDOW_CLOSE = "#C42B1C"
 
 # What Tora's cursor may wear (Make Tora yours). One colour from each of the
 # website's gradient families; the first is the default and the app's accent.
@@ -213,6 +216,11 @@ class Palette:
     inverse: str          # a plate in the text colour (keycaps, badges)
     on_inverse: str
     shadow_alpha: int     # how dark a floating surface's shadow is
+    # The shell (DESIGN.md §3B): the frame - title bar and sidebar - is one
+    # ground a step darker than the panel the pages sit on, as in Wispr Flow.
+    frame: str = ""
+    nav_hover: str = ""   # a sidebar row under the pointer
+    nav_plate: str = ""   # the page you are on
     ok: str = "#22A55B"
     warn: str = "#E08A00"
     danger: str = "#E5484D"
@@ -234,17 +242,21 @@ LIGHT = Palette(
     inverse="#292929",
     on_inverse="#FFFFFF",
     shadow_alpha=40,
+    frame="#ECEAE6",
+    nav_hover="#E4E1DC",
+    nav_plate="#DEDBD5",
 )
 
-# heytora-web `.dark`: #000 ground, 4% cards, 12-15% hairlines.
+# heytora-web `.dark`: #000 ground, 4-8% cards, 12-15% hairlines. The frame
+# is the site's pure black; the panel the pages sit on is a step up from it.
 DARK = Palette(
     name="dark",
-    bg="#000000",
-    sidebar="#070707",
-    surface="#0F0F0F",
-    surface_hover="#1A1A1A",
-    surface_sunk="#121212",
-    border="#1F1F1F",
+    bg="#0B0B0B",
+    sidebar="#000000",
+    surface="#151515",
+    surface_hover="#1F1F1F",
+    surface_sunk="#111111",
+    border="#222222",
     border_strong="#2E2E2E",
     text="#FAFAFA",
     text_dim="#A1A1A1",
@@ -252,6 +264,9 @@ DARK = Palette(
     inverse="#FAFAFA",
     on_inverse="#000000",
     shadow_alpha=150,
+    frame="#000000",
+    nav_hover="#141414",
+    nav_plate="#1E1E1E",
     ok="#32C86E",
     warn="#FFB020",
     danger="#FF5A5A",

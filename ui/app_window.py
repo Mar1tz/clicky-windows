@@ -1,73 +1,50 @@
 """One window for the whole of HeyTora.
 
-Everything Tora can do currently lives in its own floating window, reached
-through the tray menu: Agents, Agent settings, Extensions, Dashboard, API
-Keys, the setup wizard, plus a dozen checkboxes buried three menus deep.
-Each was easy to add and, together, they are impossible to find — there is
-no one place that shows what the product actually is.
+Everything Tora can do used to live in its own floating window, reached
+through the tray menu. This is the one place that shows what the product
+is, laid out the way Wispr Flow lays out its app (DESIGN.md §3B):
 
-This is that place: a navigation rail on the left, one page at a time on the
-right, and no pop-ups. Opened from the tray with "Open HeyTora".
+    ┌─[≡][◯]─────────────────────────────── [●Listening] [🔔] ─ ▢ ✕ ┐
+    │ heytora      ╭──────────────────────────────────────────────╮ │
+    │ ⌂ Home       │  Hey Dylan, just hold [Ctrl + Win] and ask   │ │
+    │ ◇ Agents     │                                              │ │
+    │ ▢ Journal    │  …the page…                                  │ │
+    │ ▦ Packs      │                                              │ │
+    │ ✦ Tora       │                                              │ │
+    │              │                                              │ │
+    │ 🎁 Free month │                                              │ │
+    │ ⚙ Settings   │                                              │ │
+    │ ? Help       ╰──────────────────────────────────────────────╯ │
+    └────────────────────────────────────────────────────────────────┘
 
-    ┌────────────┬──────────────────────────────────────────┐
-    │  TORA      │  Agents                        [Stop all]│
-    │            │  Work Tora is doing for you…             │
-    │  MAIN      │  ┌────────────────────────────────────┐  │
-    │  ◆ Home    │  │ Application Builder                │  │
-    │  ◈ Agents  │  │ Step 4 of 10 ████████░░░  70%      │  │
-    │  ▣ Exten…  │  └────────────────────────────────────┘  │
-    │            │                                          │
-    │  ● Idle    │                                          │
-    └────────────┴──────────────────────────────────────────┘
+The title bar is the app's own (ui/window_frame.py keeps it a real Windows
+window). The sidebar closes to icons; a pack with a dashboard (Accounting)
+gets its own row while it is on. Profile, notifications, the free month and
+help open as cards (ui/app_popover.py).
 
 Every page is live (APP-10 to APP-19): it reads the running companion
 through ui/app_bridge.py, and every control goes down the same path as the
-tray item it replaces. The old floating windows still open from the tray.
+tray item it replaces.
 """
 
 from __future__ import annotations
 
-from typing import Optional
-
-from PyQt6.QtCore import QPoint, QSize, Qt, QTimer, pyqtSignal
-from PyQt6.QtGui import QIcon
+from PyQt6.QtCore import QPoint, Qt, QTimer, pyqtSignal
 from PyQt6.QtWidgets import (
-    QButtonGroup, QFrame, QHBoxLayout, QLabel, QPushButton, QStackedWidget,
+    QAbstractButton, QButtonGroup, QFrame, QHBoxLayout, QStackedWidget,
     QVBoxLayout, QWidget,
 )
 
+from ui import app_popover
 from ui import app_theme as T
-from ui.app_pages import PAGES
-from ui.app_widgets import Dot, label, nav_icon, wordmark
-
-
-class _NavItem(QPushButton):
-    """One row in the rail. Checkable so Qt draws the selected state.
-
-    The text is escaped: a QPushButton reads "&" as a mnemonic, so
-    "Voice & models" was rendering as "Voice  models" with an underlined m.
-    """
-
-    def __init__(self, kind: str, text: str):
-        super().__init__("  " + text.replace("&", "&&"))
-        self.setObjectName("navItem")
-        self.setCheckable(True)
-        self.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.setFixedHeight(38)
-        self._kind = kind
-        self.setIconSize(QSize(16, 16))
-        self._paint_icon(False)
-        self.toggled.connect(self._paint_icon)
-
-    def _paint_icon(self, on: bool) -> None:
-        self.setIcon(QIcon(nav_icon(self._kind, T.ACCENT if on else T.TEXT_DIM)))
-
-    def repaint_icon(self) -> None:
-        self._paint_icon(self.isChecked())
+from ui.app_pages import PACK_ROWS, PAGES
+from ui.app_shell import BrandRow, IconButton, NavItem, Sidebar, WindowButton
+from ui.app_widgets import Dot, label
+from ui.window_frame import NativeFrame
 
 
 class ToraApp(QWidget):
-    """The single window. `show_page("agents")` is the whole API for now."""
+    """The single window. `show_page("agents")` is the whole API."""
 
     page_changed = pyqtSignal(str)
 
@@ -89,124 +66,224 @@ class ToraApp(QWidget):
         self.bridge.changed.connect(self._on_changed)
         self.setWindowTitle("HeyTora")
         self.setObjectName("appRoot")
-        # A NATIVE window frame, not a hand-rolled one. The first draft was
-        # frameless and translucent so the corners could be rounded; on a
-        # real desktop the strip the custom title bar sat in stayed
-        # transparent and the windows BEHIND Tora showed through it. Windows
-        # 11 already rounds every window, draws the shadow, and does snapping
-        # and drag properly - all of which a frameless window gives up in
-        # exchange for a rectangle we then have to paint ourselves.
+        self.setWindowFlag(Qt.WindowType.FramelessWindowHint, True)
+        # A QWidget subclass paints no stylesheet background without this.
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self.resize(T.WINDOW_W, T.WINDOW_H)
         self.setMinimumSize(T.WINDOW_MIN_W, T.WINDOW_MIN_H)
         self.setStyleSheet(T.qss())
 
-        shell = QHBoxLayout(self)
-        shell.setContentsMargins(0, 0, 0, 0)
-        shell.setSpacing(0)
-
         self._pages: dict[str, QWidget] = {}
-        self._buttons: dict[str, _NavItem] = {}
+        self._buttons: dict[str, NavItem] = {}
         self._stack = QStackedWidget()
         self._stack.setObjectName("stack")
 
-        shell.addWidget(self._build_sidebar())
-        shell.addWidget(self._stack, 1)
+        root = QVBoxLayout(self)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(0)
+        root.addWidget(self._build_top_bar())
+        body = QHBoxLayout()
+        body.setContentsMargins(0, 0, 8, 8)
+        body.setSpacing(0)
+        body.addWidget(self._build_sidebar())
+        panel = QFrame()
+        panel.setObjectName("panel")
+        inner = QVBoxLayout(panel)
+        inner.setContentsMargins(1, 1, 1, 1)
+        inner.addWidget(self._stack)
+        body.addWidget(panel, 1)
+        root.addLayout(body, 1)
 
+        self._frame = NativeFrame(self, self._is_caption, self._max_button,
+                                  self._max_button.set_hot)
+        self._frame.install()
         self.show_page(PAGES[0][0])
 
-    def _dark_titlebar(self) -> None:
-        """Match the native title bar to the theme: dark over the black
-        palette, light over the soft grey - a white band above a black app
-        (or the reverse) is the first thing that looks unfinished. Silently
-        does nothing off Windows or on a build that does not know it."""
-        try:
-            import ctypes
-            hwnd = int(self.winId())
-            for attribute in (20, 19):       # 20 = Win11/late Win10, 19 = early
-                value = ctypes.c_int(1 if T.is_dark() else 0)
-                ok = ctypes.windll.dwmapi.DwmSetWindowAttribute(
-                    ctypes.c_void_p(hwnd), ctypes.c_int(attribute),
-                    ctypes.byref(value), ctypes.sizeof(value))
-                if ok == 0:
-                    return
-        except Exception:                    # noqa: BLE001 - cosmetic only
-            pass
+    # ── title bar ────────────────────────────────────────────────────────────
+
+    def _build_top_bar(self) -> QWidget:
+        bar = QWidget()
+        bar.setObjectName("topBar")
+        bar.setFixedHeight(T.TITLEBAR_H)
+        lay = QHBoxLayout(bar)
+        # The sidebar button sits over the sidebar's icon column.
+        lay.setContentsMargins(15, 0, 0, 0)
+        lay.setSpacing(4)
+        self._sidebar_button = IconButton("sidebar", "Close sidebar")
+        self._sidebar_button.clicked.connect(self.toggle_sidebar)
+        lay.addWidget(self._sidebar_button)
+        self._profile_button = IconButton("profile", "Your account")
+        self._profile_button.clicked.connect(self.open_profile)
+        lay.addWidget(self._profile_button)
+        lay.addStretch(1)
+
+        # Tora's state, only while she is doing something: idle is the
+        # normal case and says nothing.
+        self._state_chip = QWidget()
+        chip = QHBoxLayout(self._state_chip)
+        chip.setContentsMargins(0, 0, 10, 0)
+        chip.setSpacing(7)
+        self._state_dot = Dot(T.STATE_COLOUR["idle"], 7)
+        chip.addWidget(self._state_dot)
+        self._state_label = label("Idle", "stateChip")
+        chip.addWidget(self._state_label)
+        self._state_chip.hide()
+        lay.addWidget(self._state_chip)
+
+        self._bell = IconButton("notifications", "Notifications")
+        self._bell.clicked.connect(self.open_notifications)
+        lay.addWidget(self._bell)
+        lay.addSpacing(10)
+        for kind in ("min", "max", "close"):
+            b = WindowButton(kind)
+            b.clicked.connect({"min": self.showMinimized, "max": self._toggle_max,
+                               "close": self.close}[kind])
+            lay.addWidget(b)
+            if kind == "max":
+                self._max_button = b
+        self._top_bar = bar
+        return bar
+
+    def _is_caption(self, local: QPoint) -> bool:
+        """Empty title bar - drag, double-click, snap - anywhere in it that
+        is not a button."""
+        bar = self._top_bar
+        if not bar.geometry().contains(local):
+            return False
+        child = bar.childAt(bar.mapFrom(self, local))
+        while child is not None and child is not bar:
+            if isinstance(child, QAbstractButton):
+                return False
+            child = child.parentWidget()
+        return True
+
+    def _toggle_max(self) -> None:
+        self.showNormal() if self.isMaximized() else self.showMaximized()
+
+    def changeEvent(self, event) -> None:
+        super().changeEvent(event)
+        if hasattr(self, "_max_button"):
+            self._max_button.update()        # maximise <-> restore glyph
 
     # ── sidebar ──────────────────────────────────────────────────────────────
 
     def _build_sidebar(self) -> QWidget:
-        bar = QWidget()
-        bar.setObjectName("sidebar")
-        bar.setFixedWidth(T.SIDEBAR_W)
-        lay = QVBoxLayout(bar)
-        lay.setContentsMargins(12, 18, 12, 14)
-        lay.setSpacing(4)
-
-        # The site's lockup, not the name typed in caps: the app and
-        # heytora.com should be recognisably the same thing at a glance.
-        mark = QVBoxLayout()
-        mark.setContentsMargins(12, 2, 0, 0)
-        mark.setSpacing(6)
-        self._wordmark = wordmark(26)
-        mark.addWidget(self._wordmark, 0, Qt.AlignmentFlag.AlignLeft)
-        mark.addWidget(label("YOUR COMPUTER, EXPLAINED", "wordmarkSub"))
-        lay.addLayout(mark)
-        lay.addSpacing(24)
+        open_ = not self._call("sidebar_collapsed", False)
+        self._want_open = open_
+        bar = Sidebar(open_)
+        self._sidebar = bar
+        openness = lambda: bar.openness          # noqa: E731
+        self._brand = BrandRow(openness)
+        bar.lay.addWidget(self._brand)
+        bar.lay.addSpacing(10)
 
         group = QButtonGroup(self)
         group.setExclusive(True)
-        last_section = ""
-        for key, text, glyph, _page, section_name in PAGES:
-            if section_name != last_section:
-                if last_section:
-                    lay.addSpacing(14)
-                lay.addWidget(label(section_name, "navGroup"))
-                lay.addSpacing(6)
-                last_section = section_name
-            item = _NavItem(key, text)
-            item.clicked.connect(lambda _checked, k=key: self.show_page(k))
+        bottom_started = False
+        for key, text, place, _cls in PAGES:
+            if place == "hidden":
+                continue
+            if place == "bottom" and not bottom_started:
+                bar.lay.addStretch(1)
+                bar.lay.addWidget(self._action_item("free_month", "Get a free month",
+                                                    self.open_free_month, openness))
+                bottom_started = True
+            item = NavItem(key, text, openness)
+            item.clicked.connect(lambda _c=False, k=key: self.show_page(k))
             group.addButton(item)
-            lay.addWidget(item)
+            bar.lay.addWidget(item)
             self._buttons[key] = item
-
-        lay.addStretch(1)
-
-        status = QFrame()
-        status.setObjectName("cardQuiet")
-        sl = QHBoxLayout(status)
-        sl.setContentsMargins(12, 9, 12, 9)
-        sl.setSpacing(9)
-        self._state_dot = Dot(T.STATE_COLOUR["idle"], 8)
-        sl.addWidget(self._state_dot)
-        self._state_label = label("Idle", "dim")
-        sl.addWidget(self._state_label, 1)
-        lay.addWidget(status)
-        lay.addSpacing(8)
-        hotkey = self.bridge.hotkey() or "Ctrl + Win"
-        lay.addWidget(label(f"Hold  {hotkey}  to talk", "faint"))
+        bar.lay.addWidget(self._action_item("help", "Help", self.open_help, openness))
+        bar.set_open(open_, animate=False)
+        self._sidebar_button.setToolTip("Close sidebar" if open_ else "Open sidebar")
+        self._sync_pack_rows()
         return bar
+
+    def _action_item(self, key: str, text: str, action, openness) -> NavItem:
+        item = NavItem(key, text, openness, page=False)
+        item.clicked.connect(lambda _c=False: action())
+        self._buttons[key] = item
+        return item
+
+    def toggle_sidebar(self) -> None:
+        on = not self._sidebar.is_open()
+        self._want_open = on
+        self._show_sidebar(on)
+        setter = getattr(self.bridge, "set_sidebar_collapsed", None)
+        if setter is not None:
+            setter(not on)
+
+    def _show_sidebar(self, on: bool) -> None:
+        self._sidebar.set_open(on, animate=self.isVisible())
+        self._sidebar_button.setToolTip("Close sidebar" if on else "Open sidebar")
+
+    # Narrower than this, the open sidebar would leave the pages less room
+    # than their widest row (Home's four tiles), so it shuts by itself and
+    # opens again when there is room - the choice is still the user's.
+    AUTO_SHUT_W = 1100
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        if not hasattr(self, "_sidebar"):
+            return
+        want = self._want_open and self.width() >= self.AUTO_SHUT_W
+        if want != self._sidebar.is_open():
+            self._show_sidebar(want)
+
+    def _sync_pack_rows(self) -> None:
+        """A pack's own page has a row only while the pack is on."""
+        for key, ext_id in PACK_ROWS.items():
+            item = self._buttons.get(key)
+            if item is not None:
+                item.setVisible(bool(self._call("extension_on", False, ext_id)))
+
+    # ── cards from the title bar and sidebar ─────────────────────────────────
+
+    def _below_top_right(self) -> QPoint:
+        return self.mapToGlobal(QPoint(self.width() - 8, T.TITLEBAR_H - 2))
+
+    def open_profile(self) -> None:
+        def sign_out() -> None:
+            from ui.app_pages import confirm_sign_out
+            if confirm_sign_out(self):
+                self.bridge.account_sign_out()
+        self._popover = app_popover.profile_card(self.bridge, sign_out)
+        self._popover.open_at(self._below_top_right(), "right")
+
+    def open_notifications(self) -> None:
+        self._popover = app_popover.notifications_card(self.bridge)
+        self._popover.open_at(self._below_top_right(), "right")
+
+    def _beside(self, key: str) -> QPoint:
+        item = self._buttons[key]
+        return item.mapToGlobal(QPoint(item.width() + 10, -8))
+
+    def open_free_month(self) -> None:
+        self._popover = app_popover.free_month_card()
+        self._popover.open_at(self._beside("free_month"), "left")
+
+    def open_help(self) -> None:
+        self._popover = app_popover.help_card(self.bridge, self.show_page)
+        self._popover.open_at(self._beside("help"), "left")
 
     # ── navigation ───────────────────────────────────────────────────────────
 
     def show_page(self, key: str) -> None:
         """Switch to a page, building it the first time it is asked for.
 
-        Lazily, because nine pages of cards is a visible pause on a cold
-        start and most sessions open one of them.
+        Lazily, because a window of pages is a visible pause on a cold start
+        and most sessions open one of them.
         """
         if key not in self._pages:
-            for k, _text, _glyph, cls, _sec in PAGES:
+            for k, _text, _place, cls in PAGES:
                 if k == key:
                     widget = cls(self.bridge)
                     widget.navigate.connect(self.show_page)
                     self._pages[key] = widget
                     self._stack.addWidget(widget)
                     # A page builds its labels before it is parented here, so
-                    # their size hints were measured at the default 13px —
-                    # which left the 24px page title rendering into a 13px
-                    # box, clipped and half-transparent. Re-applying the
-                    # sheet re-polishes the new subtree with the real fonts.
+                    # their size hints were measured at the default 13px.
+                    # Re-applying the sheet re-polishes the new subtree.
                     self.setStyleSheet(T.qss())
                     break
             else:
@@ -219,8 +296,13 @@ class ToraApp(QWidget):
         button = self._buttons.get(key)
         if button is not None and not button.isChecked():
             button.setChecked(True)
-        heading = next((t for k, t, *_ in PAGES if k == key), "")
-        self.setWindowTitle(f"HeyTora  ·  {heading}")
+        elif button is None:
+            checked = next((b for b in self._buttons.values() if b.isChecked()), None)
+            if checked is not None:          # a page with no row: nothing lit
+                group = checked.group()
+                group.setExclusive(False)
+                checked.setChecked(False)
+                group.setExclusive(True)
         self.page_changed.emit(key)
 
     def retheme(self) -> None:
@@ -229,29 +311,36 @@ class ToraApp(QWidget):
         The pages are kept rather than rebuilt - the Agents page embeds a
         live panel - so this re-applies the sheet, repaints what is painted
         by hand and refreshes the page on screen."""
-        from ui.app_widgets import wordmark_pixmap
         self.setStyleSheet(T.qss())
-        for button in self._buttons.values():
-            button.repaint_icon()
-        if self._wordmark.pixmap() is not None and not self._wordmark.pixmap().isNull():
-            self._wordmark.setPixmap(wordmark_pixmap(26))
+        self._brand.retheme()
         self.set_state(self.bridge.state() if hasattr(self.bridge, "state") else "idle")
-        if self.isVisible():
-            self._dark_titlebar()
         page = self._stack.currentWidget()
         if page is not None:
             page.refresh()
-        self.update()
+        for w in self.findChildren(QWidget):
+            w.update()
 
     def set_state(self, state_name: str) -> None:
-        """Mirror the companion's AppState in the sidebar pill."""
+        """Tora's AppState in the title bar, while she is not idle."""
         name = (state_name or "idle").lower()
-        self._state_dot.set_colour(T.STATE_COLOUR.get(name, T.TEXT_FAINT))
+        if name not in T.STATE_COLOUR:
+            name = "idle"
+        self._state_dot.set_colour(T.STATE_COLOUR[name])
         self._state_label.setText(name.capitalize())
+        self._state_chip.setVisible(name != "idle")
+
+    def _call(self, name: str, default, *args):
+        fn = getattr(self.bridge, name, None)
+        try:
+            return fn(*args) if fn is not None else default
+        except Exception:  # noqa: BLE001 - a bridge without it: the default
+            return default
 
     def _on_changed(self, topic: str) -> None:
         if topic == "state":
             self.set_state(self.bridge.state())
+        if topic == "extensions":
+            self._sync_pack_rows()
         self._pending_topics.add(topic)
         self._refresh_timer.start()          # restarts: one redraw per burst
 
@@ -281,6 +370,12 @@ class ToraApp(QWidget):
         if page is not None and getattr(page, "LIVE", False):
             page.refresh()
 
+    def nativeEvent(self, kind, message):
+        answer = self._frame.handle(message) if kind == b"windows_generic_MSG" else None
+        # Not super().nativeEvent(): on PyQt6 6.11 that call is an access
+        # violation. (False, 0) is what it would answer - "not handled".
+        return answer if answer is not None else (False, 0)
+
     # ── behaviour ────────────────────────────────────────────────────────────
 
     def open_at(self, key: str = "") -> None:
@@ -288,7 +383,6 @@ class ToraApp(QWidget):
         if key:
             self.show_page(key)
         self.show()
-        self._dark_titlebar()       # needs a real window handle, so: after show
         self.raise_()
         self.activateWindow()
 

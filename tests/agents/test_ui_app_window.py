@@ -1,16 +1,10 @@
-"""The single-window app shell (ui/app_window).
+"""The single-window app shell (ui/app_window, DESIGN.md §6).
 
-A design draft: nine pages that hold what is currently nine separate
-floating windows and three levels of tray menu. Nothing in it is wired to
-the companion yet, so there is no behaviour to test — what these guard is
-that every page still builds, that the navigation reaches all of them, and
-the two rendering traps that cost an afternoon:
-
-  * a QWidget SUBCLASS does not paint its stylesheet background unless
-    WA_StyledBackground is set, which left the page header sitting on the
-    translucent window with its title half-transparent;
-  * QPushButton eats "&" as a mnemonic, so "Voice & models" rendered as
-    "Voice  models".
+What these guard: every page still builds and the sidebar reaches it, the
+sidebar is the agreed page map (Home, Agents, Journal, Packs, Tora; free
+month, Settings, Help underneath; a pack's page only while it is on), it
+opens and shuts, and the rendering trap that cost an afternoon - a QWidget
+SUBCLASS paints no stylesheet background unless WA_StyledBackground is set.
 """
 from __future__ import annotations
 
@@ -23,7 +17,7 @@ import pytest
 pytest.importorskip("PyQt6")
 
 from PyQt6.QtCore import Qt            # noqa: E402
-from PyQt6.QtWidgets import QApplication, QPushButton  # noqa: E402
+from PyQt6.QtWidgets import QAbstractButton, QApplication, QLabel, QPushButton  # noqa: E402
 
 from ui.app_pages import PAGES         # noqa: E402
 from ui.app_widgets import Switch, nav_icon  # noqa: E402
@@ -44,11 +38,42 @@ def window(qapp):
 
 
 def test_every_page_builds_and_is_reachable(window):
-    """Nine pages, and the rail can get to all of them."""
     for key, *_rest in PAGES:
         window.show_page(key)
         assert window._stack.currentWidget() is window._pages[key], key
-    assert len(window._pages) == len(PAGES) == 9
+    assert len(window._pages) == len(PAGES) == 8
+
+
+def test_the_sidebar_is_the_page_map(window):
+    """Five pages in the list, then the free month, Settings and Help."""
+    rows = [b.text() for b in window._sidebar.findChildren(QAbstractButton)]
+    assert rows == ["Home", "Agents", "Journal", "Packs", "Accounting", "Tora",
+                    "Get a free month", "Settings", "Help"]
+    assert window._buttons["accounting"].isHidden(), "a pack's page only while the pack is on"
+    assert not window._buttons["settings"].isHidden()
+
+
+def test_a_page_without_a_row_lights_nothing(window):
+    """Setup is reached from Help; opening it must not leave Home lit."""
+    window.show_page("setup")
+    assert not any(b.isChecked() for b in window._buttons.values())
+
+
+def test_the_sidebar_opens_and_shuts(window):
+    window._want_open = True
+    window._sidebar.set_open(True, animate=False)
+    wide = window._sidebar.width()
+    window.toggle_sidebar()
+    window._sidebar.openness = 0.0               # the slide, finished
+    assert window._sidebar.width() < wide and not window._sidebar.is_open()
+    assert window._buttons["home"].toolTip() == "Home", "shut, a row names itself on hover"
+
+
+def test_no_page_has_a_description_line(window):
+    """A title, never a line of explanation under it (DESIGN.md §6)."""
+    for key, *_rest in PAGES:
+        window.show_page(key)
+        assert not window._pages[key].findChildren(QLabel, "pageLede"), key
 
 
 def test_pages_are_built_only_when_asked_for(qapp):
@@ -69,13 +94,6 @@ def test_the_selected_page_is_the_lit_one_in_the_rail(window):
     assert not window._buttons["home"].isChecked(), "exactly one at a time"
 
 
-def test_an_ampersand_in_a_nav_label_is_not_a_mnemonic(window):
-    """QPushButton reads "&m" as a shortcut and swallows the ampersand."""
-    item = window._buttons["voice"]
-    assert "&&" in item.text(), "the label has to be escaped"
-    assert "Voice & models" in item.text().replace("&&", "&")
-
-
 def test_the_window_paints_its_own_background(window):
     """Without WA_StyledBackground a QWidget subclass ignores the
     stylesheet's background, and a translucent window shows through."""
@@ -86,17 +104,23 @@ def test_the_window_paints_its_own_background(window):
 
 def test_every_page_has_an_icon_that_actually_draws(qapp):
     """The Unicode glyphs this replaced fell back to three different fonts,
-    one of them a colour emoji."""
-    for key, *_rest in PAGES:
+    one of them a colour emoji. Every row and title bar button has a Lucide
+    file, and it renders."""
+    from ui.app_widgets import ICONS
+    for key in [k for k, *_r in PAGES] + list(ICONS):
         px = nav_icon(key, "#FFFFFF")
-        assert not px.isNull() and px.width() > 0, key
+        img = px.toImage()
+        assert not px.isNull() and any(img.pixelColor(x, y).alpha()
+                                       for x in range(img.width()) for y in range(img.height())), key
 
 
-def test_the_state_pill_follows_the_companion(window):
+def test_the_state_chip_follows_the_companion(window):
     window.set_state("LISTENING")
     assert window._state_label.text() == "Listening"
+    assert not window._state_chip.isHidden()
     window.set_state("")
     assert window._state_label.text() == "Idle", "an unknown state reads as idle"
+    assert window._state_chip.isHidden(), "idle says nothing"
 
 
 def test_a_switch_reports_what_it_was_clicked_to(qapp):

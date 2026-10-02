@@ -122,6 +122,7 @@ for _manifest in _glob.glob(os.path.join("extensions", "*", "manifest.json")):
 # The site's typeface and the wordmark (ui/tokens.py reads them from here).
 datas.append((os.path.join("assets", "fonts"), os.path.join("assets", "fonts")))
 datas.append((os.path.join("assets", "brand"), os.path.join("assets", "brand")))
+datas.append((os.path.join("assets", "icons"), os.path.join("assets", "icons")))
 # Tora's voices saying hello, for Make Tora yours (assets/voices/make_voices.py).
 datas.append((os.path.join("assets", "voices"), os.path.join("assets", "voices")))
 

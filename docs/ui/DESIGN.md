@@ -45,12 +45,12 @@ glass recipe. It is not a reason to put glass anywhere new.
 
 ## 3. Layout of a page
 
-- **Header: the title and nothing else.** 28px bold on the left, the page's
+- **Header: the title and nothing else.** 26px bold on the left, the page's
   actions on the right. **No description line.** If a page needs explaining,
   the explanation belongs in its empty state, where it helps the person who
   needs it. Repeated on every visit, it's noise.
-- **Sidebar:** logo, grouped nav (uppercase group labels), status at the
-  bottom. Selected item: `ACCENT_SOFT` plate, icon in the accent blue.
+- **Sidebar:** see §3B. Selected row: a neutral `NAV_PLATE`, icon in the
+  accent blue.
 - **Content:** one column of cards, 32px gutter, 16px between cards. Lists are
   rows divided by hairlines inside a card, not a card per row.
 - **Empty states** are written, not blank: what this page will show, and the
@@ -58,6 +58,64 @@ glass recipe. It is not a reason to put glass anywhere new.
 - **Window title:** "HeyTora". Never the page name plus the app name. Qt
   appends `applicationDisplayName` to every window title, so set the title
   once.
+
+## 3B. The shell and the page map (after Wispr Flow)
+
+Built in `ui/app_window.py` (layout), `ui/app_shell.py` (painted rows and
+title bar buttons), `ui/app_popover.py` (the cards), `ui/window_frame.py`
+(our own title bar on a real Windows window).
+
+```
+┌─[▥][◯]──────────────────────────── [●Listening] [🔔] ─ ▢ ✕ ┐
+│ heytora      ╭───────────────────────────────────────────╮ │
+│ ⌂ Home       │ Hey Dylan, just hold [Ctrl + Win] and ask │ │
+│ ◇ Agents     │                                           │ │
+│ ▢ Journal    │ …the page…                                │ │
+│ ▦ Packs      │                                           │ │
+│   Accounting │   (only while the Accounting pack is on)  │ │
+│ ✦ Tora       │                                           │ │
+│ 🎁 Free month │                                           │ │
+│ ⚙ Settings   │                                           │ │
+│ ? Help       ╰───────────────────────────────────────────╯ │
+└────────────────────────────────────────────────────────────┘
+```
+
+- **One ground, one panel.** The title bar and the sidebar are `FRAME`; the
+  pages sit on a raised panel (`BG`, hairline, `RADIUS_LG`) inset from it.
+- **Our own title bar.** Top left: the sidebar button, then the profile.
+  Top right: Tora's state (only while she is not idle), the bell, then
+  minimise / maximise / close drawn as Windows 11 draws them. The window
+  is still a real Windows window - it snaps, resizes, has the shadow and
+  rounded corners, and hovering maximise offers snap layouts.
+- **The sidebar opens and shuts.** Open: the wordmark and icon + name rows.
+  Shut: the app icon and icon rows, each naming itself on hover. It slides
+  on the site's curve; the choice is remembered (`TORA_SIDEBAR`). Below
+  1100px wide it shuts by itself and opens again when there is room.
+- **Icons:** Lucide outlines (`assets/icons`, ISC), 18px, one stroke
+  weight. A new icon is a file there plus a line in `app_widgets.ICONS`.
+- **No header bar on a page.** A page has a title and its actions; Home
+  greets instead ("Hey Dylan, just hold [Ctrl + Win] and ask").
+- **Cards from the shell** are solid (they open over the app, not the
+  desktop): **profile** (name, email, plan and use, free month, manage
+  account, sign out), **notifications** (TODO: agent tasks and approvals,
+  progress, usage, achievements - the bell and its dot are ready), **free
+  month** (coming soon), **help** (contact support, problem report, keys
+  and diagnostics).
+
+**The page map.** Each row holds a full page's worth; nothing is a tab
+with two settings on it.
+
+| Row | What it is | Made from |
+|---|---|---|
+| Home | Greeting, measured stats, one hero card, recent activity by day | Home + Journal's history |
+| Agents | Background work: plans, progress, approvals | Agents |
+| Journal | What you learned, walkthroughs worth keeping | Journal |
+| Packs | Turn industry packs on and off | Extensions |
+| (pack) | A pack's own page, e.g. Accounting, while it is on | Accounting |
+| Tora | Make her yours: voice, colour, how she teaches and answers | Tutor + Voice |
+| Get a free month | Referral - coming soon | new |
+| Settings | Opens a dialog with its own menu: General, Privacy, Models, Account, Advanced | Settings + Setup + Models |
+| Help | Support, a problem report, keys and diagnostics | new |
 
 ## 3A. Where the values live
 
@@ -371,9 +429,14 @@ Seen in Wispr Flow (2 Oct 2026), for stage 5. Not built yet.
 |---|---|---|
 | 1 | Tokens, fonts, light/dark, main window restyle, tray click + popup | Done |
 | 4 | Onboarding rebuilt to §7 | Built; needs a live run on a clean profile |
-| 2 | Frame: title-only headers (all nine pages still have a description line), window title, Home hero gradient card | Next |
+| 2 | Frame: title-only headers, window title, Home hero gradient card | Folded into A1 / A4 |
 | 3 | Content colour: pack tiles on Extensions/Accounting/Agents, capability colours | |
 | 4A | Consolidation: every value into `ui/tokens.py`, one `ui/kit.py`, a test that keeps it (§3A) | Done |
+| A1 | App shell (§3B): own title bar, sidebar that opens and shuts, page map, no description lines, Home greeting, profile / notifications / free month / help cards | Done |
+| A2 | Settings as a dialog with its own menu (General, Privacy, Models, Account, Advanced); Setup and Models leave the sidebar | Next |
+| A3 | Notifications feed: agent tasks, approvals, progress, usage, achievements | |
+| A4 | Home: hero card, stats, recent activity by day | |
+| A5 | Each remaining page in turn: Tora, Packs, Agents, Journal | |
 | 5 | Glass and the pill: §7A pill with snap targets, result card, pop sound, captions optional; tray popup to glass; panel, captions and buddy onto shared tokens; `agents/ui/orbs.py` (worker 1) | |
 
 Each stage: a mock-up screenshot first, then code, then this table updated.

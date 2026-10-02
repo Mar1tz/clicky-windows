@@ -34,14 +34,16 @@ from PyQt6.QtWidgets import (
 from ui import app_theme as T
 from ui.app_widgets import (
     Card, Dot, Meter, Metric, PageBody, Pill, Row, Select, Switch, ToggleRow,
-    button, columns, hrule, label, lede, refill, section, spacer, title,
+    button, columns, hrule, label, refill, section, spacer, title,
 )
 
 _log = logging.getLogger("tora.app")
 
 
 class Page(QWidget):
-    """Title, one line of explanation, optional buttons, then a scrolling body.
+    """A title, optional buttons beside it, then a scrolling body. No line
+    of explanation under the title: the page says what it is by what is on
+    it (DESIGN.md §3B).
 
     A LIVE page (APP-10) reads everything it shows from the bridge and is
     rebuilt each time it is shown or something it shows changes: its
@@ -54,7 +56,6 @@ class Page(QWidget):
     navigate = pyqtSignal(str)
 
     HEADING = "Page"
-    LEDE = ""
     LIVE = False
     # The bridge topics that redraw this page WHILE it is on screen. Empty:
     # it refreshes only when opened - right for a page with something to
@@ -78,14 +79,9 @@ class Page(QWidget):
 
         head = QWidget()
         head_lay = QHBoxLayout(head)
-        head_lay.setContentsMargins(T.GUTTER, 20, T.GUTTER, 18)
+        head_lay.setContentsMargins(T.GUTTER, 30, T.GUTTER, 14)
         head_lay.setSpacing(16)
-        text = QVBoxLayout()
-        text.setSpacing(4)
-        text.addWidget(title(self.HEADING))
-        if self.LEDE:
-            text.addWidget(lede(self.LEDE))
-        head_lay.addLayout(text, 1)
+        head_lay.addWidget(self.build_title(), 1)
         self.actions = QHBoxLayout()
         self.actions.setSpacing(8)
         head_lay.addLayout(self.actions)
@@ -96,6 +92,10 @@ class Page(QWidget):
         self.build_actions()
         self.build()
         self.body.finish()
+
+    def build_title(self) -> QWidget:
+        """The page's title - built once. Home greets instead."""
+        return title(self.HEADING)
 
     def build_actions(self) -> None:
         """The header buttons - built once. Live pages override this."""
@@ -126,13 +126,32 @@ class Page(QWidget):
 # ── Home ──────────────────────────────────────────────────────────────────────
 
 class HomePage(Page):
-    HEADING = "HeyTora"
-    LEDE = "Talk to her. She can see your screen, point at things, and put agents to work."
+    HEADING = "Home"
     LIVE = True
     TOPICS = frozenset({"state", "account", "agents", "guide", "switches"})
 
     _STATE_WORDS = {"listening": "Listening…", "thinking": "Thinking…",
                     "speaking": "Speaking…"}
+
+    def build_title(self) -> QWidget:
+        """"Hey Dylan, just hold [Ctrl + Win] and ask" - the one thing to
+        know, with the shortcut on a keycap (Wispr Flow's greeting)."""
+        name = ""
+        get = getattr(self.bridge, "user_name", None)
+        if get is not None:
+            try:
+                name = get() or ""
+            except Exception:  # noqa: BLE001
+                name = ""
+        row = QWidget()
+        lay = QHBoxLayout(row)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(10)
+        lay.addWidget(title(f"Hey {name or 'there'}, just hold"))
+        lay.addWidget(label(self.bridge.hotkey() or "Ctrl + Win", "keycap"))
+        lay.addWidget(title("and ask"))
+        lay.addStretch(1)
+        return row
 
     def build_actions(self) -> None:
         self.action("Open panel").clicked.connect(self.bridge.show_panel)
@@ -343,7 +362,6 @@ _TASK_WORDS = {
 
 class AgentsPage(Page):
     HEADING = "Agents"
-    LEDE = "Work Tora is doing for you in the background — the plan, the progress, and every step it took."
     LIVE = True
     TOPICS = frozenset({"agents"})
 
@@ -472,8 +490,7 @@ PACK_PAGES = {"accounting": "accounting"}
 
 
 class ExtensionsPage(Page):
-    HEADING = "Extensions"
-    LEDE = "Industry packs. Each one adds its own agents, tools and dashboard — and nothing at all while it is off."
+    HEADING = "Packs"
     LIVE = True
     TOPICS = frozenset({"extensions"})
 
@@ -546,7 +563,6 @@ class ExtensionsPage(Page):
 
 class AccountingPage(Page):
     HEADING = "Accounting"
-    LEDE = "One client at a glance. Exceptions first — everything clean is already done."
     LIVE = True
     TOPICS = frozenset({"extensions"})
     PACK = "accounting"
@@ -658,7 +674,6 @@ class AccountingPage(Page):
 
 class JournalPage(Page):
     HEADING = "Journal"
-    LEDE = "What you have learned, what you asked, and the walkthroughs worth keeping."
     LIVE = True
     TOPICS = frozenset({"journal", "recording", "guide", "switches"})
     SHOWN_DUE = 5
@@ -813,7 +828,6 @@ class JournalPage(Page):
 
 class TutorPage(Page):
     HEADING = "Tutor"
-    LEDE = "How Tora teaches: how she paces a walkthrough, what she looks at, and what she always keeps in mind."
     LIVE = True
 
     def _toggle(self, card: Card, name: str, heading: str, sub: str, *, first=False) -> None:
@@ -873,7 +887,6 @@ class TutorPage(Page):
 
 class VoicePage(Page):
     HEADING = "Voice & models"
-    LEDE = "Which voice speaks, how she talks, which model does each job, and where agent requests go."
     LIVE = True
 
     # What each model role is FOR, in words (gemini.Models.all_roles).
@@ -933,6 +946,19 @@ class VoicePage(Page):
         self.body.add(ends)
 
 
+# ── Tora ──────────────────────────────────────────────────────────────────────
+
+class ToraPage(TutorPage, VoicePage):
+    """Make her yours: how she teaches and how she sounds, on one page.
+    (Step 1 of the shell puts the two pages' cards together; the page gets
+    its own design in step A5 - DESIGN.md §9.)"""
+    HEADING = "Tora"
+
+    def build(self) -> None:
+        VoicePage.build(self)
+        TutorPage.build(self)
+
+
 # ── Settings ──────────────────────────────────────────────────────────────────
 
 def _checked_ago(when: float) -> str:
@@ -962,7 +988,6 @@ def confirm_sign_out(parent) -> bool:
 
 class SettingsPage(Page):
     HEADING = "Settings"
-    LEDE = "The rails. What Tora may touch, what runs without asking, and how she hears you."
     LIVE = True
     # The plan and usage arrive after the page is drawn, and move with every
     # question; an update downloads in the background. Both are redrawn in
@@ -1290,7 +1315,6 @@ class SettingsPage(Page):
 
 class SetupPage(Page):
     HEADING = "Setup"
-    LEDE = "Keys, first-run checks and a report you can send when something is wrong."
 
     LIVE = True
     TOPICS = frozenset({"state", "account", "agents"})
@@ -1342,15 +1366,20 @@ class SetupPage(Page):
         self.body.add(wrap)
 
 
-# The nav order, and the single place a new page gets added.
+# The sidebar, top to bottom, and the single place a new page gets added.
+# place: "main" (the list), "pack" (a pack's page: a row while the pack is
+# on - PACK_ROWS), "bottom" (under the list, with the free month and help),
+# "hidden" (reached from elsewhere: Help -> Keys and diagnostics).
 PAGES = (
-    ("home",       "Home",            "◆", HomePage,       "MAIN"),
-    ("agents",     "Agents",          "◈", AgentsPage,     "MAIN"),
-    ("extensions", "Extensions",      "▣", ExtensionsPage, "MAIN"),
-    ("accounting", "Accounting",      "▤", AccountingPage, "WORK"),
-    ("journal",    "Journal",         "▥", JournalPage,    "WORK"),
-    ("tutor",      "Tutor",           "◉", TutorPage,      "TUNING"),
-    ("voice",      "Voice & models",  "◍", VoicePage,      "TUNING"),
-    ("settings",   "Settings",        "⚙", SettingsPage,   "SYSTEM"),
-    ("setup",      "Setup",           "⛭", SetupPage,      "SYSTEM"),
+    ("home",       "Home",       "main",   HomePage),
+    ("agents",     "Agents",     "main",   AgentsPage),
+    ("journal",    "Journal",    "main",   JournalPage),
+    ("extensions", "Packs",      "main",   ExtensionsPage),
+    ("accounting", "Accounting", "pack",   AccountingPage),
+    ("tora",       "Tora",       "main",   ToraPage),
+    ("settings",   "Settings",   "bottom", SettingsPage),
+    ("setup",      "Setup",      "hidden", SetupPage),
 )
+
+# A pack page's row -> the pack that must be on for it to show.
+PACK_ROWS = {"accounting": "accounting"}

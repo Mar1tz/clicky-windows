@@ -24,6 +24,7 @@ PALETTE: tokens.Palette = tokens.LIGHT
 BG = BG_SIDEBAR = SURFACE = SURFACE_HOVER = SURFACE_SUNK = ""
 BORDER = BORDER_STRONG = TEXT = TEXT_DIM = TEXT_FAINT = ""
 INVERSE = ON_INVERSE = ""
+FRAME = NAV_HOVER = NAV_PLATE = ""
 OK = WARN = DANGER = BUSY = ""
 
 ACCENT        = tokens.BLUE    # the cursor's blue, in every theme
@@ -49,13 +50,14 @@ def apply(palette: tokens.Palette) -> None:
     """Make `palette` the current one. Callers then re-run qss()."""
     global PALETTE, BG, BG_SIDEBAR, SURFACE, SURFACE_HOVER, SURFACE_SUNK
     global BORDER, BORDER_STRONG, TEXT, TEXT_DIM, TEXT_FAINT, INVERSE, ON_INVERSE
-    global OK, WARN, DANGER, BUSY, STATE_COLOUR
+    global OK, WARN, DANGER, BUSY, STATE_COLOUR, FRAME, NAV_HOVER, NAV_PLATE
     PALETTE = palette
     BG, BG_SIDEBAR = palette.bg, palette.sidebar
     SURFACE, SURFACE_HOVER, SURFACE_SUNK = palette.surface, palette.surface_hover, palette.surface_sunk
     BORDER, BORDER_STRONG = palette.border, palette.border_strong
     TEXT, TEXT_DIM, TEXT_FAINT = palette.text, palette.text_dim, palette.text_faint
     INVERSE, ON_INVERSE = palette.inverse, palette.on_inverse
+    FRAME, NAV_HOVER, NAV_PLATE = palette.frame, palette.nav_hover, palette.nav_plate
     OK, WARN, DANGER, BUSY = palette.ok, palette.warn, palette.danger, ACCENT
     STATE_COLOUR = {
         "idle": TEXT_FAINT,
@@ -103,8 +105,10 @@ RADIUS        = 14             # the window and its big surfaces
 RADIUS_CARD   = tokens.RADIUS_MD    # the site's large plates
 RADIUS_SMALL  = tokens.RADIUS_SM    # the site's --radius
 BUTTON_PILL   = tokens.pill(tokens.BUTTON_H["md"])
-SIDEBAR_W     = 244
-TITLEBAR_H    = 44
+SIDEBAR_W     = 228            # open
+SIDEBAR_SHUT  = 64             # closed: icons only
+TITLEBAR_H    = 46
+PANEL_RADIUS  = tokens.RADIUS_LG
 GUTTER        = 32             # page padding
 GAP           = 16             # between cards
 
@@ -128,11 +132,17 @@ def qss() -> str:
     family = font()
     return f"""
     /* ── frame ─────────────────────────────────────────────────────────── */
-    /* No border and no radius: the window wears a NATIVE frame, and Windows
-       rounds and shadows it. Every region paints its own background. */
-    QWidget#appRoot {{ background: {BG}; }}
-    QStackedWidget#stack {{ background: {BG}; }}
-    QWidget#page {{ background: {BG}; }}
+    /* The window draws its own title bar (ui/window_frame.py); Windows
+       still rounds, shadows and snaps it. The title bar and sidebar are
+       one ground (FRAME); the pages sit on a raised panel inside it. */
+    QWidget#appRoot {{ background: {FRAME}; }}
+    QWidget#topBar, QWidget#sidebar {{ background: transparent; }}
+    QFrame#panel {{
+        background: {BG}; border: 1px solid {BORDER};
+        border-radius: {PANEL_RADIUS}px;
+    }}
+    QStackedWidget#stack {{ background: transparent; }}
+    QWidget#page {{ background: transparent; }}
     QWidget {{
         color: {TEXT};
         font-family: "{family}", "{tokens.FALLBACK_FONT}";
@@ -144,31 +154,19 @@ def qss() -> str:
     }}
 
     /* ── sidebar ───────────────────────────────────────────────────────── */
-    QWidget#sidebar {{
-        background: {BG_SIDEBAR};
-        border-right: 1px solid {BORDER};
-    }}
-    /* The wordmark sets lowercase and bold, as the site's does. */
+    /* The rows are painted (ui/app_shell.py); these are what is laid out. */
+    QLabel#stateChip {{ color: {TEXT_DIM}; font-size: 12px; font-weight: 600; }}
+    /* The wordmark in type, when the SVG cannot be drawn. */
     QLabel#wordmark {{ font-size: 20px; font-weight: 700; letter-spacing: -0.3px; }}
-    QLabel#wordmarkSub {{ color: {TEXT_FAINT}; font-size: 10px; font-weight: 600; letter-spacing: 1.4px; }}
-    /* The site's label tier: uppercase, tracked out, the machine's voice. */
-    QLabel#navGroup {{
-        color: {TEXT_FAINT}; font-size: 10px; font-weight: 600;
-        letter-spacing: 1.5px; padding: 0px 14px;
-    }}
-    QPushButton#navItem {{
-        background: transparent; border: none; border-radius: {RADIUS_SMALL}px;
-        color: {TEXT_DIM}; font-size: 13px; font-weight: 500;
-        text-align: left; padding: 9px 12px 9px 14px;
-    }}
-    QPushButton#navItem:hover {{ background: {SURFACE_HOVER}; color: {TEXT}; }}
-    QPushButton#navItem:checked {{
-        background: {ACCENT_SOFT}; color: {TEXT}; font-weight: 600;
-    }}
 
     /* ── page furniture ────────────────────────────────────────────────── */
     /* Bold at every heading size, tracking tightening as it grows (BRAND §3). */
-    QLabel#pageTitle  {{ font-size: 28px; font-weight: 700; letter-spacing: -0.4px; }}
+    QLabel#pageTitle  {{ font-size: 26px; font-weight: 700; letter-spacing: -0.4px; }}
+    QLabel#keycap {{
+        background: {ACCENT_SOFT}; color: {ACCENT}; border: 1px solid {ACCENT_EDGE};
+        border-radius: {RADIUS_SMALL}px; padding: 0px 8px;
+        font-size: 24px; font-weight: 700; letter-spacing: -0.3px;
+    }}
     QLabel#pageLede   {{ color: {TEXT_DIM}; font-size: 14px; }}
     QLabel#sectionTitle {{
         font-size: 10px; font-weight: 600; color: {TEXT_FAINT};
