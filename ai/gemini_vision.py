@@ -132,15 +132,16 @@ class Action:
         return max(20, int(max(xmax - xmin, ymax - ymin) * 0.62))
 
     def as_tag(self) -> str:
-        """The drawing tag the overlay already knows how to render."""
+        """The drawing tag the overlay already knows how to render - in
+        Tora's own colour, the one the user picked for her cursor."""
         x, y = self.center
         if self.kind == "rect":
             ymin, xmin, ymax, xmax = self.box
-            return f"[RECT:{xmin},{ymin},{xmax},{ymax}:blue]"
+            return f"[RECT:{xmin},{ymin},{xmax},{ymax}:tora]"
         if self.kind == "underline":
             ymin, xmin, ymax, xmax = self.box
-            return f"[UNDERLINE:{xmin},{ymax},{xmax - xmin}:blue]"
-        return f"[CIRCLE:{x},{y},{self.radius}:{self.label}:blue]"
+            return f"[UNDERLINE:{xmin},{ymax},{xmax - xmin}:tora]"
+        return f"[CIRCLE:{x},{y},{self.radius}:{self.label}:tora]"
 
 
 @dataclass

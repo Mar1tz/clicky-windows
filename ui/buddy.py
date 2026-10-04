@@ -46,6 +46,13 @@ SIDE = 19.0                                    # the triangle's side
 CORNER = 3.2                                   # its rounded corners
 
 
+def _lighten(color: QColor, white: float) -> QColor:
+    """`color` mixed with `white` (0-1) of white."""
+    return QColor(round(color.red() + (255 - color.red()) * white),
+                  round(color.green() + (255 - color.green()) * white),
+                  round(color.blue() + (255 - color.blue()) * white))
+
+
 def _c(color: QColor, alpha: float) -> QColor:
     c = QColor(color)
     c.setAlphaF(max(0.0, min(1.0, alpha)))
@@ -191,7 +198,7 @@ def bubble_rect(cx: float, cy: float, label: str) -> QRectF:
 
 def draw_bubble(p: QPainter, cx: float, cy: float, label: str, *, alpha: float = 1.0,
                 scale: float = 1.0) -> None:
-    """The name of what Tora points at: a blue pill beside the buddy, with a
+    """The name of what Tora points at: a pill in her colour beside the buddy, with a
     soft shadow and white semibold text. `scale` pops it in from its left."""
     if alpha <= 0.01 or not label:
         return
@@ -207,7 +214,8 @@ def draw_bubble(p: QPainter, cx: float, cy: float, label: str, *, alpha: float =
     pill.addRoundedRect(r, h / 2, h / 2)
     _soft_shadow(p, pill, alpha, dy=2.0)
     g = QLinearGradient(QPointF(0, y), QPointF(0, y + h))
-    g.setColorAt(0.0, _c(QColor("#5A9EFF"), alpha))
+    top = QColor("#5A9EFF") if BLUE.name().lower() == _DEFAULT[1].name().lower() else _lighten(BLUE, 0.15)
+    g.setColorAt(0.0, _c(top, alpha))                # the blue's own top; any other colour, a touch paler
     g.setColorAt(1.0, _c(BLUE_DEEP, alpha))
     p.setPen(QPen(_c(QColor("white"), 0.28 * alpha), 0.9))
     p.setBrush(QBrush(g))

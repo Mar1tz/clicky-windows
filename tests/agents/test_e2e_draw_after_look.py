@@ -47,8 +47,8 @@ def test_a_look_says_where_its_highlights_are(monkeypatch):
     monkeypatch.setattr(gemini_vision, "look", fake_look)
     monkeypatch.setattr(cm, "active_window_title", lambda: "HeyTora")
     out = asyncio.run(mgr._tool_look_at_screen({"question": "what's wrong with this equation?"}))
-    assert out["highlights"] == [{"label": "2x = 14 + 6", "tag": "[RECT:120,300,420,360:blue]"}]
-    assert mgr._drawn == [{"tag": "[RECT:120,300,420,360:blue]"}], "and it is drawn, as before"
+    assert out["highlights"] == [{"label": "2x = 14 + 6", "tag": "[RECT:120,300,420,360:tora]"}]
+    assert mgr._drawn == [{"tag": "[RECT:120,300,420,360:tora]"}], "and it is drawn, as before"
 
 
 def test_drawing_is_not_restricted_after_a_look():

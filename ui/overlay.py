@@ -62,8 +62,14 @@ def set_cursor_colour(hex_colour: str) -> None:
     CURSOR_BLUE = c if c.isValid() else QColor(0x33, 0x80, 0xFF)
     buddy.set_colour(CURSOR_BLUE.name())
 
-# Teaching-annotation palette. The LLM picks colors by name; default is the
-# Tora blue. Chosen for contrast on both light and dark content.
+# Teaching-annotation palette. A drawing wears TORA's colour - the one the
+# user picked for her cursor (Make Tora yours) - unless it names another
+# because the colour means something (red for a mistake, green for right).
+# "tora", no colour at all, and "blue" (the name her colour had when it was
+# always blue) are all hers, worked out at paint time: changing her colour
+# recolours what is already on screen. The rest are chosen for contrast on
+# both light and dark content.
+TORA_COLOUR_NAMES = ("", "tora", "blue")
 ANNOT_COLORS = {
     "blue":   QColor(0x33, 0x80, 0xFF),
     "red":    QColor(0xFF, 0x45, 0x55),
@@ -74,6 +80,22 @@ ANNOT_COLORS = {
     "white":  QColor(0xF5, 0xF7, 0xFA),
     "cyan":   QColor(0x4F, 0xD9, 0xFF),
 }
+
+
+def annotation_colour(name) -> QColor:
+    """The colour a drawing is painted in: Tora's own unless it names
+    another (see ANNOT_COLORS)."""
+    key = str(name or "").strip().lower()
+    if key in TORA_COLOUR_NAMES:
+        return QColor(CURSOR_BLUE)
+    return QColor(ANNOT_COLORS.get(key, CURSOR_BLUE))
+
+
+def _tint(colour: QColor, white: float) -> QColor:
+    """`colour` mixed with `white` (0-1) of white - a pale version of it."""
+    return QColor(round(colour.red() + (255 - colour.red()) * white),
+                  round(colour.green() + (255 - colour.green()) * white),
+                  round(colour.blue() + (255 - colour.blue()) * white))
 
 # Progressive stroke animation — shapes draw at "hand speed" (px/sec), so a
 # long line takes visibly longer than a short tick mark. Queued sequentially;
@@ -529,7 +551,7 @@ class CursorOverlay(QWidget):
         dur = max(SHAPE_DRAW_MIN_S, min(SHAPE_DRAW_MAX_S, dur))
         shape["start"] = start
         shape["dur"] = dur
-        shape.setdefault("color", "blue")
+        shape.setdefault("color", "tora")             # Tora's colour, read when it is painted
         # Auto-expiry unless a guide is running. Nothing ever passed a ttl, so
         # every drawing used to persist until the next question — which is why
         # arrows and circles piled up on screen long after they were relevant.
@@ -931,7 +953,9 @@ class CursorOverlay(QWidget):
         )
         if sub:
             p.setFont(sub_font)
-            p.setPen(QPen(QColor(150, 190, 255, int(230 * a)), 1))
+            sub_col = _tint(CURSOR_BLUE, 0.5)              # her colour, pale (the blue's was 150,190,255)
+            sub_col.setAlpha(int(230 * a))
+            p.setPen(QPen(sub_col, 1))
             p.drawText(
                 QRectF(tx, y + pad_y + fm_h.height() + gap,
                        w - dot_w - pad_x * 2, fm_s.height()),
@@ -961,7 +985,7 @@ class CursorOverlay(QWidget):
                 if age > ttl * 0.75:
                     alpha = max(0.0, 1.0 - (age - ttl * 0.75) / (ttl * 0.25))
 
-            col = QColor(ANNOT_COLORS.get(ann.get("color", "blue"), CURSOR_BLUE))
+            col = annotation_colour(ann.get("color"))
             col.setAlpha(int(235 * alpha))
             kind = ann["kind"]
             try:

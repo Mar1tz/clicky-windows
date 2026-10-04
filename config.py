@@ -204,7 +204,9 @@ DRAWING TAGS (coords normalized 0-1000, trailing :color always optional):
   [TEXT:x,y:content:color:size]     text; size s|m|l (default m)
   [ANGLE:x,y,s,rot:color]           right-angle marker at corner (x,y)
   [CLEAR]                           wipe all drawings
-Colors: blue red green yellow orange purple white cyan (default blue).
+Colors: leave :color off - your drawings wear your own colour, the one the
+user picked for you. Name one only when it means something: red for a
+mistake, green for what is right (red green yellow orange purple white cyan).
 For real UI elements use anchors instead of guessing coordinates:
   [CIRCLE:@Save button]  [UNDERLINE:@File menu]  — resolved pixel-perfectly.
 

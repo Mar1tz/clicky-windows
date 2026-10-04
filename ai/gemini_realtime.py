@@ -183,15 +183,20 @@ def tool_declarations() -> list[dict]:
                     "tags": {
                         "type": "string",
                         "description": (
-                            "One or more tags, coords 0-1000, trailing :color "
-                            "optional (blue red green yellow orange purple "
-                            "white cyan). [ARROW:x1,y1->x2,y2:color] "
+                            "One or more tags, coords 0-1000. Leave the "
+                            "trailing :color off: your drawings wear your own "
+                            "colour, the one the user picked for you. Name a "
+                            "colour only when it means something - red for a "
+                            "mistake, green for what is right (red green "
+                            "yellow orange purple white cyan). "
+                            "[ARROW:x1,y1->x2,y2:color] "
                             "[LINE:x1,y1->x2,y2:color] "
                             "[CIRCLE:x,y,r:label:color] "
                             "[RECT:x1,y1,x2,y2:color] "
                             "[POLY:x1,y1 x2,y2 x3,y3:color] "
                             "[TEXT:x,y:content:color:size] "
-                            "Example: [CIRCLE:500,300,80:here:red]"
+                            "Example: [CIRCLE:500,300,80:here] "
+                            "[CIRCLE:420,610,60:wrong:red]"
                         ),
                     },
                 },

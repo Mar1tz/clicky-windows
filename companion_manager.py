@@ -264,7 +264,8 @@ POINT_PARTIAL_RE = re.compile(r'\[(?:P|PO|POI|POIN|POINT|POINT:[^\]]*)?$')
 # ALL coordinates are normalized 0-1000 relative to the screenshot the model
 # saw (x: 0=left edge, 1000=right edge; y: 0=top, 1000=bottom). The manager
 # converts to logical screen pixels via _denorm(). Trailing :color is optional
-# on every shape.
+# on every shape: without one a shape is "tora" - the colour the user picked
+# for her cursor (ui/overlay.annotation_colour).
 _C = r'(?::([a-z]+))?'                       # optional trailing color group
 LINE_RE      = re.compile(r'\[LINE:(\d+),(\d+)->(\d+),(\d+)' + _C + r'\]')
 ARROW_RE     = re.compile(r'\[ARROW:(\d+),(\d+)->(\d+),(\d+)' + _C + r'\]')
@@ -2483,12 +2484,12 @@ class CompanionManager(QObject):
                 l, t, r, b = bbox
                 pad = 4.0
                 self.sig_draw.emit({
-                    "kind": "rect", "color": "blue",
+                    "kind": "rect", "color": "tora",
                     "x1": l - pad, "y1": t - pad, "x2": r + pad, "y2": b + pad,
                 })
             else:
                 self.sig_draw.emit({
-                    "kind": "circle", "color": "blue",
+                    "kind": "circle", "color": "tora",
                     "x": float(found.x), "y": float(found.y), "r": 32.0,
                 })
         except Exception:
@@ -4506,7 +4507,7 @@ class CompanionManager(QObject):
             l, t, r, b = bbox
             return {"kind": "circle", "x": (l + r) / 2, "y": (t + b) / 2,
                     "r": max(r - l, b - t) / 2 + 10, "label": "",
-                    "color": color or "blue"}
+                    "color": color or "tora"}
         m = UNDERLINE_AT_RE.fullmatch(tag)
         if m:
             name, color = m.groups()
@@ -4515,7 +4516,7 @@ class CompanionManager(QObject):
                 return None
             l, t, r, b = bbox
             return {"kind": "underline", "x": l, "y": b + 3, "w": r - l,
-                    "color": color or "blue"}
+                    "color": color or "tora"}
         m = LINE_RE.fullmatch(tag) or ARROW_RE.fullmatch(tag)
         if m:
             kind = "line" if tag.startswith("[LINE") else "arrow"
@@ -4523,21 +4524,21 @@ class CompanionManager(QObject):
             n1 = self._snap_pt(float(x1), float(y1))
             n2 = self._snap_pt(float(x2), float(y2))
             return {"kind": kind, "pts": [self._denorm(*n1), self._denorm(*n2)],
-                    "color": color or "blue"}
+                    "color": color or "tora"}
         m = CIRCLE_RE.fullmatch(tag)
         if m:
             x, y, r, label, color = m.groups()
             cx, cy = self._denorm(float(x), float(y))
             return {"kind": "circle", "x": cx, "y": cy,
                     "r": max(12.0, self._denorm_len(float(r))),
-                    "label": (label or "").strip(), "color": color or "blue"}
+                    "label": (label or "").strip(), "color": color or "tora"}
         m = RECT_RE.fullmatch(tag)
         if m:
             x1, y1, x2, y2, color = m.groups()
             p1 = self._denorm(*self._snap_pt(float(x1), float(y1)))
             p2 = self._denorm(*self._snap_pt(float(x2), float(y2)))
             return {"kind": "rect", "x1": p1[0], "y1": p1[1],
-                    "x2": p2[0], "y2": p2[1], "color": color or "blue"}
+                    "x2": p2[0], "y2": p2[1], "color": color or "tora"}
         m = POLY_RE.fullmatch(tag)
         if m:
             pts_str, color = m.groups()
@@ -4545,13 +4546,13 @@ class CompanionManager(QObject):
                    for a, b in re.findall(r'(\d+),(\d+)', pts_str)]
             if len(pts) < 3:
                 return None
-            return {"kind": "poly", "pts": pts, "color": color or "blue"}
+            return {"kind": "poly", "pts": pts, "color": color or "tora"}
         m = TEXT_RE.fullmatch(tag)
         if m:
             x, y, content, color, size = m.groups()
             lx, ly = self._denorm(float(x), float(y))
             return {"kind": "text", "x": lx, "y": ly, "text": content.strip(),
-                    "color": color or "blue", "size": size or "m"}
+                    "color": color or "tora", "size": size or "m"}
         m = ANGLE_RE.fullmatch(tag)
         if m:
             x, y, s, rot, color = m.groups()
@@ -4561,20 +4562,20 @@ class CompanionManager(QObject):
             return {"kind": "angle", "x": lx, "y": ly,
                     "s": max(10.0, self._denorm_len(float(s))),
                     "rot": auto_rot if auto_rot is not None else float(rot or 0),
-                    "color": color or "blue"}
+                    "color": color or "tora"}
         m = UNDERLINE_RE.fullmatch(tag)
         if m:
             x, y, w, color = m.groups()
             lx, ly = self._denorm(float(x), float(y))
             return {"kind": "underline", "x": lx, "y": ly,
                     "w": max(8.0, self._denorm_len(float(w))),
-                    "color": color or "blue"}
+                    "color": color or "tora"}
         m = LABEL_RE.fullmatch(tag)
         if m:
             x, y, txt, color = m.groups()
             lx, ly = self._denorm(float(x), float(y))
             return {"kind": "text", "x": lx, "y": ly, "text": txt.strip(),
-                    "color": color or "blue", "size": "s"}
+                    "color": color or "tora", "size": "s"}
         return None
 
     def _extract_shapes(self, text: str) -> list:
