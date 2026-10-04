@@ -24,6 +24,18 @@ keeps the folder, the shortcuts and the start-with-Windows choice:
 An installer that did not take (still the old version after it ran) is
 tried MAX_ATTEMPTS times, then left to the user, with the download page.
 
+Found on 4 Oct 2026, updating to 1.6.7 for real:
+  * The installer reopens HeyTora while it is still running itself, so its
+    own file is still in use: the new HeyTora must not fall over tidying
+    it away (it did - a crash on the first start of every update). Tidying
+    is best-effort now, and finished on a later start.
+  * /VERYSILENT showed nothing for the minute an install takes, so the user
+    started HeyTora again; that copy held a file the installer had to
+    replace, and the install rolled back. Updates run /SILENT now - a small
+    "Installing HeyTora" progress window - and a HeyTora started while one
+    runs (installer.iss: SetupMutex) says so and steps aside
+    (installing_now). The copy the installer reopens says --updated.
+
 Run from source there is nothing to install over: updates are off ("dev")
 - but "Check for updates" still says what is published.
 """
@@ -51,7 +63,36 @@ MANIFEST_URL = "https://qwickly.github.io/heytora/latest.json"
 DOWNLOAD_PAGE = "https://qwickly.github.io/heytora/"
 CHECK_EVERY_S = 6 * 3600
 MAX_ATTEMPTS = 2
-INSTALLER_FLAGS = ["/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/CLOSEAPPLICATIONS", "/UPDATE=1"]
+INSTALLER_FLAGS = ["/SILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/CLOSEAPPLICATIONS", "/UPDATE=1"]
+SETUP_MUTEX = "HeyToraSetup"   # installer.iss's SetupMutex: held while an installer runs
+RELAUNCHED = "--updated"       # what the installer passes to the HeyTora it reopens
+
+
+def installing_now() -> bool:
+    """Is a HeyTora installer running right now? (Windows; False elsewhere.)"""
+    if sys.platform != "win32":
+        return False
+    try:
+        import ctypes
+        kernel32 = ctypes.windll.kernel32
+        handle = kernel32.OpenMutexW(0x00100000, False, SETUP_MUTEX)       # SYNCHRONIZE
+        if handle:
+            kernel32.CloseHandle(handle)
+            return True
+    except Exception:  # noqa: BLE001 - never a reason not to start
+        _log.debug("could not ask for the installer's mutex", exc_info=True)
+    return False
+
+
+def _remove(path: Path) -> bool:
+    """Delete a file if Windows lets us; True if it is gone. An installer that
+    is still running holds its own file - it goes on a later start."""
+    try:
+        path.unlink(missing_ok=True)
+        return True
+    except OSError as e:
+        _log.info("left %s for later: %s", path.name, e)
+        return False
 
 
 def parse_version(text: str) -> tuple[int, ...]:
@@ -269,13 +310,13 @@ class Updater:
                         self._progress = min(0.99, done / total)
             self._set(progress=self._progress)
         if digest.hexdigest() != rel.sha256 or (rel.size and done != rel.size):
-            part.unlink(missing_ok=True)
+            _remove(part)
             raise ValueError("the download didn't match the published installer - not used")
         os.replace(part, target)
         # Older installers are of no use now.
         for old in self.folder().glob("Setup-HeyTora-*.exe"):
             if old != target:
-                old.unlink(missing_ok=True)
+                _remove(old)
         _log.info("update %s downloaded and verified", rel.version)
         return target
 
@@ -311,6 +352,7 @@ class Updater:
             return ""
         pending = self._pending()
         if not pending:
+            self._tidy()
             return ""
         if not newer(pending.get("version", ""), self.current):
             # It took: this is the new version (or a newer one).
@@ -318,8 +360,7 @@ class Updater:
             with self._lock:
                 self._just_updated = self.current
             self._write_pending({})
-            for leftover in self.folder().glob("Setup-HeyTora-*.exe"):
-                leftover.unlink(missing_ok=True)
+            self._tidy()                  # its installer may still be running: what it can
             return "updated"
         if int(pending.get("attempts", 0)) >= MAX_ATTEMPTS:
             self._set(state="failed", error="The update didn't install - download it from the website.")
@@ -327,6 +368,17 @@ class Updater:
         if auto and self.install_now(relaunch=True):
             return "installing"
         return ""
+
+    def _tidy(self) -> None:
+        """Installers for this version or older are of no more use. Never
+        raises: one that is still in use stays until a later start."""
+        try:
+            for old in self.folder().glob("Setup-HeyTora-*.exe"):
+                version = old.stem[len("Setup-HeyTora-"):]
+                if not newer(version, self.current):
+                    _remove(old)
+        except OSError:
+            _log.debug("tidying the updates folder failed", exc_info=True)
 
     def ready(self) -> bool:
         with self._lock:

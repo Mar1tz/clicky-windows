@@ -241,8 +241,23 @@ def main():
     # installer runs over this app, silently, and opens HeyTora again on the
     # new version. Run from source, there is nothing to update.
     from updates import updater as _updater
+    from updates.service import RELAUNCHED, installing_now
+    if RELAUNCHED not in sys.argv and installing_now():
+        # Started while an update installs: this copy would hold files the
+        # installer is replacing, and the install would roll back. The
+        # installer opens HeyTora itself when it is done.
+        import ctypes
+        ctypes.windll.user32.MessageBoxW(
+            None, "HeyTora is updating. It opens by itself in a moment.", "HeyTora",
+            0x40 | 0x40000)                                   # information, on top
+        return
     upd = _updater()
-    update_outcome = upd.at_startup(auto=cfg.switch("auto_update"))
+    try:
+        update_outcome = upd.at_startup(auto=cfg.switch("auto_update"))
+    except Exception:  # noqa: BLE001 - an update must never stop HeyTora starting
+        import logging as _lg
+        _lg.getLogger("tora.updates").exception("update check at start failed")
+        update_outcome = ""
     if update_outcome == "installing":
         return
 

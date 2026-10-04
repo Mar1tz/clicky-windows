@@ -4,7 +4,7 @@
 it just does it to the existing app." The installed app reads a manifest
 beside the download page, downloads a newer installer in the background,
 trusts it only if size and SHA-256 match, and installs it over itself with
-/VERYSILENT - when the user says "Restart to update", or by itself the next
+/SILENT - when the user says "Restart to update", or by itself the next
 time it starts or as it is quit; at once when the version is required.
 tools/release.py publishes all of it in one go. No network here: a fake
 site, a fake installer.
@@ -147,7 +147,7 @@ def test_restart_to_update_runs_the_installer_silently_over_the_app(tmp_path):
     assert u.install_now(relaunch=True)
     argv = spawned[0]
     assert argv[0].endswith("Setup-HeyTora-1.7.0.exe")
-    for flag in ("/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/CLOSEAPPLICATIONS", "/UPDATE=1",
+    for flag in ("/SILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/CLOSEAPPLICATIONS", "/UPDATE=1",
                  "/RELAUNCH=1"):
         assert flag in argv, flag
     assert any(a.startswith("/LOG=") for a in argv)
@@ -177,6 +177,55 @@ def test_the_new_version_says_it_was_updated_and_tidies_up(tmp_path):
     assert new.state()["just_updated"] == "1.7.0"
     assert not (tmp_path / "updates" / "pending.json").exists()
     assert not list((tmp_path / "updates").glob("Setup-HeyTora-*"))
+
+
+def test_the_reopened_app_does_not_fall_over_its_installer_still_running(tmp_path):
+    """Found updating to 1.6.7 for real: the installer reopens HeyTora while
+    it still runs, so its own file is in use - and the new HeyTora crashed
+    trying to delete it ("WinError 32 ... being used by another process")."""
+    u, _ = _updater(tmp_path, FakeSite())
+    _check(u)
+    installer = next((tmp_path / "updates").glob("Setup-HeyTora-*.exe"))
+    with open(installer, "rb"):                               # the installer, still running
+        new, _ = _updater(tmp_path, FakeSite(), current="1.7.0")
+        assert new.at_startup(auto=True) == "updated"
+    assert installer.exists(), "left for later"
+    again, _ = _updater(tmp_path, FakeSite(), current="1.7.0")  # the next start
+    assert again.at_startup(auto=True) == "" and not installer.exists(), "tidied then"
+
+
+def test_tidying_keeps_an_installer_for_a_newer_version(tmp_path):
+    folder = tmp_path / "updates"
+    folder.mkdir()
+    for v in ("1.6.6", "1.7.0", "1.8.0"):
+        (folder / f"Setup-HeyTora-{v}.exe").write_bytes(b"MZ")
+    from updates.service import Updater
+    Updater("1.7.0", folder=folder, installed=True, spawn=lambda _a: None).at_startup(auto=True)
+    assert sorted(f.name for f in folder.glob("*.exe")) == ["Setup-HeyTora-1.8.0.exe"]
+
+
+@pytest.mark.skipif(os.name != "nt", reason="a Windows named mutex")
+def test_a_heytora_started_during_an_install_knows_it():
+    import ctypes
+    from updates.service import SETUP_MUTEX, installing_now
+    assert installing_now() is False
+    handle = ctypes.windll.kernel32.CreateMutexW(None, False, SETUP_MUTEX)   # what the installer holds
+    try:
+        assert installing_now() is True
+    finally:
+        ctypes.windll.kernel32.CloseHandle(handle)
+    assert installing_now() is False
+
+
+def test_start_up_steps_aside_during_an_install_and_never_falls_over_an_update():
+    src = (ROOT / "main.py").read_text(encoding="utf-8")
+    guard = src.index("if RELAUNCHED not in sys.argv and installing_now():")
+    at_start = src.index("update_outcome = upd.at_startup(")
+    assert guard < at_start < src.index("door = sign_in_gate.gate()")
+    assert "except Exception:  # noqa: BLE001 - an update must never stop HeyTora starting" in src
+    iss = (ROOT / "installer.iss").read_text(encoding="utf-8")
+    assert "SetupMutex=HeyToraSetup" in iss
+    assert 'Parameters: "--updated"; Flags: nowait skipifnotsilent; Check: ShouldRelaunch' in iss
 
 
 def test_an_installer_that_does_not_take_is_not_tried_forever(tmp_path):

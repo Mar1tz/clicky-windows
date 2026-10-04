@@ -46,6 +46,10 @@ VersionInfoProductName={#MyAppName}
 ; files in use.
 CloseApplications=yes
 RestartApplications=no
+; Held while this installer runs: a HeyTora started meanwhile sees it, says
+; it is updating and steps aside, rather than holding files this installer
+; has to replace (updates/service.installing_now). Found 4 Oct 2026.
+SetupMutex=HeyToraSetup
 #if FileExists("assets\icon.ico")
   SetupIconFile=assets\icon.ico
 #endif
@@ -108,7 +112,7 @@ Filename: "{app}\{#MyAppExeName}"; Description: "Launch {#MyAppName}"; Flags: no
 ; An update the app installed over itself (updates/service.py: /VERYSILENT
 ; /UPDATE=1) opens HeyTora again - unless it was installed as HeyTora was
 ; being quit (/RELAUNCH=0).
-Filename: "{app}\{#MyAppExeName}"; Flags: nowait skipifnotsilent; Check: ShouldRelaunch
+Filename: "{app}\{#MyAppExeName}"; Parameters: "--updated"; Flags: nowait skipifnotsilent; Check: ShouldRelaunch
 
 [Code]
 const
