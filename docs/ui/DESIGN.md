@@ -117,6 +117,45 @@ with two settings on it.
 | Settings | Opens a dialog with its own menu: General, Privacy, Models, Account, Advanced | Settings + Setup + Models |
 | Help | Support, a problem report, keys and diagnostics | new |
 
+## 3C. A page (after Wispr Flow's pages)
+
+Built from `ui/app_parts.py`. Home is the template; every page follows it.
+
+**The page map, revised.** Journal stops being a page: what you asked goes
+to Home, review and saved walkthroughs to **Learn**.
+
+| Page | Wispr | Hero (family · scene) | Under it |
+|---|---|---|---|
+| Home | Dictation | ask · Ask - "Ask about *anything* on your screen" | side card (questions, walkthroughs, day streak; plan or review); everything asked, by day |
+| Insights | Insights | show · Show me - "What you've *learned*" | streak grid, apps you ask about, walkthroughs, agent tasks, plan use; achievements later |
+| Agents | Notetaker | do · Do it - "Tora works while *you* don't" | "give her a first job" card, running, approvals, past tasks |
+| Learn | Dictionary / Snippets | teach · Teach me - "Keep what she *taught* you" | review, saved walkthroughs, recorded lessons, captured workflows |
+| Packs | Transforms | build · Build it - "Tora, *for your work*" | a grid of pack cards; "more packs coming" |
+| Tora | Style | ribbon - "Make her *yours*" | voice carousel, colour, teaching style, how she answers, instructions |
+
+Sidebar extra (later): a **Get started** checklist - first question, a
+walkthrough, her voice, a pack, an agent's first job - each ticked from
+real data, gone when all are.
+
+**Rules.**
+
+- **One level of container.** Nothing in a card is a card. Containers are
+  filled (`SURFACE` on the panel), never filled *and* outlined.
+- **A centred column**, at most `T.COLUMN_W` (1040px) wide. The title is in
+  it and scrolls with the page.
+- **A hero per page**: the page's gradient family from heytora.com drifting
+  slowly, a light veil on the words' side, the headline in Plus Jakarta
+  bold with one *italic* word in the family's deep colour, one line, one
+  paper pill button, and the website's tour scene for that capability
+  playing in a pane that rises out of the card's bottom edge (hidden when
+  the card is too narrow). Drawn content: light in both themes.
+- **Lists are one container** with hairline rows; the row under the
+  pointer tints and shows its actions (copy...); a click opens it.
+  Section labels ("TODAY") sit outside, above.
+- **Quiet when fine.** No "Connected" pill, no "Nothing running": a banner
+  only when she can't answer, a "Happening now" list only while something is.
+- **Empty states are written**: what will be here and the one thing to do.
+
 ## 3A. Where the values live
 
 Every colour, radius, shadow and button size is a name in **`ui/tokens.py`**;
@@ -433,10 +472,11 @@ Seen in Wispr Flow (2 Oct 2026), for stage 5. Not built yet.
 | 3 | Content colour: pack tiles on Extensions/Accounting/Agents, capability colours | |
 | 4A | Consolidation: every value into `ui/tokens.py`, one `ui/kit.py`, a test that keeps it (§3A) | Done |
 | A1 | App shell (§3B): own title bar, sidebar that opens and shuts, page map, no description lines, Home greeting, profile / notifications / free month / help cards | Done |
+| A1b | Page template (§3C): hero, side card, history list, centred column, no outlined cards; Home rebuilt | Done |
 | A2 | Settings as a dialog with its own menu (General, Privacy, Models, Account, Advanced); Setup and Models leave the sidebar | Next |
 | A3 | Notifications feed: agent tasks, approvals, progress, usage, achievements | |
-| A4 | Home: hero card, stats, recent activity by day | |
-| A5 | Each remaining page in turn: Tora, Packs, Agents, Journal | |
+| A4 | Insights, then Agents, Learn (Journal leaves the sidebar), Packs, Tora - each on the §3C template | |
+| A5 | Home extras: replay a walkthrough from history (needs a manager entry point), Get started checklist | |
 | 5 | Glass and the pill: §7A pill with snap targets, result card, pop sound, captions optional; tray popup to glass; panel, captions and buddy onto shared tokens; `agents/ui/orbs.py` (worker 1) | |
 
 Each stage: a mock-up screenshot first, then code, then this table updated.

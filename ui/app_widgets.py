@@ -411,10 +411,12 @@ class Select(QComboBox):
 # ── scrolling page body ───────────────────────────────────────────────────────
 
 class PageBody(QScrollArea):
-    """A scrollable column with the page gutter already applied.
+    """A scrollable, centred column with the page gutter already applied.
 
-    Every page is a stack of cards in a scroll area; doing it here means no
-    page has to remember the gutter, the spacing or to turn off the frame.
+    The column is never wider than T.COLUMN_W and sits in the middle of a
+    wide window, as Wispr Flow's pages do - a page stretched edge to edge
+    on a big screen reads as a spreadsheet. `top` holds what stays when a
+    live page rebuilds (its title); `column` is what clear() empties.
     """
 
     def __init__(self):
@@ -423,9 +425,23 @@ class PageBody(QScrollArea):
         self.setFrameShape(QFrame.Shape.NoFrame)
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         inner = QWidget()
-        self.column = QVBoxLayout(inner)
-        self.column.setContentsMargins(T.GUTTER, 4, T.GUTTER, T.GUTTER)
+        centre = QHBoxLayout(inner)
+        centre.setContentsMargins(T.GUTTER, 0, T.GUTTER, T.GUTTER)
+        centre.setSpacing(0)
+        holder = QWidget()
+        holder.setMaximumWidth(T.COLUMN_W)
+        centre.addWidget(holder, 1)
+        outer = QVBoxLayout(holder)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(T.GAP)
+        self.top = QVBoxLayout()
+        self.top.setContentsMargins(0, 0, 0, 0)
+        outer.addLayout(self.top)
+        self.column = QVBoxLayout()
+        self.column.setContentsMargins(0, 0, 0, 0)
         self.column.setSpacing(T.GAP)
+        outer.addLayout(self.column)
+        outer.addStretch(1)
         self.setWidget(inner)
 
     def add(self, widget: QWidget) -> QWidget:
@@ -436,8 +452,7 @@ class PageBody(QScrollArea):
         self.column.addLayout(layout)
 
     def finish(self) -> None:
-        """Push everything to the top."""
-        self.column.addStretch(1)
+        """Kept for callers: the column already sits at the top."""
 
     def clear(self) -> None:
         """Empty the column, for a page that rebuilds from live data."""

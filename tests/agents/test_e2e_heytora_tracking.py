@@ -240,11 +240,8 @@ def test_home_shows_the_plan_moving_with_use(qapp):
                 "usage": {"talk": 19, "agent": 3, "dictation": 2}, "today": {"talk": 4},
                 "period_end": "2026-11-01T00:00:00+00:00", "fair_use": 0.05}
     _page, texts = _home(qapp, {"summary": max_plan})
-    assert "Your Max plan" in texts and "starts again on 1 Nov" in texts
-    shown = [t.lower() for t in texts]                 # tiles print their captions in capitals
-    assert "19" in texts and "talk messages this month · 4 today" in shown
-    assert "997" in texts and "agent messages left" in shown
-    assert "5%" in texts and "overall use this month" in shown
+    assert "Your Max plan" in texts and "Starts again on 1 Nov" in texts
+    assert "5% of this month used" in texts
 
 
 def test_home_has_no_plan_card_on_an_own_key(qapp):

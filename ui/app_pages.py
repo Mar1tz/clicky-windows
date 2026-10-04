@@ -22,6 +22,8 @@ drawn again. The floating windows still open from the tray.
 
 from __future__ import annotations
 
+from typing import Optional
+
 import logging
 from datetime import date, datetime
 
@@ -33,7 +35,7 @@ from PyQt6.QtWidgets import (
 
 from ui import app_theme as T
 from ui.app_widgets import (
-    Card, Dot, Meter, Metric, PageBody, Pill, Row, Select, Switch, ToggleRow,
+    Card, Dot, Meter, PageBody, Pill, Row, Select, Switch, ToggleRow,
     button, columns, hrule, label, refill, section, spacer, title,
 )
 
@@ -77,18 +79,19 @@ class Page(QWidget):
         outer.setContentsMargins(0, 0, 0, 0)
         outer.setSpacing(0)
 
+        # The title is inside the scrolling column: it lines up with the
+        # content under it and scrolls away with it, as Wispr's do.
+        self.body = PageBody()
+        outer.addWidget(self.body, 1)
         head = QWidget()
         head_lay = QHBoxLayout(head)
-        head_lay.setContentsMargins(T.GUTTER, 30, T.GUTTER, 14)
+        head_lay.setContentsMargins(0, 34, 0, 10)
         head_lay.setSpacing(16)
         head_lay.addWidget(self.build_title(), 1)
         self.actions = QHBoxLayout()
         self.actions.setSpacing(8)
         head_lay.addLayout(self.actions)
-        outer.addWidget(head)
-
-        self.body = PageBody()
-        outer.addWidget(self.body, 1)
+        self.body.top.addWidget(head)
         self.build_actions()
         self.build()
         self.body.finish()
@@ -126,23 +129,23 @@ class Page(QWidget):
 # ── Home ──────────────────────────────────────────────────────────────────────
 
 class HomePage(Page):
+    """Wispr Flow's Dictation page, for Tora: a greeting with the shortcut,
+    a hero, the numbers that are true, then everything you asked - by day,
+    newest first, each with her answer (DESIGN.md §3C)."""
+
     HEADING = "Home"
     LIVE = True
-    TOPICS = frozenset({"state", "account", "agents", "guide", "switches"})
+    TOPICS = frozenset({"state", "account", "agents", "guide", "switches", "journal"})
+    HISTORY = 60          # entries on the page; the rest are in Learn
 
-    _STATE_WORDS = {"listening": "Listening…", "thinking": "Thinking…",
-                    "speaking": "Speaking…"}
+    def __init__(self, bridge=None):
+        self._open: set[int] = set()        # history rows showing their whole answer
+        super().__init__(bridge)
 
     def build_title(self) -> QWidget:
         """"Hey Dylan, just hold [Ctrl + Win] and ask" - the one thing to
         know, with the shortcut on a keycap (Wispr Flow's greeting)."""
-        name = ""
-        get = getattr(self.bridge, "user_name", None)
-        if get is not None:
-            try:
-                name = get() or ""
-            except Exception:  # noqa: BLE001
-                name = ""
+        name = _ask(self.bridge, "user_name", "")
         row = QWidget()
         lay = QHBoxLayout(row)
         lay.setContentsMargins(0, 0, 0, 0)
@@ -153,9 +156,6 @@ class HomePage(Page):
         lay.addStretch(1)
         return row
 
-    def build_actions(self) -> None:
-        self.action("Open panel").clicked.connect(self.bridge.show_panel)
-
     def showEvent(self, event) -> None:
         """On screen: the plan is read again (at most once a minute); every
         question asked meanwhile moves it without a read."""
@@ -164,119 +164,170 @@ class HomePage(Page):
         if refresh is not None:
             refresh()
 
-    _PLAN_KINDS = (("talk", "talk messages"), ("agent", "agent messages"), ("dictation", "dictations"))
+    def build(self) -> None:
+        from ui.app_parts import HeroCard, SideCard, section_head
+        from ui.tour_scenes import AskScene
+        br = self.bridge
 
-    def _plan_card(self):
-        """The HeyTora plan at a glance, moving with every question - or None
+        banner = self._banner()
+        if banner is not None:
+            self.body.add(banner)
+
+        top = QHBoxLayout()
+        top.setSpacing(T.GAP + 4)
+        top.addWidget(HeroCard(
+            "ask", 0, "Ask about *anything* on your screen",
+            "She sees what you see, answers out loud, and points at the thing you need.",
+            button=("Open the panel", br.show_panel), scene=AskScene), 1,
+            Qt.AlignmentFlag.AlignTop)
+        stats = _ask(br, "stats", {}) or {}
+        top.addWidget(SideCard([
+            (str(stats.get("questions", 0)), "questions asked"),
+            (str(stats.get("walkthroughs", 0)), "walkthroughs"),
+            (str(stats.get("streak", 0)), "day streak"),
+        ], self._side_foot()), 0, Qt.AlignmentFlag.AlignTop)
+        self.body.add_layout(top)
+
+        now = self._now()
+        if now is not None:
+            self.body.add(section_head("Happening now"))
+            self.body.add(now)
+        self._history()
+
+    # ── pieces ───────────────────────────────────────────────────────────────
+
+    def _banner(self) -> Optional[QWidget]:
+        """Only when she cannot answer: everything fine says nothing."""
+        br = self.bridge
+        problem = br.problem()
+        if problem == "billing":
+            words = "Out of Gemini credit. Tora can't answer until it's topped up."
+        elif problem == "key":
+            words = "API key refused. Add a working key in Help > Keys and diagnostics."
+        elif getattr(br, "manager", None) is not None and not br.live():
+            words = "Not connected. Tora can't hear you right now - she keeps trying."
+        else:
+            return None
+        box = QFrame()
+        box.setObjectName("banner")
+        lay = QHBoxLayout(box)
+        lay.setContentsMargins(16, 12, 16, 12)
+        lay.setSpacing(10)
+        lay.addWidget(Dot(T.WARN, 8), 0, Qt.AlignmentFlag.AlignVCenter)
+        lay.addWidget(label(words, "bannerText", wrap=True), 1)
+        return box
+
+    def _side_foot(self) -> QWidget:
+        """Under the numbers: this month's plan, or what is due for review."""
+        foot = QWidget()
+        lay = QVBoxLayout(foot)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(6)
+        plan = self._plan()
+        if plan is not None:
+            name, used, resets = plan
+            lay.addWidget(label(f"Your {name} plan", "footTitle"))
+            lay.addWidget(label(f"{round(used * 100)}% of this month used", "faint"))
+            lay.addSpacing(2)
+            lay.addWidget(Meter(used, T.WARN if used >= 0.8 else T.ACCENT))
+            lay.addSpacing(2)
+            lay.addWidget(label(f"Starts again on {resets}", "faint"))
+            return foot
+        due = _ask(self.bridge, "due_count", 0) or 0
+        lay.addWidget(label("Due for review", "footTitle"))
+        lay.addWidget(label(f"{due} thing{'s' if due != 1 else ''} she taught you"
+                            if due else "Nothing due. What you ask comes back tomorrow.",
+                            "faint", wrap=True))
+        if due:
+            go = button("Review now", "link")
+            go.clicked.connect(lambda: self.navigate.emit("journal"))
+            lay.addWidget(go, 0, Qt.AlignmentFlag.AlignLeft)
+        return foot
+
+    def _plan(self):
+        """(plan name, share of the month used, when it resets) - or None
         (own key, no accounts, signed out, not read yet)."""
         try:
             st = self.bridge.account_state()
-        except Exception:  # noqa: BLE001 - a bridge without accounts: no plan card
+        except Exception:  # noqa: BLE001 - a bridge without accounts: no plan
             return None
         summary = st.get("summary")
         if not (st.get("configured") and st.get("signed_in") and summary and st.get("mode") == "account"):
             return None
         from account.service import resets_on
-        limits, usage = summary.get("limits") or {}, summary.get("usage") or {}
-        today, blocked = summary.get("today") or {}, summary.get("blocked") or {}
-        tiles = []
-        for kind, unit in self._PLAN_KINDS:
-            if kind not in limits:
-                continue
-            used, limit = int(usage.get(kind) or 0), limits[kind]
-            if limit is None:
-                caption = f"{unit} this month"
-                if today.get(kind):
-                    caption += f" · {today[kind]} today"
-                tiles.append(Metric(str(used), caption))
-            else:
-                left = max(0, int(limit) - used)
-                tiles.append(Metric(str(left), f"{unit} left",
-                                    T.WARN if left <= 0.2 * int(limit) or blocked.get(kind) else T.TEXT))
         fair = summary.get("fair_use")
-        if isinstance(fair, (int, float)):
-            tiles.append(Metric(f"{round(fair * 100)}%", "overall use this month",
-                                T.WARN if fair >= 0.8 else T.TEXT))
-        plan = summary.get("plan_name") or (summary.get("plan") or "").capitalize() or "HeyTora"
-        note = ("This month's use is up - " if blocked.get("all") == "budget" else "") + \
-            f"starts again on {resets_on(summary)}"
-        card = Card(f"Your {plan} plan", note)
-        card.body.addLayout(columns(*tiles))
-        return card
+        used = float(fair) if isinstance(fair, (int, float)) else 0.0
+        if (summary.get("blocked") or {}).get("all") == "budget":
+            used = 1.0
+        name = summary.get("plan_name") or (summary.get("plan") or "").capitalize() or "HeyTora"
+        return name, max(0.0, min(1.0, used)), resets_on(summary)
 
-    def build(self) -> None:
+    def _now(self) -> Optional[QWidget]:
+        """What is running - a walkthrough, agents - or None when nothing is."""
+        from ui.app_parts import ListBox
         br = self.bridge
-        state, problem = br.state(), br.problem()
-        ambient = br.listening() == "ambient"
-
-        hero = Card()
-        row = QHBoxLayout()
-        row.setSpacing(16)
-        busy = state in self._STATE_WORDS
-        row.addWidget(Dot(T.STATE_COLOUR.get(state, T.OK) if busy else
-                          (T.OK if ambient else T.TEXT_DIM), 12, glow=busy or ambient),
-                      0, Qt.AlignmentFlag.AlignVCenter)
-        text = QVBoxLayout()
-        text.setSpacing(3)
-        headline = self._STATE_WORDS.get(state) or (
-            "Listening for “Tora”" if ambient else f"Hold {br.hotkey() or 'the hotkey'} and talk")
-        text.addWidget(label(headline, "cardTitle"))
-        facts = [br.mic_name() or "no microphone found",
-                 "wake word on" if ambient else "wake word off"]
-        text.addWidget(label(" · ".join(facts), "faint"))
-        row.addLayout(text, 1)
-        if problem == "billing":
-            row.addWidget(Pill("Out of Gemini credit", T.DANGER, dot=True))
-        elif problem == "key":
-            row.addWidget(Pill("API key refused", T.DANGER, dot=True))
-        elif br.live():
-            row.addWidget(Pill("Connected", T.OK, dot=True))
-        else:
-            row.addWidget(Pill("Not connected", T.WARN, dot=True))
-        hero.body.addLayout(row)
-        self.body.add(hero)
-
-        plan = self._plan_card()
-        if plan is not None:
-            self.body.add(plan)
-
-        agents, today, walk = br.agents(), br.today(), br.walkthrough()
-        self.body.add_layout(columns(
-            Metric(str(len(agents)), "agents working", T.ACCENT if agents else T.TEXT),
-            Metric(str(today["walkthroughs"]), "walkthroughs today"),
-            Metric(str(today["questions"]), "questions today"),
-            Metric(str(today["due"]), "due for review", T.WARN if today["due"] else T.TEXT),
-        ))
-
-        work = Card("Happening now", "Walkthroughs and agents, while they work.")
-        first = True
+        walk, agents = br.walkthrough(), br.agents()
+        if walk is None and not agents:
+            return None
+        box = ListBox()
         if walk is not None:
             where = (f"Step {walk['step']} of {walk['total']}" if walk["total"]
                      else f"Step {walk['step']}")
             if walk["instruction"]:
                 where += f" · {walk['instruction']}"
-            work.add(Row(f"Walkthrough · {walk['goal'] or 'guided steps'}", where,
-                         dot=T.ACCENT, trailing=Pill("Running", T.ACCENT), first=first))
-            first = False
+            box.add(_padded(Row(f"Walkthrough · {walk['goal'] or 'guided steps'}", where,
+                                dot=T.ACCENT, trailing=Pill("Running", T.ACCENT), first=True)))
         for a in agents:
             doing = a["doing"] or (f"Step {a['step']} of {a['total']}" if a["total"] else "Working")
-            work.add(Row(a["title"], doing, dot=T.ACCENT,
-                         trailing=Pill(f"{round(a['progress'] * 100)}%", T.ACCENT), first=first))
-            first = False
-        if first:
-            work.add(Row("Nothing running right now",
-                         "Ask “show me how to…” for a walkthrough, or give her a job to do.",
-                         first=True))
-        self.body.add(work)
+            box.add(_padded(Row(a["title"], doing, dot=T.ACCENT, first=True,
+                                trailing=Pill(f"{round(a['progress'] * 100)}%", T.ACCENT))))
+        return box
 
-        start = Card("Try asking", "Out loud — no clicking required.")
-        for line in ("“Where do I change my display scaling?”",
-                     "“Open Spotify and play my focus playlist.”",
-                     "“Show me how to share my screen in Google Meet.”",
-                     "“Build me a landing page for my coffee shop.”",
-                     "“Reconcile the September bank statement.”"):
-            start.add(Row(line, first=(line.startswith("“Where"))))
-        self.body.add(start)
+    def _history(self) -> None:
+        """Everything asked, by day, newest first."""
+        from ui.app_parts import ListBox, day_name, empty, history_row, section_head
+        entries = _ask(self.bridge, "recent", [], self.HISTORY) or []
+        if not entries:
+            self.body.add(section_head("Today"))
+            self.body.add(empty("Nothing asked yet",
+                                f"Hold {self.bridge.hotkey() or 'Ctrl + Win'} and ask about anything "
+                                "on your screen. Every question and her answer land here.",
+                                "journal"))
+            return
+        box, day = None, ""
+        for e in entries:
+            name = day_name(e["created_at"])
+            if name != day:
+                day, box = name, ListBox()
+                self.body.add(section_head(name))
+                self.body.add(box)
+            entry_id = int(e["id"])
+            box.add(history_row(e, entry_id in self._open,
+                                lambda i=entry_id: self._flip(i)))
+
+    def _flip(self, entry_id: int) -> None:
+        self._open ^= {entry_id}
+        QTimer.singleShot(0, self.refresh)
+
+
+def _ask(bridge, name: str, default, *args):
+    """A bridge reading that a plain or older bridge may not have."""
+    fn = getattr(bridge, name, None)
+    if fn is None:
+        return default
+    try:
+        return fn(*args)
+    except Exception:  # noqa: BLE001 - a page shows what it can
+        return default
+
+
+def _padded(row: QWidget) -> QWidget:
+    """A Row inside a ListBox: the row has no side padding of its own."""
+    box = QWidget()
+    lay = QVBoxLayout(box)
+    lay.setContentsMargins(18, 2, 18, 2)
+    lay.addWidget(row)
+    return box
 
 
 # ── shared by the pages below ─────────────────────────────────────────────────
@@ -951,7 +1002,7 @@ class VoicePage(Page):
 class ToraPage(TutorPage, VoicePage):
     """Make her yours: how she teaches and how she sounds, on one page.
     (Step 1 of the shell puts the two pages' cards together; the page gets
-    its own design in step A5 - DESIGN.md §9.)"""
+    its own design in step A4 - DESIGN.md §9.)"""
     HEADING = "Tora"
 
     def build(self) -> None:

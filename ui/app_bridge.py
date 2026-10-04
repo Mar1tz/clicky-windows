@@ -553,6 +553,30 @@ class AppBridge(QObject):
         """The latest questions and walkthroughs, newest first."""
         return self._read_journal("recent", [], limit)
 
+    def stats(self) -> dict:
+        """Home's numbers, all counted from the journal: questions asked,
+        walkthroughs, and the day streak - consecutive days with at least
+        one question, up to today (or yesterday, if today has none yet)."""
+        journal = self._journal()
+        none = {"questions": 0, "walkthroughs": 0, "streak": 0}
+        if journal is None:
+            return none
+        try:
+            entries = journal.entries_all()
+        except Exception:  # noqa: BLE001
+            return none
+        from datetime import date, timedelta
+        walks = sum(1 for e in entries if journal.WALKTHROUGH_TAG in (e.get("tags") or ""))
+        days = {date.fromtimestamp(e["created_at"]) for e in entries}
+        day = date.today()
+        if day not in days:
+            day -= timedelta(days=1)
+        streak = 0
+        while day in days:
+            streak += 1
+            day -= timedelta(days=1)
+        return {"questions": len(entries) - walks, "walkthroughs": walks, "streak": streak}
+
     def review(self, entry_id: int, knew: bool) -> None:
         """Grade one review: knew it - it comes back later; not yet - tomorrow."""
         journal = self._journal()

@@ -152,10 +152,13 @@ def test_home_shows_no_placeholder_anywhere(qapp):
         assert fake not in texts, fake
 
 
-def test_home_says_nothing_is_running_when_nothing_is(qapp):
-    texts = _texts(_home(qapp, FakeManager()))
-    assert "Nothing running right now" in texts
-    assert "Connected" in texts
+def test_home_says_nothing_about_running_work_when_nothing_is(qapp):
+    """Happening now appears only while something is (DESIGN.md §3C)."""
+    mgr = FakeManager()
+    mgr._realtime = SimpleNamespace(ready=True)
+    texts = _texts(_home(qapp, mgr))
+    assert "HAPPENING NOW" not in texts
+    assert not any(t.startswith("Not connected") for t in texts), "all fine: no banner"
 
 
 def test_home_shows_the_walkthrough_and_the_agents(qapp):
@@ -170,17 +173,20 @@ def test_home_shows_the_walkthrough_and_the_agents(qapp):
     assert "Walkthrough · export the video" in texts
     assert "Step 1 of 2 · Click Export." in texts
     assert "Florist website" in texts and "70%" in texts
-    assert "Nothing running right now" not in texts
+    assert "HAPPENING NOW" in texts
 
 
-@pytest.mark.parametrize("problem, live, pill", [
+@pytest.mark.parametrize("problem, live, banner", [
     ("billing", True, "Out of Gemini credit"), ("key", True, "API key refused"),
-    ("", False, "Not connected"), ("", True, "Connected")])
-def test_home_says_whether_she_can_answer(qapp, problem, live, pill):
+    ("", False, "Not connected"), ("", True, None)])
+def test_home_says_when_she_cannot_answer(qapp, problem, live, banner):
+    """A banner when she can't answer; nothing when she can."""
     mgr = FakeManager()
     mgr._problem_kind = problem
     mgr._realtime = SimpleNamespace(ready=live)
-    assert pill in _texts(_home(qapp, mgr))
+    shown = [t for t in _texts(_home(qapp, mgr))
+             if t.startswith(("Out of Gemini credit", "API key refused", "Not connected"))]
+    assert [t.split(".")[0] for t in shown] == ([banner] if banner else [])
 
 
 # ── the window refreshes what it shows ───────────────────────────────────────
@@ -192,7 +198,7 @@ def test_a_change_redraws_the_page_on_screen(qapp):
     w = ToraApp(AppBridge(mgr))
     w.show()
     try:
-        assert "Nothing running right now" in _texts(w._pages["home"])
+        assert "Florist website" not in _texts(w._pages["home"])
         mgr.agents = SimpleNamespace(list_agents=lambda active_only=False: [
             _agent("Florist website", "Writing index.html")])
         mgr.sig_agent_event.emit(object())
