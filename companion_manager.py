@@ -333,6 +333,7 @@ class CompanionManager(QObject):
     sig_open_extension = pyqtSignal(str, str)   # (extension id, "" | "dashboard" | "wizard:<template>")
     sig_agents_ready        = pyqtSignal()                # workforce built (or failed); wire the UI now
     sig_account_problem     = pyqtSignal(str, str)        # (kind, plain words); ("", "") = over
+    sig_hands_free          = pyqtSignal(bool)            # listening with no key held: the flow bar's ✕ ✓
 
     def __init__(self):
         super().__init__()
@@ -2915,6 +2916,7 @@ class CompanionManager(QObject):
         if held < cfg.tap_max_seconds:
             # A tap, not a hold: keep listening and let the user finish
             # speaking. The watchdog ends the capture on silence.
+            self.sig_hands_free.emit(True)
             return
         if self._claim_end():
             self._submit(self._end_capture_and_process())
@@ -2924,7 +2926,51 @@ class CompanionManager(QObject):
         if not self._claim_begin():
             return
         self._begin_capture()
+        self.sig_hands_free.emit(True)
         self._submit(self._auto_stop_on_silence())
+
+    # ── The flow bar's buttons (ui/flow_bar.py) ──────────────────────────────
+    # Any thread may call these; they go the same ways the hotkey does.
+
+    def start_hands_free(self) -> None:
+        """A click on the resting flow bar: listen, as a tap of the hotkey
+        does - the user's silence (or ✓) ends it."""
+        if not self._claim_begin():
+            return
+        self._begin_capture()
+        self.sig_hands_free.emit(True)
+        self._submit(self._auto_stop_on_silence())
+
+    def finish_listening(self) -> None:
+        """✓: that's the question - as if the hotkey came up."""
+        if self._state == AppState.LISTENING and self._claim_end():
+            self._submit(self._end_capture_and_process())
+
+    def cancel_listening(self) -> None:
+        """✕: never mind. Nothing is asked, and nothing of it is kept."""
+        if self._state != AppState.LISTENING or not self._claim_end():
+            return
+        streamed, self._rt_streaming = self._rt_streaming, False
+        try:
+            self._listener.stop_recording()
+        except Exception:  # noqa: BLE001 - the mic may already be closed
+            _log.debug("mic stop on cancel failed", exc_info=True)
+        self._heard_buf = []
+        self._emit_state(AppState.IDLE)
+        _log.info("listening cancelled")
+        if streamed and self._realtime is not None:
+            # The live session has heard the start of it, and would join it
+            # onto the next question: a fresh session instead.
+            self._submit(self._restart_realtime())
+
+    async def _restart_realtime(self) -> None:
+        conv = self._realtime
+        if conv is not None:
+            try:
+                await conv.close()
+            except Exception:  # noqa: BLE001
+                _log.debug("closing the live session failed", exc_info=True)
+        await self._realtime_connect()      # a plan that opens it on the question: not now
 
     def _claim_begin(self) -> bool:
         """Exactly one of {hotkey press, wake word} may open a capture.

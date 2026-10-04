@@ -223,4 +223,6 @@ def test_the_manager_hands_the_clock_over_and_none_without_a_voice():
 def test_main_connects_the_clock():
     from pathlib import Path
     src = (Path(__file__).resolve().parents[2] / "main.py").read_text(encoding="utf-8")
-    assert "overlay.set_voice_clock(manager.voice_clock)" in src
+    # Her words are shown in the flow bar's card now (4 Oct 2026), kept in
+    # time with her voice the same way; the top island is kept for later.
+    assert "flow.set_voice_clock(manager.voice_clock)" in src

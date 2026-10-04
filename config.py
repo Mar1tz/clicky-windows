@@ -590,6 +590,15 @@ class Config:
 
     # ── Appearance ───────────────────────────────────────────────────────
 
+    def flow_dock(self) -> str:
+        """Where the flow bar sits (ui/flow_bar.py): "edge|place|monitor"."""
+        return os.environ.get("TORA_FLOW_DOCK", "").strip()
+
+    def set_flow_dock(self, dock: str) -> None:
+        """Dragged to another side: there, for every launch after this one."""
+        os.environ["TORA_FLOW_DOCK"] = dock
+        self._write_env("TORA_FLOW_DOCK", dock)
+
     def cursor_colour(self) -> str:
         """The colour key Tora's cursor wears (ui/tokens.CURSOR_COLOURS)."""
         return os.environ.get("TORA_CURSOR_COLOUR", "").strip().lower() or "blue"

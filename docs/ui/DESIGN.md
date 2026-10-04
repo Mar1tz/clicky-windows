@@ -437,7 +437,17 @@ point does.
 
 ## 7A. The floating pill (after Wispr Flow)
 
-Seen in Wispr Flow (2 Oct 2026), for stage 5. Not built yet.
+Seen in Wispr Flow (2 Oct 2026), for stage 5. **Built 4 Oct 2026 as the
+flow bar** (`ui/flow_bar.py`, wired in `main.py`), shown live first and
+approved: resting pill; bars while listening (✕ and ✓ when hands-free: a
+tap of the shortcut, the wake word, or a click on the pill); faint dots and
+a turning circle while thinking; her voice in the bars and the answer card
+(fixed size, its text rolling in time with her voice, ✕, Copy) while she
+speaks. Dragged, it snaps to the nearest side of any monitor, anywhere
+along it - upright on the left and right, the card opening towards the
+middle - and stays there (`TORA_FLOW_DOCK`). Her words go to the card; the
+top island (`ui/caption.py`) is kept, unused for now. Not built: the ghost
+snap targets and the pop sound below.
 
 - **Small at rest.** A black pill, about 46 × 16 px, with a row of dots,
   at the bottom centre of the screen. It grows into the waveform while

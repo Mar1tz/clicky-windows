@@ -47,6 +47,7 @@ from ui.panel import CompanionPanel, AppState
 from ui.overlay import (
     CursorOverlay, MODE_IDLE, MODE_LISTENING, MODE_THINKING, MODE_SPEAKING
 )
+from ui.flow_bar import FlowBar
 from hotkey import GlobalHotkeyMonitor, StopHotkey
 from companion_manager import CompanionManager
 from ui import sign_in_gate
@@ -258,9 +259,16 @@ def main():
     panel   = CompanionPanel()
     overlay = CursorOverlay()
     tray    = TrayManager()
+    # Where Tora lives at the edge of the screen, after Wispr Flow: what she
+    # is doing (listening, thinking, speaking) and the card with what she
+    # says. Dragged to any side, it stays there. The top island stays too -
+    # it is kept for something else; her words no longer go there.
+    flow    = FlowBar(dock=cfg.flow_dock(),
+                      hotkey=" + ".join(k.strip().capitalize() for k in cfg.hotkey.split("+")))
 
     def _shutdown():
         """Close HeyTora: the tray, the companion, the app."""
+        flow.close()
         tray.hide_icon()
         manager.shutdown()
         app.quit()
@@ -279,25 +287,34 @@ def main():
         panel.set_state(state)
         tray.set_state_icon(state.name.lower())
         overlay.set_mode(STATE_TO_CURSOR_MODE.get(state, MODE_IDLE))
-        # Already on the main thread here; hand the caption the NAME so
-        # overlay.py never has to import AppState.
-        overlay.caption_state(state.name)
+        # Already on the main thread here; hand the flow bar the NAME so
+        # ui/flow_bar.py never has to import AppState.
+        flow.set_state(state.name)
 
     manager.sig_state_changed.connect(_on_state)
 
-    # Response streaming -> panel scrollback AND the top caption island.
+    # Response streaming -> panel scrollback AND the flow bar's answer card.
     # Qt delivers to both slots in connection order; the panel keeps the
-    # full text, the caption is the glanceable live line.
+    # full text, the card shows it as she says it.
     manager.sig_response_chunk.connect(panel.append_response_chunk)
-    manager.sig_response_chunk.connect(overlay.caption_chunk)
-    manager.sig_response_done.connect(overlay.caption_done)
-    # The words arrive seconds ahead of the voice; the caption paces them by
+    manager.sig_response_chunk.connect(flow.push_answer)
+    manager.sig_response_done.connect(flow.finish_answer)
+    # The words arrive seconds ahead of the voice; the card paces them by
     # how far the voice has actually got.
-    overlay.set_voice_clock(manager.voice_clock)
+    flow.set_voice_clock(manager.voice_clock)
 
-    # Audio level → cursor waveform (+ panel meter)
+    # Audio level → cursor waveform, the flow bar's bars (+ panel meter)
     manager.sig_audio_level.connect(panel.set_audio_level)
     manager.sig_audio_level.connect(overlay.set_audio_level)
+    manager.sig_audio_level.connect(flow.set_level)
+
+    # The flow bar's own controls: ✕ and ✓ while listening hands-free, a
+    # click on the resting pill to talk, and the side it was dragged to.
+    manager.sig_hands_free.connect(flow.set_hands_free)
+    flow.cancel_requested.connect(manager.cancel_listening)
+    flow.done_requested.connect(manager.finish_listening)
+    flow.talk_requested.connect(manager.start_hands_free)
+    flow.dock_changed.connect(cfg.set_flow_dock)
 
     # Pointing directives
     manager.sig_point_at.connect(overlay.point_at)
@@ -695,6 +712,7 @@ def main():
 
     # ── Show UI + start listener ──────────────────────────────────────────────
     overlay.show()        # persistent overlay (cursor follow)
+    flow.show()           # Tora at the edge of the screen
     # Panel is hidden by default — user can open it from the tray menu if needed
     # The workforce builds on a worker thread (~650 ms) so the tray icon
     # is not held up; wire its UI when it says it is ready.
