@@ -297,8 +297,17 @@ def main():
 
     # ── Wire signals ──────────────────────────────────────────────────────────
 
-    # State changes → Panel + Tray + Cursor
+    # State changes → Panel + Tray + Cursor (+ the listening pop)
+    from ui import sounds
+    sounds.preload(cfg.listen_sound())
+    last_state = {"s": None}
+
     def _on_state(state: AppState):
+        # The pop as she starts listening - once per press, not on every
+        # repeat of the same state.
+        if state == AppState.LISTENING and last_state["s"] != AppState.LISTENING:
+            sounds.play(cfg.listen_sound())
+        last_state["s"] = state
         panel.set_state(state)
         tray.set_state_icon(state.name.lower())
         overlay.set_mode(STATE_TO_CURSOR_MODE.get(state, MODE_IDLE))

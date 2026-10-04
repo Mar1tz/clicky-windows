@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from typing import Optional
 
-from PyQt6.QtCore import QRectF, QSize, Qt, pyqtSignal
+from PyQt6.QtCore import QEvent, QPoint, QRectF, QSize, Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import QColor, QPainter, QPainterPath, QPen
 from PyQt6.QtWidgets import (
     QComboBox, QFrame, QGraphicsDropShadowEffect, QHBoxLayout, QLabel,
@@ -417,7 +417,14 @@ class PageBody(QScrollArea):
     wide window, as Wispr Flow's pages do - a page stretched edge to edge
     on a big screen reads as a spreadsheet. `top` holds what stays when a
     live page rebuilds (its title); `column` is what clear() empties.
+
+    A page can put a card in a second column on the right (set_aside). It
+    is sticky, as Wispr Flow's usage card is: it starts level with the
+    column's first card and, once that scrolls away, stays STICKY px from
+    the top while the rest scrolls under its side.
     """
+
+    STICKY = 20
 
     def __init__(self):
         super().__init__()
@@ -437,12 +444,63 @@ class PageBody(QScrollArea):
         self.top = QVBoxLayout()
         self.top.setContentsMargins(0, 0, 0, 0)
         outer.addLayout(self.top)
+        row = QHBoxLayout()
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(T.GAP + 4)
         self.column = QVBoxLayout()
         self.column.setContentsMargins(0, 0, 0, 0)
         self.column.setSpacing(T.GAP)
-        outer.addLayout(self.column)
+        row.addLayout(self.column, 1)
+        # Holds the aside's place in the layout; the aside itself lives on
+        # the viewport so it does not scroll with the content.
+        self._slot = QWidget()
+        self._slot.setFixedWidth(0)
+        self._slot.hide()
+        row.addWidget(self._slot, 0, Qt.AlignmentFlag.AlignTop)
+        outer.addLayout(row)
         outer.addStretch(1)
         self.setWidget(inner)
+        self._aside: Optional[QWidget] = None
+        self.verticalScrollBar().valueChanged.connect(self.place_aside)
+        # Re-placed after layout settles - by a timer the page owns, so a
+        # page closed meanwhile takes it with it (a bare singleShot to a
+        # deleted page is an access violation).
+        self._settle = QTimer(self)
+        self._settle.setSingleShot(True)
+        self._settle.setInterval(0)
+        self._settle.timeout.connect(self.place_aside)
+        inner.installEventFilter(self)
+
+    def set_aside(self, widget: QWidget, width: int) -> None:
+        """Put `widget` in the sticky right-hand column, replacing the last."""
+        if self._aside is not None:
+            self._aside.setParent(None)
+            self._aside.deleteLater()
+        self._slot.setFixedWidth(width)
+        self._slot.show()
+        widget.setParent(self.viewport())
+        widget.setFixedWidth(width)
+        widget.show()
+        widget.raise_()
+        self._aside = widget
+        self.place_aside()
+
+    def place_aside(self, *_args) -> None:
+        aside = self._aside
+        if aside is None:
+            return
+        at = self._slot.mapTo(self.viewport(), QPoint(0, 0))
+        aside.adjustSize()
+        aside.move(at.x(), max(at.y(), self.STICKY))
+
+    def eventFilter(self, obj, event) -> bool:
+        if event.type() in (QEvent.Type.Resize, QEvent.Type.LayoutRequest):
+            self._settle.start()
+        return False
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        self._settle.start()
 
     def add(self, widget: QWidget) -> QWidget:
         self.column.addWidget(widget)

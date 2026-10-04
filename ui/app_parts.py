@@ -1,210 +1,31 @@
-"""The pieces a premium page is built from (DESIGN.md §3C).
+"""The pieces a page is built from (DESIGN.md §3C).
 
 Every page in the app had the same shape - a stack of outlined cards with
 outlined rows and outlined tiles inside them - so nothing on a page stood
 out and everything looked like a settings screen. These are what replace
 it, after Wispr Flow's pages:
 
-* HeroCard  - the page's one picture: its gradient family from heytora.com,
-              a headline with one italic word, a line, a button, and the
-              website's tour scene for that capability playing on the right.
-* SideCard  - big numbers that are true, and one thing under them.
-* HistoryList - one container, hairline rows, the row under the pointer
-              tinted, its actions only while it is.
-* empty()   - a written empty state.
+* SideCard    - big numbers that are true, and one thing under them.
+* ListBox / HoverRow - one container, hairline rows, the row under the
+                pointer tinted, its actions only while it is.
+* empty()     - a written empty state.
 
 One level of container per page: nothing here goes inside a card.
 """
 
 from __future__ import annotations
 
-import math
 import time
 from typing import Callable, Optional
 
-from PyQt6.QtCore import QPointF, QRectF, Qt, QTimer, pyqtSignal
-from PyQt6.QtGui import (
-    QBrush, QColor, QLinearGradient, QPainter, QPainterPath, QRadialGradient,
-    QTextDocument,
-)
+from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtGui import QColor, QPainter
 from PyQt6.QtWidgets import (
-    QApplication, QFrame, QHBoxLayout, QLabel, QPushButton, QSizePolicy,
-    QVBoxLayout, QWidget,
+    QApplication, QFrame, QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget,
 )
 
 from ui import app_theme as T
-from ui import kit, tokens
 from ui.app_widgets import icon, label
-
-
-# ── hero ──────────────────────────────────────────────────────────────────────
-
-class HeroCard(QWidget):
-    """The picture at the top of a page.
-
-    `family` is a key of tokens.CAPABILITY (the mesh), `look` an index into
-    tokens.SCENE_LOOKS (the scene's pane and the italic word's colour),
-    `headline` marks its one italic word with *stars*."""
-
-    H = 236
-    SCENE_SCALE = 0.56
-
-    def __init__(self, family: str, look: int, headline: str, sub: str = "", *,
-                 button: Optional[tuple[str, Callable]] = None, scene=None):
-        super().__init__()
-        self.setFixedHeight(self.H)
-        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-        self._wash, self._blobs = tokens.CAPABILITY[family]
-        self._look = tokens.SCENE_LOOKS[look]
-        self._headline, self._sub = headline, sub
-        self._scene = scene(self._look) if scene is not None else None
-        self._t0 = time.monotonic()
-        self._timer = QTimer(self)
-        self._timer.setInterval(33)
-        self._timer.timeout.connect(self._tick)
-        self.button: Optional[QPushButton] = None
-        if button is not None:
-            self.button = QPushButton(button[0], self)
-            self.button.setObjectName("heroButton")
-            self.button.setCursor(Qt.CursorShape.PointingHandCursor)
-            self.button.setFixedHeight(tokens.BUTTON_H["md"] + 2)
-            self.button.clicked.connect(button[1])
-            kit.drop_shadow(self.button, "card")
-
-    # the clock: the scene plays, ends, and plays again; the mesh drifts
-    def showEvent(self, e) -> None:
-        if self._scene is not None:
-            self._scene.reset()
-        self._timer.start()
-        super().showEvent(e)
-
-    def hideEvent(self, e) -> None:
-        self._timer.stop()
-        super().hideEvent(e)
-
-    def _tick(self) -> None:
-        if self._scene is not None:
-            self._scene.advance()
-            if self._scene.done:
-                self._scene.reset()
-        self.update()
-
-    def resizeEvent(self, e) -> None:
-        super().resizeEvent(e)
-        self._place_button()
-
-    def _place_button(self) -> None:
-        """Under the words, wherever they end - never over them."""
-        if self.button is None:
-            return
-        self.button.adjustSize()
-        _head, _sub, bottom = self._words()
-        floor = self.height() - self.PAD + 6 - self.button.height()
-        self.button.move(self.PAD, int(min(floor, bottom + 18)))
-
-    PAD = 34
-
-    def _words(self) -> tuple[QTextDocument, Optional[QTextDocument], float]:
-        """The headline and the line under it, laid out for the space left
-        of the scene; and where they end."""
-        pane = self._pane()
-        right = (pane.left() - 28) if pane is not None else self.width() - self.PAD
-        width = max(200.0, right - self.PAD)
-        head = QTextDocument()
-        head.setDefaultFont(kit.font(28, 700, -0.5))
-        head.setDocumentMargin(0)
-        head.setTextWidth(width)
-        head.setHtml(f'<div style="color:{tokens.PAPER.ink}; line-height:112%">'
-                     f'{_italic(self._headline, self._look[2])}</div>')
-        bottom = self.TOP + head.size().height()
-        sub = None
-        if self._sub:
-            sub = QTextDocument()
-            sub.setDefaultFont(kit.font(14, 500))
-            sub.setDocumentMargin(0)
-            sub.setTextWidth(width)
-            sub.setHtml(f'<div style="color:{tokens.PAPER.dim}">{_escape(self._sub)}</div>')
-            bottom += 10 + sub.size().height()
-        return head, sub, bottom
-
-    TOP = 30
-
-    def _pane(self) -> Optional[QRectF]:
-        """Where the scene sits - right, rising out of the bottom edge - or
-        None when the card is too narrow to give it room."""
-        if self._scene is None or self.width() < 620:
-            return None
-        from ui.tour_scenes import H, W
-        s = self.SCENE_SCALE
-        return QRectF(self.width() - W * s - 30, 30, W * s, H * s)
-
-    def paintEvent(self, _e) -> None:
-        p = QPainter(self)
-        p.setRenderHint(QPainter.RenderHint.Antialiasing)
-        p.setRenderHint(QPainter.RenderHint.TextAntialiasing)
-        w, h = float(self.width()), float(self.height())
-        clip = QPainterPath()
-        clip.addRoundedRect(QRectF(0, 0, w, h), tokens.RADIUS_XL, tokens.RADIUS_XL)
-        p.setClipPath(clip)
-
-        # the mesh: the site's wash and blobs, drifting slowly
-        t = time.monotonic() - self._t0
-        p.fillRect(self.rect(), QColor(self._wash))
-        spots = ((0.12, 0.10, 0.70), (0.92, 0.18, 0.62), (0.78, 1.05, 0.75),
-                 (0.30, 1.00, 0.60), (0.60, 0.45, 0.50))
-        for i, ((fx, fy, fr), colour) in enumerate(zip(spots, self._blobs)):
-            fx += 0.05 * math.sin(t * 0.21 + i * 1.7)
-            fy += 0.08 * math.cos(t * 0.17 + i * 2.3)
-            r = max(w, h) * fr
-            g = QRadialGradient(QPointF(w * fx, h * fy), r)
-            c = QColor(colour)
-            c.setAlpha(200)
-            g.setColorAt(0.0, c)
-            c.setAlpha(0)
-            g.setColorAt(1.0, c)
-            p.fillRect(self.rect(), QBrush(g))
-        # a light veil on the words' side, so the type reads on any blob
-        veil = QLinearGradient(0, 0, w * 0.62, 0)
-        veil.setColorAt(0.0, kit.with_alpha(tokens.PAPER.card, 0.72))
-        veil.setColorAt(1.0, kit.with_alpha(tokens.PAPER.card, 0.0))
-        p.fillRect(self.rect(), QBrush(veil))
-
-        pane = self._pane()
-        if pane is not None:
-            kit.soft_shadow(p, pane, tokens.RADIUS_LG, "float", 0.8)
-            p.save()
-            box = QPainterPath()
-            box.addRoundedRect(pane, tokens.RADIUS_LG, tokens.RADIUS_LG)
-            p.setClipPath(box, Qt.ClipOperation.IntersectClip)
-            p.fillRect(pane, QColor(self._look[1]))
-            p.translate(pane.topLeft())
-            p.scale(self.SCENE_SCALE, self.SCENE_SCALE)
-            self._scene.paint(p)
-            p.restore()
-
-        # the words
-        head, sub, _bottom = self._words()
-        p.save()
-        p.translate(self.PAD, self.TOP)
-        head.drawContents(p)
-        p.restore()
-        if sub is not None:
-            p.save()
-            p.translate(self.PAD, self.TOP + head.size().height() + 10)
-            sub.drawContents(p)
-            p.restore()
-        p.end()
-
-
-def _escape(text: str) -> str:
-    return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-
-
-def _italic(text: str, colour: str) -> str:
-    """"Ask about *anything*" -> the starred words italic, in `colour`."""
-    parts = _escape(text).split("*")
-    return "".join(f'<i style="color:{colour}">{s}</i>' if i % 2 else s
-                   for i, s in enumerate(parts))
 
 
 # ── side card ─────────────────────────────────────────────────────────────────
@@ -297,15 +118,21 @@ class HoverRow(QFrame):
         self._hover = False
         self.setCursor(Qt.CursorShape.PointingHandCursor)
 
+    def _show_actions(self, on: bool) -> None:
+        # The column keeps its width either way (fixed by the row); only the
+        # buttons in it come and go - so a hover never re-wraps the text.
+        for child in self.actions.findChildren(QPushButton):
+            child.setVisible(on)
+
     def enterEvent(self, e) -> None:
         self._hover = True
-        self.actions.setVisible(True)
+        self._show_actions(True)
         self.update()
         super().enterEvent(e)
 
     def leaveEvent(self, e) -> None:
         self._hover = False
-        self.actions.setVisible(False)
+        self._show_actions(False)
         self.update()
         super().leaveEvent(e)
 
@@ -316,8 +143,28 @@ class HoverRow(QFrame):
 
     def paintEvent(self, e) -> None:
         if self._hover:
+            # The tint follows the list's rounded outline where the row
+            # touches it (the first and last rows), square elsewhere.
+            from PyQt6.QtCore import QRectF
+            from PyQt6.QtGui import QPainterPath
+            from ui import tokens
             p = QPainter(self)
-            p.fillRect(self.rect(), QColor(T.SURFACE_HOVER))
+            p.setRenderHint(QPainter.RenderHint.Antialiasing)
+            r = QRectF(self.rect())
+            box = self.parentWidget()
+            rad = tokens.RADIUS_LG - 1
+            top = self.y() <= 1
+            bottom = box is not None and self.geometry().bottom() >= box.height() - 2
+            path = QPainterPath()
+            path.setFillRule(Qt.FillRule.WindingFill)     # overlaps add, never cancel
+            path.addRoundedRect(r, rad, rad)
+            if not top:
+                path.addRect(QRectF(r.left(), r.top(), r.width(), rad))
+            if not bottom:
+                path.addRect(QRectF(r.left(), r.bottom() - rad, r.width(), rad))
+            p.setPen(Qt.PenStyle.NoPen)
+            p.setBrush(QColor(T.SURFACE_HOVER))
+            p.drawPath(path.simplified())
             p.end()
         super().paintEvent(e)
 
@@ -337,21 +184,30 @@ class RowAction(QPushButton):
         self.clicked.connect(lambda _c=False: action())
 
 
+# Tora's own windows: a question asked with one of these in front was not
+# about another app, so the row does not name one.
+OWN_WINDOWS = ("ai companion", "heytora")
+
+
 def history_row(entry: dict, opened: bool, on_toggle: Callable[[], None]) -> HoverRow:
     """One thing asked: when, the question, her answer (two lines, or all of
-    it once opened), the app it was asked in; copy on hover."""
+    it once opened) and the app it was about; copy on hover.
+
+    Wispr's row: the time and the actions centred on the row's height, and
+    the actions in a column of their own that is there whether or not they
+    show, so hovering never reflows the text."""
     from tutor_features.journal import WALKTHROUGH_TAG
     row = HoverRow()
     lay = QHBoxLayout(row)
-    lay.setContentsMargins(18, 14, 14, 14)
+    lay.setContentsMargins(18, 16, 14, 16)
     lay.setSpacing(18)
+    centre = Qt.AlignmentFlag.AlignVCenter
     when = label(time.strftime("%I:%M%p", time.localtime(entry["created_at"])).lstrip("0").lower(), "rowTime")
     when.setFixedWidth(62)
-    lay.addWidget(when, 0, Qt.AlignmentFlag.AlignTop)
+    lay.addWidget(when, 0, centre)
     text = QVBoxLayout()
     text.setSpacing(4)
-    question = label((entry.get("question") or "").strip(), "rowTitle", wrap=True)
-    text.addWidget(question)
+    text.addWidget(label((entry.get("question") or "").strip(), "rowTitle", wrap=True))
     answer = (entry.get("answer") or "").strip()
     walk = WALKTHROUGH_TAG in (entry.get("tags") or "")
     if walk:
@@ -360,18 +216,18 @@ def history_row(entry: dict, opened: bool, on_toggle: Callable[[], None]) -> Hov
         shown = answer if opened else _clip(answer, 180)
     if shown:
         text.addWidget(label(shown, "rowSub", wrap=True))
-    lay.addLayout(text, 1)
     app = (entry.get("app_key") or "").strip()
-    if app:
-        chip = label(app, "rowApp")
-        chip.setToolTip(entry.get("window_title") or "")
-        lay.addWidget(chip, 0, Qt.AlignmentFlag.AlignTop)
+    if app and not any(own in app.lower() for own in OWN_WINDOWS):
+        where = label(f"in {app}", "rowApp")
+        where.setToolTip(entry.get("window_title") or "")
+        text.addWidget(where)
+    lay.addLayout(text, 1)
     if answer:
         row.actions_lay.addWidget(RowAction(
             "copy", "Copy answer", lambda: QApplication.clipboard().setText(answer)))
-    row.actions.setVisible(False)
-    row.actions.setFixedWidth(34)
-    lay.addWidget(row.actions, 0, Qt.AlignmentFlag.AlignTop)
+    row.actions.setFixedWidth(max(1, row.actions_lay.count()) * 32)
+    row._show_actions(False)
+    lay.addWidget(row.actions, 0, centre)
     row.clicked.connect(on_toggle)
     return row
 
@@ -414,3 +270,90 @@ def empty(title: str, sub: str, name: str = "") -> QWidget:
     words.setAlignment(Qt.AlignmentFlag.AlignHCenter)
     lay.addWidget(words)
     return box
+
+
+# ── search ────────────────────────────────────────────────────────────────────
+
+class SearchBox(QWidget):
+    """A search icon that slides open into a field (Wispr's history search)
+    and closes again when it is empty and left, or on Escape. `changed`
+    fires a moment after typing stops, not on every key."""
+
+    changed = pyqtSignal(str)
+    SHUT_W, OPEN_W, H = 32, 300, 34
+
+    def __init__(self, placeholder: str):
+        super().__init__()
+        from PyQt6.QtCore import QTimer, QVariantAnimation
+        from PyQt6.QtGui import QIcon
+        from PyQt6.QtWidgets import QLineEdit
+        from ui import tokens
+        self.setFixedSize(self.SHUT_W, self.H)
+        lay = QHBoxLayout(self)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(0)
+        self.button = RowAction("search", "Search", self.open)
+        self.button.setFixedSize(self.SHUT_W, self.SHUT_W)
+        lay.addWidget(self.button, 0, Qt.AlignmentFlag.AlignRight)
+        self.field = QLineEdit()
+        self.field.setObjectName("searchField")
+        self.field.setPlaceholderText(placeholder)
+        self.field.setClearButtonEnabled(True)
+        self.field.addAction(QIcon(icon("search", T.TEXT_FAINT, 16)),
+                             QLineEdit.ActionPosition.LeadingPosition)
+        self.field.setFixedHeight(self.H)
+        self.field.hide()
+        self.field.installEventFilter(self)
+        lay.addWidget(self.field)
+        self._wait = QTimer(self)
+        self._wait.setSingleShot(True)
+        self._wait.setInterval(160)
+        self._wait.timeout.connect(lambda: self.changed.emit(self.field.text().strip()))
+        self.field.textChanged.connect(lambda _t: self._wait.start())
+        self._anim = QVariantAnimation(self)
+        self._anim.setDuration(tokens.DURATION)
+        self._anim.setEasingCurve(tokens.ease())
+        self._anim.valueChanged.connect(lambda w: self.setFixedWidth(int(w)))
+
+    def is_open(self) -> bool:
+        return self.field.isVisible()
+
+    def open(self) -> None:
+        if self.is_open():
+            return
+        self.button.hide()
+        self.field.show()
+        self.field.setFocus()
+        self._slide(self.OPEN_W)
+
+    def close_search(self) -> None:
+        if self.field.text():
+            self.field.clear()
+            self.changed.emit("")
+        self._slide(self.SHUT_W, then=self._shut)
+
+    def _shut(self) -> None:
+        self.field.hide()
+        self.button.show()
+
+    def _slide(self, to: int, then=None) -> None:
+        self._anim.stop()
+        try:
+            self._anim.finished.disconnect()
+        except TypeError:
+            pass
+        if then is not None:
+            self._anim.finished.connect(then)
+        self._anim.setStartValue(self.width())
+        self._anim.setEndValue(to)
+        self._anim.start()
+
+    def eventFilter(self, obj, event) -> bool:
+        from PyQt6.QtCore import QEvent
+        if obj is self.field:
+            if event.type() == QEvent.Type.KeyPress and event.key() == Qt.Key.Key_Escape:
+                self.close_search()
+                return True
+            if event.type() == QEvent.Type.FocusOut and not self.field.text():
+                self.close_search()
+        return False

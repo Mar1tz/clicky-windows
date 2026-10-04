@@ -192,31 +192,39 @@ def qss() -> str:
     }}
 
     /* ── page parts (ui/app_parts.py) ──────────────────────────────────── */
-    QFrame#sideCard, QFrame#listBox {{
-        background: {SURFACE}; border: none; border-radius: {tokens.RADIUS_LG}px;
+    /* Cards are filled; a list is a hairline round rows on the page's own
+       ground (Wispr's history) - so the cards lead and the list recedes. */
+    QFrame#sideCard {{
+        background: {SURFACE}; border: none; border-radius: {tokens.RADIUS_XL}px;
     }}
+    QFrame#listBox {{
+        background: transparent; border: 1px solid {BORDER}; border-radius: {tokens.RADIUS_LG}px;
+    }}
+    QLineEdit#searchField {{
+        background: {SURFACE}; border: 1px solid {BORDER}; border-radius: 17px;
+        padding: 0px 10px 0px 4px; font-size: 13px;
+    }}
+    QLineEdit#searchField:focus {{ border: 1px solid {ACCENT_EDGE}; }}
     QFrame#hoverRow {{ background: transparent; border: none; }}
     QWidget#rowActions {{ background: transparent; }}
     QPushButton#rowAction {{
         background: transparent; border: none; border-radius: {RADIUS_SMALL}px; padding: 0px;
     }}
     QPushButton#rowAction:hover {{ background: {NAV_HOVER}; }}
-    QLabel#rowTime  {{ color: {TEXT_FAINT}; font-size: 12px; padding-top: 2px; }}
+    QLabel#rowTime  {{ color: {TEXT_FAINT}; font-size: 12px; }}
     QLabel#rowTitle {{ font-size: 14px; font-weight: 600; }}
     QLabel#rowSub   {{ color: {TEXT_DIM}; font-size: 13px; }}
-    QLabel#rowApp   {{ color: {TEXT_FAINT}; font-size: 12px; font-weight: 600; padding-top: 2px; }}
+    QLabel#rowApp   {{ color: {TEXT_FAINT}; font-size: 12px; }}
     QLabel#statValue {{ font-size: 30px; font-weight: 700; letter-spacing: -0.6px; }}
     QLabel#statLabel {{ color: {TEXT_DIM}; font-size: 14px; }}
     QLabel#footTitle {{ font-size: 14px; font-weight: 700; }}
+    QFrame#upNext {{ background: {SURFACE}; border: none; border-radius: {tokens.RADIUS_XL}px; }}
+    QLabel#upTitle  {{ font-size: 22px; font-weight: 700; letter-spacing: -0.4px; }}
+    QLabel#upSub    {{ color: {TEXT_DIM}; font-size: 14px; }}
+    QLabel#upPct    {{ color: {TEXT_DIM}; font-size: 13px; font-weight: 600; }}
+    QLabel#upPrompt {{ font-size: 17px; font-weight: 600; letter-spacing: -0.2px; }}
     QLabel#emptyTitle {{ font-size: 15px; font-weight: 600; }}
     QLabel#emptySub   {{ color: {TEXT_DIM}; font-size: 13px; }}
-    /* The hero is drawn content - light in both themes - so its button is paper. */
-    QPushButton#heroButton {{
-        background: {tokens.PAPER.card}; color: {tokens.PAPER.ink}; border: none;
-        border-radius: {tokens.pill(tokens.BUTTON_H['md'] + 2)}px;
-        font-size: 13px; font-weight: 700; padding: 0px 18px;
-    }}
-    QPushButton#heroButton:hover {{ background: {tokens.PAPER.ground}; }}
     QFrame#banner {{ background: {_rgba(WARN, 0.12)}; border: none; border-radius: {RADIUS_CARD}px; }}
     QLabel#bannerText {{ color: {TEXT}; font-size: 13px; font-weight: 600; }}
     QFrame#cardQuiet {{

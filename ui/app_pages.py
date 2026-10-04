@@ -136,10 +136,15 @@ class HomePage(Page):
     HEADING = "Home"
     LIVE = True
     TOPICS = frozenset({"state", "account", "agents", "guide", "switches", "journal"})
-    HISTORY = 60          # entries on the page; the rest are in Learn
+    PAGE = 100            # history rows loaded at a time; more as the end comes up
 
     def __init__(self, bridge=None):
         self._open: set[int] = set()        # history rows showing their whole answer
+        self._revealed: Optional[int] = None  # the review card showing its answer
+        self._limit = self.PAGE
+        self._more = False                  # the last read filled the page: there may be more
+        self._query = ""
+        self._parts = None                  # the places build() fills, made once
         super().__init__(bridge)
 
     def build_title(self) -> QWidget:
@@ -164,35 +169,61 @@ class HomePage(Page):
         if refresh is not None:
             refresh()
 
+    # ── layout ───────────────────────────────────────────────────────────────
+    #
+    # Two columns, as Wispr's Home: on the left Up next and everything asked;
+    # on the right the numbers, sticky while the history scrolls under them.
+    # The page is built once and its parts refilled, so the search box keeps
+    # its text and focus while what it finds redraws.
+
     def build(self) -> None:
-        from ui.app_parts import HeroCard, SideCard, section_head
-        from ui.tour_scenes import AskScene
+        if self._parts is None:
+            from ui.app_parts import SearchBox
+            parts = {}
+            for name in ("banner", "up", "history"):
+                host = QWidget()
+                lay = QVBoxLayout(host)
+                lay.setContentsMargins(0, 0, 0, 0)
+                lay.setSpacing(T.GAP)
+                self.body.add(host)
+                parts[name] = lay
+                if name == "up":
+                    head = QWidget()
+                    hl = QHBoxLayout(head)
+                    hl.setContentsMargins(2, 12, 0, 0)
+                    self._first_day = label("TODAY", "sectionTitle")
+                    hl.addWidget(self._first_day, 0, Qt.AlignmentFlag.AlignBottom)
+                    hl.addStretch(1)
+                    self._search = SearchBox("Search everything you asked")
+                    self._search.changed.connect(self._find)
+                    hl.addWidget(self._search, 0, Qt.AlignmentFlag.AlignBottom)
+                    self.body.add(head)
+            self._parts = parts
+            self.body.verticalScrollBar().valueChanged.connect(self._near_end)
+        self._fill()
+
+    def refresh(self) -> None:
+        bar = self.body.verticalScrollBar()
+        was = bar.value()
+        self._fill()
+        if was:
+            QTimer.singleShot(0, lambda: bar.setValue(min(was, bar.maximum())))
+
+    def _fill(self) -> None:
+        from ui.app_parts import SideCard
         br = self.bridge
-
         banner = self._banner()
-        if banner is not None:
-            self.body.add(banner)
-
-        top = QHBoxLayout()
-        top.setSpacing(T.GAP + 4)
-        top.addWidget(HeroCard(
-            "ask", 0, "Ask about *anything* on your screen",
-            "She sees what you see, answers out loud, and points at the thing you need.",
-            button=("Open the panel", br.show_panel), scene=AskScene), 1,
-            Qt.AlignmentFlag.AlignTop)
+        refill(self._parts["banner"], [banner] if banner is not None else [])
+        # Empty, it must take no room: the first card lines up with the aside.
+        self._parts["banner"].parentWidget().setVisible(banner is not None)
+        refill(self._parts["up"], [self._up_next()])
         stats = _ask(br, "stats", {}) or {}
-        top.addWidget(SideCard([
+        self.body.set_aside(SideCard([
             (str(stats.get("questions", 0)), "questions asked"),
             (str(stats.get("walkthroughs", 0)), "walkthroughs"),
             (str(stats.get("streak", 0)), "day streak"),
-        ], self._side_foot()), 0, Qt.AlignmentFlag.AlignTop)
-        self.body.add_layout(top)
-
-        now = self._now()
-        if now is not None:
-            self.body.add(section_head("Happening now"))
-            self.body.add(now)
-        self._history()
+        ], self._side_foot()), SideCard.W)
+        self._fill_history()
 
     # ── pieces ───────────────────────────────────────────────────────────────
 
@@ -262,52 +293,224 @@ class HomePage(Page):
         name = summary.get("plan_name") or (summary.get("plan") or "").capitalize() or "HeyTora"
         return name, max(0.0, min(1.0, used)), resets_on(summary)
 
-    def _now(self) -> Optional[QWidget]:
-        """What is running - a walkthrough, agents - or None when nothing is."""
-        from ui.app_parts import ListBox
+    # ── Up next: the one useful thing, in the space a hero would take ────────
+
+    def _up_next(self) -> QWidget:
+        """What is worth doing now, in order: watch what is running; answer
+        what is due for review; or try one of three things she is good at
+        for the work they said they do (DESIGN.md §3C)."""
         br = self.bridge
         walk, agents = br.walkthrough(), br.agents()
-        if walk is None and not agents:
-            return None
-        box = ListBox()
+        if walk is not None or agents:
+            return self._running(walk, agents)
+        due = _ask(br, "due", [], 1) or []
+        if due:
+            return self._review(due[0], _ask(br, "due_count", 1) or 1)
+        return self._try_asking()
+
+    def _card(self, eyebrow: str, dot: str = "") -> tuple[QFrame, QVBoxLayout]:
+        card = QFrame()
+        card.setObjectName("upNext")
+        lay = QVBoxLayout(card)
+        lay.setContentsMargins(30, 26, 30, 26)
+        lay.setSpacing(8)
+        head = QHBoxLayout()
+        head.setSpacing(8)
+        if dot:
+            head.addWidget(Dot(dot, 7), 0, Qt.AlignmentFlag.AlignVCenter)
+        head.addWidget(label(eyebrow.upper(), "sectionTitle"))
+        head.addStretch(1)
+        lay.addLayout(head)
+        lay.addSpacing(6)
+        return card, lay
+
+    def _running(self, walk, agents) -> QWidget:
+        card, lay = self._card("Happening now", T.ACCENT)
+        rows = []
         if walk is not None:
-            where = (f"Step {walk['step']} of {walk['total']}" if walk["total"]
-                     else f"Step {walk['step']}")
-            if walk["instruction"]:
-                where += f" · {walk['instruction']}"
-            box.add(_padded(Row(f"Walkthrough · {walk['goal'] or 'guided steps'}", where,
-                                dot=T.ACCENT, trailing=Pill("Running", T.ACCENT), first=True)))
+            total = walk["total"] or 0
+            where = f"Step {walk['step']} of {total}" if total else f"Step {walk['step']}"
+            rows.append((f"Walkthrough · {walk['goal'] or 'guided steps'}",
+                         f"{where} · {walk['instruction']}" if walk["instruction"] else where,
+                         (walk["step"] / total) if total else 0.0))
         for a in agents:
             doing = a["doing"] or (f"Step {a['step']} of {a['total']}" if a["total"] else "Working")
-            box.add(_padded(Row(a["title"], doing, dot=T.ACCENT, first=True,
-                                trailing=Pill(f"{round(a['progress'] * 100)}%", T.ACCENT))))
-        return box
+            rows.append((a["title"], doing, float(a["progress"] or 0.0)))
+        head, sub, frac = rows[0]
+        lay.addWidget(label(head, "upTitle", wrap=True))
+        lay.addWidget(label(sub, "upSub", wrap=True))
+        lay.addSpacing(10)
+        bar = QHBoxLayout()
+        bar.setSpacing(12)
+        bar.addWidget(Meter(frac, T.ACCENT), 1)
+        bar.addWidget(label(f"{round(frac * 100)}%", "upPct"))
+        lay.addLayout(bar)
+        for title_, doing, frac_ in rows[1:3]:
+            lay.addWidget(label(f"{title_} · {doing} · {round(frac_ * 100)}%", "faint", wrap=True))
+        lay.addStretch(1)
+        if agents:
+            foot = QHBoxLayout()
+            go = button("Open Agents")
+            go.clicked.connect(lambda: self.navigate.emit("agents"))
+            foot.addWidget(go)
+            foot.addStretch(1)
+            lay.addLayout(foot)
+        return card
 
-    def _history(self) -> None:
-        """Everything asked, by day, newest first."""
+    def _review(self, entry: dict, count: int) -> QWidget:
+        """One thing she taught them, back for a check: the question; the
+        answer when asked for; did you know it."""
+        entry_id = int(entry["id"])
+        card, lay = self._card(f"Up next · review{'' if count < 2 else f' 1 of {count}'}", T.WARN)
+        lay.addWidget(label(_clip(entry.get("question"), 160), "upTitle", wrap=True))
+        shown = self._revealed == entry_id
+        if shown:
+            lay.addWidget(label(_clip(entry.get("answer"), 320), "upSub", wrap=True))
+        else:
+            lay.addWidget(label(f"You asked this {_ago(entry['created_at'])}. "
+                                "Answer it in your head, then check.", "upSub", wrap=True))
+        lay.addStretch(1)
+        foot = QHBoxLayout()
+        foot.setSpacing(8)
+        if shown:
+            knew = button("I knew it", "primary")
+            knew.clicked.connect(lambda: self._grade(entry_id, True))
+            again = button("Not yet")
+            again.clicked.connect(lambda: self._grade(entry_id, False))
+            foot.addWidget(knew)
+            foot.addWidget(again)
+        else:
+            reveal = button("Show answer", "primary")
+            reveal.clicked.connect(lambda: self._reveal(entry_id))
+            foot.addWidget(reveal)
+        foot.addStretch(1)
+        lay.addLayout(foot)
+        return card
+
+    def _reveal(self, entry_id: int) -> None:
+        self._revealed = entry_id
+        self._later(self.refresh)
+
+    def _grade(self, entry_id: int, knew: bool) -> None:
+        self._revealed = None
+        self.bridge.review(entry_id, knew)
+        self._later(self.refresh)
+
+    def _try_asking(self) -> QWidget:
+        """Three things to say, for the work they said they do."""
+        card, lay = self._card("Try asking")
+        for line in try_asking(_ask(self.bridge, "uses", []) or []):
+            row = QHBoxLayout()
+            row.setSpacing(12)
+            glyph = QLabel()
+            from ui.app_widgets import icon
+            glyph.setPixmap(icon("mic", T.ACCENT, 16))
+            row.addWidget(glyph, 0, Qt.AlignmentFlag.AlignVCenter)
+            row.addWidget(label(f"“{line}”", "upPrompt", wrap=True), 1)
+            lay.addLayout(row)
+            lay.addSpacing(4)
+        lay.addStretch(1)
+        lay.addWidget(label(f"Hold {self.bridge.hotkey() or 'Ctrl + Win'} and say it, "
+                            "with the thing it's about on your screen.", "faint", wrap=True))
+        return card
+
+    def _fill_history(self) -> None:
+        """Everything asked, by day, newest first - all of it, a page at a
+        time - or, while searching, everything that mentions the words."""
         from ui.app_parts import ListBox, day_name, empty, history_row, section_head
-        entries = _ask(self.bridge, "recent", [], self.HISTORY) or []
+        br = self.bridge
+        if self._query:
+            entries = _ask(br, "search", [], self._query, 200) or []
+            self._more = False
+        else:
+            entries = _ask(br, "recent", [], self._limit) or []
+            self._more = len(entries) >= self._limit
+        widgets: list[QWidget] = []
         if not entries:
-            self.body.add(section_head("Today"))
-            self.body.add(empty("Nothing asked yet",
-                                f"Hold {self.bridge.hotkey() or 'Ctrl + Win'} and ask about anything "
-                                "on your screen. Every question and her answer land here.",
-                                "journal"))
-            return
+            self._first_day.setText("NO MATCHES" if self._query else "TODAY")
+            widgets.append(empty(
+                f"Nothing asked mentions “{self._query}”" if self._query else "Nothing asked yet",
+                "Try fewer words, or a word from her answer." if self._query else
+                f"Hold {br.hotkey() or 'Ctrl + Win'} and ask about anything on your screen. "
+                "Every question and her answer land here.", "search" if self._query else "journal"))
         box, day = None, ""
         for e in entries:
             name = day_name(e["created_at"])
             if name != day:
                 day, box = name, ListBox()
-                self.body.add(section_head(name))
-                self.body.add(box)
+                if widgets:
+                    widgets.append(section_head(name))
+                else:                        # the first day's name is on the search row
+                    self._first_day.setText(name.upper())
+                widgets.append(box)
             entry_id = int(e["id"])
             box.add(history_row(e, entry_id in self._open,
                                 lambda i=entry_id: self._flip(i)))
+        refill(self._parts["history"], widgets)
+        self.body.place_aside()
+
+    def _find(self, text: str) -> None:
+        self._query = text
+        self._fill_history()
+
+    def _near_end(self, value: int) -> None:
+        """Scrolled near the bottom with more to show: the next page."""
+        bar = self.body.verticalScrollBar()
+        if self._more and value >= bar.maximum() - 600:
+            self._more = False
+            self._limit += self.PAGE
+            self._fill_history()
 
     def _flip(self, entry_id: int) -> None:
+        # After the click returns: the row being clicked is one the redraw replaces.
         self._open ^= {entry_id}
-        QTimer.singleShot(0, self.refresh)
+        self._later(self._fill_history)
+
+    def _later(self, fn) -> None:
+        """Run `fn` once the current event is done - on a timer this page
+        owns, so nothing fires into a page that has been closed."""
+        timer = QTimer(self)
+        timer.setSingleShot(True)
+        timer.timeout.connect(fn)
+        timer.timeout.connect(timer.deleteLater)
+        timer.start(0)
+
+
+# Things she is good at, by what people said they do at first launch
+# (setup_wizard.WORK). Each is something Tora really does on the screen.
+TRY_ASKING = {
+    "Accounting": ("Why won't this total add up?", "What does this line on the statement mean?",
+                   "Show me how to make a pivot table here."),
+    "Business owner": ("Draft a polite reply to this email.", "What's the catch in this clause?",
+                       "Show me how to send this as a PDF."),
+    "Student": ("What's wrong with this equation?", "Explain this paragraph more simply.",
+                "Quiz me on this page."),
+    "Teacher": ("Turn this page into five quiz questions.", "Explain this so a twelve-year-old gets it.",
+                "Show me how to share this with my class."),
+    "Developer": ("Why is this error happening?", "What does this function do?",
+                  "Show me how to make a new branch here."),
+    "Sales": ("Draft a follow-up to this email.", "Summarise this company's page for me.",
+              "Show me how to log this call in the CRM."),
+    "Design & video": ("Show me how to export this as MP4.", "Where's the colour picker in this app?",
+                       "Why does this text look blurry?"),
+    "Admin & office": ("Show me how to share this file.", "Make this table tidy.",
+                       "Where do I change the page margins?"),
+    "Writing": ("Make this paragraph shorter.", "Is there a better word here?",
+                "Does this email sound too blunt?"),
+}
+TRY_ANYWAY = ("What's wrong with this equation?", "Where do I change my display scaling?",
+              "Show me how to share my screen in Meet.")
+
+
+def try_asking(uses: list[str]) -> list[str]:
+    """Three lines, taking in turn from each thing they do."""
+    pools = [list(TRY_ASKING[u]) for u in uses if u in TRY_ASKING] or [list(TRY_ANYWAY)]
+    out: list[str] = []
+    while len(out) < 3 and any(pools):
+        for pool in pools:
+            if pool and len(out) < 3:
+                out.append(pool.pop(0))
+    return out
 
 
 def _ask(bridge, name: str, default, *args):
@@ -1007,7 +1210,23 @@ class ToraPage(TutorPage, VoicePage):
 
     def build(self) -> None:
         VoicePage.build(self)
+        self.body.add(self._sounds())
         TutorPage.build(self)
+
+    def _sounds(self) -> QWidget:
+        """The pop as she starts listening (ui/sounds.py). Choosing one plays it."""
+        from ui import sounds
+        card = Card("Sounds")
+        keys = [k for k, _n in sounds.SOUNDS] + [sounds.OFF]
+        pick = Select(*[n for _k, n in sounds.SOUNDS], "Off", width=240)
+        now = _ask(self.bridge, "listen_sound", keys[0])
+        pick.setCurrentIndex(keys.index(now) if now in keys else 0)
+        pick.currentIndexChanged.connect(
+            lambda i: self.bridge.set_listen_sound(keys[i]) if 0 <= i < len(keys) else None)
+        card.add(Row("When she starts listening",
+                     "A short pop the moment you can talk. Pick one to hear it.",
+                     trailing=pick, first=True))
+        return card
 
 
 # ── Settings ──────────────────────────────────────────────────────────────────

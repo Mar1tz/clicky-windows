@@ -124,14 +124,14 @@ Built from `ui/app_parts.py`. Home is the template; every page follows it.
 **The page map, revised.** Journal stops being a page: what you asked goes
 to Home, review and saved walkthroughs to **Learn**.
 
-| Page | Wispr | Hero (family · scene) | Under it |
+| Page | Wispr | Top card | Under it |
 |---|---|---|---|
-| Home | Dictation | ask · Ask - "Ask about *anything* on your screen" | side card (questions, walkthroughs, day streak; plan or review); everything asked, by day |
-| Insights | Insights | show · Show me - "What you've *learned*" | streak grid, apps you ask about, walkthroughs, agent tasks, plan use; achievements later |
-| Agents | Notetaker | do · Do it - "Tora works while *you* don't" | "give her a first job" card, running, approvals, past tasks |
-| Learn | Dictionary / Snippets | teach · Teach me - "Keep what she *taught* you" | review, saved walkthroughs, recorded lessons, captured workflows |
-| Packs | Transforms | build · Build it - "Tora, *for your work*" | a grid of pack cards; "more packs coming" |
-| Tora | Style | ribbon - "Make her *yours*" | voice carousel, colour, teaching style, how she answers, instructions |
+| Home | Dictation | Up next (running · review · try asking) | side card (questions, walkthroughs, day streak; plan or review); everything asked, by day |
+| Insights | Insights | "What you've learned." | streak grid, apps you ask about, walkthroughs, agent tasks, plan use; achievements later |
+| Agents | Notetaker | "Tora works while you don't." | "give her a first job" card, running, approvals, past tasks |
+| Learn | Dictionary / Snippets | "Keep what she taught you." | review, saved walkthroughs, recorded lessons, captured workflows |
+| Packs | Transforms | "Tora, for your work." | a grid of pack cards; "more packs coming" |
+| Tora | Style | "Make her yours." | voice carousel, colour, teaching style, how she answers, instructions |
 
 Sidebar extra (later): a **Get started** checklist - first question, a
 walkthrough, her voice, a pack, an agent's first job - each ticked from
@@ -143,12 +143,30 @@ real data, gone when all are.
   filled (`SURFACE` on the panel), never filled *and* outlined.
 - **A centred column**, at most `T.COLUMN_W` (1040px) wide. The title is in
   it and scrolls with the page.
-- **A hero per page**: the page's gradient family from heytora.com drifting
-  slowly, a light veil on the words' side, the headline in Plus Jakarta
-  bold with one *italic* word in the family's deep colour, one line, one
-  paper pill button, and the website's tour scene for that capability
-  playing in a pane that rises out of the card's bottom edge (hidden when
-  the card is too narrow). Drawn content: light in both themes.
+- **The top of a page does something - no decorative hero.** Two tries
+  at a picture there (a capability gradient with a tour scene; the site's
+  mesh with its tagline) read as a website banner pasted into an app, so
+  the space holds the page's most useful thing instead. On Home that is
+  **Up next**: what is running (progress, Open Agents); else the review
+  that is due (question, Show answer, I knew it / Not yet); else three
+  things to try asking, picked from what they said they do at first launch
+  (`app_pages.TRY_ASKING`). A plain `SURFACE` card, `RADIUS_XL`, beside the
+  side card. Other pages get their own useful top card when they are built.
+- **The listening pop.** A short earcon the moment she listens
+  (`ui/sounds.py`, `assets/sounds/*.wav` made by `make_sounds.py`); the
+  user picks Bubble, Bloop, Select, Spark, Chime or Off on the Tora page.
+- **Two columns on Home**, as Wispr's: Up next and the history on the
+  left; the numbers on the right, **sticky** - level with Up next, then
+  held 20px from the top while the history scrolls (`PageBody.set_aside`).
+- **The history has no cap**: 100 rows, the next 100 as the end comes up.
+  **Search** is an icon on the first day's row that slides open into a
+  field; it matches question or answer, and Escape or leaving it empty
+  closes it.
+- **Cards are filled, lists are a hairline.** Up next and the numbers are
+  `SURFACE` plates; the history is a 1px `BORDER` round rows on the page's
+  own ground, so the cards lead and the list recedes. (Wispr's way round -
+  a near-white page with the site's soft grey on the cards - was tried:
+  see the A/B in the session notes.)
 - **Lists are one container** with hairline rows; the row under the
   pointer tints and shows its actions (copy...); a click opens it.
   Section labels ("TODAY") sit outside, above.

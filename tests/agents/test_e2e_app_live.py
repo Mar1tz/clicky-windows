@@ -172,8 +172,8 @@ def test_home_shows_the_walkthrough_and_the_agents(qapp):
     texts = _texts(_home(qapp, mgr))
     assert "Walkthrough · export the video" in texts
     assert "Step 1 of 2 · Click Export." in texts
-    assert "Florist website" in texts and "70%" in texts
-    assert "HAPPENING NOW" in texts
+    assert any("Florist website" in t and "70%" in t for t in texts), "the agent under it"
+    assert "HAPPENING NOW" in texts, "Up next shows what is running first"
 
 
 @pytest.mark.parametrize("problem, live, banner", [
@@ -198,7 +198,7 @@ def test_a_change_redraws_the_page_on_screen(qapp):
     w = ToraApp(AppBridge(mgr))
     w.show()
     try:
-        assert "Florist website" not in _texts(w._pages["home"])
+        assert not any("Florist website" in t for t in _texts(w._pages["home"]))
         mgr.agents = SimpleNamespace(list_agents=lambda active_only=False: [
             _agent("Florist website", "Writing index.html")])
         mgr.sig_agent_event.emit(object())

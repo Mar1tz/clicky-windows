@@ -123,6 +123,10 @@ for _manifest in _glob.glob(os.path.join("extensions", "*", "manifest.json")):
 datas.append((os.path.join("assets", "fonts"), os.path.join("assets", "fonts")))
 datas.append((os.path.join("assets", "brand"), os.path.join("assets", "brand")))
 datas.append((os.path.join("assets", "icons"), os.path.join("assets", "icons")))
+# The listening pops (ui/sounds.py) - the WAVs only, not the downloaded originals.
+for _wav in _glob.glob(os.path.join("assets", "sounds", "*.wav")):
+    if not os.path.basename(_wav).startswith("ES_"):
+        datas.append((_wav, os.path.join("assets", "sounds")))
 # Tora's voices saying hello, for Make Tora yours (assets/voices/make_voices.py).
 datas.append((os.path.join("assets", "voices"), os.path.join("assets", "voices")))
 

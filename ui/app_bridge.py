@@ -223,6 +223,17 @@ class AppBridge(QObject):
         from ui import autostart
         return autostart.set_enabled(on)
 
+    def listen_sound(self) -> str:
+        from config import cfg
+        return cfg.listen_sound()
+
+    def set_listen_sound(self, key: str) -> None:
+        """Save the choice and play it, so the choice is heard."""
+        from config import cfg
+        from ui import sounds
+        cfg.set_listen_sound(key)
+        sounds.play(key)
+
     def sidebar_collapsed(self) -> bool:
         from config import cfg
         return cfg.sidebar_collapsed()
@@ -230,6 +241,11 @@ class AppBridge(QObject):
     def set_sidebar_collapsed(self, shut: bool) -> None:
         from config import cfg
         cfg.set_sidebar_collapsed(shut)
+
+    def uses(self) -> list[str]:
+        """What they said they do at first launch ("Accounting", "Student"...)."""
+        from config import cfg
+        return cfg.profile()[1]
 
     def user_name(self) -> str:
         """The name given at first launch, for Home's greeting and the
@@ -562,12 +578,12 @@ class AppBridge(QObject):
         if journal is None:
             return none
         try:
-            entries = journal.entries_all()
+            rows = journal.activity()
         except Exception:  # noqa: BLE001
             return none
         from datetime import date, timedelta
-        walks = sum(1 for e in entries if journal.WALKTHROUGH_TAG in (e.get("tags") or ""))
-        days = {date.fromtimestamp(e["created_at"]) for e in entries}
+        walks = sum(1 for _t, tags in rows if journal.WALKTHROUGH_TAG in tags)
+        days = {date.fromtimestamp(t) for t, _tags in rows}
         day = date.today()
         if day not in days:
             day -= timedelta(days=1)
@@ -575,7 +591,11 @@ class AppBridge(QObject):
         while day in days:
             streak += 1
             day -= timedelta(days=1)
-        return {"questions": len(entries) - walks, "walkthroughs": walks, "streak": streak}
+        return {"questions": len(rows) - walks, "walkthroughs": walks, "streak": streak}
+
+    def search(self, text: str, limit: int = 100) -> list[dict]:
+        """Everything asked that mentions `text`, newest first."""
+        return self._read_journal("search", [], text, limit)
 
     def review(self, entry_id: int, knew: bool) -> None:
         """Grade one review: knew it - it comes back later; not yet - tomorrow."""

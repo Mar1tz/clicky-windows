@@ -195,6 +195,26 @@ def recent(limit: int = 10) -> list[dict]:
     return [dict(zip(cols, r)) for r in rows]
 
 
+def search(text: str, limit: int = 100) -> list[dict]:
+    """Entries whose question or answer contains `text` (any case), newest
+    first - Home's search box."""
+    needle = f"%{text.strip()}%"
+    with _connect() as conn:
+        rows = conn.execute(
+            "SELECT * FROM entries WHERE question LIKE ? OR answer LIKE ? "
+            "ORDER BY created_at DESC LIMIT ?", (needle, needle, limit)
+        ).fetchall()
+        cols = [r[1] for r in conn.execute("PRAGMA table_info(entries)").fetchall()]
+    return [dict(zip(cols, r)) for r in rows]
+
+
+def activity() -> list[tuple[float, str]]:
+    """(created_at, tags) for every entry - all of them, for counting:
+    Home's totals and streak. Two columns, so it stays cheap at any size."""
+    with _connect() as conn:
+        return conn.execute("SELECT created_at, COALESCE(tags, '') FROM entries").fetchall()
+
+
 def due_for_review(limit: int = 5) -> list[dict]:
     """Spaced-repetition: pull entries whose `next_review_at` is in the past."""
     now = time.time()

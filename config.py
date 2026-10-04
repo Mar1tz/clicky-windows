@@ -608,6 +608,15 @@ class Config:
         os.environ["TORA_CURSOR_COLOUR"] = key
         self._write_env("TORA_CURSOR_COLOUR", key)
 
+    def listen_sound(self) -> str:
+        """The earcon when Tora starts listening (ui/sounds.SOUNDS), or "off"."""
+        return os.environ.get("TORA_LISTEN_SOUND", "").strip().lower() or "bloop"
+
+    def set_listen_sound(self, key: str) -> None:
+        key = (key or "off").strip().lower()
+        os.environ["TORA_LISTEN_SOUND"] = key
+        self._write_env("TORA_LISTEN_SOUND", key)
+
     def theme(self) -> str:
         """"system" (follow Windows), "light" or "dark" - ui/tokens.py."""
         raw = os.environ.get("TORA_THEME", "").strip().lower()
