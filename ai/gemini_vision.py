@@ -119,8 +119,10 @@ _SCHEMA = {
 # Thinking tokens count against maxOutputTokens on this API. Unbounded
 # (think=None) let the pro model reason for ~3,500 of its 4,096 tokens and
 # then get cut off mid-answer — 40 s for nothing, three times in one
-# session. This is a cap, not a floor: trivial questions use far less.
-_DEEP_THINK = 1536
+# session. A budget of 1,536 did not hold on Gemini 3 either: 2,050 tokens,
+# $0.037 and 20 s for one chess look (SP-01). Gemini 3 takes a level; "low"
+# is its least (SP-04, gemini.thinking).
+_DEEP_THINK = "low"
 _DEEP_TIMEOUT_S = 35.0
 
 _SYSTEM = """You are the eyes of Tora, a visual tutor that points at things

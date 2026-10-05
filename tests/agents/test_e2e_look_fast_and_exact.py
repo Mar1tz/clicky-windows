@@ -201,3 +201,33 @@ def test_a_look_at_a_window_maps_back_snaps_and_hints(monkeypatch):
     # Buy at (900,500)-(1020,580) on the monitor, in the drawing's 0-1000 terms:
     assert out["highlights"][0]["tag"] == "[RECT:469,463,531,537:tora]"
     assert drawn == [{"tag": "[RECT:469,463,531,537:tora]"}]
+
+
+# -- SP-04: thinking under control ----------------------------------------------------------------------------
+
+def test_gemini_3_is_told_a_thinking_level_not_a_budget_it_ignores():
+    """Sent thinkingBudget 0, gemini-3.8-flash still thought on 14 of 23 test
+    screens; the pro model spent 2,050 tokens on a 1,536 budget."""
+    assert gemini.thinking(0, "gemini-3.8-flash") == {"thinkingConfig": {"thinkingLevel": "low"}}
+    assert gemini.thinking("low", "gemini-3.1-pro-preview") == {"thinkingConfig": {"thinkingLevel": "low"}}
+    assert gemini.thinking(None, "gemini-3.8-flash") == {}, "unsaid stays unsaid"
+    assert gemini.thinking(2048, "gemini-3.1-pro-preview") == {"thinkingConfig": {"thinkingBudget": 2048}}, \
+        "the planner's budget is not measured by a bench yet - unchanged"
+
+
+def test_a_model_that_still_takes_a_budget_gets_the_budget_a_level_means():
+    assert gemini.thinking(0, "gemini-2.5-flash") == {"thinkingConfig": {"thinkingBudget": 0}}
+    assert gemini.thinking("low", "gemini-2.5-pro") == {"thinkingConfig": {"thinkingBudget": 1024}}
+    assert gemini.thinking(0, "gemini-2.5-pro") == {}, "a pro model refuses 0"
+
+
+def test_the_deep_look_asks_for_the_low_level(monkeypatch):
+    sent = {}
+
+    async def fake_generate(model, contents, **kw):
+        sent[model] = kw.get("think")
+        return _reply()
+    monkeypatch.setattr(gemini, "generate", fake_generate)
+    asyncio.run(gemini_vision.look("what's the best move?", "img", deep=True))
+    assert sent[Models.VISION_DEEP] == "low"
+    assert gemini.thinking(sent[Models.VISION_DEEP], Models.VISION_DEEP)["thinkingConfig"] == {"thinkingLevel": "low"}

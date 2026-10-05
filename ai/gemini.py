@@ -73,6 +73,11 @@ class Models:
         return not any(marker in model for marker in cls.THINKING_ONLY)
 
     @classmethod
+    def takes_level(cls, model: str) -> bool:
+        """Gemini 3 is told how hard to think by a level, not a budget (SP-04)."""
+        return model.startswith("gemini-3")
+
+    @classmethod
     def all_roles(cls) -> dict[str, str]:
         return {
             "realtime":    cls.REALTIME,
@@ -421,16 +426,34 @@ def _url(model: str, method: str) -> str:
     return f"models/{model}:{method}"
 
 
-def thinking(budget: Optional[int], model: str) -> dict:
+# What a level means to a model that still takes a budget.
+_LEVEL_BUDGET = {"minimal": 0, "low": 1024, "medium": 4096, "high": 8192}
+
+
+def thinking(budget: "Optional[int | str]", model: str) -> dict:
     """generationConfig fragment that caps deliberation.
 
     budget=0 on a flash model is the single biggest latency win available:
     it removes a whole silent reasoning pass (~240 tokens, roughly half a
     second) from an answer that never needed one. Pro models reject it, so
     for them this is a no-op and they think as much as they want to.
+
+    Gemini 3 takes a thinking LEVEL - low, medium or high, medium if unsaid -
+    and no budget. Sent thinkingBudget 0, gemini-3.8-flash still thought on
+    14 of 23 test screens, up to 338 tokens, and 613 on a real one; the pro
+    model spent 2,050 on a 1,536 budget, $0.037 for one look (SP-01). So
+    budget 0 - as little as possible - is "low" on Gemini 3, the least
+    either model takes. A caller may name a level instead of a budget; a
+    model that still takes budgets gets the budget it means.
     """
     if budget is None:
         return {}
+    if isinstance(budget, str):
+        if Models.takes_level(model):
+            return {"thinkingConfig": {"thinkingLevel": budget}}
+        budget = _LEVEL_BUDGET.get(budget, 1024)
+    if budget == 0 and Models.takes_level(model):
+        return {"thinkingConfig": {"thinkingLevel": "low"}}
     if budget == 0 and not Models.can_skip_thinking(model):
         return {}
     return {"thinkingConfig": {"thinkingBudget": budget}}
@@ -443,7 +466,7 @@ async def generate(
     system: str = "",
     max_tokens: int = 1024,
     temperature: float = 0.7,
-    think: Optional[int] = None,
+    think: "Optional[int | str]" = None,
     schema: Optional[dict] = None,
     tools: Optional[list] = None,
     audio_voice: Optional[str] = None,
@@ -487,7 +510,7 @@ async def generate_json(
     *,
     system: str = "",
     max_tokens: int = 2048,
-    think: Optional[int] = None,
+    think: "Optional[int | str]" = None,
     timeout: float = 120.0,
     usage: Optional[dict] = None,
 ) -> Optional[dict]:
@@ -554,7 +577,7 @@ async def stream(
     system: str = "",
     max_tokens: int = 1024,
     temperature: float = 0.7,
-    think: Optional[int] = None,
+    think: "Optional[int | str]" = None,
     schema: Optional[dict] = None,
     timeout: float = 120.0,
 ) -> AsyncIterator[str]:

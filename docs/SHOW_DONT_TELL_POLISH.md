@@ -65,9 +65,9 @@ take the focus, and 16 looks saw the owner's editor instead.
 ### SP-01 · A look test bench in the repo — M — **done (6 Oct)**
 
 **The first run,** in the app's routing ($0.081): **22/23 right**, p50
-2.6 s, avg $0.0035 a look, 20 fast and 3 deep. It is the baseline,
-`tools/look_eval_baseline.json`; compare with `--against
-tools/look_eval_baseline.json`.
+2.6 s, avg $0.0035 a look, 20 fast and 3 deep. The baseline,
+`tools/look_eval_baseline.json`, is now SP-04's run (avg $0.0020); compare
+with `--against tools/look_eval_baseline.json`.
 
 **What it already found:**
 * **The only wrong one** is the music screen: "what should I play next?"
@@ -226,9 +226,40 @@ timeline. On SP-02's run, the cost per answer is printed.
 
 ## Wave B — the fast look, faster and cheaper
 
-### SP-04 · Thinking under control, fast and deep — S — **evidence in hand**
+### SP-04 · Thinking under control, fast and deep — S — **done (6 Oct)**
 
-The SP-01 baseline backs it up:
+**What Google's docs say:** Gemini 3 takes a thinking *level* (low,
+medium or high; medium if unsaid). It takes no budget, and thinking has no
+"off". `gemini-3.8-flash` and `gemini-3.1-pro-preview` both go down to
+"low".
+
+**What changed:**
+* `gemini.thinking()` sends budget 0 as `thinkingLevel: "low"` on Gemini 3.
+* A caller may name a level. The deep look asks for "low"
+  (`_DEEP_THINK`).
+* The planner's 2,048 budget is unchanged: no bench measures it yet.
+
+**SP-01, before → after** (in the app's routing; $0.075 with two
+repeats):
+
+| | before | after |
+|---|---|---|
+| right | 22/23 | 22/23 |
+| average look | $0.0035 | **$0.0020 (−42%)** |
+| thinking tokens | 3,663 | 1,405 |
+| deep looks: cost | $0.054 | **$0.020** |
+| deep looks: p50 | 5.3 s | 3.9 s |
+| chess | 20 s, $0.037 | **3.7–4.0 s, $0.0066**, right 3 of 3 |
+
+* **The fast model did not change.** Its thinking stayed at about 1,230
+  tokens, on 10 of 20 screens, up to 274. "low" is as little as it takes:
+  budget 0 was already being read as low.
+* **The new baseline** is this run (`tools/look_eval_baseline.json`).
+* **Only three deep screens** are measured. If a harder deep question
+  (dense code, a long contract) is ever missed, try "medium" for
+  `needs_reading` only.
+
+The SP-01 baseline backed it up:
 * **Fast:** thinking on 14 of 23 screens, up to 338 tokens.
 * **Deep:** 2,050 thinking tokens on chess against a budget of 1,536, at
   $0.037 and 20 s.
@@ -534,7 +565,7 @@ answered the mate-in-one correctly.
 | SP-01 | Look test bench — done | A | M | ~$0.10 | – |
 | SP-02 | Voice test bench — done | A | M | ~$0.12/run | – |
 | SP-03 | Whole answer's cost — done | A | S | (with SP-02) | – |
-| SP-04 | Thinking really off | B | S | ~$0.06 | SP-01 |
+| SP-04 | Thinking under control — done | B | S | ~$0.08 | SP-01 |
 | SP-05 | Fewer words back | B | S | ~$0.03 | SP-01 |
 | SP-06 | Right image size | B | S | ~$0.10 | SP-01 |
 | SP-07 | Typed path, same rule | B | S | free | – |
@@ -555,8 +586,9 @@ SP-12.
 **The biggest levers:**
 * **Cost:** SP-16. The voice is three quarters of a looked answer
   (SP-03).
-* **The look's speed:** SP-04.
 * **The answer's speed:** SP-17.
+* **Done:** SP-04 took the deep look from $0.054 to $0.020 and from 5.3 s
+  to 3.9 s.
 
 Each has its bench (SP-01 or SP-02), so nothing changes without a
 before-and-after.
