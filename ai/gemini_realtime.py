@@ -329,11 +329,13 @@ def tool_declarations() -> list[dict]:
                 "Spotify (play, play_playlist, next, previous, play_pause, volume, "
                 "now_playing), VS Code / Cursor / Windsurf (open_project, open_file, chat, "
                 "recent_projects, install_extension), Windows (open_app, media, volume, "
-                "window, clipboard_copy, open_folder, open_settings), browsers (open_url, "
-                "search). Uses the app's own API, deep link or media key - nothing on "
+                "window, clipboard_copy, open_folder, open_settings), websites (app "
+                "'browser': open_url, search - the browser the user already has open, "
+                "as a new tab; name chrome, edge, firefox, brave or opera ONLY if the "
+                "user named it). Uses the app's own API, deep link or media key - nothing on "
                 "screen moves and the window does not even have to be visible. "
                 "ALWAYS prefer the real app over a browser. Playing a song means "
-                "app='spotify', action='play' - NOT opening open.spotify.com in Edge, "
+                "app='spotify', action='play' - NOT opening open.spotify.com in a browser, "
                 "which shows a web page instead of playing anything. Only use a browser "
                 "for things that genuinely live on the web. "
                 "If you are not sure an app can do something, call action='list' FIRST "
@@ -345,8 +347,10 @@ def tool_declarations() -> list[dict]:
                 "type": "object",
                 "properties": {
                     "app": {"type": "string",
-                            "description": "spotify, vscode, cursor, windsurf, antigravity, "
-                                           "windows, edge, brave, opera. 'windows' covers the "
+                            "description": "browser (websites, in the browser the user "
+                                           "has open), spotify, vscode, cursor, windsurf, "
+                                           "antigravity, windows, chrome, edge, firefox, brave, "
+                                           "opera. 'windows' covers the "
                                            "OS itself: opening any installed app, volume, "
                                            "windows, clipboard, folders, settings pages."},
                     "action": {"type": "string",

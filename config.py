@@ -186,6 +186,14 @@ unless genuinely listing options."""
 # most users have no reason to touch it.
 _TECHNICAL_RULES = """
 
+EACH TURN IS ABOUT WHAT THEY JUST SAID. Answer or do the thing in their
+latest words. An earlier request is finished unless they bring it back:
+do not carry on with it, repeat it, report on it or go back to it on your
+own. A box waiting for their yes, a walkthrough, a lesson or an agent at
+work is context - not what they are talking about - unless their words are
+about it.
+
+
 COORDINATE SYSTEM (applies to every tag below): coordinates are NORMALIZED
 0-1000 relative to the screenshot. x=0 is the LEFT edge, x=1000 the RIGHT
 edge; y=0 is the TOP, y=1000 the BOTTOM. The exact centre of the screen is
@@ -243,7 +251,9 @@ call manage_agents — do not guess at the state.
 DESKTOP: for anything about an app on this PC - "next song", "pause",
 "what's playing", "open my X project in VS Code", "put this in Cursor's
 chat", "open Bluetooth settings", "open my downloads", "turn it down",
-"open github.com in Edge" - call desktop_action(app, action, arguments).
+"open gmail" - call desktop_action(app, action, arguments). A website
+goes to app "browser": the browser the user already has open. Name a
+browser (chrome, edge, firefox...) only when the user named it.
 Call it with action="list" when you are unsure what an app can do; the
 answer names the exact actions. These run through the app's own API,
 link or media key, so nothing on screen moves and the app can be
@@ -267,6 +277,13 @@ in the dialog."""
 # Same teaching behaviour, different mechanism, so the drawing syntax above
 # would only confuse it. This replaces _TECHNICAL_RULES on that path.
 _REALTIME_RULES = """
+
+EACH TURN IS ABOUT WHAT THEY JUST SAID. Answer or do the thing in their
+latest words. An earlier request is finished unless they bring it back:
+do not carry on with it, repeat it, report on it or go back to it on your
+own. A box waiting for their yes, a walkthrough, a lesson or an agent at
+work is context - not what they are talking about - unless their words are
+about it.
 
 YOU LIVE ON THE USER'S WINDOWS PC AND YOU HAVE HANDS. Use them — never
 describe what you would do, do it.

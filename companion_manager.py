@@ -1317,6 +1317,27 @@ class CompanionManager(QObject):
         # and a half later.
         await conv.end_user_audio()
 
+    LESSON_STALE_S = 600.0
+    _lesson_key = None                    # (the lesson, its step) as last seen
+    _lesson_key_at = 0.0                  # since when
+
+    def _lesson_stale(self) -> bool:
+        """A lesson nobody has moved on for LESSON_STALE_S is over. It is
+        dropped, so it is no longer "in progress" in every turn after - and
+        a "next" an hour later does not teach its next step."""
+        key = (tuple(self._lesson_steps), self._lesson_step_idx)   # not id(): Python reuses those
+        now = time.monotonic()
+        if self._lesson_key != key:
+            self._lesson_key, self._lesson_key_at = key, now
+            return False
+        if now - self._lesson_key_at < self.LESSON_STALE_S:
+            return False
+        if self._guide_runner is None or not self._guide_runner.running:
+            _log.info("an untouched lesson (step %d of %d) dropped",
+                      self._lesson_step_idx + 1, len(self._lesson_steps))
+            self._lesson_steps, self._lesson_plan, self._lesson_step_idx = [], None, 0
+        return True
+
     def _context_head(self, line: str) -> str:
         """The screen line, or a note that nothing has changed.
 
@@ -1408,9 +1429,12 @@ class CompanionManager(QObject):
                 f"I did it / carry on), skip, back, repeat (say that again), "
                 f"stop, pause, where (where is it / I can't find it), help "
                 f"(I'm stuck / it's not working), do_it (do it for me). "
-                f"Everything else they say mid-walkthrough is a question or a "
-                f"remark - answer it and leave the guide alone; it keeps "
-                f"running underneath. 'Okay' and 'got it' are not commands: it "
+                f"If they ask for something DIFFERENT - another task, another "
+                f"app, open something, how to do something else - call "
+                f"guide_step with action stop FIRST, then do what they asked; "
+                f"the walkthrough is over. A question or remark about THIS "
+                f"walkthrough or this screen: answer it and leave the guide "
+                f"alone; it keeps running underneath. 'Okay' and 'got it' are not commands: it "
                 f"moves on by itself when the step is done. If they ask what "
                 f"they're doing or what's coming, answer from this context "
                 f"rather than starting over; for anything else on screen they "
@@ -1425,7 +1449,7 @@ class CompanionManager(QObject):
                 "the user asks to resume or continue THAT walkthrough, call "
                 "guide_step with action 'resume'."
             )
-        elif self._lesson_steps:
+        elif self._lesson_steps and not self._lesson_stale():
             bits.append(
                 f"A guide is in progress: step {self._lesson_step_idx + 1} of "
                 f"{len(self._lesson_steps)}. If they say 'next', teach the "
@@ -1475,16 +1499,19 @@ class CompanionManager(QObject):
         if not pending:
             return ""
         req = pending[-1]
+        # Only a clear yes or no answers the box. Anything else is something
+        # NEW: "Do this INSTEAD of answering" made every later question an
+        # answer to an old box, and Tora stuck on it (5 Oct 2026).
         if getattr(req, "sensitive", False):
-            return (f'WAITING ON YOU: "{req.reason}". This one is sensitive - '
-                    f'it can ONLY be approved by typing {req.confirm_word} in the '
-                    f'box on screen. If they say yes, tell them that; never '
-                    f'approve it for them.')
-        return (f'WAITING ON YOU: "{req.reason}". If they say yes, go on, do it, '
-                f'sure, please do - call manage_agents with action "approve". '
-                f'If they say no, stop, cancel, leave it - call manage_agents '
-                f'with action "deny". Do this INSTEAD of answering; they are '
-                f'replying to the box, not asking something new.')
+            return (f'A box on screen is waiting for a yes: "{req.reason}". It is '
+                    f'sensitive - it can ONLY be approved by typing {req.confirm_word} '
+                    f'in the box. If they say yes to it, tell them that; never '
+                    f'approve it for them. Anything else they say is new: answer that.')
+        return (f'A box on screen is waiting for a yes: "{req.reason}". ONLY if '
+                f'their words are a yes or no to it (yes, go on, do it / no, '
+                f'stop, cancel it) call manage_agents with action "approve" or '
+                f'"deny". Anything else they say is a NEW request - answer it or '
+                f'do it, and leave the box alone; do not bring it up.')
 
     def _realtime_system_prompt(self) -> str:
         """The session-level prompt. Deliberately free of per-turn detail.
@@ -1647,6 +1674,7 @@ class CompanionManager(QObject):
                         "actions": [a.describe() for a in found]} if found else {"error": c.suggestions(app)}
             return {"ok": True, "apps": [{"app": a["app"], "actions": a["actions"]} for a in apps],
                     "note": "Say the app and the action; I confirm before anything that acts."}
+        app = self._browser_they_meant(c, app, action)
         found = c.find(app, action)
         if found is None:
             return {"error": c.suggestions(app, action),
@@ -1715,12 +1743,44 @@ class CompanionManager(QObject):
         out = await c.run(app, action, arguments)
         return self._desktop_result(out)
 
+    _BROWSER_APPS = ("chrome", "edge", "brave", "opera", "firefox", "vivaldi")
+
+    def _browser_they_meant(self, c, app: str, action: str) -> str:
+        """A website in a browser the user did not name goes to the one they
+        are using ("browser"). "Open Gmail" with Chrome open went to Edge on a
+        tester's PC (5 Oct 2026): the model picked the browser it had been
+        told about, not the one in front of the user."""
+        if action not in ("open_url", "search"):
+            return app
+        asked = (app or "").strip().lower()
+        key = c.resolve_app(app) if app else ""
+        key = key if key in self._BROWSER_APPS else (asked if asked in self._BROWSER_APPS else "")
+        if not key:
+            return app
+        try:
+            heard = self._heard_buf or []
+        except (AttributeError, RuntimeError):     # nothing heard yet (a bare manager)
+            heard = []
+        said = " ".join(heard).lower()
+        if not said.strip():
+            return app                    # what they said is not known here: as asked
+        from agents.control.apps.browsers import NAMES
+        display, stem = NAMES.get(key, (key, key))
+        if any(re.search(r"\b" + re.escape(w.lower()) + r"\b", said) for w in {key, display, stem}):
+            return app
+        _log.info("desktop_action: %s was not named - the browser in use instead", key)
+        return "browser"
+
     @staticmethod
     def _desktop_result(out) -> dict:
         return {"ok": out.ok, "action": out.action, "app": out.app,
                 "how": out.tier.label if out.tier else "", "result": out.message,
                 "note": ("Read the result back in a few words." if out.ok
                          else "Tell the user what stopped it; do not pretend it worked.")}
+
+    # A box left unanswered this long has lapsed (agent_manager's own expiry
+    # is 180 s): the user went on to something else.
+    APPROVAL_LAPSED_S = 170.0
 
     async def _after_approval(self, future, found, arguments: dict) -> None:
         """Wait for the dialog, run the action, and say how it went.
@@ -1730,12 +1790,19 @@ class CompanionManager(QObject):
         than returned - see RealtimeConversation.say_now.
         """
         from agents.control import control
+        asked_at = time.monotonic()
         try:
             approved = await asyncio.wrap_future(future)
         except Exception:  # noqa: BLE001 - a broken dialog is a refusal
             _log.debug("approval future failed", exc_info=True)
             approved = False
 
+        if not approved and time.monotonic() - asked_at >= self.APPROVAL_LAPSED_S:
+            # Nobody answered the box: they moved on. Saying "you didn't
+            # approve opening Gmail" minutes later, in the middle of
+            # something else, is Tora stuck on the past (5 Oct 2026).
+            _log.info("%s lapsed unanswered - dropped quietly", found.key)
+            return
         if not approved:
             _log.info("%s was not approved", found.key)
             await self._speak_aside(

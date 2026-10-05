@@ -318,7 +318,7 @@ def test_a_pending_confirmation_is_offered_to_the_voice(tmp_path):
         mgr.request_confirmation("spotify.next - Next track (system)",
                                  grant_key="app_action:spotify.next")
         line = companion._pending_confirmation_line()
-        assert "WAITING ON YOU" in line and "spotify.next" in line
+        assert "waiting for a yes" in line and "spotify.next" in line
         assert "approve" in line and "deny" in line
 
         req = mgr.pending_approvals()[0]

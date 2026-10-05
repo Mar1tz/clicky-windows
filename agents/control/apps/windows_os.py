@@ -186,15 +186,16 @@ class WindowsOS:
             raise Refused(f"there is no app called {name!r} on this PC.{hint}")
 
         async def open_url(url: str) -> str:
+            from .browsers import open_in_use
             if not url.startswith(("http://", "https://")):
                 url = "https://" + url
-            open_uri(url)
-            return f"opened {url}"
+            return f"opened {url} in {open_in_use(url)}"
 
         async def search_web(query: str) -> str:
             import urllib.parse
-            open_uri("https://www.google.com/search?q=" + urllib.parse.quote(query))
-            return f"searched the web for {query!r} in your browser"
+            from .browsers import open_in_use
+            where = open_in_use("https://www.google.com/search?q=" + urllib.parse.quote(query))
+            return f"searched the web for {query!r} in {where}"
 
         return [
             Action(self.app, "media", "Play/pause, next or previous track for whatever is playing.",
@@ -232,9 +233,9 @@ class WindowsOS:
                    (Param("page", "bluetooth, wifi, display, sound, update…"),)),
             Action(self.app, "open_app", "Open an installed application by name.", open_app,
                    Tier.SYSTEM, Risk.CHANGES, (Param("name", "Application name", True),)),
-            Action(self.app, "open_url", "Open a web address in the default browser.", open_url,
+            Action(self.app, "open_url", "Open a web address in the browser the user has open.", open_url,
                    Tier.DEEP_LINK, Risk.CHANGES, (Param("url", "The address", True),)),
-            Action(self.app, "search_web", "Search the web in the default browser.", search_web,
+            Action(self.app, "search_web", "Search the web in the browser the user has open.", search_web,
                    Tier.DEEP_LINK, Risk.CHANGES, (Param("query", "What to search for", True),)),
         ]
 
