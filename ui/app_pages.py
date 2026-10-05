@@ -813,141 +813,6 @@ def _coming(ts: float) -> str:
 # ── Agents ────────────────────────────────────────────────────────────────────
 
 # A task's status, as its row says it, and the colour of its dot.
-_TASK_WORDS = {
-    "completed": ("Done", T.OK),
-    "failed": ("Failed", T.DANGER),
-    "cancelled": ("Stopped", T.TEXT_FAINT),
-    "running": ("Working", T.ACCENT),
-    "planning": ("Planning", T.ACCENT),
-    "verifying": ("Checking its work", T.ACCENT),
-    "pending": ("Queued", T.TEXT_DIM),
-    "waiting_approval": ("Waiting for you", T.WARN),
-    "paused": ("Paused", T.WARN),
-}
-
-
-class AgentsPage(Page):
-    HEADING = "Agents"
-    LIVE = True
-    TOPICS = frozenset({"agents"})
-
-    def __init__(self, bridge=None):
-        # Built once and kept for the life of the window: the live panel,
-        # and a plan-and-activity view for each task looked at. They all
-        # listen through ONE event bridge, so neither opening this page nor
-        # redrawing it ever adds a listener to the workforce.
-        self._events = None
-        self._panel = None
-        self._details: dict[str, QWidget] = {}
-        self._drawn: tuple = ()
-        super().__init__(bridge)
-
-    def build_actions(self) -> None:
-        self.action("Agent settings").clicked.connect(lambda: self.navigate.emit("settings/agents"))
-        self.action("Stop all", "danger").clicked.connect(self.bridge.stop_agents)
-
-    def build(self) -> None:
-        wf = self.bridge.workforce()
-        if wf is None:
-            self.body.add(_no_agents("Nothing can be handed to them until they do - "
-                                     "see tora.log for why."))
-            return
-        # The workforce's own panel - the one the tray's "Active Agents"
-        # opens: a card per agent with its progress, Pause and Stop, and a
-        # box to give them a job. It redraws itself from agent events.
-        from agents.ui import ActiveAgentsPanel, AgentEventBridge
-        self._events = AgentEventBridge(wf, self)
-        self._panel = _tidy(ActiveAgentsPanel(wf, bridge=self._events))
-        self._panel.setMinimumHeight(320)
-        self._panel.view_logs.connect(self.show_task)
-        work = Card("Working now", "Give them a job here, or just ask Tora out loud.")
-        work.add(self._panel)
-        self.body.add(work)
-
-        self._waiting = Card("Waiting for you",
-                             "Nothing risky runs without a yes - answer in the approval window.")
-        self.body.add(self._waiting)
-        self._recent = Card("Recent tasks", "Open one for its plan and every step it took.")
-        self.body.add(self._recent)
-
-        self._detail = Card("Plan and activity")
-        self._detail_title = label("", "cardSub")
-        self._detail.add(self._detail_title)
-        self._detail.add(spacer(10))
-        self._stack = QStackedWidget()
-        self._stack.setMinimumHeight(360)
-        self._detail.add(self._stack)
-        self._detail.hide()
-        self.body.add(self._detail)
-        self._drawn = ()
-        self._fill()
-
-    def refresh(self) -> None:
-        """Only the lists are redrawn: the panel and the task views follow
-        the agents by themselves, and keep what is typed and scrolled."""
-        if self._panel is None:
-            if self.bridge.workforce() is not None:
-                super().refresh()        # the agents started after this page was drawn
-            return
-        self._fill()
-
-    def _fill(self) -> None:
-        tasks, waiting = self.bridge.tasks(), self.bridge.approvals()
-        drawn = (tuple((t["id"], t["status"]) for t in tasks), tuple(a["id"] for a in waiting))
-        if drawn == self._drawn:
-            return                       # a progress tick: nothing listed here changed
-        self._drawn = drawn
-
-        rows = []
-        for i, a in enumerate(waiting):
-            sub = a["tool"] + (" · needs a typed confirm word" if a["sensitive"] else "")
-            if a["task"]:
-                sub = f"{a['task']} · {sub}"
-            rows.append(Row(_clip(a["reason"], 200), sub, dot=T.WARN, first=(i == 0), wrap=True))
-        refill(self._waiting.body, rows)
-        self._waiting.setVisible(bool(waiting))
-
-        rows = []
-        for i, t in enumerate(tasks):
-            words, colour = _TASK_WORDS.get(t["status"], (t["status"].capitalize(), T.TEXT_DIM))
-            sub = f"{words} · {_when(t['when'])}" if t["when"] else words
-            if t["status"] == "failed" and t["error"]:
-                sub += f" · {t['error']}"
-            details = button("Details")
-            details.clicked.connect(lambda _c=False, tid=t["id"]: self.show_task(tid))
-            rows.append(Row(_clip(t["title"], 120), sub, dot=colour, trailing=details,
-                            first=(i == 0), wrap=True))
-        if not rows:
-            rows.append(Row("Nothing yet",
-                            "Jobs given to the agents are listed here, finished ones too.",
-                            first=True))
-        refill(self._recent.body, rows)
-
-    def show_task(self, task_id: str) -> None:
-        """One task's plan and activity log, under the lists."""
-        wf = self.bridge.workforce()
-        if wf is None or self._events is None:
-            return
-        view = self._details.get(task_id)
-        if view is None:
-            from agents.ui import ActivityTimeline, PlanView
-            view = QWidget()
-            lay = QHBoxLayout(view)
-            lay.setContentsMargins(0, 0, 0, 0)
-            lay.setSpacing(T.GAP)
-            lay.addWidget(PlanView(wf, task_id, self._events, embedded=True), 1)
-            timeline = _tidy(ActivityTimeline(wf, task_id, bridge=self._events))
-            timeline.layout().setContentsMargins(0, 0, 0, 0)    # level with the plan
-            lay.addWidget(timeline, 1)
-            self._details[task_id] = view
-            self._stack.addWidget(view)
-        task = wf.get_task(task_id)
-        self._detail_title.setText(task.title if task else "")
-        self._stack.setCurrentWidget(view)
-        self._detail.show()
-        QTimer.singleShot(0, lambda: self.body.ensureWidgetVisible(self._detail))
-
-
 # ── Extensions ────────────────────────────────────────────────────────────────
 
 # Packs whose dashboard is a page of this window. Any other pack's opens in
@@ -1510,6 +1375,10 @@ def confirm_sign_out(parent) -> bool:
         QMessageBox.StandardButton.Cancel)
     return answer == QMessageBox.StandardButton.Yes
 
+
+# The Agents page lives in its own module; it builds on Page and the helpers
+# above, so it is imported here, after them.
+from ui.agents_page import AgentsPage  # noqa: E402
 
 # The sidebar, top to bottom, and the single place a new page gets added.
 # place: "main" (the list), "pack" (a pack's page: a row while the pack is

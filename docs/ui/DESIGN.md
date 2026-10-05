@@ -231,6 +231,31 @@ you are on underlined): **Voice & look** (1-3), **How she works** (4-5),
    prompt on every answer (config._instructions_from_env).
 6. **Teach her how you work** - Record a lesson · Show her what you did.
 
+## 3F. The Agents page
+
+`ui/agents_page.py`. The app's own components, drawn from the workforce
+through the bridge; the workforce's floating panels (agents/ui, worker 1)
+stay for the tray. Two columns, as Home:
+
+- **Give Tora a job** - a box that grows, three example jobs (one from an
+  enabled pack first), Start. A job that reads as a question is said so.
+- **Needs your OK** - only while an agent waits: what it wants, for which
+  job, Approve / Deny on the page (a sensitive one needs its typed word).
+  The approval window still opens; whichever answer comes first counts.
+- **Working now** - a card per running job: step n of m, what it is
+  doing, progress, how long it has run, Pause/Resume, Stop.
+- **History** - the hairline list by day: how each job ended and how long
+  it ran; hover for Open its folder; click for details.
+- **Aside** (sticky) - this month's jobs finished / didn't finish /
+  running, run time, approve-automatically state, Agent settings.
+- **Details** slide in from the right over the page: what you asked, the
+  plan as a checklist (done, on now, waiting, failed), the live activity
+  log (the workforce's own, restyled), the result or why it stopped,
+  Open folder, Run again or Stop.
+
+Later, if wanted: a map of a project's agents in the details (the data -
+a lead job, its agents and who waits on whom - is already recorded).
+
 ## 3A. Where the values live
 
 Every colour, radius, shadow and button size is a name in **`ui/tokens.py`**;

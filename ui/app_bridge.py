@@ -779,8 +779,114 @@ class AppBridge(QObject):
             out.append({"id": req.id, "tool": req.call.tool_name,
                         "reason": req.reason or req.call.tool_name,
                         "task": task.title if task else "",
-                        "sensitive": bool(req.sensitive)})
+                        "sensitive": bool(req.sensitive),
+                        "confirm_word": getattr(req, "confirm_word", "") or ""})
         return out
+
+    # ── the Agents page (DESIGN.md §3F) ──────────────────────────────────────
+
+    def running(self) -> list[dict]:
+        """Jobs on the go, top level only (a project's agents are its own),
+        with where each one is: the step it is on, what it is doing."""
+        wf = self.workforce()
+        if wf is None:
+            return []
+        try:
+            tasks = wf.list_tasks(active_only=True)
+        except Exception:  # noqa: BLE001
+            return []
+        out = []
+        for t in tasks:
+            if (t.metadata or {}).get("parent_id"):
+                continue
+            total = len(t.steps)
+            done = sum(1 for st in t.steps if str(getattr(st.status, "value", st.status)) == "done")
+            out.append({"id": t.id, "title": t.title or (t.goal or "")[:60] or "Job",
+                        "doing": t.current_action or "",
+                        "step": min(total, done + 1) if total else 0, "total": total,
+                        "progress": float(t.progress or 0.0),
+                        "status": str(getattr(t.status, "value", t.status)),
+                        "started": float(t.created_at or 0.0)})
+        return out
+
+    def give_job(self, text: str) -> tuple[str, str]:
+        """Hand the agents a job in the user's words. ("started", its title),
+        ("chat", "") when it reads as a question rather than a job, or
+        ("error", why)."""
+        wf = self.workforce()
+        if wf is None:
+            return "error", "The agents did not start - see tora.log for why."
+        try:
+            task = wf.submit(text.strip())
+        except Exception as e:  # noqa: BLE001
+            _log.warning("could not start a job", exc_info=True)
+            return "error", str(e) or type(e).__name__
+        if task is None:
+            return "chat", ""
+        self.changed.emit("agents")
+        return "started", task.title or text.strip()[:60]
+
+    def _task_call(self, name: str, task_id: str) -> bool:
+        wf = self.workforce()
+        if wf is None:
+            return False
+        try:
+            ok = bool(getattr(wf, name)(task_id))
+        except Exception:  # noqa: BLE001
+            _log.debug("could not %s %s", name, task_id, exc_info=True)
+            return False
+        self.changed.emit("agents")
+        return ok
+
+    def pause_job(self, task_id: str) -> bool:
+        return self._task_call("pause", task_id)
+
+    def resume_job(self, task_id: str) -> bool:
+        return self._task_call("resume", task_id)
+
+    def stop_job(self, task_id: str) -> bool:
+        return self._task_call("cancel", task_id)
+
+    def answer_approval(self, request_id: str, approved: bool, confirmation: str = "") -> bool:
+        """Approve or deny what an agent is waiting on - the same answer the
+        approval window gives; whichever comes first counts."""
+        wf = self.workforce()
+        if wf is None:
+            return False
+        try:
+            ok = bool(wf.approve(request_id, approved, confirmation=confirmation))
+        except Exception:  # noqa: BLE001
+            _log.debug("could not answer %s", request_id, exc_info=True)
+            return False
+        self.changed.emit("agents")
+        return ok
+
+    def job(self, task_id: str) -> Optional[dict]:
+        """One job, for its details: the goal, the plan step by step, how it
+        ended, and the folder it worked in."""
+        wf = self.workforce()
+        task = wf.get_task(task_id) if wf is not None else None
+        if task is None:
+            return None
+        steps = [{"title": st.title, "status": str(getattr(st.status, "value", st.status)),
+                  "summary": st.summary or "", "error": st.error or ""} for st in task.steps]
+        return {"id": task.id, "title": task.title or (task.goal or "")[:60], "goal": task.goal or "",
+                "status": str(getattr(task.status, "value", task.status)),
+                "doing": task.current_action or "", "steps": steps,
+                "result": task.result or "", "error": (task.error or "").strip(),
+                "folder": task.workspace or "", "started": float(task.created_at or 0.0),
+                "updated": float(task.updated_at or 0.0)}
+
+    def open_folder(self, path: str) -> bool:
+        """Open a job's folder in Explorer."""
+        import os
+        if not path or not os.path.isdir(path):
+            return False
+        try:
+            os.startfile(path)        # noqa: S606 - the user's own folder, on their click
+            return True
+        except Exception:  # noqa: BLE001
+            return False
 
     def stop_agents(self) -> None:
         if self.tray is not None:
