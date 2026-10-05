@@ -91,8 +91,11 @@ def _texts(w):
     return [lbl.text() for lbl in w.findChildren(QLabel) if lbl.isVisibleTo(w)]
 
 
-def _toggle_row(page, heading) -> ToggleRow:
-    for row in page.findChildren(ToggleRow):
+def _toggle_row(page, heading):
+    """The switch row - or, on the Tora page, the mode tile - called `heading`.
+    Both have a `.switch`."""
+    from ui.app_parts import ModeTile
+    for row in page.findChildren(ToggleRow) + page.findChildren(ModeTile):
         if heading in [lbl.text() for lbl in row.findChildren(QLabel)]:
             return row
     raise AssertionError(f"no switch called {heading!r}")
@@ -113,7 +116,9 @@ def test_every_tutor_switch_is_real(qapp, heading, name):
     from ui.settings_tabs import PrivacyTab
 
     bridge = FakeBridge(switches={name: True})
-    page = (PrivacyTab if name in ("privacy_guard", "ocr", "web_search") else ToraPage)(bridge)             # kept: Qt deletes an orphaned page's children
+    page = (PrivacyTab if name in ("privacy_guard", "ocr", "web_search") else ToraPage)(bridge)
+    if isinstance(page, ToraPage):
+        page.show_tab("works")             # kept: Qt deletes an orphaned page's children
     row = _toggle_row(page, heading)
     assert row.switch.isChecked() is True, "shows what is true"
     row.switch.setChecked(False)
@@ -133,6 +138,7 @@ def test_the_instructions_box_saves_through_the_tray(qapp):
 
     bridge = FakeBridge(instructions="Only help with Excel")
     page = ToraPage(bridge)
+    page.show_tab("works")
     (box,) = page.findChildren(QPlainTextEdit)
     assert box.toPlainText() == "Only help with Excel"
     box.setPlainText("Keep answers short")

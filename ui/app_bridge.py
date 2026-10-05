@@ -223,6 +223,22 @@ class AppBridge(QObject):
         from ui import autostart
         return autostart.set_enabled(on)
 
+    def cursor_colour(self) -> str:
+        """The colour key Tora wears (ui/tokens.CURSOR_COLOURS)."""
+        from config import cfg
+        return cfg.cursor_colour()
+
+    def set_cursor_colour(self, key: str) -> None:
+        """Save it and repaint her at once - the overlay reads it per frame."""
+        from config import cfg
+        from ui import tokens
+        cfg.set_cursor_colour(key)
+        try:
+            from ui.overlay import set_cursor_colour
+            set_cursor_colour(tokens.cursor_hex(key))
+        except Exception:  # noqa: BLE001 - no overlay (a window on its own)
+            pass
+
     def listen_sound(self) -> str:
         from config import cfg
         return cfg.listen_sound()

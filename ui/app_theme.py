@@ -139,7 +139,7 @@ def qss() -> str:
     QWidget#appRoot {{ background: {FRAME}; }}
     QWidget#topBar, QWidget#sidebar {{ background: transparent; }}
     QFrame#panel {{
-        background: {BG}; border: 1px solid {BORDER};
+        background: {BG}; border: 1px solid {BORDER if is_dark() else BG};
         border-radius: {PANEL_RADIUS}px;
     }}
     QStackedWidget#stack {{ background: transparent; }}
@@ -235,6 +235,26 @@ def qss() -> str:
         background: {ACCENT_SOFT}; color: {ACCENT}; border-radius: 9px;
         font-size: 11px; font-weight: 700; padding: 2px 8px;
     }}
+    QFrame#tabBar {{ background: transparent; border: none; border-bottom: 1px solid {BORDER}; }}
+    QPushButton#pageTab {{
+        background: transparent; border: none; border-bottom: 2px solid transparent;
+        border-radius: 0px; padding: 8px 0px 10px 0px;
+        color: {TEXT_DIM}; font-size: 14px; font-weight: 600;
+    }}
+    QPushButton#pageTab:hover {{ color: {TEXT}; }}
+    QPushButton#pageTab:checked {{ color: {TEXT}; border-bottom: 2px solid {TEXT}; }}
+    QFrame#modeTile {{
+        background: {SURFACE}; border: 1px solid {BORDER}; border-radius: {RADIUS_CARD}px;
+    }}
+    QFrame#modeTile[on="true"] {{ background: {ACCENT_SOFT}; border: 1px solid {ACCENT_EDGE}; }}
+    QLabel#modeTitle {{ font-size: 14px; font-weight: 700; background: transparent; }}
+    QLabel#modeSub   {{ color: {TEXT_DIM}; font-size: 12px; background: transparent; }}
+    QPushButton#chip {{
+        background: {SURFACE}; border: 1px solid {BORDER_STRONG}; border-radius: 16px;
+        padding: 7px 16px; font-size: 13px; font-weight: 600; min-height: 18px;
+    }}
+    QPushButton#chip:hover {{ background: {SURFACE_HOVER}; }}
+    QPushButton#chip:checked {{ background: {ACCENT_SOFT}; border: 1px solid {ACCENT}; color: {ACCENT}; }}
     QFrame#infoCard {{ background: {SURFACE}; border: none; border-radius: {tokens.RADIUS_LG}px; }}
     QLabel#infoTitle {{ font-size: 15px; font-weight: 700; }}
     QLabel#infoBig   {{ font-size: 22px; font-weight: 700; letter-spacing: -0.4px; }}

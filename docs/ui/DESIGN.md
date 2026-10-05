@@ -81,7 +81,9 @@ title bar buttons), `ui/app_popover.py` (the cards), `ui/window_frame.py`
 ```
 
 - **One ground, one panel.** The title bar and the sidebar are `FRAME`; the
-  pages sit on a raised panel (`BG`, hairline, `RADIUS_LG`) inset from it.
+  pages sit on a raised panel (`BG`, `RADIUS_LG`) inset from it, lifted by
+  a soft shadow in light (painted by the window under it, not a graphics
+  effect) and a hairline in dark, where a shadow does not show.
 - **Our own title bar.** Top left: the sidebar button, then the profile.
   Top right: Tora's state (only while she is not idle), the bell, then
   minimise / maximise / close drawn as Windows 11 draws them. The window
@@ -205,6 +207,29 @@ page's soft grey on the dialog's white, rows split by hairlines.
 `show_page("settings/<tab>")` opens a tab; `"setup"` is Advanced. The
 Tora page keeps only what makes her yours: voice, teaching style,
 instructions.
+
+## 3E. The Tora page - make her yours
+
+Second in the sidebar (Home, **Tora**, Insights, Agents, Packs). The Journal
+has no row: Home shows everything asked and the next review, and the full
+review list is Home's "Review now".
+
+Three tabs of its own (Wispr's Style page: words on a hairline, the one
+you are on underlined): **Voice & look** (1-3), **How she works** (4-5),
+**Teach her** (6).
+
+1. **Her voice** - the first launch's carousel: her name, audio bars that
+   move with the clip, arrows; settling on one (0.7 s) saves it.
+2. **Her colour** - her cursor, breathing, in the chosen colour, and the
+   swatches; applied to the live cursor at once.
+3. **Her sound** - the listening pop as chips; picking one plays it (moved
+   here from Settings > System).
+4. **Her modes** - tiles, two by two: Slow mode, Advance by itself, Quiz
+   mode, Code mode. The tile is the switch and fills with a pale accent
+   while on.
+5. **Instructions for Tora** - only the user's own words, added after her
+   prompt on every answer (config._instructions_from_env).
+6. **Teach her how you work** - Record a lesson · Show her what you did.
 
 ## 3A. Where the values live
 

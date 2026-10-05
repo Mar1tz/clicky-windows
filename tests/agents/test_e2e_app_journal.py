@@ -218,14 +218,17 @@ def test_saving_off_is_said_where_the_entries_are(qapp, journal, monkeypatch):
 def test_folder_and_attach_are_the_trays(qapp, journal, text, signal):
     from ui.app_pages import JournalPage
     _mgr, tray, bridge = _live()
-    _buttons(JournalPage(bridge), text)[0].click()
+    page = JournalPage(bridge)               # kept: Qt deletes an orphaned page's children
+    _buttons(page, text)[0].click()
     assert tray.done == [signal]
 
 
 def test_recording_starts_and_stops_through_the_tray(qapp, journal):
-    from ui.app_pages import JournalPage
+    """Teaching her how you work lives on the Tora page now."""
+    from ui.app_pages import ToraPage
     mgr, tray, bridge = _live()
-    page = JournalPage(bridge)
+    page = ToraPage(bridge)
+    page.show_tab("teach")
     _buttons(page, "Start recording")[0].click()
     assert tray.done == ["on_record_start"]
 
@@ -241,9 +244,10 @@ def test_recording_starts_and_stops_through_the_tray(qapp, journal):
 
 
 def test_capture_starts_and_stops_through_the_tray(qapp, journal):
-    from ui.app_pages import JournalPage
+    from ui.app_pages import ToraPage
     mgr, tray, bridge = _live()
-    page = JournalPage(bridge)
+    page = ToraPage(bridge)
+    page.show_tab("teach")
     _buttons(page, "Capture my clicks")[0].click()
     assert tray.done == ["on_workflow_start"]
 

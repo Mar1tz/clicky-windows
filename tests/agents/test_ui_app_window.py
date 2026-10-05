@@ -47,7 +47,7 @@ def test_every_page_builds_and_is_reachable(window):
 def test_the_sidebar_is_the_page_map(window):
     """Five pages in the list, then the free month, Settings and Help."""
     rows = [b.text() for b in window._sidebar.findChildren(QAbstractButton)]
-    assert rows == ["Home", "Insights", "Agents", "Journal", "Packs", "Accounting", "Tora",
+    assert rows == ["Home", "Tora", "Insights", "Agents", "Packs", "Accounting",
                     "Get a free month", "Settings", "Help"]
     assert window._buttons["accounting"].isHidden(), "a pack's page only while the pack is on"
     assert not window._buttons["settings"].isHidden()
@@ -96,8 +96,8 @@ def test_pages_are_built_only_when_asked_for(qapp):
 
 
 def test_the_selected_page_is_the_lit_one_in_the_rail(window):
-    window.show_page("journal")
-    assert window._buttons["journal"].isChecked()
+    window.show_page("tora")
+    assert window._buttons["tora"].isChecked()
     assert not window._buttons["home"].isChecked(), "exactly one at a time"
 
 

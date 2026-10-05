@@ -122,24 +122,8 @@ class SystemTab(Tab):
         panel.switch.toggled.connect(br.set_panel_visible)
         pc.add(panel)
         self.body.add(pc)
-        self.body.add(self._sounds())
         self._updates_slot = self._slot(self._updates_card)
         self.body.add(self._updates_slot)
-
-    def _sounds(self) -> Card:
-        """The pop as she starts listening (ui/sounds.py). Choosing one plays it."""
-        from ui import sounds
-        card = Card("Sounds")
-        keys = [k for k, _n in sounds.SOUNDS] + [sounds.OFF]
-        pick = Select(*[n for _k, n in sounds.SOUNDS], "Off", width=200)
-        now = _ask(self.bridge, "listen_sound", keys[0])
-        pick.setCurrentIndex(keys.index(now) if now in keys else 0)
-        pick.currentIndexChanged.connect(
-            lambda i: self.bridge.set_listen_sound(keys[i]) if 0 <= i < len(keys) else None)
-        card.add(Row("When she starts listening",
-                     "A short pop the moment you can talk. Pick one to hear it.",
-                     trailing=pick, first=True))
-        return card
 
     def _updates_card(self) -> Card:
         """HeyTora keeps itself up to date (updates/service.py): which version

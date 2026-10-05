@@ -1210,11 +1210,11 @@ class VoiceCarousel(QWidget):
         off = (1 - self._slide) * 40 * self._dir
         p.setOpacity(0.25 + 0.75 * self._slide)
         p.setFont(_font(12, 600, 1.5))
-        p.setPen(QColor(P.dim))
+        p.setPen(QColor(T.TEXT_DIM))
         p.drawText(QRectF(off, 4, w, 18), Qt.AlignmentFlag.AlignHCenter,
                    f"VOICE {self._index + 1} OF {len(self._voices)}")
         p.setFont(_font(46, 700, -1.0))
-        p.setPen(QColor(INK_ON_PALE))
+        p.setPen(QColor(T.TEXT))
         p.drawText(QRectF(off, 24, w, 60), Qt.AlignmentFlag.AlignHCenter, self.voice())
         p.setOpacity(1.0)
         # the waveform, in this voice's colour
@@ -1234,10 +1234,10 @@ class VoiceCarousel(QWidget):
             x += bw + gap
         # arrows
         for r, left in zip(self._arrows(), (True, False)):
-            p.setBrush(QColor(255, 255, 255, 235))
-            p.setPen(QPen(QColor(0, 0, 0, 22), 1))
+            p.setBrush(QColor(T.SURFACE))
+            p.setPen(QPen(QColor(T.BORDER_STRONG), 1))
             p.drawEllipse(r)
-            pen = QPen(QColor(INK_ON_PALE), 2.2)
+            pen = QPen(QColor(T.TEXT), 2.2)
             pen.setCapStyle(Qt.PenCapStyle.RoundCap)
             pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
             p.setPen(pen)
@@ -1250,10 +1250,10 @@ class VoiceCarousel(QWidget):
         for i in range(n):
             on = i == self._index
             p.setPen(Qt.PenStyle.NoPen)
-            p.setBrush(QColor(colour) if on else QColor(0, 0, 0, 40))
+            p.setBrush(QColor(colour) if on else QColor(T.BORDER_STRONG))
             p.drawEllipse(QPointF(dx + i * 14 + 7, 204), 4 if on else 3, 4 if on else 3)
         p.setFont(_font(12, 500))
-        p.setPen(QColor(P.faint))
+        p.setPen(QColor(T.TEXT_FAINT))
         p.drawText(QRectF(0, 216, w, 18), Qt.AlignmentFlag.AlignHCenter, "Click to hear her again")
         p.end()
 

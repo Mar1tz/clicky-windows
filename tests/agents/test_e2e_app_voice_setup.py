@@ -102,14 +102,20 @@ def _button(page, text):
 # ── Voice & models ───────────────────────────────────────────────────────────
 
 def test_the_voice_in_use_is_selected_and_can_be_changed(qapp):
+    """Her voice is the first launch's carousel: it opens on hers, and the
+    one it settles on is saved - once, not for every voice passed."""
+    from PyQt6.QtCore import QEventLoop, QTimer
     from ui.app_pages import ToraPage
 
     bridge = FakeBridge()
     page = ToraPage(bridge)
-    voice = next(s for s in page.findChildren(Select) if s.count() == 3)
-    assert voice.currentText() == "Kore"
-    voice.setCurrentIndex(1)
-    assert bridge.done == [("voice", "Puck")]
+    assert page.carousel.voice() == "Kore"
+    page.carousel.go(1, play=False)
+    page.carousel.go(1, play=False)
+    wait = QEventLoop()
+    QTimer.singleShot(ToraPage.VOICE_WAIT_MS + 200, wait.quit)
+    wait.exec()
+    assert bridge.done == [("voice", page.carousel.voice())] and page.carousel.voice() != "Kore"
 
 
 def test_the_route_can_be_changed(qapp):

@@ -180,6 +180,22 @@ STYLE: warm, concise, teacher-y. 1-2 sentences per step. No markdown bullets
 unless genuinely listing options."""
 
 
+def _instructions_from_env() -> tuple[str, str]:
+    """(Tora's system prompt, the user's own instructions).
+
+    CUSTOM_INSTRUCTIONS used to BE the system prompt: unset, it defaulted to
+    DEFAULT_SYSTEM_PROMPT, and the "Instructions for Tora" box showed and
+    saved the whole thing - so typing "keep answers short" and saving
+    replaced her entire prompt with that one line. Now it holds only what
+    the user adds, appended to her prompt. A value that still contains the
+    prompt's {{CONTEXT}} slot is a whole prompt saved by an older build (or
+    by hand): it is kept as her prompt, and there are no extra instructions."""
+    raw = os.getenv("CUSTOM_INSTRUCTIONS", "").replace("\\n", "\n")
+    if "{{CONTEXT}}" in raw:
+        return raw, ""
+    return DEFAULT_SYSTEM_PROMPT, raw.strip()
+
+
 # Technical rules Tora needs to actually draw on screen and point at
 # elements correctly. Always appended after the user-editable prompt above
 # — kept separate because breaking this syntax breaks pointing/drawing, and
@@ -398,11 +414,10 @@ class Config:
     ))
     # Fixed reply language (ISO 639-1). Empty = match the user per message.
     response_language: str = field(default="en")   # English-only
-    # User-defined scope/rules appended to every system prompt (e.g. "only
-    # help with Excel, refuse anything else").
-    custom_instructions: str = field(default_factory=lambda: os.getenv(
-        "CUSTOM_INSTRUCTIONS", DEFAULT_SYSTEM_PROMPT
-    ).replace("\\n", "\n"))
+    # Tora's prompt, and the user's own standing instructions added to it on
+    # every answer ("only help with Excel"). See _instructions_from_env.
+    system_prompt: str = field(default_factory=lambda: _instructions_from_env()[0])
+    custom_instructions: str = field(default_factory=lambda: _instructions_from_env()[1])
 
     # ── Search ───────────────────────────────────────────────────────────
     tavily_api_key: Optional[str] = field(default_factory=lambda: os.getenv("TAVILY_API_KEY") or None)

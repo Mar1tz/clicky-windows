@@ -89,6 +89,7 @@ class ToraApp(QWidget):
         body.addWidget(self._build_sidebar())
         panel = QFrame()
         panel.setObjectName("panel")
+        self._panel = panel
         inner = QVBoxLayout(panel)
         inner.setContentsMargins(1, 1, 1, 1)
         inner.addWidget(self._stack)
@@ -160,6 +161,23 @@ class ToraApp(QWidget):
 
     def _toggle_max(self) -> None:
         self.showNormal() if self.isMaximized() else self.showMaximized()
+
+    def paintEvent(self, event) -> None:
+        """A soft shadow under the panel the pages sit on (Wispr's), in
+        place of an outline. Painted here, under it, rather than as a
+        QGraphicsDropShadowEffect: an effect would re-render the whole page
+        into an image on every repaint. In dark the panel keeps a hairline
+        instead - a shadow on black does not show."""
+        super().paintEvent(event)
+        if T.is_dark() or not hasattr(self, "_panel"):
+            return
+        from PyQt6.QtCore import QRectF
+        from PyQt6.QtGui import QPainter
+        from ui import kit
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        kit.soft_shadow(p, QRectF(self._panel.geometry()), T.PANEL_RADIUS, "card", 0.55)
+        p.end()
 
     def changeEvent(self, event) -> None:
         super().changeEvent(event)

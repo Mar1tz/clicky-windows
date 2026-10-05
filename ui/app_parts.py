@@ -711,3 +711,163 @@ def swatch(shade: float) -> QWidget:
             p.drawRoundedRect(self.rect(), 3, 3)
             p.end()
     return _Swatch()
+
+
+# ── the Tora page (DESIGN.md §3E) ─────────────────────────────────────────────
+
+class ModeTile(QFrame):
+    """One of her modes as a tile: an icon, what it does, a switch. The
+    whole tile is the switch, and it fills with a pale accent while on."""
+
+    toggled = pyqtSignal(bool)
+
+    def __init__(self, icon_name: str, heading: str, sub: str, on: bool):
+        super().__init__()
+        from PyQt6.QtWidgets import QLabel
+        from ui.app_widgets import Switch
+        self.setObjectName("modeTile")
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(16, 14, 16, 16)
+        lay.setSpacing(6)
+        top = QHBoxLayout()
+        self._glyph = QLabel()
+        self._icon = icon_name
+        top.addWidget(self._glyph, 0, Qt.AlignmentFlag.AlignTop)
+        top.addStretch(1)
+        self.switch = Switch(on)
+        self.switch.toggled.connect(self._changed)
+        top.addWidget(self.switch, 0, Qt.AlignmentFlag.AlignTop)
+        lay.addLayout(top)
+        lay.addSpacing(4)
+        lay.addWidget(label(heading, "modeTitle"))
+        lay.addWidget(label(sub, "modeSub", wrap=True))
+        lay.addStretch(1)
+        self._paint(on)
+
+    def _paint(self, on: bool) -> None:
+        self.setProperty("on", "true" if on else "false")
+        self.style().unpolish(self)
+        self.style().polish(self)
+        self._glyph.setPixmap(icon(self._icon, T.ACCENT if on else T.TEXT_DIM, 20))
+
+    def _changed(self, on: bool) -> None:
+        self._paint(on)
+        self.toggled.emit(on)
+
+    def mouseReleaseEvent(self, e) -> None:
+        if e.button() == Qt.MouseButton.LeftButton and self.rect().contains(e.position().toPoint()):
+            self.switch.setChecked(not self.switch.isChecked())
+        super().mouseReleaseEvent(e)
+
+
+def chips(options: list[tuple[str, str]], current: str, on_pick: Callable[[str], None]) -> QWidget:
+    """A row of pill chips, one chosen - her sound. Picking one calls
+    on_pick(key) (which plays it)."""
+    from PyQt6.QtWidgets import QButtonGroup
+    row = QWidget()
+    lay = QHBoxLayout(row)
+    lay.setContentsMargins(0, 0, 0, 0)
+    lay.setSpacing(8)
+    group = QButtonGroup(row)
+    group.setExclusive(True)
+    for key, words in options:
+        b = QPushButton(words)
+        b.setObjectName("chip")
+        b.setCheckable(True)
+        b.setChecked(key == current)
+        b.setCursor(Qt.CursorShape.PointingHandCursor)
+        b.clicked.connect(lambda _c=False, k=key: on_pick(k))
+        group.addButton(b)
+        lay.addWidget(b)
+    lay.addStretch(1)
+    return row
+
+
+class TabBar(QFrame):
+    """A page's own tabs, Wispr's way: words in a row on a hairline, the one
+    you are on in ink with a line under it. `picked` says which."""
+
+    picked = pyqtSignal(str)
+
+    def __init__(self, tabs: list[tuple[str, str]], current: str):
+        super().__init__()
+        from PyQt6.QtWidgets import QButtonGroup
+        self.setObjectName("tabBar")
+        lay = QHBoxLayout(self)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(26)
+        group = QButtonGroup(self)
+        group.setExclusive(True)
+        self.buttons: dict[str, QPushButton] = {}
+        for key, words in tabs:
+            b = QPushButton(words.replace("&", "&&"))      # "&" is a mnemonic to a button
+            b.setObjectName("pageTab")
+            b.setCheckable(True)
+            b.setChecked(key == current)
+            b.setCursor(Qt.CursorShape.PointingHandCursor)
+            b.clicked.connect(lambda _c=False, k=key: self.picked.emit(k))
+            group.addButton(b)
+            lay.addWidget(b)
+            self.buttons[key] = b
+        lay.addStretch(1)
+
+
+class InfoButton(QPushButton):
+    """The small "i" beside a card's title: click it and a card opens
+    saying what the thing does, where it goes and what to watch for -
+    so a button nobody has used before is never a dead one."""
+
+    def __init__(self, title: str, points: list[str]):
+        super().__init__()
+        from PyQt6.QtGui import QIcon
+        self.setObjectName("rowAction")
+        self.setFixedSize(28, 28)
+        self.setIcon(QIcon(icon("info", T.TEXT_DIM, 16)))
+        self.setToolTip(f"About {title.lower()}")
+        self.setAccessibleName(f"About {title.lower()}")
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._title, self._points = title, list(points)
+        self.clicked.connect(self.open)
+
+    def open(self) -> None:
+        from PyQt6.QtCore import QPoint
+        from ui.app_popover import Popover
+        pop = Popover(360)
+        head = label(self._title, "popTitle")
+        head.setContentsMargins(12, 10, 12, 4)
+        pop.add(head)
+        for point in self._points:
+            line = label(point, "popSub", wrap=True)
+            line.setContentsMargins(12, 4, 12, 4)
+            pop.add(line)
+        pop.body.addSpacing(8)
+        self._pop = pop
+        pop.open_at(self.mapToGlobal(QPoint(self.width(), self.height() + 4)), "right")
+
+
+def growing_text(text: str, placeholder: str, least: int = 84, most: int = 320):
+    """A text box that grows with what is typed in it - from `least` to
+    `most` px, then scrolls - instead of a fixed box that hides the words."""
+    from PyQt6.QtWidgets import QPlainTextEdit
+
+    class _Growing(QPlainTextEdit):
+        def __init__(self):
+            super().__init__(text)
+            self.setPlaceholderText(placeholder)
+            self.document().contentsChanged.connect(self._fit)
+            self._fit()
+
+        def _fit(self) -> None:
+            lines, block = 0, self.document().begin()
+            while block.isValid():
+                lines += max(1, block.layout().lineCount())
+                block = block.next()
+            want = lines * self.fontMetrics().lineSpacing() + 28
+            self.setFixedHeight(max(least, min(most, want)))
+
+        def resizeEvent(self, e) -> None:
+            super().resizeEvent(e)
+            self._fit()           # a narrower box wraps to more lines
+
+    return _Growing()

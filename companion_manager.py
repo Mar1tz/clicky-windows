@@ -181,7 +181,12 @@ STYLE: short, friendly, never more than 2 sentences. End every turn with a
 question mark."""
 
     from config import _REALTIME_RULES, _TECHNICAL_RULES
-    base = cfg.custom_instructions.strip()
+    base = cfg.system_prompt.strip()
+    # The user's own standing instructions, added to her prompt - never in
+    # place of it (config._instructions_from_env).
+    own = (cfg.custom_instructions or "").strip()
+    if own:
+        base += "\n\nThe user's own standing instructions - follow them on every answer:\n" + own
     # Who the user is, from the first launch: their name, and what they use
     # the PC for - so answers start from their world.
     name, uses = cfg.profile()

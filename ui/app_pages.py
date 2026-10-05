@@ -513,6 +513,16 @@ def try_asking(uses: list[str]) -> list[str]:
     return out
 
 
+def _fill(card: Card) -> None:
+    """Let a card's body take its spare height (so what is in it can sit in
+    the middle) instead of the stretch Card keeps under it."""
+    outer = card.layout()
+    last = outer.itemAt(outer.count() - 1)
+    if last is not None and last.spacerItem() is not None:
+        outer.takeAt(outer.count() - 1)
+    outer.setStretchFactor(card.body, 1)
+
+
 def _ask(bridge, name: str, default, *args):
     """A bridge reading that a plain or older bridge may not have."""
     fn = getattr(bridge, name, None)
@@ -1170,12 +1180,6 @@ class JournalPage(Page):
             card.add(Row("Nothing yet", "Ask Tora anything; it is kept here.", first=True))
         self.body.add(card)
 
-        split = QHBoxLayout()
-        split.setSpacing(T.GAP)
-        split.addWidget(self._recording(), 1)
-        split.addWidget(self._capture(), 1)
-        self.body.add_layout(split)
-
         keep = Card()
         row = ToggleRow("Keep a journal",
                         "Save every question and answer, so they come back for "
@@ -1241,9 +1245,199 @@ class JournalPage(Page):
         self.bridge.review(entry_id, knew)
         QTimer.singleShot(0, self.refresh)
 
+# ── Tora ──────────────────────────────────────────────────────────────────────
+
+class ToraPage(Page):
+    """Make her yours (DESIGN.md §3E): her voice, her colour, her sound, her
+    modes, what she always keeps in mind, and the ways to teach her how you
+    work. The technical half - models, what she may look at - is Settings."""
+
+    HEADING = "Tora"
+    LIVE = True
+    TOPICS = frozenset({"recording"})
+    VOICE_WAIT_MS = 700          # carousel settles before the live session restarts
+
+    # Her modes: switch, icon, what it is, what it does.
+    MODES = (("slow_mode", "turtle", "Slow mode",
+              "A calmer pace on screen. For someone new to the machine."),
+             ("auto_advance", "fast-forward", "Advance by itself",
+              "Move on when she sees the step done, without waiting for “next”."),
+             ("quiz_mode", "circle-help", "Quiz mode",
+              "Ask a question back, so it sticks. Lasts until Tora restarts."),
+             ("code_mode", "code", "Code mode",
+              "Notice when you are in an editor and explain like a developer."))
+
+    # The page's own tabs (Wispr's Style page): one long page was three.
+    TABS = (("look", "Voice & look"), ("works", "How she works"), ("teach", "Teach her"))
+
+    def __init__(self, bridge=None):
+        self._tab = self.TABS[0][0]
+        super().__init__(bridge)
+
+    def show_tab(self, key: str) -> None:
+        if key in dict(self.TABS):
+            self._tab = key
+            self.refresh()
+
+    def build(self) -> None:
+        from ui.app_parts import TabBar
+        bar = TabBar(list(self.TABS), self._tab)
+        bar.picked.connect(lambda k: self._later(lambda: self.show_tab(k)))
+        self.body.add(bar)
+        self.body.column.addSpacing(6)
+        if self._tab == "look":
+            self.body.add(self._voice())
+            looks = QHBoxLayout()
+            looks.setSpacing(T.GAP)
+            looks.addWidget(self._colour(), 1)
+            looks.addWidget(self._sound(), 1)
+            self.body.add_layout(looks)
+        elif self._tab == "works":
+            self.body.add(self._modes())
+            self.body.add(self._instructions())
+        else:
+            teach = QHBoxLayout()
+            teach.setSpacing(T.GAP)
+            teach.addWidget(self._recording(), 1)
+            teach.addWidget(self._capture(), 1)
+            self.body.add_layout(teach)
+
+    def _later(self, fn) -> None:
+        """After the click returns: the tab clicked is one the redraw replaces."""
+        timer = QTimer(self)
+        timer.setSingleShot(True)
+        timer.timeout.connect(fn)
+        timer.timeout.connect(timer.deleteLater)
+        timer.start(0)
+
+    # ── her voice ────────────────────────────────────────────────────────────
+
+    def _voice(self) -> Card:
+        """The first launch's carousel: her name, the audio bars moving with
+        the clip, arrows to the next. Settling on one saves it."""
+        from audio.tts.gemini_tts import VOICES
+        from ui.onboarding_parts import VoiceCarousel
+        br = self.bridge
+        card = Card("Her voice", "Hear each one, then stop on hers. The live session "
+                                 "restarts to switch.")
+        voices = list(VOICES)
+        current = br.voice()
+        if current and current not in voices:
+            voices.insert(0, current)
+        self.carousel = VoiceCarousel(voices, current)
+        wait = QTimer(self)
+        wait.setSingleShot(True)
+        wait.setInterval(self.VOICE_WAIT_MS)
+        wait.timeout.connect(lambda: br.set_voice(self.carousel.voice()))
+        self.carousel.changed.connect(lambda _name: wait.start())
+        row = QHBoxLayout()
+        row.addStretch(1)
+        row.addWidget(self.carousel)
+        row.addStretch(1)
+        card.body.addLayout(row)
+        return card
+
+    # ── her colour, her sound ────────────────────────────────────────────────
+
+    def _colour(self) -> Card:
+        from ui import tokens
+        from ui.onboarding_parts import Swatch, ToraPreview
+        card = Card("Her colour", "What her cursor wears beside yours.")
+        now = _ask(self.bridge, "cursor_colour", "blue") or "blue"
+        preview = ToraPreview()
+        preview.setFixedWidth(130)
+        preview.set_colour(tokens.cursor_hex(now))
+        swatches = []
+
+        def pick(key: str) -> None:
+            for sw in swatches:
+                sw.set_on(sw.key == key)
+            preview.set_colour(tokens.cursor_hex(key))
+            _ask(self.bridge, "set_cursor_colour", None, key)
+
+        row = QHBoxLayout()
+        row.setSpacing(6)
+        row.addWidget(preview)
+        for key, name, hex_colour in tokens.CURSOR_COLOURS:
+            sw = Swatch(key, name, hex_colour)
+            sw.set_on(key == now)
+            sw.picked.connect(pick)
+            swatches.append(sw)
+            row.addWidget(sw)
+        row.addStretch(1)
+        card.body.addLayout(row)
+        return card
+
+    def _sound(self) -> Card:
+        from ui import sounds
+        from ui.app_parts import chips
+        card = Card("Her sound", "The pop the moment she is listening. Pick one to hear it.")
+        options = list(sounds.SOUNDS) + [(sounds.OFF, "Off")]
+        now = _ask(self.bridge, "listen_sound", sounds.SOUNDS[0][0])
+        card.body.addStretch(1)
+        card.body.addWidget(chips(options, now, lambda k: _ask(self.bridge, "set_listen_sound", None, k)))
+        card.body.addStretch(1)
+        _fill(card)
+        return card
+
+    # ── her modes ────────────────────────────────────────────────────────────
+
+    def _modes(self) -> Card:
+        from PyQt6.QtWidgets import QGridLayout
+        from ui.app_parts import ModeTile
+        card = Card("Her modes", "How she teaches. Each takes effect from her next answer.")
+        grid = QGridLayout()
+        grid.setSpacing(12)
+        for i, (name, icon_name, heading, sub) in enumerate(self.MODES):
+            tile = ModeTile(icon_name, heading, sub, self.bridge.switch(name))
+            tile.setObjectName("modeTile")
+            tile.switch.setAccessibleName(heading)
+            tile.toggled.connect(lambda on, n=name: self.bridge.set_switch(n, on))
+            grid.addWidget(tile, i // 2, i % 2)
+        card.body.addLayout(grid)
+        return card
+
+    # ── what she keeps in mind ───────────────────────────────────────────────
+
+    def _instructions(self) -> Card:
+        # The tray's "Instructions for Tora…" - standing orders she keeps in
+        # mind on every answer. Saved through the tray's own signal.
+        br = self.bridge
+        rules = Card("Instructions for Tora",
+                     "Kept in mind on every answer - “only help with Excel”, "
+                     "“keep answers very short”.")
+        from ui.app_parts import growing_text
+        box = growing_text(br.instructions(), "Nothing yet - she helps with anything.")
+        rules.body.addWidget(box)
+        rules.body.addSpacing(12)
+        foot = QHBoxLayout()
+        foot.setSpacing(10)
+        saved = label("", "faint")
+        save = button("Save instructions", "primary")
+
+        def _save() -> None:
+            br.set_instructions(box.toPlainText())
+            saved.setText("Saved - used from the next answer.")
+
+        save.clicked.connect(_save)
+        foot.addWidget(save)
+        foot.addWidget(saved, 1)
+        rules.body.addLayout(foot)
+        return rules
+
+    # ── teach her how you work ───────────────────────────────────────────────
+
     def _recording(self) -> Card:
         on = self.bridge.recording()
-        card = Card("Lesson recording",
+        from ui.app_parts import InfoButton
+        about = InfoButton("Record a lesson", [
+            "Records your screen as a video while you work with Tora - her pointer included.",
+            "Everything you ask her, and her answers, is written into a transcript beside the video.",
+            "Each lesson is saved in its own folder in Documents\\Tora Lessons, on this PC - "
+            "watch it again, or send it to someone.",
+            "Press Start recording, ask her as you normally would, then Stop recording.",
+        ])
+        card = Card("Record a lesson", action=about, sub=
                     "Records the screen and every question and answer into "
                     "Documents\\Tora Lessons - to watch again, or to send to someone.")
         foot = QHBoxLayout()
@@ -1259,7 +1453,15 @@ class JournalPage(Page):
 
     def _capture(self) -> Card:
         on = self.bridge.capturing()
-        card = Card("Workflow capture",
+        from ui.app_parts import InfoButton
+        about = InfoButton("Show her what you did", [
+            "Do a task yourself while Tora notes every click and key you press.",
+            "When you stop, she gets the list of what you did - ask her “what did I just do?” "
+            "or “how could I do this faster?”.",
+            "It is handled like a document you attach: it goes to Tora with your next questions.",
+            "It records typing too, so stop it before you type a password.",
+        ])
+        card = Card("Show her what you did", action=about, sub=
                     "Do a task yourself while Tora notes every click and key, then "
                     "ask “what did I just do?”. It records typing too - stop it "
                     "before a password.")
@@ -1280,69 +1482,6 @@ class JournalPage(Page):
         QTimer.singleShot(0, self.refresh)
 
 
-# ── Tora ──────────────────────────────────────────────────────────────────────
-
-class ToraPage(Page):
-    """Make her yours: her voice, how she teaches, and what she always keeps
-    in mind. The technical half - models, the conversation route, what she
-    may look at - is in Settings (ui/settings_tabs.py)."""
-
-    HEADING = "Tora"
-    LIVE = True
-
-    def _toggle(self, card: Card, name: str, heading: str, sub: str, *, first=False) -> None:
-        row = ToggleRow(heading, sub, self.bridge.switch(name), first=first)
-        row.switch.toggled.connect(lambda on, n=name: self.bridge.set_switch(n, on))
-        card.add(row)
-
-    def build(self) -> None:
-        br = self.bridge
-        voice = Card("Her voice")
-        voices = br.voices()
-        pick = Select(*voices, width=240)
-        if br.voice() in voices:
-            pick.setCurrentIndex(voices.index(br.voice()))
-        pick.currentIndexChanged.connect(
-            lambda k: br.set_voice(voices[k]) if 0 <= k < len(voices) else None)
-        voice.add(Row("Spoken voice", "Both routes use it; the live session restarts to switch.",
-                      trailing=pick, first=True))
-        self.body.add(voice)
-
-        how = Card("Teaching style")
-        self._toggle(how, "slow_mode", "Slow mode",
-                     "A calmer pace on screen. For someone new to the machine.", first=True)
-        self._toggle(how, "auto_advance", "Advance by itself",
-                     "Move on when she sees the step done, without waiting for “next”.")
-        self._toggle(how, "quiz_mode", "Quiz mode",
-                     "Ask a question back, so it sticks. Lasts until Tora restarts.")
-        self._toggle(how, "code_mode", "Code mode",
-                     "Notice when you are in an editor and explain like a developer.")
-        self.body.add(how)
-
-        # The tray's "Instructions for Tora…" - standing orders she keeps in
-        # mind on every answer. Saved through the tray's own signal.
-        rules = Card("Instructions for Tora",
-                     "Kept in mind on every answer - “only help with Excel”, "
-                     "“keep answers very short”.")
-        from PyQt6.QtWidgets import QPlainTextEdit
-        box = QPlainTextEdit(br.instructions())
-        box.setPlaceholderText("Nothing yet - she helps with anything.")
-        box.setFixedHeight(84)
-        rules.body.addWidget(box)
-        foot = QHBoxLayout()
-        foot.setSpacing(10)
-        saved = label("", "faint")
-        save = button("Save instructions", "primary")
-
-        def _save() -> None:
-            br.set_instructions(box.toPlainText())
-            saved.setText("Saved - used from the next answer.")
-
-        save.clicked.connect(_save)
-        foot.addWidget(save)
-        foot.addWidget(saved, 1)
-        rules.body.addLayout(foot)
-        self.body.add(rules)
 
 
 # ── shared with the Settings tabs ─────────────────────────────────────────────
@@ -1378,12 +1517,14 @@ def confirm_sign_out(parent) -> bool:
 # it is a dialog (ui/settings_dialog.py, ui/settings_tabs.py).
 PAGES = (
     ("home",       "Home",       "main",   HomePage),
+    ("tora",       "Tora",       "main",   ToraPage),
     ("insights",   "Insights",   "main",   InsightsPage),
     ("agents",     "Agents",     "main",   AgentsPage),
-    ("journal",    "Journal",    "main",   JournalPage),
     ("extensions", "Packs",      "main",   ExtensionsPage),
     ("accounting", "Accounting", "pack",   AccountingPage),
-    ("tora",       "Tora",       "main",   ToraPage),
+    # Home shows everything asked and the next review; the full list of
+    # reviews is one link away ("Review now"), not a row of its own.
+    ("journal",    "Journal",    "hidden", JournalPage),
 )
 
 # A pack page's row -> the pack that must be on for it to show.
