@@ -101,6 +101,97 @@ def _setup_logging():
         pass  # logging must never block startup
 
 
+_crash_file = None          # crash.log, open for as long as HeyTora runs (faulthandler writes to it)
+
+# The main thread re-arms the hang watchdog this often; if it has not for
+# HANG_DUMP_S, every thread's stack goes into crash.log.
+HANG_REARM_MS = 5_000
+HANG_DUMP_S = 60
+
+
+def _install_crash_guards():
+    """What happens when something goes wrong, so it never takes HeyTora
+    down silently again.
+
+    An error raised in anything Qt calls - a slot, a timer, a paint - used to
+    end the app: PyQt calls qFatal() when sys.excepthook is Python's own, and
+    the process died in Qt6Core.dll with 0xc0000409, logging nothing (a dozen
+    times on the owner's PC between 21 Sep and 5 Oct). Now it is logged, with
+    its traceback, and HeyTora carries on. Errors in other threads are logged
+    too - by default they went to stderr, which a windowed build throws away.
+
+    A crash below Python (an access violation in a driver, Qt or a ctypes
+    callback) cannot be stopped, but faulthandler writes every thread's
+    Python stack to crash.log first; so does a main thread stuck for a
+    minute. The next start says in tora.log that the last run ended so.
+    """
+    import faulthandler
+    import logging
+    import threading
+    import time
+    from config import data_dir
+
+    log = logging.getLogger("tora.crash")
+
+    def _excepthook(kind, value, tb):
+        if issubclass(kind, KeyboardInterrupt):
+            return
+        log.error("unhandled error (HeyTora carried on)", exc_info=(kind, value, tb))
+
+    def _thread_excepthook(args):
+        if args.exc_type is SystemExit:
+            return
+        name = getattr(args.thread, "name", "?")
+        log.error("unhandled error in thread %s", name,
+                  exc_info=(args.exc_type, args.exc_value, args.exc_traceback))
+
+    sys.excepthook = _excepthook
+    threading.excepthook = _thread_excepthook
+
+    global _crash_file
+    try:
+        path = data_dir() / "crash.log"
+        if path.exists():
+            text = path.read_text(encoding="utf-8", errors="replace")
+            last = text.rsplit("=== HeyTora started", 1)[-1]
+            if "Fatal Python error" in last or "Windows fatal exception" in last:
+                log.warning("the last run crashed - its stacks are in crash.log:\n%s",
+                            last.strip()[:1500])
+            elif "Timeout (" in last:
+                log.warning("the last run's main thread stood still for %ss at least "
+                            "once (or the PC slept) - stacks in crash.log", HANG_DUMP_S)
+            if path.stat().st_size > 512_000:
+                path.replace(path.with_suffix(".log.1"))
+        _crash_file = open(path, "a", encoding="utf-8")
+        _crash_file.write(f"\n=== HeyTora started {time.strftime('%Y-%m-%d %H:%M:%S')} "
+                          f"pid {os.getpid()} ===\n")
+        _crash_file.flush()
+        faulthandler.enable(file=_crash_file, all_threads=True)
+    except Exception:  # noqa: BLE001 - diagnostics must never stop HeyTora starting
+        log.debug("crash.log unavailable", exc_info=True)
+
+
+def _watch_for_hangs(app):
+    """Re-arm the hang dump from the main thread every few seconds: if the
+    thread stops (blocked, deadlocked), the dump fires and shows where."""
+    if _crash_file is None:
+        return None
+    import faulthandler
+
+    def _rearm():
+        try:
+            faulthandler.dump_traceback_later(HANG_DUMP_S, repeat=False, file=_crash_file)
+        except Exception:  # noqa: BLE001
+            pass
+
+    timer = QTimer(app)
+    timer.timeout.connect(_rearm)
+    timer.start(HANG_REARM_MS)
+    _rearm()
+    app.aboutToQuit.connect(faulthandler.cancel_dump_traceback_later)
+    return timer
+
+
 def _wire_agents(manager, tray):
     """Connect the agent workforce to the tray, once it is running.
 
@@ -214,10 +305,12 @@ def _wire_agents(manager, tray):
 
 def main():
     _setup_logging()
+    _install_crash_guards()
     QApplication.setHighDpiScaleFactorRoundingPolicy(
         Qt.HighDpiScaleFactorRoundingPolicy.PassThrough
     )
     app = QApplication(sys.argv)
+    _hang_watch = _watch_for_hangs(app)  # noqa: F841 - parented to app; kept for clarity
     app.setQuitOnLastWindowClosed(False)
     app.setApplicationName("HeyTora")
     app.setApplicationDisplayName("HeyTora - AI Companion")

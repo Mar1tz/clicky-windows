@@ -294,6 +294,7 @@ class FlowBar(QObject):
         self._copied_at = 0.0
         self._clock: Optional[Callable[[], Optional[tuple[float, float]]]] = None
         self._last = time.monotonic()
+        self._painted: tuple = ()        # what the pill looked like when last painted
 
         self.pill = _Pill(self)
         self.pill.setToolTip(f"Hold {hotkey} to talk to Tora · drag me to any side")
@@ -509,7 +510,13 @@ class FlowBar(QObject):
                 self._snap = None
                 self._place_card()
         self._tick_card(now, dt)
-        self.pill.update()
+        # Idle (or hovered) and settled, the pill does not change: painting it
+        # 60 times a second anyway kept Windows composing it 60 times a second.
+        look = self._look()
+        key = (look, self._edge, tuple(round(v, 1) for v in self._size), round(self._buttons_a, 2))
+        if look not in ("idle", "hover") or key != self._painted or self._snap is not None:
+            self._painted = key
+            self.pill.update()
 
     def _voice_level(self, now: float) -> float:
         """Her voice, for the bars: lively while it plays (no level is given

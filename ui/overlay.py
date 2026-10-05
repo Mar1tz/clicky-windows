@@ -27,9 +27,9 @@ import time
 from typing import Optional
 
 from PyQt6.QtWidgets import QWidget, QApplication
-from PyQt6.QtCore import Qt, QTimer, QPointF, QRectF
+from PyQt6.QtCore import Qt, QTimer, QPointF, QRect, QRectF
 from PyQt6.QtGui import (
-    QPainter, QColor, QPen, QBrush, QPainterPath, QCursor, QFont,
+    QPainter, QColor, QPen, QBrush, QPainterPath, QCursor, QFont, QFontMetricsF,
 )
 
 from screen import monitors
@@ -46,6 +46,10 @@ MODE_SPEAKING  = "speaking"
 # Exactly matches Swift source: buddyX = swiftUIPosition.x + 35; buddyY = +25
 OFFSET_X = 35
 OFFSET_Y = 25
+
+# How far the buddy itself reaches from its centre, in any state: the widest
+# glow is 24px (listening, loud), the triangle swoops to 1.25x in flight.
+BUDDY_REACH = 40.0
 
 # Swift: .rotationEffect(.degrees(-35))
 TRI_ROTATION_DEG = -35.0
@@ -116,6 +120,9 @@ ANNOTATION_TTL_S    = 14.0
 GUIDE_LINGER_S      = 4.0
 
 _TEXT_SIZES = {"s": 12, "m": 17, "l": 26}
+
+# The status card above the buddy (_island_box).
+_ISLAND_PAD_X, _ISLAND_PAD_Y, _ISLAND_GAP, _ISLAND_DOT_W = 11, 7, 3, 16
 
 
 def _shape_path_pts(shape: dict):
@@ -248,7 +255,7 @@ class _Surface(QWidget):
         self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
         self._overlay = overlay
         self.qscreen = screen
-        self.drawn = False               # something was on it at the last frame
+        self.rects: list[QRect] = []     # what was drawn on it at the last frame
         self.place(screen)
 
     def place(self, screen) -> None:
@@ -286,6 +293,7 @@ class CursorOverlay(QWidget):
         self._display_pos = QPointF(0, 0)
         self._vel = QPointF(0, 0)
         self._pointer_screen = None            # the monitor the pointer was on last frame
+        self._rest_frames = 0                  # frames in a row with nothing moving (_tick)
         self._mode: str = MODE_IDLE
         self._audio_level: float = 0.0
         self._phase: float = 0.0
@@ -343,6 +351,7 @@ class CursorOverlay(QWidget):
         # persist until clear_annotations() — a lesson stays on screen while
         # the student studies it.
         self._annotations: list[dict] = []
+        self._ann_painted = 0               # how many were on screen at the last frame
         self._draw_queue_end: float = 0.0   # when the last queued stroke finishes
         self._last_tip = None               # pen position held between strokes
 
@@ -673,29 +682,67 @@ class CursorOverlay(QWidget):
         self._caption.needs_screen = self._caption.active()
         self._refresh(force=True)
 
-    def _regions(self) -> list:
-        """Where on the desktop something is drawn now, generously."""
-        if self._annotations:
-            return [None]                          # drawings: every monitor
+    def _annotations_moving(self) -> bool:
+        """A drawing is being drawn in or fading out, so it changes every
+        frame wherever it is. One that has been drawn and sits there does not."""
+        now = time.monotonic()
+        for a in self._annotations:
+            start = a["start"]
+            if start - 0.1 <= now <= start + a.get("dur", 0.6) + 0.1:
+                return True
+            ttl = a.get("ttl")
+            if ttl is not None and now - start > ttl * 0.75:
+                return True
+        return False
+
+    def _regions(self) -> Optional[list]:
+        """Where on the desktop something is drawn now - every pixel of it,
+        with a margin - or None when the drawings change and every monitor
+        has to be painted whole."""
+        if len(self._annotations) != self._ann_painted or self._annotations_moving():
+            return None
         d = self._display_pos
-        out = [QRectF(d.x() - 70, d.y() - 170, 480, 290)]   # the buddy, its bubble and card
+        cx, cy = d.x(), d.y()
+        out = [QRectF(cx - BUDDY_REACH, cy - BUDDY_REACH, 2 * BUDDY_REACH, 2 * BUDDY_REACH)]
+        if self._locked_pos is not None and self._bubble_text:
+            out.append(buddy.bubble_rect(cx, cy, self._bubble_text).adjusted(-8, -8, 8, 10))
+        lines = self._island_lines()
+        if lines and self._island_alpha >= 0.02:
+            out.append(self._island_box(cx, cy, *lines)[0].adjusted(-12, -12, 30, 12))
         if self._ring is not None:
             rx, ry, r = self._ring
             out.append(QRectF(rx - r - 30, ry - r - 30, 2 * r + 60, 2 * r + 60))
-        if self._caption.active() and self._cap_screen is not None:
-            out.append(self._cap_screen)
+        if self._caption.active():
+            out.append(self._caption.bounds())
         return out
 
     def _refresh(self, force: bool = False) -> None:
-        """Repaint the monitors that have something on them now - or had at
-        the last frame, to rub it out. The rest are left alone."""
-        regions = self._regions()
+        """Repaint what is drawn now and what was drawn at the last frame, to
+        rub it out - and nothing else.
+
+        It used to repaint every monitor with anything on it, whole, 60 times
+        a second - and the buddy is always on one. These are see-through
+        windows, so each frame Windows took a full-monitor picture from Tora
+        and composed it into the desktop: a third of a core here at 1536x864,
+        many times that on a 4K screen or three monitors, and the desktop
+        compositor (DWM) shared out with every app. On slower PCs the whole
+        screen stopped keeping up and the PC looked frozen. The buddy is
+        80px across; now that is what is painted."""
+        regions = None if force else self._regions()
+        self._ann_painted = len(self._annotations)
         for s in self._surfaces:
             area = s.area()
-            has = any(r is None or area.intersects(r) for r in regions)
-            if has or s.drawn or force:
-                s.update()
-            s.drawn = has
+            if regions is None:
+                rects = [QRect(0, 0, s.width(), s.height())]
+            else:
+                rects = []
+                for r in regions:
+                    hit = r.intersected(area)
+                    if not hit.isEmpty():
+                        rects.append(hit.translated(-area.x(), -area.y()).toAlignedRect())
+            for r in rects + s.rects:
+                s.update(r)
+            s.rects = rects
 
     def _release_lock(self):
         self._locked_pos = None
@@ -840,6 +887,19 @@ class CursorOverlay(QWidget):
         self._spin_phase += 0.14  # ~0.8s per rev @ 60fps matches Swift
         self._ring_phase += 0.08
 
+        # At rest under a still mouse, with nothing else on show, all that
+        # changes is the glow's slow breath (~3s): every third frame shows it
+        # just as well, at a third of the cost - and Tora is at rest most of
+        # the day.
+        settled = (abs(self._vel.x()) + abs(self._vel.y()) < 0.05
+                   and abs(target.x() - self._display_pos.x())
+                   + abs(target.y() - self._display_pos.y()) < 0.5)
+        quiet = (settled and self._mode in (MODE_IDLE, MODE_SPEAKING)
+                 and not self._annotations and not self._caption.active()
+                 and self._island_alpha < 0.02 and self._locked_pos is None)
+        self._rest_frames = self._rest_frames + 1 if quiet else 0
+        if self._rest_frames % 3:
+            return
         self._refresh()
 
     # ── Painting ──────────────────────────────────────────────────────────────
@@ -886,6 +946,22 @@ class CursorOverlay(QWidget):
             except Exception:
                 pass
 
+    @staticmethod
+    def _island_box(cx: float, cy: float, head: str, sub: str):
+        """(card rect, head font, sub font) of the status card above the
+        buddy at (cx, cy) - one place, so what is painted and what is
+        repainted (_regions) cannot disagree."""
+        head_font = QFont("Segoe UI", 9, QFont.Weight.DemiBold)
+        sub_font = QFont("Segoe UI", 8, QFont.Weight.Normal)
+        fm_h, fm_s = QFontMetricsF(head_font), QFontMetricsF(sub_font)
+        w = _ISLAND_DOT_W + max(
+            fm_h.horizontalAdvance(head),
+            fm_s.horizontalAdvance(sub) if sub else 0,
+        ) + _ISLAND_PAD_X * 2
+        h = fm_h.height() + (fm_s.height() + _ISLAND_GAP if sub else 0) + _ISLAND_PAD_Y * 2
+        # Sit above the buddy, nudged so it never covers what we point at.
+        return QRectF(cx + 16, cy - h - 20, w, h), head_font, sub_font
+
     def _draw_island(self, p, cx, cy):
         """A small status card above the buddy: what it's doing, and where
         you are in the guide. Fades in and out so it never snaps (the fade
@@ -894,25 +970,12 @@ class CursorOverlay(QWidget):
         if self._island_alpha < 0.02 or not lines:
             return
         head, sub = lines
-
-        head_font = QFont("Segoe UI", 9, QFont.Weight.DemiBold)
-        sub_font = QFont("Segoe UI", 8, QFont.Weight.Normal)
-        p.setFont(head_font)
-        fm_h = p.fontMetrics()
-        p.setFont(sub_font)
-        fm_s = p.fontMetrics()
-
-        pad_x, pad_y, gap = 11, 7, 3
-        dot_w = 16
-        w = dot_w + max(
-            fm_h.horizontalAdvance(head),
-            fm_s.horizontalAdvance(sub) if sub else 0,
-        ) + pad_x * 2
-        h = fm_h.height() + (fm_s.height() + gap if sub else 0) + pad_y * 2
-
-        # Sit above the buddy, nudged so it never covers what we point at.
-        x = cx + 16
-        y = cy - h - 20
+        box, head_font, sub_font = self._island_box(cx, cy, head, sub)
+        fm_h = QFontMetricsF(head_font)
+        fm_s = QFontMetricsF(sub_font)
+        pad_x, pad_y, gap = _ISLAND_PAD_X, _ISLAND_PAD_Y, _ISLAND_GAP
+        dot_w = _ISLAND_DOT_W
+        x, y, w, h = box.x(), box.y(), box.width(), box.height()
         a = self._island_alpha
 
         # Soft shadow + dark glass card

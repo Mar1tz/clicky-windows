@@ -209,6 +209,11 @@ class CaptionIsland:
     def active(self) -> bool:
         return self._state != "hidden"
 
+    def bounds(self) -> QRectF:
+        """Everything draw() can touch, in the overlay's coordinates: the
+        notch and the shoulders that reach CAP_SHOULDER past its sides."""
+        return self._pill.adjusted(-CAP_SHOULDER - 6, -6, CAP_SHOULDER + 6, 6)
+
     def push(self, text: str) -> None:
         """A fragment of what Tora is saying. Opens the island on the first
         non-empty fragment of an utterance, regardless of app state — on the
