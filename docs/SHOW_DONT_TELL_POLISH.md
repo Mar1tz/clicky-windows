@@ -288,7 +288,25 @@ The SP-01 baseline backed it up:
 
 *Cost:* about $0.06.
 
-### SP-05 · Fewer words back — S
+### SP-05 · Fewer words back — S — **done (6 Oct)**
+
+**What changed:**
+* The fast look's schema and system prompt have no `observations`.
+* The deep look keeps them, and the "look read:" line in the log.
+
+**SP-01, the 20 fast looks, before → after** ($0.049):
+
+| | before | after |
+|---|---|---|
+| right | 22/23 | 22/23 |
+| output tokens | 2,796 | **1,645 (−41%)** |
+| fast looks' cost | $0.0266 | $0.0239 (−10%; −17% without thinking) |
+| p50 | 2.73 s | **2.39 s** |
+
+**Thinking varies from run to run.** At "low", the fast model's thinking
+went 1,239 → 1,660 tokens with nothing else changed. The deep chess look
+thought 0 tokens on one run and 348 on another. So compare the parts a
+change touches, not only the total. The baseline is now this run.
 
 **Why:**
 * The look writes `observations` on every call. They are only logged
@@ -566,7 +584,7 @@ answered the mate-in-one correctly.
 | SP-02 | Voice test bench — done | A | M | ~$0.12/run | – |
 | SP-03 | Whole answer's cost — done | A | S | (with SP-02) | – |
 | SP-04 | Thinking under control — done | B | S | ~$0.08 | SP-01 |
-| SP-05 | Fewer words back | B | S | ~$0.03 | SP-01 |
+| SP-05 | Fewer words back — done | B | S | ~$0.05 | SP-01 |
 | SP-06 | Right image size | B | S | ~$0.10 | SP-01 |
 | SP-07 | Typed path, same rule | B | S | free | – |
 | SP-08 | Sharper routing words | B | S | free | SP-01 screen |
@@ -587,8 +605,10 @@ SP-12.
 * **Cost:** SP-16. The voice is three quarters of a looked answer
   (SP-03).
 * **The answer's speed:** SP-17.
-* **Done:** SP-04 took the deep look from $0.054 to $0.020 and from 5.3 s
-  to 3.9 s.
+* **Done:**
+  * SP-04 took the deep look from $0.054 to $0.020 and from 5.3 s to
+    3.9 s;
+  * SP-05 took the fast look from 2.73 s to 2.39 s.
 
 Each has its bench (SP-01 or SP-02), so nothing changes without a
 before-and-after.

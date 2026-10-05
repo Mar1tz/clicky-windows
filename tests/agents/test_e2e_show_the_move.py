@@ -131,7 +131,8 @@ def test_the_rules_say_say_it_and_stop():
     look = next(d for d in gemini_realtime.tool_declarations()[0]["functionDeclarations"]
                 if d["name"] == "look_at_screen")
     assert "returns `say`" in look["description"] and "describe the highlight" not in look["description"]
-    assert "ONE thing in actions" in gemini_vision._SYSTEM and "never read to the user" in gemini_vision._SYSTEM
+    assert "ONE thing in actions" in gemini_vision._SYSTEM
+    assert "never read to the user" in gemini_vision._OBSERVATIONS_RULE, "the deep look's trail (SP-05)"
 
 
 @pytest.fixture(scope="module")

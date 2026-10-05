@@ -231,3 +231,20 @@ def test_the_deep_look_asks_for_the_low_level(monkeypatch):
     asyncio.run(gemini_vision.look("what's the best move?", "img", deep=True))
     assert sent[Models.VISION_DEEP] == "low"
     assert gemini.thinking(sent[Models.VISION_DEEP], Models.VISION_DEEP)["thinkingConfig"] == {"thinkingLevel": "low"}
+
+
+# -- SP-05: fewer words back ----------------------------------------------------------------------------------
+
+def test_the_fast_look_writes_no_observations_and_the_deep_one_keeps_its_trail(monkeypatch):
+    sent = {}
+
+    async def fake_generate_json(model, contents, schema, **kw):
+        sent[model] = (schema, kw["system"])
+        return {"answer": "Click Sign in.", "actions": [], "sure": False}
+    monkeypatch.setattr(gemini, "generate_json", fake_generate_json)
+    asyncio.run(gemini_vision.look("where do I sign in?", "img"))      # unsure: fast, then deep
+    fast_schema, fast_system = sent[Models.VISION_FAST]
+    deep_schema, deep_system = sent[Models.VISION_DEEP]
+    assert "observations" not in fast_schema["properties"] and "observations" not in fast_system
+    assert "observations" in deep_schema["properties"] and "observations" in deep_system
+    assert fast_schema["required"] == ["answer", "actions", "sure"]

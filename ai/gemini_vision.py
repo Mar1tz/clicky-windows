@@ -116,6 +116,16 @@ _SCHEMA = {
     "propertyOrdering": ["actions", "answer", "observations"],
 }
 
+# SP-05: the fast look writes no observations. They come after the answer,
+# so they cannot change it; they were only logged, and they were the larger
+# part of every fast look's output - six times the price of input, and the
+# slow part. The deep look keeps them as its trail in the log.
+_FAST_SCHEMA = {
+    **_SCHEMA,
+    "properties": {k: v for k, v in _SCHEMA["properties"].items() if k != "observations"},
+    "propertyOrdering": ["actions", "answer"],
+}
+
 # Thinking tokens count against maxOutputTokens on this API. Unbounded
 # (think=None) let the pro model reason for ~3,500 of its 4,096 tokens and
 # then get cut off mid-answer — 40 s for nothing, three times in one
@@ -141,12 +151,14 @@ on the user's screen while it talks.
     guessing.
   • For other questions, put every element the user needs to look at in
     actions, with a tight box around it, in the order to look at them.
-  • observations are the specific things you read off the screen that your
-    answer depends on — piece positions, axis values, the exact error text.
-    They are kept for checking and are never read to the user.
   • sure: false when you cannot read the thing clearly, or the judgement is
     genuinely hard (a strong chess move, a subtle bug) - a stronger look
     then takes over. Never guess to seem sure."""
+
+_OBSERVATIONS_RULE = """
+  • observations are the specific things you read off the screen that your
+    answer depends on — piece positions, axis values, the exact error text.
+    They are kept for checking and are never read to the user."""
 
 
 @dataclass
@@ -405,11 +417,11 @@ async def _ask(question: str, screenshot_b64: str, *, deep: bool, context: str, 
     usage: dict = {}
     try:
         data = await gemini.generate_json(
-            model, contents, _SCHEMA,
-            system=_SYSTEM,
+            model, contents, _SCHEMA if deep else _FAST_SCHEMA,
+            system=_SYSTEM + _OBSERVATIONS_RULE if deep else _SYSTEM,
             max_tokens=4096,
-            # The fast look skips its reasoning pass entirely; the deep look
-            # gets a bounded budget so it always has room left to answer.
+            # As little thinking as each model takes: "low" on Gemini 3, for
+            # the deep look too, so it always has room left to answer (SP-04).
             think=_DEEP_THINK if deep else 0,
             timeout=min(timeout, _DEEP_TIMEOUT_S) if deep else timeout,
             usage=usage,
