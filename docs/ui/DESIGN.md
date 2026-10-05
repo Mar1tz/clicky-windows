@@ -127,7 +127,7 @@ to Home, review and saved walkthroughs to **Learn**.
 | Page | Wispr | Top card | Under it |
 |---|---|---|---|
 | Home | Dictation | Up next (running · review · try asking) | side card (questions, walkthroughs, day streak; plan or review); everything asked, by day |
-| Insights | Insights | "What you've learned." | streak grid, apps you ask about, walkthroughs, agent tasks, plan use; achievements later |
+| Insights | Insights | (none - the tiles are the top) | three tiles (questions + week on week; walkthroughs + minutes guided; remembered of all taught + due); where you ask (top apps, Tora's own window left out); streak calendar (20 weeks, current + longest); this month on the plan; agents this month. Only measured numbers: no words per minute, no percentiles, no time saved |
 | Agents | Notetaker | "Tora works while you don't." | "give her a first job" card, running, approvals, past tasks |
 | Learn | Dictionary / Snippets | "Keep what she taught you." | review, saved walkthroughs, recorded lessons, captured workflows |
 | Packs | Transforms | "Tora, for your work." | a grid of pack cards; "more packs coming" |
@@ -162,6 +162,12 @@ real data, gone when all are.
   **Search** is an icon on the first day's row that slides open into a
   field; it matches question or answer, and Escape or leaving it empty
   closes it.
+- **Insights shows its numbers as charts**, Wispr's way: questions a day
+  as bars (21 days, today in the accent), what is remembered as a half
+  gauge, each app's share as a bar, the streak calendar, the plan as
+  meters. They **grow in when the page opens** - each chart a `Grows`
+  (`ui/app_parts.py`) on the site's curve, a beat after the one before -
+  and never replay on a live redraw.
 - **Cards are filled, lists are a hairline.** Up next and the numbers are
   `SURFACE` plates; the history is a 1px `BORDER` round rows on the page's
   own ground, so the cards lead and the list recedes. (Wispr's way round -
@@ -503,7 +509,8 @@ snap targets and the pop sound below.
 | A1b | Page template (§3C): hero, side card, history list, centred column, no outlined cards; Home rebuilt | Done |
 | A2 | Settings as a dialog with its own menu (General, Privacy, Models, Account, Advanced); Setup and Models leave the sidebar | Next |
 | A3 | Notifications feed: agent tasks, approvals, progress, usage, achievements | |
-| A4 | Insights, then Agents, Learn (Journal leaves the sidebar), Packs, Tora - each on the §3C template | |
+| A3b | Insights page (§3C), `ui/insights_data.py` | Done |
+| A4 | Agents, Learn (Journal leaves the sidebar), Packs, Tora - each on the §3C template | |
 | A5 | Home extras: replay a walkthrough from history (needs a manager entry point), Get started checklist | |
 | 5 | Glass and the pill: §7A pill with snap targets, result card, pop sound, captions optional; tray popup to glass; panel, captions and buddy onto shared tokens; `agents/ui/orbs.py` (worker 1) | |
 

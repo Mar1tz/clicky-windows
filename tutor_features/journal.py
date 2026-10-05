@@ -208,6 +208,22 @@ def search(text: str, limit: int = 100) -> list[dict]:
     return [dict(zip(cols, r)) for r in rows]
 
 
+def insight_rows() -> list[tuple]:
+    """(created_at, tags, app_key, streak) for every entry - the Insights
+    page counts from these (ui/insights_data.py)."""
+    with _connect() as conn:
+        return conn.execute(
+            "SELECT created_at, COALESCE(tags, ''), COALESCE(app_key, ''), "
+            "COALESCE(streak, 0) FROM entries").fetchall()
+
+
+def walkthrough_seconds() -> float:
+    """How long all the walkthroughs took, together."""
+    with _connect() as conn:
+        row = conn.execute("SELECT COALESCE(SUM(seconds), 0) FROM walkthroughs").fetchone()
+    return float(row[0] or 0.0)
+
+
 def activity() -> list[tuple[float, str]]:
     """(created_at, tags) for every entry - all of them, for counting:
     Home's totals and streak. Two columns, so it stays cheap at any size."""

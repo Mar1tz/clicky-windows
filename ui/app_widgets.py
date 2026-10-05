@@ -571,6 +571,7 @@ from PyQt6.QtGui import QPixmap   # noqa: E402  (grouped with its users)
 # Page and action -> icon file. A new page adds a line here.
 ICONS = {
     "home": "house",
+    "insights": "chart-column",
     "agents": "bot",
     "journal": "book-open",
     "extensions": "blocks",

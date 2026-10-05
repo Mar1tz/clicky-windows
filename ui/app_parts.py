@@ -357,3 +357,298 @@ class SearchBox(QWidget):
             if event.type() == QEvent.Type.FocusOut and not self.field.text():
                 self.close_search()
         return False
+
+
+# ── insights (DESIGN.md §3C) ──────────────────────────────────────────────────
+
+class InfoCard(QFrame):
+    """A filled card with a heading and, on the right of it, a small caps
+    note ("TOTAL APPS · 8"). `body` takes the content."""
+
+    def __init__(self, heading: str = "", note: str = "", *, big: bool = False):
+        super().__init__()
+        self.setObjectName("infoCard")
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(22, 20, 22, 20)
+        lay.setSpacing(12)
+        if heading or note:
+            head = QHBoxLayout()
+            head.setSpacing(10)
+            if heading:
+                head.addWidget(label(heading, "infoBig" if big else "infoTitle"), 0,
+                               Qt.AlignmentFlag.AlignVCenter)
+            head.addStretch(1)
+            if note:
+                head.addWidget(label(note.upper(), "infoNote"), 0, Qt.AlignmentFlag.AlignVCenter)
+            lay.addLayout(head)
+        self.body = QVBoxLayout()
+        self.body.setSpacing(8)
+        lay.addLayout(self.body)
+        lay.addStretch(1)
+
+
+def stat_tile(value: str, caption: str, lines: list[tuple[str, str]] = (),
+              chart: Optional[QWidget] = None) -> InfoCard:
+    """Wispr's tile: the number, what it counts, a chart if there is one,
+    then a hairline and up to two lines of detail ("this week · 12")."""
+    card = InfoCard()
+    card.body.setSpacing(4)
+    card.body.addWidget(label(value, "tileValue"))
+    card.body.addWidget(label(caption.upper(), "infoNote"))
+    if chart is not None:
+        card.body.addSpacing(12)
+        if chart.minimumWidth() == chart.maximumWidth():      # a fixed size (the gauge): centred
+            card.body.addWidget(chart, 0, Qt.AlignmentFlag.AlignHCenter)
+        else:                                                 # the rest fill the tile's width
+            card.body.addWidget(chart)
+    if lines:
+        card.body.addSpacing(10)
+        line = QFrame()
+        line.setObjectName("hr")
+        line.setFixedHeight(1)
+        card.body.addWidget(line)
+        card.body.addSpacing(6)
+        for left, right in lines:
+            row = QHBoxLayout()
+            row.addWidget(label(left, "tileLine"))
+            row.addStretch(1)
+            row.addWidget(label(right, "tileLineValue"))
+            card.body.addLayout(row)
+    return card
+
+
+class Grows(QWidget):
+    """A chart that draws itself `t` of the way in (0..1). It starts drawn;
+    the Insights page sets it to 0 and calls play() when the page opens, so
+    a chart grows in on arrival and a live redraw does not replay it."""
+
+    GROW_MS = 950
+
+    def __init__(self):
+        super().__init__()
+        self.t = 1.0
+
+    def play(self, delay: int = 0) -> None:
+        from PyQt6.QtCore import QTimer
+        from ui import kit
+        self.t = 0.0
+        self.update()
+        timer = QTimer(self)
+        timer.setSingleShot(True)
+        timer.timeout.connect(lambda: kit.tween(self, "t", 1.0, self.GROW_MS))
+        timer.timeout.connect(timer.deleteLater)
+        timer.start(delay)
+
+
+class ShareBar(Grows):
+    """One app's share: a rounded bar in the accent, its % inside it."""
+
+    H = 26
+
+    def __init__(self, share: float, rank: int):
+        super().__init__()
+        self._share, self._rank = max(0.0, min(1.0, share)), rank
+        self.setFixedHeight(self.H)
+        self.setMinimumWidth(120)
+
+    def paintEvent(self, _e) -> None:
+        from PyQt6.QtCore import QRectF
+        from ui import kit, tokens
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        w = max(44.0, self.width() * self._share) * self.t
+        if w < 2:
+            p.end()
+            return
+        r = QRectF(0, 0, w, self.H)
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(kit.with_alpha(tokens.BLUE, (1.0, 0.82, 0.66, 0.52, 0.42)[min(self._rank, 4)]))
+        p.drawRoundedRect(r, 6, 6)
+        p.setOpacity(max(0.0, (self.t - 0.6) / 0.4))
+        p.setPen(QColor(tokens.ON_COLOUR))
+        p.setFont(kit.font(12, 700))
+        p.drawText(r, Qt.AlignmentFlag.AlignCenter, f"{round(self._share * 100)}%")
+        p.end()
+
+
+class StreakGrid(Grows):
+    """The last weeks, a square a day, deeper blue for more questions;
+    months along the top, days down the side (Wispr's streak calendar)."""
+
+    CELL, GAP, LEFT, TOP = 14, 4, 34, 20
+
+    def __init__(self, columns: list[list[tuple]]):
+        super().__init__()
+        self._cols = columns
+        w = self.LEFT + len(columns) * (self.CELL + self.GAP)
+        self.setMinimumSize(w, self.TOP + 7 * (self.CELL + self.GAP))
+
+    @staticmethod
+    def level(n: int) -> float:
+        return 0.0 if n <= 0 else 0.35 if n == 1 else 0.6 if n <= 3 else 1.0
+
+    def paintEvent(self, _e) -> None:
+        from PyQt6.QtCore import QRectF
+        from ui import kit, tokens
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        step = self.CELL + self.GAP
+        p.setFont(kit.font(11, 500))
+        p.setPen(QColor(T.TEXT_FAINT))
+        for i, name in enumerate(("Sun", "", "Tue", "", "Thu", "", "Sat")):
+            if name:
+                p.drawText(QRectF(0, self.TOP + i * step, self.LEFT - 6, self.CELL),
+                           Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft, name)
+        month = None
+        for c, col in enumerate(self._cols):
+            x = self.LEFT + c * step
+            # A month is named on the column its first day falls in, so two
+            # names never share the space of one.
+            first = next((day for day, _n in col if day.day == 1), None)
+            if first is not None and first.month != month:
+                month = first.month
+                if c < len(self._cols) - 1:
+                    p.setPen(QColor(T.TEXT_FAINT))
+                    p.drawText(QRectF(x, 0, step * 3, 14), Qt.AlignmentFlag.AlignLeft,
+                               first.strftime("%b"))
+            p.setPen(Qt.PenStyle.NoPen)
+            # The weeks arrive left to right, each a short fade behind the last.
+            n_cols = max(1, len(self._cols))
+            shown = max(0.0, min(1.0, self.t * (n_cols + 4) / 4 - c / 4))
+            for r, (_day, n) in enumerate(col):
+                a = self.level(n)
+                p.setOpacity(shown)
+                p.setBrush(kit.with_alpha(tokens.BLUE, a) if a else QColor(T.SURFACE_HOVER))
+                p.drawRoundedRect(QRectF(x, self.TOP + r * step, self.CELL, self.CELL), 3.5, 3.5)
+            p.setOpacity(1.0)
+        p.end()
+
+
+def legend() -> QWidget:
+    """Less ▢▢▢▢ More, under the calendar."""
+    from PyQt6.QtCore import QRectF
+    from ui import kit, tokens
+
+    class _Swatches(QWidget):
+        def __init__(self):
+            super().__init__()
+            self.setFixedSize(4 * 18, 14)
+
+        def paintEvent(self, _e):
+            p = QPainter(self)
+            p.setRenderHint(QPainter.RenderHint.Antialiasing)
+            p.setPen(Qt.PenStyle.NoPen)
+            for i, a in enumerate((0.0, 0.35, 0.6, 1.0)):
+                p.setBrush(kit.with_alpha(tokens.BLUE, a) if a else QColor(T.SURFACE_HOVER))
+                p.drawRoundedRect(QRectF(i * 18, 0, 14, 14), 3.5, 3.5)
+            p.end()
+
+    row = QWidget()
+    lay = QHBoxLayout(row)
+    lay.setContentsMargins(StreakGrid.LEFT, 4, 0, 0)
+    lay.setSpacing(8)
+    lay.addWidget(label("Less", "infoFaint"))
+    lay.addWidget(_Swatches())
+    lay.addWidget(label("More", "infoFaint"))
+    lay.addStretch(1)
+    return row
+
+
+class DayBars(Grows):
+    """Questions a day, the last few weeks: a bar a day, today's in the
+    accent, the rest a paler blue; they rise in, left to right."""
+
+    def __init__(self, values: list[int], height: int = 64):
+        super().__init__()
+        self._v = list(values)
+        self.setFixedHeight(height)
+        self.setMinimumWidth(120)
+        from PyQt6.QtWidgets import QSizePolicy
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+
+    def paintEvent(self, _e) -> None:
+        from PyQt6.QtCore import QRectF
+        from ui import kit, tokens
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        n = max(1, len(self._v))
+        gap = 4.0
+        bw = max(3.0, (self.width() - gap * (n - 1)) / n)
+        top = max(self._v) if self._v and max(self._v) > 0 else 1
+        h = float(self.height())
+        p.setPen(Qt.PenStyle.NoPen)
+        for i, v in enumerate(self._v):
+            # each bar starts a little after the one before it
+            k = max(0.0, min(1.0, self.t * 1.6 - i / n * 0.6))
+            full = max(3.0, (h - 2) * v / top) if v else 3.0
+            bh = full * k if v else 3.0
+            x = i * (bw + gap)
+            last = i == n - 1
+            colour = (kit.with_alpha(tokens.BLUE, 1.0) if last else
+                      kit.with_alpha(tokens.BLUE, 0.38) if v else QColor(T.SURFACE_HOVER))
+            p.setBrush(colour)
+            p.drawRoundedRect(QRectF(x, h - bh, bw, bh), min(3.0, bw / 2), min(3.0, bw / 2))
+        p.end()
+
+
+class Gauge(Grows):
+    """A half ring, Wispr's words-per-minute gauge: `share` of it in the
+    accent, sweeping round as it grows in, the % in the middle."""
+
+    def __init__(self, share: float, caption: str, size: int = 150):
+        super().__init__()
+        self._share = max(0.0, min(1.0, share))
+        self._caption = caption
+        self.setFixedSize(size, int(size * 0.62))
+
+    def paintEvent(self, _e) -> None:
+        from PyQt6.QtCore import QRectF
+        from PyQt6.QtGui import QPen
+        from ui import kit, tokens
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        thick = 14.0
+        w = float(self.width())
+        r = QRectF(thick / 2, thick / 2, w - thick, w - thick)
+        pen = QPen(QColor(T.SURFACE_HOVER), thick)
+        pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+        p.setPen(pen)
+        p.drawArc(r, 180 * 16, -180 * 16)
+        sweep = 180 * self._share * self.t
+        if sweep > 0.5:
+            pen.setColor(QColor(tokens.BLUE))
+            p.setPen(pen)
+            p.drawArc(r, 180 * 16, int(-sweep * 16))
+        p.setPen(QColor(T.TEXT))
+        p.setFont(kit.font(24, 700, -0.5))
+        mid = QRectF(0, r.center().y() - 30, w, 30)
+        p.drawText(mid, Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignBottom,
+                   f"{round(self._share * 100 * self.t)}%")
+        p.setPen(QColor(T.TEXT_DIM))
+        p.setFont(kit.font(12, 500))
+        p.drawText(QRectF(0, r.center().y() + 2, w, 18),
+                   Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop, self._caption)
+        p.end()
+
+
+class GrowMeter(Grows):
+    """Meter's thin bar, filling in."""
+
+    def __init__(self, fraction: float, colour: str, height: int = 6):
+        super().__init__()
+        self._f, self._colour = max(0.0, min(1.0, fraction)), colour
+        self.setFixedHeight(height)
+
+    def paintEvent(self, _e) -> None:
+        from PyQt6.QtCore import QRectF
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        h = self.height()
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(QColor(T.BORDER))
+        p.drawRoundedRect(QRectF(0, 0, self.width(), h), h / 2, h / 2)
+        f = self._f * self.t
+        if f > 0:
+            p.setBrush(QColor(self._colour))
+            p.drawRoundedRect(QRectF(0, 0, max(h, self.width() * f), h), h / 2, h / 2)
+        p.end()

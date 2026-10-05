@@ -218,6 +218,14 @@ def qss() -> str:
     QLabel#statValue {{ font-size: 30px; font-weight: 700; letter-spacing: -0.6px; }}
     QLabel#statLabel {{ color: {TEXT_DIM}; font-size: 14px; }}
     QLabel#footTitle {{ font-size: 14px; font-weight: 700; }}
+    QFrame#infoCard {{ background: {SURFACE}; border: none; border-radius: {tokens.RADIUS_LG}px; }}
+    QLabel#infoTitle {{ font-size: 15px; font-weight: 700; }}
+    QLabel#infoBig   {{ font-size: 22px; font-weight: 700; letter-spacing: -0.4px; }}
+    QLabel#infoNote  {{ color: {TEXT_DIM}; font-size: 10px; font-weight: 700; letter-spacing: 1.3px; }}
+    QLabel#infoFaint {{ color: {TEXT_FAINT}; font-size: 12px; }}
+    QLabel#tileValue {{ font-size: 30px; font-weight: 700; letter-spacing: -0.6px; }}
+    QLabel#tileLine  {{ font-size: 13px; }}
+    QLabel#tileLineValue {{ color: {TEXT_DIM}; font-size: 13px; }}
     QFrame#upNext {{ background: {SURFACE}; border: none; border-radius: {tokens.RADIUS_XL}px; }}
     QLabel#upTitle  {{ font-size: 22px; font-weight: 700; letter-spacing: -0.4px; }}
     QLabel#upSub    {{ color: {TEXT_DIM}; font-size: 14px; }}

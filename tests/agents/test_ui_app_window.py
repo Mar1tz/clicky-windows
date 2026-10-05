@@ -41,13 +41,13 @@ def test_every_page_builds_and_is_reachable(window):
     for key, *_rest in PAGES:
         window.show_page(key)
         assert window._stack.currentWidget() is window._pages[key], key
-    assert len(window._pages) == len(PAGES) == 8
+    assert len(window._pages) == len(PAGES) == 9
 
 
 def test_the_sidebar_is_the_page_map(window):
     """Five pages in the list, then the free month, Settings and Help."""
     rows = [b.text() for b in window._sidebar.findChildren(QAbstractButton)]
-    assert rows == ["Home", "Agents", "Journal", "Packs", "Accounting", "Tora",
+    assert rows == ["Home", "Insights", "Agents", "Journal", "Packs", "Accounting", "Tora",
                     "Get a free month", "Settings", "Help"]
     assert window._buttons["accounting"].isHidden(), "a pack's page only while the pack is on"
     assert not window._buttons["settings"].isHidden()

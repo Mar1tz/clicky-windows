@@ -593,6 +593,31 @@ class AppBridge(QObject):
             day -= timedelta(days=1)
         return {"questions": len(rows) - walks, "walkthroughs": walks, "streak": streak}
 
+    def insights(self) -> dict:
+        """The Insights page's numbers (ui/insights_data.py), all measured:
+        the journal's questions, apps, walkthroughs and reviews; this
+        month's agent jobs; the plan's month."""
+        from ui import insights_data as data
+        journal = self._journal()
+        rows, seconds, tag = [], 0.0, "walkthrough"
+        if journal is not None:
+            tag = journal.WALKTHROUGH_TAG
+            try:
+                rows, seconds = journal.insight_rows(), journal.walkthrough_seconds()
+            except Exception:  # noqa: BLE001
+                _log.debug("could not read the journal for insights", exc_info=True)
+        out = data.summarise(rows, seconds, tag)
+        out["agents"] = data.agents_month(self.tasks(500))
+        try:
+            st = self.account_state()
+            summary = st.get("summary") if st.get("signed_in") and st.get("mode") == "account" else None
+        except Exception:  # noqa: BLE001
+            summary = None
+        out["plan"] = data.plan(summary)
+        out["plan_summary"] = summary
+        out["due"] = self.due_count()
+        return out
+
     def search(self, text: str, limit: int = 100) -> list[dict]:
         """Everything asked that mentions `text`, newest first."""
         return self._read_journal("search", [], text, limit)

@@ -533,6 +533,138 @@ def _padded(row: QWidget) -> QWidget:
     return box
 
 
+# ── Insights ──────────────────────────────────────────────────────────────────
+
+class InsightsPage(Page):
+    """What Tora has done for you, counted - never estimated (DESIGN.md §3C,
+    ui/insights_data.py). Wispr's Insights layout: three tiles, then where
+    you use it and the streak calendar, then the month's plan and agents."""
+
+    HEADING = "Insights"
+    LIVE = True
+    TOPICS = frozenset({"journal", "account", "agents"})
+
+    def showEvent(self, event) -> None:
+        """Opened: the charts grow in, one a beat after another (Wispr's
+        page does this). A live redraw while it is open does not replay."""
+        super().showEvent(event)
+        from ui.app_parts import Grows
+        for i, chart in enumerate(self.findChildren(Grows)):
+            chart.play(80 + 45 * i)
+
+    def build(self) -> None:
+        from ui import insights_data as data
+        from ui.app_parts import DayBars, Gauge, GrowMeter, InfoCard, StreakGrid, legend, stat_tile
+        d = _ask(self.bridge, "insights", {}) or {}
+        if not d:
+            d = data.summarise([])
+            d.update(agents=data.agents_month([]), plan=[], plan_summary=None, due=0)
+
+        # ── three tiles
+        change = d["change"]
+        week = (f"{'+' if change > 0 else ''}{change}%" if change is not None else "–")
+        tiles = QHBoxLayout()
+        tiles.setSpacing(T.GAP)
+        tiles.addWidget(stat_tile(str(d["questions"]), "questions asked",
+                                  [("This week", str(d["this_week"])), ("On last week", week)],
+                                  chart=DayBars(data.daily(d["days"]))), 1)
+        tiles.addWidget(stat_tile(str(d["walkthroughs"]), "walkthroughs finished",
+                                  [("Time she guided you", f"{d['guided_minutes']} min")]), 1)
+        share = d["remembered"] / d["learnable"] if d["learnable"] else 0.0
+        tiles.addWidget(stat_tile(f"{d['remembered']}", "things remembered",
+                                  [("Of all she taught you", str(d["learnable"])),
+                                   ("Due for review", str(d["due"]))],
+                                  chart=Gauge(share, "remembered")), 1)
+        self.body.add_layout(tiles)
+
+        # ── where you ask · the streak
+        mid = QHBoxLayout()
+        mid.setSpacing(T.GAP)
+        apps = InfoCard("Where you ask", f"apps · {d['apps_used']}", big=True)
+        if d["apps"]:
+            for rank, (name, n, share) in enumerate(d["apps"]):
+                from ui.app_parts import ShareBar
+                row = QHBoxLayout()
+                row.setSpacing(12)
+                who = label("", "tileLine")
+                who.setFixedWidth(110)
+                who.setText(who.fontMetrics().elidedText(name, Qt.TextElideMode.ElideRight, 108))
+                who.setToolTip(name)
+                row.addWidget(who)
+                row.addWidget(ShareBar(share, rank), 1)
+                count = label(f"{n} question{'s' if n != 1 else ''}".upper(), "infoNote")
+                count.setFixedWidth(110)
+                row.addWidget(count)
+                apps.body.addLayout(row)
+        else:
+            apps.body.addWidget(label("Ask about something in another app - Excel, a PDF, a "
+                                      "website - and it shows up here.", "infoFaint", wrap=True))
+        mid.addWidget(apps, 1)
+        streak = InfoCard(f"{d['streak']} day streak", f"longest · {d['longest']} "
+                          f"day{'s' if d['longest'] != 1 else ''}", big=True)
+        streak.body.addWidget(StreakGrid(data.calendar(d["days"])), 0, Qt.AlignmentFlag.AlignLeft)
+        streak.body.addWidget(legend())
+        mid.addWidget(streak, 1)
+        self.body.add_layout(mid)
+
+        # ── the plan · agents
+        low = QHBoxLayout()
+        low.setSpacing(T.GAP)
+        low.addWidget(self._plan_card(d), 1)
+        low.addWidget(self._agents_card(d["agents"]), 1)
+        self.body.add_layout(low)
+
+    def _plan_card(self, d: dict) -> QWidget:
+        from ui.app_parts import GrowMeter, InfoCard
+        summary = d.get("plan_summary")
+        if not d["plan"]:
+            card = InfoCard("This month")
+            card.body.addWidget(label("Your plan's use shows here when you are signed in to "
+                                      "a HeyTora plan.", "infoFaint", wrap=True))
+            return card
+        from account.service import resets_on
+        name = summary.get("plan_name") or (summary.get("plan") or "").capitalize() or "HeyTora"
+        card = InfoCard("This month", f"{name} plan · resets {resets_on(summary)}")
+        for words, used, limit in d["plan"]:
+            row = QHBoxLayout()
+            row.addWidget(label(words, "tileLine"))
+            row.addStretch(1)
+            row.addWidget(label(f"{used} of {limit}" if limit is not None else f"{used} · unlimited",
+                                "tileLineValue"))
+            card.body.addLayout(row)
+            frac = (used / limit) if limit else 0.0
+            card.body.addWidget(GrowMeter(frac, T.WARN if frac >= 0.8 else T.ACCENT))
+            card.body.addSpacing(4)
+        return card
+
+    def _agents_card(self, a: dict) -> QWidget:
+        from ui.app_parts import InfoCard
+        card = InfoCard("Agents", "this month")
+        nums = QHBoxLayout()
+        nums.setSpacing(28)
+        for value, words in ((a["done"], "finished"), (a["failed"], "didn't finish"),
+                             (a["running"], "running")):
+            col = QVBoxLayout()
+            col.setSpacing(0)
+            col.addWidget(label(str(value), "tileValue"))
+            col.addWidget(label(words.upper(), "infoNote"))
+            nums.addLayout(col)
+        nums.addStretch(1)
+        card.body.addLayout(nums)
+        if a["recent"]:
+            card.body.addSpacing(6)
+            for t in a["recent"]:
+                card.body.addWidget(label(f"{t['title']} · {t['status'].replace('_', ' ')}",
+                                          "infoFaint", wrap=True))
+        else:
+            card.body.addWidget(label("Give Tora a job - \u201cbuild me a landing page\u201d - "
+                                      "and she works on it in the background.", "infoFaint", wrap=True))
+        go = button("Open Agents", "link")
+        go.clicked.connect(lambda: self.navigate.emit("agents"))
+        card.body.addWidget(go, 0, Qt.AlignmentFlag.AlignLeft)
+        return card
+
+
 # ── shared by the pages below ─────────────────────────────────────────────────
 
 def _tidy(embedded: QWidget, *titles: str) -> QWidget:
@@ -1642,6 +1774,7 @@ class SetupPage(Page):
 # "hidden" (reached from elsewhere: Help -> Keys and diagnostics).
 PAGES = (
     ("home",       "Home",       "main",   HomePage),
+    ("insights",   "Insights",   "main",   InsightsPage),
     ("agents",     "Agents",     "main",   AgentsPage),
     ("journal",    "Journal",    "main",   JournalPage),
     ("extensions", "Packs",      "main",   ExtensionsPage),
