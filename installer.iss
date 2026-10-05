@@ -12,7 +12,7 @@
 ; ────────────────────────────────────────────────────────────────────
 
 #define MyAppName        "HeyTora"
-#define MyAppVersion     "1.6.9"
+#define MyAppVersion     "1.7.0"
 #define MyAppPublisher   "HeyTora"
 #define MyAppExeName     "HeyTora.exe"
 
