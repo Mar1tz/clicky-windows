@@ -62,7 +62,21 @@ take the focus, and 16 looks saw the owner's editor instead.
 
 ## Wave A — measure first (everything else is judged by these)
 
-### SP-01 · A look test bench in the repo — M
+### SP-01 · A look test bench in the repo — M — **done (6 Oct)**
+
+**The first run,** in the app's routing ($0.081): **22/23 right**, p50
+2.6 s, avg $0.0035 a look, 20 fast and 3 deep. It is the baseline,
+`tools/look_eval_baseline.json`; compare with `--against
+tools/look_eval_baseline.json`.
+
+**What it already found:**
+* **The only wrong one** is the music screen: "what should I play next?"
+  went to the deep model. That is SP-08.
+* **The fast model thought** on 14 of 23 screens, up to 338 tokens,
+  despite budget 0. That is SP-04.
+* **The deep model** spent **2,050** thinking tokens on the chess move
+  (over its 1,536 budget): $0.037 and 20 s for one look. The deep look's
+  thinking is not controlled either, so SP-04 covers both models.
 
 **Why:**
 * The fast-first decision rests on one run of a script that lived in a
@@ -168,7 +182,14 @@ timeline. On SP-02's run, the cost per answer is printed.
 
 ## Wave B — the fast look, faster and cheaper
 
-### SP-04 · Thinking really off on the fast look — S — **evidence in hand**
+### SP-04 · Thinking under control, fast and deep — S — **evidence in hand**
+
+The SP-01 baseline backs it up:
+* **Fast:** thinking on 14 of 23 screens, up to 338 tokens.
+* **Deep:** 2,050 thinking tokens on chess against a budget of 1,536, at
+  $0.037 and 20 s.
+* **The fix covers both:** the fast model as close to none as it allows,
+  and the deep model at a level that still solves the mate-in-one.
 
 **Why:**
 * `gemini.thinking()` sends `thinkingBudget: 0` for the fast model.

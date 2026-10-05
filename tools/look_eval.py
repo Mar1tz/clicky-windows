@@ -1,18 +1,32 @@
-"""The look test bench, as first run on 5 Oct 2026 (docs/SHOW_THE_NEXT_MOVE.md, UD-01).
+"""The look test bench (docs/SHOW_DONT_TELL_POLISH.md, SP-01).
 
-STARTER for SP-01 (docs/SHOW_DONT_TELL_POLISH.md). It builds 16 everyday screens as
-HTML, renders them headless with Edge (nothing opens on screen), asks the fast model
-about each and the deep model where the fast one was unsure or missed (up to 10), and
-prints right-thing-drawn, time and cost. SP-01 adds the flags (--fast-only,
---max-dollars, --only), the extra screens, and the exact app routing through look().
+Every change to a screen look - the model, its thinking, the image size, the
+prompt, the routing words - is measured here before and after. 23 everyday
+screens are built as HTML and rendered headless with Edge, so nothing opens on
+screen and no real screen is ever sent. Each goes through gemini_vision.look()
+exactly as the app calls it (fast first, deep when needed), and is scored:
 
-PAID: about $0.10 a run, on the owner's own key (TORA_ACCESS=own_key) - never the plan.
+    right thing drawn   the drawn box's centre on the target (a move: both ends)
+    nothing drawn       for a decoy - the thing asked for is not there
+    stays fast          for a question that must not go to the deep model
 
-    python tools/look_eval.py --render     # the screens only, free (writes a contact sheet)
-    python tools/look_eval.py              # the comparison
+with the path taken (fast, fast→deep, deep), seconds, tokens and cost. A
+report is saved as JSON; --against an earlier report prints what changed.
+
+PAID: on the owner's own key (TORA_ACCESS=own_key), never the plan. About
+$0.06 a run in the app's routing, $0.03 with --fast-only. --max-dollars stops
+it (default $0.30).
+
+    python tools/look_eval.py --render                 # the screens only, free (a contact sheet)
+    python tools/look_eval.py                          # the app's routing
+    python tools/look_eval.py --fast-only              # every screen on the fast model
+    python tools/look_eval.py --deep-only --only chess,tictactoe
+    python tools/look_eval.py --against <report.json>  # and what changed since that run
 """
+import argparse
 import asyncio
 import base64
+import hashlib
 import io
 import json
 import os
@@ -29,11 +43,11 @@ os.environ["TORA_ACCESS"] = "own_key"          # straight to Google with the own
 from ai import gemini, gemini_vision  # noqa: E402
 from agents.tools import design_tools  # noqa: E402
 
-assert gemini.own_key() and gemini.api_key(), "no own key"
 W, H = 1600, 900
 OUT = Path(tempfile.gettempdir()) / "tora-look-eval"
 OUT.mkdir(exist_ok=True)
-PRICE = {"fast": (0.5, 3.0), "deep": (2.5, 15.0)}   # $ per million in / out (server's table)
+# Screens scored by something other than where the drawing landed.
+EXPECT = {"decoy": "nothing", "music": "fast"}
 
 
 def box(x, y, w, h, inner="", style=""):
@@ -163,6 +177,77 @@ def scenes():
     for r in range(8):
         html += box(470, 100 + (7 - r) * 80 + 28, 24, 24, str(r + 1), "font-size:18px")
     s.append(("chess", "what's my best move? I'm white", html, (500, 660, 80, 80), (500, 100, 80, 80)))
+    return s + more_scenes()
+
+
+def more_scenes():
+    """The cases that break things (SP-01): a dark theme, look-alike icons, a
+    tiny target, a dialog over a busy page, another language, a decoy where
+    the thing is NOT there, and a question that must stay on the fast model."""
+    s = []
+    dark = "<body style='margin:0;font-family:Segoe UI;background:#0f172a;color:#e2e8f0;position:relative'>"
+    html = dark + box(80, 40, 600, 50, "<b style='font-size:28px'>Projects</b>")
+    for i in range(6):
+        html += box(80, 140 + i * 110, 1000, 90, f"<span style='font-size:22px'>Project {i + 1}</span>",
+                    "background:#1e293b;border-radius:10px;display:flex;align-items:center;padding-left:24px")
+    html += box(1460, 40, 56, 56, "TM", "background:#334155;border-radius:50%;display:flex;align-items:center;"
+                "justify-content:center;font-weight:700")
+    html += box(1300, 110, 260, 156, "", "background:#1e293b;border:1px solid #334155;border-radius:10px")
+    for i, item in enumerate(["Profile", "Settings", "Log out"]):
+        html += box(1310, 120 + i * 48, 240, 44, item, "font-size:20px;display:flex;align-items:center;padding-left:14px")
+    s.append(("darktheme", "where do I log out?", html, (1310, 216, 240, 44), None))
+
+    icon = lambda x, svg: box(x, 120, 44, 44, f"<svg width='44' height='44' viewBox='0 0 44 44'>{svg}</svg>",  # noqa: E731
+                              "border-radius:6px;background:#fff;border:1px solid #e2e8f0")
+    html = BASE + box(150, 100, 1300, 84, "", "background:#f1f5f9;border-radius:10px")
+    html += icon(200, "<text x='22' y='31' font-size='26' font-weight='900' text-anchor='middle' font-family='Georgia'>B</text>")
+    html += icon(256, "<text x='22' y='31' font-size='26' font-style='italic' text-anchor='middle' font-family='Georgia'>I</text>")
+    html += icon(312, "<text x='22' y='29' font-size='24' text-anchor='middle' font-family='Georgia'>U</text><line x1='12' y1='34' x2='32' y2='34' stroke='#000' stroke-width='2'/>")
+    html += icon(368, "<text x='22' y='30' font-size='24' text-anchor='middle' font-family='Georgia'>S</text><line x1='10' y1='22' x2='34' y2='22' stroke='#000' stroke-width='2'/>")
+    html += icon(424, "<circle cx='12' cy='14' r='2.5'/><line x1='18' y1='14' x2='34' y2='14' stroke='#000' stroke-width='2'/><circle cx='12' cy='22' r='2.5'/><line x1='18' y1='22' x2='34' y2='22' stroke='#000' stroke-width='2'/><circle cx='12' cy='30' r='2.5'/><line x1='18' y1='30' x2='34' y2='30' stroke='#000' stroke-width='2'/>")
+    html += icon(480, "<path d='M18 26 L26 18 M15 22 l-3 3 a5 5 0 0 0 7 7 l3 -3 M29 22 l3 -3 a5 5 0 0 0 -7 -7 l-3 3' stroke='#000' fill='none' stroke-width='2'/>")
+    html += box(150, 230, 1300, 560, "<p style='font-size:20px;line-height:1.6'>" + "Meeting notes. " * 60 + "</p>",
+                "background:#fff;padding:30px;overflow:hidden")
+    s.append(("toolbar", "which button makes text bold?", html, (200, 120, 44, 44), None))
+
+    html = BASE + box(300, 120, 1000, 60, "<b style='font-size:30px'>Dashboard</b>")
+    html += box(1170, 760, 400, 96, "<b>Update ready</b><br><span style='font-size:16px'>Restart to finish installing.</span>",
+                "background:#1e293b;color:#fff;border-radius:10px;padding:16px 20px;font-size:18px")
+    html += box(1540, 770, 16, 16, "<svg width='16' height='16'><path d='M3 3 L13 13 M13 3 L3 13' stroke='#cbd5e1' stroke-width='2'/></svg>")
+    s.append(("tinyclose", "how do I close this notification?", html, (1540, 770, 16, 16), None))
+
+    html = BASE + box(100, 60, 1400, 780, "<p style='font-size:18px;line-height:1.7;color:#334155'>"
+                      + "Quarterly report draft - revenue, costs, outlook. " * 70 + "</p>", "overflow:hidden")
+    html += box(0, 0, W, H, "", "background:#0004")
+    html += box(500, 330, 600, 260, "", "background:#fff;border-radius:12px")
+    html += box(540, 360, 520, 40, "<b style='font-size:24px'>Save changes to report.docx?</b>")
+    html += box(540, 410, 520, 60, "<span style='font-size:18px'>Your changes will be lost if you don't save them.</span>")
+    html += box(560, 520, 160, 44, "Save", BTN) + box(740, 520, 160, 44, "Don't save", GHOST)
+    html += box(920, 520, 160, 44, "Cancel", GHOST)
+    s.append(("savedialog", "what should I click to keep my changes?", html, (560, 520, 160, 44), None))
+
+    s.append(("german", "where do I sign in?", BASE +
+              box(600, 180, 400, 520, "", "background:#fff;border-radius:12px;box-shadow:0 4px 20px #0002") +
+              box(640, 210, 320, 50, "<b style='font-size:30px'>Bei Acme anmelden</b>") +
+              box(640, 300, 320, 44, "E-Mail", FIELD) + box(640, 370, 320, 44, "Passwort", FIELD) +
+              box(640, 428, 320, 30, "<span style='color:#2563eb;font-size:16px'>Passwort vergessen?</span>") +
+              box(640, 480, 320, 48, "Anmelden", BTN) +
+              box(680, 560, 240, 30, "<span style='color:#2563eb;font-size:16px'>Konto erstellen</span>"),
+              (640, 480, 320, 48), None))
+
+    html = BASE + box(400, 120, 800, 60, "<b style='font-size:32px'>Settings</b>")
+    for i, label in enumerate(["Language", "Time zone", "Notifications", "Privacy"]):
+        html += box(400, 200 + i * 80, 800, 64, label, ROW)
+    s.append(("decoy", "where's the export button?", html, None, None))
+
+    html = BASE.replace("#f8fafc", "#121212") + box(60, 40, 400, 50, "<b style='font-size:28px;color:#fff'>Up next</b>")
+    for i, (song, artist) in enumerate([("Blinding Lights", "The Weeknd"), ("Levitating", "Dua Lipa"),
+                                        ("As It Was", "Harry Styles"), ("Flowers", "Miley Cyrus")]):
+        html += box(60, 120 + i * 80, 900, 64, f"<b style='color:#fff;width:360px'>{song}</b><span style='color:#aaa'>{artist}</span>",
+                    "display:flex;align-items:center;font-size:20px;border-bottom:1px solid #333")
+    html += box(0, 800, W, 100, "", "background:#181818")
+    html += box(760, 820, 60, 60, "<svg width='60' height='60'><circle cx='30' cy='30' r='28' fill='#fff'/><polygon points='24,18 44,30 24,42' fill='#000'/></svg>")
+    s.append(("music", "what should I play next?", html, None, None))
     return s
 
 
@@ -183,8 +268,14 @@ def inside(nbox, rect, pad=12):
     return x - pad <= cx <= x + w + pad and y - pad <= cy <= y + h + pad
 
 
-def score(scene, look):
+def score(scene, look, path=""):
+    """Right or wrong, the way the app would draw it."""
     name, q, _, target, to_target = scene
+    expect = EXPECT.get(name)
+    if expect == "nothing":                       # a decoy: say so, draw nothing
+        return bool(look) and not look.actions
+    if expect == "fast":                          # routing only
+        return path.startswith("fast")
     if not look or not look.actions:
         return False
     acts = look.actions
@@ -196,88 +287,110 @@ def score(scene, look):
     return inside(a.box, target) or (a.to_box is not None and inside(a.to_box, target))
 
 
-def cost(kind, usage):
-    pin, pout = PRICE[kind]
-    return (usage.get("promptTokenCount", 0) * pin + (usage.get("candidatesTokenCount", 0)
-                                                      + usage.get("thoughtsTokenCount", 0)) * pout) / 1e6
-
-
-async def main():
-    s = scenes()
+async def render_all(s) -> dict:
+    """Every screen as the JPEG the app would send; cached by its HTML."""
     imgs = {}
     for name, q, html, *_ in s:
-        png = OUT / f"{name}.png"
+        png = OUT / f"{name}-{hashlib.sha1(html.encode()).hexdigest()[:8]}.png"
         if not png.exists():
             with tempfile.TemporaryDirectory() as tmp:
                 src = Path(tmp) / "p.html"
                 src.write_text(design_tools.page_html(html, W, H), encoding="utf-8")
                 await design_tools.render(str(src), str(png), W, H)
-        imgs[name] = jpeg_b64(png)
-    if "--render" in sys.argv:
-        sheet = Image.new("RGB", (4 * 400, 4 * 245), "white")
-        for i, (name, *_r) in enumerate(s):
-            im = Image.open(OUT / f"{name}.png").convert("RGB")
-            im.thumbnail((396, 225))
-            sheet.paste(im, ((i % 4) * 400, (i // 4) * 245))
-        sheet.save(OUT / "sheet.png")
-        print("rendered", len(s))
+        imgs[name] = (png, jpeg_b64(png))
+    return imgs
+
+
+def contact_sheet(s, imgs) -> Path:
+    cols, cw, chh = 4, 400, 245
+    sheet = Image.new("RGB", (cols * cw, ((len(s) + cols - 1) // cols) * chh), "white")
+    for i, (name, *_r) in enumerate(s):
+        im = Image.open(imgs[name][0]).convert("RGB")
+        im.thumbnail((cw - 4, chh - 20))
+        sheet.paste(im, ((i % cols) * cw, (i // cols) * chh))
+    path = OUT / "sheet.png"
+    sheet.save(path)
+    return path
+
+
+def compare(before: dict, after: dict) -> None:
+    """What changed between two reports, screen by screen and in sum."""
+    b = {r["name"]: r for r in before["rows"]}
+    for r in after["rows"]:
+        o = b.get(r["name"])
+        if not o:
+            continue
+        marks = []
+        if o["ok"] != r["ok"]:
+            marks.append("now RIGHT" if r["ok"] else "now WRONG")
+        if o["path"] != r["path"]:
+            marks.append(f"{o['path']} -> {r['path']}")
+        if marks:
+            print(f"  {r['name']:12} {', '.join(marks)}")
+    for k in ("right", "p50_s", "avg_cost", "thinking"):
+        print(f"  {k:9} {before['summary'].get(k)} -> {after['summary'].get(k)}")
+
+
+async def main():
+    ap = argparse.ArgumentParser(description="The look test bench (SP-01).")
+    ap.add_argument("--render", action="store_true", help="build the screens only, free")
+    ap.add_argument("--fast-only", action="store_true")
+    ap.add_argument("--deep-only", action="store_true")
+    ap.add_argument("--only", default="", help="comma-separated screen names")
+    ap.add_argument("--max-dollars", type=float, default=0.30)
+    ap.add_argument("--against", default="", help="an earlier report.json to compare with")
+    args = ap.parse_args()
+
+    s = scenes()
+    if args.only:
+        wanted = {n.strip() for n in args.only.split(",") if n.strip()}
+        s = [sc for sc in s if sc[0] in wanted]
+    imgs = await render_all(s)
+    if args.render:
+        print("rendered", len(s), "-", contact_sheet(s, imgs))
         return
-    results = {}
+    assert gemini.own_key() and gemini.api_key(), "no own key in .env (GOOGLE_API_KEY)"
+    deep = False if args.fast_only else True if args.deep_only else None
+    mode = "fast-only" if args.fast_only else "deep-only" if args.deep_only else "app routing"
+    rows, spent = [], 0.0
     for sc in s:
+        if spent >= args.max_dollars:
+            print(f"stopped: ${spent:.3f} reached the ${args.max_dollars:.2f} cap")
+            break
         name, q = sc[0], sc[1]
-        t = time.monotonic()
-        look = await gemini_vision._ask(q, imgs[name], deep=False, context="", timeout=60)
-        results[name] = {"fast": look, "fast_s": time.monotonic() - t}
-    need = [sc for sc in s if not results[sc[0]]["fast"] or not results[sc[0]]["fast"].sure
-            or not score(sc, results[sc[0]]["fast"])]
-    rest = [sc for sc in s if sc not in need]
-    deep_set = (need + rest)[:10]
-    for sc in deep_set:
-        name, q = sc[0], sc[1]
-        t = time.monotonic()
-        results[name]["deep"] = await gemini_vision._ask(q, imgs[name], deep=True, context="", timeout=60)
-        results[name]["deep_s"] = time.monotonic() - t
-    rows, totals = [], {"fast": 0.0, "deep": 0.0}
-    old_ok = new_ok = 0
-    old_cost = new_cost = 0.0
-    old_t, new_t = [], []
-    for sc in s:
-        name, q = sc[0], sc[1]
-        r = results[name]
-        f, d = r["fast"], r.get("deep")
-        f_ok, d_ok = score(sc, f), (score(sc, d) if d is not None else None)
-        f_cost = cost("fast", f.usage) if f else 0
-        d_cost = cost("deep", d.usage) if d else None
-        totals["fast"] += f_cost
-        totals["deep"] += d_cost or 0
-        escalate = (not f) or (not f.sure) or (gemini_vision.is_next_action(q) and not f.actions)
-        new_this_ok = (d_ok if escalate and d is not None else f_ok)
-        new_this_cost = f_cost + ((d_cost or 0) if escalate else 0)
-        new_this_t = r["fast_s"] + (r.get("deep_s", 0) if escalate else 0)
-        went_deep_before = gemini_vision.wants_deep(q)
-        if went_deep_before and d is not None:
-            old_this_ok, old_this_cost, old_this_t = d_ok, d_cost, r["deep_s"]
-        else:
-            old_this_ok, old_this_cost, old_this_t = f_ok, f_cost, r["fast_s"]
-        old_ok += bool(old_this_ok)
-        new_ok += bool(new_this_ok)
-        old_cost += old_this_cost or 0
-        new_cost += new_this_cost
-        old_t.append(old_this_t)
-        new_t.append(new_this_t)
-        rows.append(f"{name:13} fast {'HIT ' if f_ok else 'miss'} sure={f.sure if f else '-'!s:5} {r['fast_s']:4.1f}s "
-                    f"${f_cost:.4f} | deep {('HIT ' if d_ok else 'miss') if d is not None else ' -  '} "
-                    f"{r.get('deep_s', 0):4.1f}s ${(d_cost or 0):.4f} | now {'deep' if escalate else 'fast'} "
-                    f"| before {'deep' if went_deep_before else 'fast'} | {(f.answer if f else '')[:60]!r}")
-    print("\n".join(rows))
-    med = lambda xs: sorted(xs)[len(xs) // 2]  # noqa: E731
-    print(f"\nright thing drawn: before {old_ok}/16, now {new_ok}/16")
-    print(f"cost per answer: before ${old_cost / 16:.4f}, now ${new_cost / 16:.4f}")
-    print(f"median time to the answer: before {med(old_t):.1f}s, now {med(new_t):.1f}s")
-    print(f"this run cost: fast ${totals['fast']:.3f} + deep ${totals['deep']:.3f} = ${totals['fast'] + totals['deep']:.3f}")
-    (OUT / "results.json").write_text(json.dumps({k: {"fast": (v["fast"].answer if v["fast"] else None),
-                                                       "deep": (v["deep"].answer if v.get("deep") else None)}
-                                                   for k, v in results.items()}, indent=1), encoding="utf-8")
+        t0 = time.monotonic()
+        look = await gemini_vision.look(q, imgs[name][1], deep=deep)
+        took = time.monotonic() - t0
+        u = look.usage or {}
+        cost = float(look.cost or 0.0)
+        spent += cost
+        ok = score(sc, look, look.path or "")
+        rows.append({"name": name, "ok": bool(ok), "path": look.path or "-", "s": round(took, 2),
+                     "cost": round(cost, 5), "in": u.get("promptTokenCount", 0),
+                     "out": u.get("candidatesTokenCount", 0), "thinking": u.get("thoughtsTokenCount", 0),
+                     "answer": look.answer})
+        r = rows[-1]
+        print(f"{name:12} {'RIGHT' if ok else 'WRONG'} {r['path']:18} {took:4.1f}s ${cost:.4f} "
+              f"{r['in']:5} in {r['out']:4} out {r['thinking']:4} think | {look.answer[:60]!r}")
+    if not rows:
+        return
+    times = sorted(r["s"] for r in rows)
+    paths: dict = {}
+    for r in rows:
+        paths[r["path"]] = paths.get(r["path"], 0) + 1
+    summary = {"right": f"{sum(r['ok'] for r in rows)}/{len(rows)}", "p50_s": times[len(times) // 2],
+               "avg_cost": round(spent / len(rows), 5), "total_cost": round(spent, 4),
+               "thinking": sum(r["thinking"] for r in rows), "paths": paths, "mode": mode}
+    print(f"\n{mode}: right {summary['right']}, p50 {summary['p50_s']}s, avg ${summary['avg_cost']:.4f}, "
+          f"total ${spent:.3f}, thinking tokens {summary['thinking']}, paths {paths}")
+    report = {"when": time.strftime("%Y-%m-%d %H:%M:%S"), "fast": gemini.Models.VISION_FAST,
+              "deep": gemini.Models.VISION_DEEP, "rows": rows, "summary": summary}
+    path = OUT / f"report-{time.strftime('%Y%m%d-%H%M%S')}.json"
+    path.write_text(json.dumps(report, indent=1), encoding="utf-8")
+    print("report:", path)
+    if args.against:
+        print("\nsince", args.against)
+        compare(json.loads(Path(args.against).read_text(encoding="utf-8")), report)
 
 
 if __name__ == "__main__":
