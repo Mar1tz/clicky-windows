@@ -53,6 +53,61 @@ OUTPUT_RATE = 24000
 # websocket framing overhead on every 20 ms.
 CHUNK_BYTES = INPUT_RATE * 2 // 10
 
+# SP-03: what a live answer costs. $ per million tokens, by modality, from
+# Google's list for gemini-3.8-live (checked 6 Oct 2026). The Live API bills
+# every generation for the WHOLE prompt - system instruction, tools, history -
+# so a question that calls a tool pays for it twice. gemini_vision.PRICES has
+# the screen looks; these are the voice.
+LIVE_PRICES = {
+    "in": {"TEXT": 0.75, "AUDIO": 3.00, "IMAGE": 1.00, "VIDEO": 1.00},
+    "out": {"TEXT": 4.50, "AUDIO": 12.00},
+}
+
+
+def _by_modality(details, total: int, default: str) -> dict:
+    """Tokens by modality. The breakdown can come up short of the count -
+    on 6 Oct by about 460 of a 4,500-token prompt - and the rest is priced at
+    `default`, so nothing billed goes uncounted."""
+    out: dict = {}
+    for d in details or []:
+        out[d.get("modality", default)] = out.get(d.get("modality", default), 0) + int(d.get("tokenCount", 0))
+    gap = int(total or 0) - sum(out.values())
+    if gap > 0:
+        out[default] = out.get(default, 0) + gap
+    return out
+
+
+def live_cost_usd(usage: dict) -> float:
+    """The dollars one usageMetadata (or a sum of them, add_usage) stands for.
+    Thinking is billed as text out; a modality the table does not know, at
+    the dearest rate on its side."""
+    if not usage:
+        return 0.0
+    ins = _by_modality(usage.get("promptTokensDetails"), usage.get("promptTokenCount", 0), "TEXT")
+    for m, n in _by_modality(usage.get("toolUsePromptTokensDetails"),
+                             usage.get("toolUsePromptTokenCount", 0), "TEXT").items():
+        ins[m] = ins.get(m, 0) + n
+    outs = _by_modality(usage.get("responseTokensDetails"), usage.get("responseTokenCount", 0), "AUDIO")
+    outs["TEXT"] = outs.get("TEXT", 0) + int(usage.get("thoughtsTokenCount", 0))
+    top_in, top_out = max(LIVE_PRICES["in"].values()), max(LIVE_PRICES["out"].values())
+    dollars = sum(n * LIVE_PRICES["in"].get(m, top_in) for m, n in ins.items())
+    dollars += sum(n * LIVE_PRICES["out"].get(m, top_out) for m, n in outs.items())
+    return dollars / 1e6
+
+
+def add_usage(total: dict, more: dict) -> dict:
+    """Two usageMetadata summed: every count, and each *Details list by modality."""
+    out = dict(total or {})
+    for k, v in (more or {}).items():
+        if isinstance(v, (int, float)):
+            out[k] = out.get(k, 0) + v
+        elif isinstance(v, list):
+            by = {d.get("modality"): int(d.get("tokenCount", 0)) for d in out.get(k, [])}
+            for d in v:
+                by[d.get("modality")] = by.get(d.get("modality"), 0) + int(d.get("tokenCount", 0))
+            out[k] = [{"modality": m, "tokenCount": n} for m, n in by.items()]
+    return out
+
 
 @dataclass
 class ToolCall:
@@ -82,6 +137,7 @@ class LiveEvent:
     #   interrupted       the user talked over the model; drop queued audio
     #   voice_activity    server VAD: text is ACTIVITY_START or ACTIVITY_END
     #   go_away           server is about to close this session
+    #   usage             raw is the server's usageMetadata (SP-03)
     #   closed            socket is gone
 
 
@@ -252,6 +308,11 @@ class LiveSession:
                         msg["sessionResumptionUpdate"].get("newHandle")
                     )
                     continue
+
+                # Before the branches below: it can ride on any message,
+                # a toolCall included, and those `continue`.
+                if msg.get("usageMetadata"):
+                    yield LiveEvent(kind="usage", raw=msg["usageMetadata"])
 
                 if "goAway" in msg:
                     yield LiveEvent(kind="go_away", raw=msg)

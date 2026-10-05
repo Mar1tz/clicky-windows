@@ -45,7 +45,7 @@ from dataclasses import dataclass, field
 from typing import Awaitable, Callable, Optional
 
 from ai.gemini import Models
-from ai.gemini_live import CHUNK_BYTES, LiveSession, ToolCall
+from ai.gemini_live import CHUNK_BYTES, LiveSession, ToolCall, add_usage
 from audio.playback import PcmStreamPlayer
 
 _log = logging.getLogger("tora.realtime")
@@ -415,6 +415,9 @@ class Turn:
     said: str = ""
     tools_used: list[str] = field(default_factory=list)
     interrupted: bool = False
+    # What the server billed for this turn, every generation in it summed
+    # (a tool round is a generation of its own) - gemini_live.live_cost_usd.
+    usage: dict = field(default_factory=dict)
 
 
 class RealtimeConversation:
@@ -469,6 +472,9 @@ class RealtimeConversation:
         # while most of the answer is still waiting in the player.
         self._voice_bytes = 0
         self._tool_rounds = 0
+        # The latest usageMetadata of the generation under way, folded into
+        # the turn when that generation completes (SP-03).
+        self._gen_usage: dict = {}
         # True once a turn has ended, until the user speaks again. The user
         # speaking across that boundary is what "a new request" means, and a
         # new request is the only thing that refills the tool budget. Using
@@ -859,6 +865,9 @@ class RealtimeConversation:
                         results.append((call, await self._run_tool(call)))
                     await session.send_tool_response(results)
 
+                elif ev.kind == "usage":
+                    self._gen_usage = ev.raw
+
                 elif ev.kind == "turn_complete":
                     # A turn that produced only tool calls is not the answer;
                     # the answer is the turn that follows the tool results.
@@ -873,6 +882,9 @@ class RealtimeConversation:
                     # speaks next (input_transcript) or when a spoken answer
                     # finishes the request (_finish_turn).
                     self._awaiting_user = True
+                    if self._gen_usage:
+                        self._turn.usage = add_usage(self._turn.usage, self._gen_usage)
+                        self._gen_usage = {}
                     if not ev.produced_output:
                         continue
                     self._finish_turn()

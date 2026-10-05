@@ -1,0 +1,571 @@
+{
+ "when": "2026-10-06 01:07:52",
+ "model": "gemini-3.8-live",
+ "prompt_chars": 6910,
+ "rows": [
+  {
+   "name": "chess",
+   "question": "what's the best move here?",
+   "ok": true,
+   "failed": [],
+   "tools": [
+    "look_at_screen"
+   ],
+   "args": [
+    {
+     "question": "What is the best move on the chessboard?"
+    }
+   ],
+   "said": "Knight to f7 - it forks the king and the queen.",
+   "answer": "Knight to f7 - it forks the king and the queen.",
+   "first_word_s": 1.49,
+   "answer_s": 1.49,
+   "usage": [
+    {
+     "promptTokenCount": 9161,
+     "responseTokenCount": 106,
+     "totalTokenCount": 9267,
+     "promptTokensDetails": [
+      {
+       "modality": "TEXT",
+       "tokenCount": 7763
+      },
+      {
+       "modality": "AUDIO",
+       "tokenCount": 444
+      }
+     ],
+     "thoughtsTokenCount": 134,
+     "responseTokensDetails": [
+      {
+       "modality": "AUDIO",
+       "tokenCount": 84
+      }
+     ]
+    }
+   ],
+   "cost": 0.00974
+  },
+  {
+   "name": "click_next",
+   "question": "what should I click next?",
+   "ok": true,
+   "failed": [],
+   "tools": [
+    "look_at_screen"
+   ],
+   "args": [
+    {
+     "question": "What should I click to proceed with the checkout?"
+    }
+   ],
+   "said": "Click Continue to payment.",
+   "answer": "Click Continue to payment.",
+   "first_word_s": 1.3,
+   "answer_s": 1.3,
+   "usage": [
+    {
+     "promptTokenCount": 9145,
+     "responseTokenCount": 68,
+     "totalTokenCount": 9213,
+     "promptTokensDetails": [
+      {
+       "modality": "TEXT",
+       "tokenCount": 7747
+      },
+      {
+       "modality": "AUDIO",
+       "tokenCount": 444
+      }
+     ],
+     "thoughtsTokenCount": 113,
+     "responseTokensDetails": [
+      {
+       "modality": "AUDIO",
+       "tokenCount": 45
+      }
+     ]
+    }
+   ],
+   "cost": 0.00918
+  },
+  {
+   "name": "pick_one",
+   "question": "which one of these should I pick?",
+   "ok": true,
+   "failed": [],
+   "tools": [
+    "look_at_screen"
+   ],
+   "args": [
+    {
+     "careful": true,
+     "question": "Which desk fan should I pick from the available options?"
+    }
+   ],
+   "said": "Let me look at your options to see which one is the best choice.Pick the Arctic Fan - it is the best rated for the price.",
+   "answer": "Pick the Arctic Fan - it is the best rated for the price.",
+   "first_word_s": 0.86,
+   "answer_s": 4.93,
+   "usage": [
+    {
+     "promptTokenCount": 4529,
+     "responseTokenCount": 119,
+     "totalTokenCount": 4648,
+     "promptTokensDetails": [
+      {
+       "modality": "TEXT",
+       "tokenCount": 3846
+      },
+      {
+       "modality": "AUDIO",
+       "tokenCount": 222
+      }
+     ],
+     "responseTokensDetails": [
+      {
+       "modality": "AUDIO",
+       "tokenCount": 90
+      }
+     ],
+     "thoughtsTokenCount": 90
+    },
+    {
+     "promptTokenCount": 4744,
+     "responseTokenCount": 93,
+     "totalTokenCount": 4837,
+     "promptTokensDetails": [
+      {
+       "modality": "TEXT",
+       "tokenCount": 3933
+      },
+      {
+       "modality": "AUDIO",
+       "tokenCount": 312
+      }
+     ],
+     "responseTokensDetails": [
+      {
+       "modality": "AUDIO",
+       "tokenCount": 93
+      }
+     ],
+     "thoughtsTokenCount": 97
+    }
+   ],
+   "cost": 0.01154
+  },
+  {
+   "name": "misleading",
+   "question": "what should I do here?",
+   "ok": true,
+   "failed": [],
+   "tools": [
+    "look_at_screen"
+   ],
+   "args": [
+    {
+     "question": "What should I do in this setup wizard?"
+    }
+   ],
+   "said": "Click Continue at the bottom right.",
+   "answer": "Click Continue at the bottom right.",
+   "first_word_s": 1.31,
+   "answer_s": 1.31,
+   "usage": [
+    {
+     "promptTokenCount": 9156,
+     "responseTokenCount": 78,
+     "totalTokenCount": 9234,
+     "promptTokensDetails": [
+      {
+       "modality": "TEXT",
+       "tokenCount": 7725
+      },
+      {
+       "modality": "AUDIO",
+       "tokenCount": 444
+      }
+     ],
+     "thoughtsTokenCount": 104,
+     "responseTokensDetails": [
+      {
+       "modality": "AUDIO",
+       "tokenCount": 56
+      }
+     ]
+    }
+   ],
+   "cost": 0.00927
+  },
+  {
+   "name": "error",
+   "question": "what does this error mean?",
+   "ok": true,
+   "failed": [],
+   "tools": [
+    "look_at_screen"
+   ],
+   "args": [
+    {
+     "careful": true,
+     "question": "What does this error message say and mean?"
+    }
+   ],
+   "said": "The file is open in another program, so Excel can only open it read-only.",
+   "answer": "The file is open in another program, so Excel can only open it read-only.",
+   "first_word_s": 1.24,
+   "answer_s": 1.24,
+   "usage": [
+    {
+     "promptTokenCount": 9058,
+     "responseTokenCount": 146,
+     "totalTokenCount": 9204,
+     "promptTokensDetails": [
+      {
+       "modality": "TEXT",
+       "tokenCount": 7658
+      },
+      {
+       "modality": "AUDIO",
+       "tokenCount": 444
+      }
+     ],
+     "thoughtsTokenCount": 144,
+     "responseTokensDetails": [
+      {
+       "modality": "AUDIO",
+       "tokenCount": 119
+      }
+     ]
+    }
+   ],
+   "cost": 0.01019
+  },
+  {
+   "name": "tictactoe",
+   "question": "where should I go to win?",
+   "ok": true,
+   "failed": [],
+   "tools": [
+    "look_at_screen"
+   ],
+   "args": [
+    {
+     "question": "Where should I go to win on this Tic Tac Toe board?"
+    }
+   ],
+   "said": "Let me analyze the board to find your best move.Take the top right corner to win.",
+   "answer": "Take the top right corner to win.",
+   "first_word_s": 1.04,
+   "answer_s": 4.41,
+   "usage": [
+    {
+     "promptTokenCount": 4525,
+     "responseTokenCount": 104,
+     "totalTokenCount": 4629,
+     "promptTokensDetails": [
+      {
+       "modality": "TEXT",
+       "tokenCount": 3842
+      },
+      {
+       "modality": "AUDIO",
+       "tokenCount": 222
+      }
+     ],
+     "responseTokensDetails": [
+      {
+       "modality": "AUDIO",
+       "tokenCount": 78
+      }
+     ],
+     "thoughtsTokenCount": 61
+    },
+    {
+     "promptTokenCount": 4717,
+     "responseTokenCount": 55,
+     "totalTokenCount": 4772,
+     "promptTokensDetails": [
+      {
+       "modality": "TEXT",
+       "tokenCount": 3920
+      },
+      {
+       "modality": "AUDIO",
+       "tokenCount": 300
+      }
+     ],
+     "responseTokensDetails": [
+      {
+       "modality": "AUDIO",
+       "tokenCount": 55
+      }
+     ],
+     "thoughtsTokenCount": 109
+    }
+   ],
+   "cost": 0.01078
+  },
+  {
+   "name": "where_named",
+   "question": "where is the bold button?",
+   "ok": true,
+   "failed": [],
+   "tools": [
+    "point_at"
+   ],
+   "args": [
+    {
+     "name": "Bold (Ctrl+B)"
+    }
+   ],
+   "said": "The bold button is located in the Home tab's font group, right next to the italic option.",
+   "answer": "The bold button is located in the Home tab's font group, right next to the italic option.",
+   "first_word_s": 1.32,
+   "answer_s": 1.32,
+   "usage": [
+    {
+     "promptTokenCount": 9096,
+     "responseTokenCount": 140,
+     "totalTokenCount": 9236,
+     "promptTokensDetails": [
+      {
+       "modality": "TEXT",
+       "tokenCount": 7710
+      },
+      {
+       "modality": "AUDIO",
+       "tokenCount": 444
+      }
+     ],
+     "thoughtsTokenCount": 155,
+     "responseTokensDetails": [
+      {
+       "modality": "AUDIO",
+       "tokenCount": 123
+      }
+     ]
+    }
+   ],
+   "cost": 0.0102
+  },
+  {
+   "name": "where_unlisted",
+   "question": "where do I share this?",
+   "ok": true,
+   "failed": [],
+   "tools": [
+    "point_at"
+   ],
+   "args": [
+    {
+     "name": "File"
+    }
+   ],
+   "said": "You can share your document by clicking on the File tab in the top left corner of the screen.",
+   "answer": "You can share your document by clicking on the File tab in the top left corner of the screen.",
+   "first_word_s": 1.71,
+   "answer_s": 1.71,
+   "usage": [
+    {
+     "promptTokenCount": 9086,
+     "responseTokenCount": 132,
+     "totalTokenCount": 9218,
+     "promptTokensDetails": [
+      {
+       "modality": "TEXT",
+       "tokenCount": 7700
+      },
+      {
+       "modality": "AUDIO",
+       "tokenCount": 444
+      }
+     ],
+     "thoughtsTokenCount": 273,
+     "responseTokensDetails": [
+      {
+       "modality": "AUDIO",
+       "tokenCount": 120
+      }
+     ]
+    }
+   ],
+   "cost": 0.01063
+  },
+  {
+   "name": "where_web",
+   "question": "where's the sign in button?",
+   "ok": true,
+   "failed": [],
+   "tools": [
+    "point_at"
+   ],
+   "args": [
+    {
+     "name": "Sign in"
+    }
+   ],
+   "said": "The Sign in button is located in the top right corner of the browser window.",
+   "answer": "The Sign in button is located in the top right corner of the browser window.",
+   "first_word_s": 1.35,
+   "answer_s": 1.35,
+   "usage": [
+    {
+     "promptTokenCount": 9104,
+     "responseTokenCount": 121,
+     "totalTokenCount": 9225,
+     "promptTokensDetails": [
+      {
+       "modality": "TEXT",
+       "tokenCount": 7718
+      },
+      {
+       "modality": "AUDIO",
+       "tokenCount": 444
+      }
+     ],
+     "thoughtsTokenCount": 144,
+     "responseTokensDetails": [
+      {
+       "modality": "AUDIO",
+       "tokenCount": 108
+      }
+     ]
+    }
+   ],
+   "cost": 0.00993
+  },
+  {
+   "name": "how_to",
+   "question": "how do I export this as a PDF?",
+   "ok": true,
+   "failed": [],
+   "tools": [
+    "show_me_how"
+   ],
+   "args": [
+    {
+     "goal": "export this as a PDF"
+    }
+   ],
+   "said": "Sure, let me walk you through exporting this document as a PDF.",
+   "answer": "Sure, let me walk you through exporting this document as a PDF.",
+   "first_word_s": 1.49,
+   "answer_s": 1.49,
+   "usage": [
+    {
+     "promptTokenCount": 9174,
+     "responseTokenCount": 124,
+     "totalTokenCount": 9298,
+     "promptTokensDetails": [
+      {
+       "modality": "TEXT",
+       "tokenCount": 7788
+      },
+      {
+       "modality": "AUDIO",
+       "tokenCount": 444
+      }
+     ],
+     "thoughtsTokenCount": 190,
+     "responseTokensDetails": [
+      {
+       "modality": "AUDIO",
+       "tokenCount": 106
+      }
+     ]
+    }
+   ],
+   "cost": 0.01022
+  },
+  {
+   "name": "thanks",
+   "question": "thanks, that's perfect",
+   "ok": true,
+   "failed": [],
+   "tools": [],
+   "args": [],
+   "said": "You're very welcome, [name]! I'm here whenever you need further assistance.",
+   "answer": "You're very welcome, [name]! I'm here whenever you need further assistance.",
+   "first_word_s": 0.63,
+   "answer_s": 0.63,
+   "usage": [
+    {
+     "promptTokenCount": 4526,
+     "responseTokenCount": 108,
+     "totalTokenCount": 4634,
+     "promptTokensDetails": [
+      {
+       "modality": "TEXT",
+       "tokenCount": 3843
+      },
+      {
+       "modality": "AUDIO",
+       "tokenCount": 222
+      }
+     ],
+     "responseTokensDetails": [
+      {
+       "modality": "AUDIO",
+       "tokenCount": 108
+      }
+     ],
+     "thoughtsTokenCount": 56
+    }
+   ],
+   "cost": 0.00544
+  },
+  {
+   "name": "skip_song",
+   "question": "skip this song",
+   "ok": true,
+   "failed": [],
+   "tools": [
+    "desktop_action"
+   ],
+   "args": [
+    {
+     "app": "spotify",
+     "action": "next"
+    }
+   ],
+   "said": "I've skipped to the next song for you.",
+   "answer": "I've skipped to the next song for you.",
+   "first_word_s": 1.43,
+   "answer_s": 1.43,
+   "usage": [
+    {
+     "promptTokenCount": 8990,
+     "responseTokenCount": 71,
+     "totalTokenCount": 9061,
+     "promptTokensDetails": [
+      {
+       "modality": "TEXT",
+       "tokenCount": 7600
+      },
+      {
+       "modality": "AUDIO",
+       "tokenCount": 444
+      }
+     ],
+     "thoughtsTokenCount": 145,
+     "responseTokensDetails": [
+      {
+       "modality": "AUDIO",
+       "tokenCount": 53
+      }
+     ]
+    }
+   ],
+   "cost": 0.00925
+  }
+ ],
+ "summary": {
+  "passed": "12/12",
+  "p50_answer_s": 1.43,
+  "avg_cost": 0.0097,
+  "total_cost": 0.1164
+ },
+ "note": "first run, 6 Oct 2026; costs re-priced with the prompt-gap fix; the owner's name replaced by [name]"
+}

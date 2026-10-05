@@ -1163,6 +1163,27 @@ class CompanionManager(QObject):
         if self._ans is not None:
             self._ans.update(facts)
 
+    def _answer_stats(self) -> dict:
+        if self._ans_stats is None:
+            self._ans_stats = {}
+        return self._ans_stats
+
+    def _note_voice(self, usage: Optional[dict]) -> None:
+        """SP-03: what the live voice billed for a turn - the system prompt and
+        the tools again on every generation, the audio out. On 6 Oct it was
+        $0.0088 an answer against $0.0035 for the look (tools/voice_eval.py)."""
+        if not usage:
+            return
+        from ai.gemini_live import live_cost_usd
+        cost = live_cost_usd(usage)
+        st = self._answer_stats()
+        st["voice_cost"] = st.get("voice_cost", 0.0) + cost
+        a = self._ans
+        if a is not None:
+            a["voice_in"] = a.get("voice_in", 0) + int(usage.get("promptTokenCount", 0))
+            a["voice_out"] = a.get("voice_out", 0) + int(usage.get("responseTokenCount", 0))                 + int(usage.get("thoughtsTokenCount", 0))
+            a["voice_cost"] = a.get("voice_cost", 0.0) + cost
+
     def _log_answer(self, said: str) -> None:
         """One timeline line for an answer that looked at the screen."""
         a, self._ans = self._ans, None
@@ -1176,10 +1197,14 @@ class CompanionManager(QObject):
                      if "drawing" in a else "nothing drawn")
         if "audio" in a:
             parts.append("voice +%.1fs" % (a["audio"] - t0))
+        if "answer" in a and a["answer"] - a.get("audio", a["answer"]) > 0.05:
+            # It said something first ("let me look"); this is the answer itself.
+            parts.append("answer +%.1fs" % (a["answer"] - t0))
         parts.append("said %d chars" % len(said or ""))
+        if "voice_in" in a:
+            parts.append("voice %d in / %d out $%.4f" % (a["voice_in"], a["voice_out"], a["voice_cost"]))
         _log.info("answer timeline: %s", ", ".join(parts))
-        st = self._ans_stats if self._ans_stats is not None else {}
-        self._ans_stats = st
+        st = self._answer_stats()
         st["looks"] = st.get("looks", 0) + 1
         if "drawing" in a:
             st.setdefault("drawn", []).append(a["drawing"] - t0)
@@ -1207,6 +1232,11 @@ class CompanionManager(QObject):
             bits.append("look cost avg $%.4f" % (sum(st["cost"]) / len(st["cost"])))
         if st.get("paths"):
             bits.append("(" + ", ".join(f"{k} {v}" for k, v in sorted(st["paths"].items())) + ")")
+        # SP-03: per question asked, looked or not - the whole message's cost.
+        if st.get("voice_cost") and st.get("questions"):
+            voice = st["voice_cost"] / st["questions"]
+            bits.append("voice cost avg $%.4f, answer cost avg $%.4f"
+                        % (voice, voice + sum(st.get("cost", [])) / st["questions"]))
         _log.info("answer scorecard: %s", ", ".join(bits))
 
     def _on_realtime_heard(self, text: str) -> None:
@@ -1215,6 +1245,8 @@ class CompanionManager(QObject):
             self._rearm_desktop_control()
             self._count_question()
             self._ans = {"heard": now}
+            st = self._answer_stats()
+            st["questions"] = st.get("questions", 0) + 1
         if self._ans is not None and "tool" not in self._ans:
             self._ans["asked"] = now          # the last words before Tora acted
         self._heard_buf.append(text)
@@ -1263,6 +1295,8 @@ class CompanionManager(QObject):
 
     def _on_realtime_speaking(self) -> None:
         self._mark_answer("audio")
+        if self._ans is not None and "tool" in self._ans:
+            self._mark_answer("answer")          # the first word after the look
         self._activity("")          # it's talking now — nothing to report
         self._emit_state(AppState.SPEAKING)
 
@@ -1292,7 +1326,12 @@ class CompanionManager(QObject):
             self._last_response = said
             self._record_turn(heard, said)
         try:
-            self._log_answer(said)
+            self._note_voice(getattr(turn, "usage", None))
+            a = self._ans
+            # "Let me look" and then the look: that turn ended before the
+            # answer was said, so the line waits for the turn that says it.
+            if not (a and "tool" in a and "answer" not in a and getattr(turn, "tools_used", None)):
+                self._log_answer(said)
         except Exception:  # noqa: BLE001 - measuring must never break an answer
             _log.debug("answer timeline failed", exc_info=True)
         self._heard_buf = []

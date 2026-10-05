@@ -123,7 +123,24 @@ tools/look_eval_baseline.json`.
 deep). A `--fast-only` run costs about $0.03.
 *Size:* M. *Cost to build:* about $0.10 of runs.
 
-### SP-02 · A voice test bench — M
+### SP-02 · A voice test bench — M — **done (6 Oct)**
+
+**The first run** ($0.116): **12/12 passed**. The answer's first word came
+at p50 1.4 s. It is the baseline, `tools/voice_eval_baseline.json`; compare
+with `--against tools/voice_eval_baseline.json`.
+
+**What it found:**
+* **The voice behaves.** Every what-to-do question called the look (5 of
+  5), and it said the `say` line and stopped. It never read out the
+  misleading look's extra rings.
+* **"Let me look" costs time.** In 2 of 6 look questions it said a filler
+  first ("Let me analyse the board…"):
+  * the answer then came at **4.4–4.9 s instead of 1.0–1.5 s**;
+  * the look was called a second later (1.6 s, not 0.55 s);
+  * the server makes all of the filler's audio before it starts the
+    answer.
+  * That is SP-17.
+* **The voice costs more than the look.** See SP-03 and SP-16.
 
 **Why:**
 * Nothing has checked the *voice* side since wave 1:
@@ -154,9 +171,36 @@ deep). A `--fast-only` run costs about $0.03.
 
 *Prove:* a report line per question, and a pass on 12/12 before any
 prompt change ships.
-*Cost:* about $0.05 a run (estimate; SP-03 measures it).
+*Cost:* about $0.12 a run (measured; the estimate was $0.05).
 
-### SP-03 · The whole answer's cost, not just the look — S
+### SP-03 · The whole answer's cost, not just the look — S — **done (6 Oct)**
+
+**Measured on SP-02's run:**
+* **The voice: $0.0097 an answer.**
+  * A question that calls a tool: $0.009–0.012.
+  * Small talk: $0.0054.
+  * A look adds $0.0035 (SP-01), so **a looked answer is about $0.013,
+    and three quarters of that is the voice.**
+* **Why it costs that.** Every generation bills the whole prompt, about
+  4,500 tokens:
+  * 3,850 of them are text: the rules (~1,700) and the tool list
+    (~2,100);
+  * a question that calls a tool is two generations, so it pays for them
+    twice.
+* **The live model thinks** 56–273 tokens an answer (~$0.0008).
+* **How the server reports it.** One `usageMetadata` per generation, just
+  before `turnComplete`. Its modality breakdown is about 460 tokens short
+  of the count; the gap is priced as text.
+* **Prices:** `gemini-3.8-live`, from Google's list on 6 Oct, in
+  `gemini_live.LIVE_PRICES`. Per million tokens: $0.75 text in, $3 audio
+  in, $4.50 text out, $12 audio out.
+
+**In `tora.log`:**
+* The answer timeline ends with "voice N in / N out $x".
+* After a "let me look", the line waits for the answer, and shows "answer
+  +Ns" beside the first word.
+* The scorecard gets "voice cost avg" and "answer cost avg", per question
+  asked.
 
 **Why:**
 * The scorecard prices the look only.
@@ -275,6 +319,49 @@ next?" on Spotify goes to the deep model.
 
 *Prove:* unit tests both ways, and SP-01's music screen stays fast.
 
+### SP-16 · A lighter live prompt — S — **found by SP-03**
+
+**Why:**
+* The voice is three quarters of a looked answer's cost (SP-03).
+* Most of that is the same 3,850 tokens of rules and tool list, billed
+  on every generation: twice for any question that calls a tool.
+* **Two places say the same thing.** The rules and the tool descriptions
+  overlap: look_at_screen's when-to-use is written out in both.
+* **Long and rarely used.** `delegate_task`, `desktop_action` and
+  `manage_agents` together are about half the tool list.
+
+**Do:**
+* Say each thing once:
+  * when to use a tool goes in its description;
+  * how to speak goes in the rules.
+* Shorten the long descriptions without losing a rule a test holds.
+* Measure with SP-02 before and after.
+
+*Prove:* SP-02 still 12/12; prompt tokens down by at least 1,000 (about
+$0.0015 an answer, 15%).
+*Cost:* about $0.25 (two runs).
+
+### SP-17 · "Let me look", or straight to the look — S — **found by SP-02**
+
+**Why:**
+* The rules say to speak first, then call a slow tool. On SP-02's run,
+  that delayed the answer by about 3.5 s (SP-02's findings).
+* With a real look (about 2.6 s), the filler fills the silence but
+  probably still costs about a second.
+* Meanwhile the island and the flow bar already show that Tora is
+  looking.
+
+**Do:**
+* Try both with SP-02, on the look questions:
+  * **(a)** call the look first, and say nothing until it answers;
+  * **(b)** keep a filler, but two words ("One sec.").
+* Take a real look's time from SP-01's p50. Keep whichever has the answer
+  sooner, as long as nothing is silent for more than about 1.5 s
+  without the island showing it.
+
+*Prove:* SP-02 answer p50 on the look questions down; 12/12 kept.
+*Cost:* about $0.25.
+
 ---
 
 ## Wave C — draw exactly, where they mean
@@ -361,7 +448,8 @@ whole time.
 **Do:**
 * **The condition.** Only if SP-02 and SP-03 (or SP-14's field numbers)
   show the voice calls `look_at_screen` for at least 90% of
-  `is_next_action` questions.
+  `is_next_action` questions. SP-02's first run: 5 of 5. That is a
+  small sample; SP-14's numbers would settle it.
 * **What it does.** Start the fast look as soon as the heard words match.
   The voice's call then picks it up through UD-05's reuse.
 * **The record.** Count unused prefetches on the scorecard.
@@ -443,14 +531,16 @@ answered the mate-in-one correctly.
 
 | # | milestone | wave | size | cost to prove | needs |
 |---|---|---|---|---|---|
-| SP-01 | Look test bench | A | M | ~$0.10 | – |
-| SP-02 | Voice test bench | A | M | ~$0.05/run | – |
-| SP-03 | Whole answer's cost | A | S | (with SP-02) | – |
+| SP-01 | Look test bench — done | A | M | ~$0.10 | – |
+| SP-02 | Voice test bench — done | A | M | ~$0.12/run | – |
+| SP-03 | Whole answer's cost — done | A | S | (with SP-02) | – |
 | SP-04 | Thinking really off | B | S | ~$0.06 | SP-01 |
 | SP-05 | Fewer words back | B | S | ~$0.03 | SP-01 |
 | SP-06 | Right image size | B | S | ~$0.10 | SP-01 |
 | SP-07 | Typed path, same rule | B | S | free | – |
 | SP-08 | Sharper routing words | B | S | free | SP-01 screen |
+| SP-16 | A lighter live prompt | B | S | ~$0.25 | SP-02 |
+| SP-17 | "Let me look" or not | B | S | ~$0.25 | SP-02 |
 | SP-09 | Snap to the real control | C | M | free | – |
 | SP-10 | The monitor they point at | C | S | free | – |
 | SP-11 | Arrowhead visible, card glides | C | S | free | live demo |
@@ -462,5 +552,11 @@ answered the mate-in-one correctly.
 **Quick wins that need no paid runs:** SP-07, SP-08, SP-09, SP-10, SP-11,
 SP-12.
 
-**The biggest cost and speed lever:** SP-04. It needs SP-01 first, so
-nothing is changed without a before-and-after.
+**The biggest levers:**
+* **Cost:** SP-16. The voice is three quarters of a looked answer
+  (SP-03).
+* **The look's speed:** SP-04.
+* **The answer's speed:** SP-17.
+
+Each has its bench (SP-01 or SP-02), so nothing changes without a
+before-and-after.
