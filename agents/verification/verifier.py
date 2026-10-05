@@ -134,6 +134,14 @@ class RuleVerifier(Verifier):
             return Check(name, False, res.error or "tool reported failure")
         rule = self.rules.get(res.tool_name)
         if rule is None:
+            # A tool that keeps its records in a database (the packs) says
+            # what it saved. Its own success is the proof - the write was
+            # committed before it answered - and there is no file to look
+            # at: asked instead, the model judge found "no files written"
+            # and failed a step that had drafted all twelve posts.
+            recorded = (res.data or {}).get("recorded")
+            if recorded:
+                return Check(name, True, f"recorded: {recorded}")
             return Check(name, True, "no rule")
         try:
             c = rule(args, res, ctx)

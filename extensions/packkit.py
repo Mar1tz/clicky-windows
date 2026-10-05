@@ -18,6 +18,7 @@ knows any trade.
 """
 from __future__ import annotations
 
+import inspect
 import json
 import os
 import re
@@ -154,15 +155,26 @@ class PackTool(Tool):
         except LookupError as exc:
             return self.fail(str(exc))
         try:
-            with store.lock:
-                out = self.d.fn(store, args)
+            if inspect.iscoroutinefunction(self.d.fn):
+                # A tool that waits on something (rendering a picture) is a
+                # coroutine; it takes the lock only for its own writes, so
+                # nothing is held across the wait.
+                out = await self.d.fn(store, args)
+            else:
+                with store.lock:
+                    out = self.d.fn(store, args)
         except EXPECTED as exc:
             msg = exc.args[0] if isinstance(exc, KeyError) and exc.args else str(exc)
             return self.fail(str(msg))
         text = out.text
         if out.findings:
             text += "\n\nNeeds you:\n" + "\n".join(f"  - {f['title']}" for f in out.findings)
-        return self.ok(text, **out.data, findings=[{**f, "source": self.name} for f in out.findings])
+        data = dict(out.data)
+        if self.level is not Level.READ and not data.get("recorded"):
+            # What a step that changed records saved, for the verifier: the
+            # records live in the pack's database, with no file to inspect.
+            data["recorded"] = f"{self.name} saved in {os.path.join(store.root, store.DB)}"
+        return self.ok(text, **data, findings=[{**f, "source": self.name} for f in out.findings])
 
 
 # -- the store -------------------------------------------------------------------------------------------------
@@ -351,6 +363,8 @@ class PackExtension(IAgentExtension):
     ACTIONS: list[tuple[str, str]] = []
     NOTES = ""
     EXAMPLES: list[tuple[str, str]] = []     # (request, workflow id or "") - must route here with every pack on
+    EXTRA_TOOLS: list[str] = []              # core tools the pack's worker may use too ("render_design")
+    MAX_ITERATIONS = PackWorker.max_iterations
 
     def __init__(self) -> None:
         self.stores = StoreCache(self.STORE)
@@ -367,7 +381,9 @@ class PackExtension(IAgentExtension):
 
     def get_workers(self, ctx):
         mission = self.TEMPLATES[0].mission if self.TEMPLATES else ""
-        return [PackWorker(self.id, self.TOOLS.names(), self.ROLE, mission)]
+        worker = PackWorker(self.id, self.TOOLS.names() + list(self.EXTRA_TOOLS), self.ROLE, mission)
+        worker.max_iterations = self.MAX_ITERATIONS
+        return [worker]
 
     def get_skills(self):
         return list(self.SKILLS)

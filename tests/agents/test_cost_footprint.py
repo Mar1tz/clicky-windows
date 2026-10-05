@@ -61,7 +61,8 @@ def test_worker_tool_schemas_stay_within_budget():
     a tool set it does not need."""
     reg = default_registry()
     workers = default_workers()
-    budget = {"coding": 3000, "file": 2200, "terminal": 1300, "research": 700,
+    # file: 2200 + render_design (5 Oct 2026, ~350 - trimmed from 655), the File Agent's posters.
+    budget = {"coding": 3000, "file": 2400, "terminal": 1300, "research": 700,
               "browser": 700, "computer": 2100}
     for worker_type, limit in budget.items():
         names = list(workers.get(worker_type).default_tools)

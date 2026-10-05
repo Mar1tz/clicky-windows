@@ -21,6 +21,7 @@ EXPECTED = {
     "spreadsheet": {"read_workbook", "write_workbook", "clean_data", "reconcile_sheets", "check_formulas",
                     "compare_periods"},
     "desktop": {"list_app_actions", "app_action", "ui_control", "open_link"},
+    "design": {"render_design"},
 }
 
 
@@ -52,6 +53,7 @@ def test_risk_levels():
     assert risk["git_status"] is RiskLevel.SAFE and risk["git_diff"] is RiskLevel.SAFE
     assert risk["git_log"] is RiskLevel.SAFE
     assert risk["create_file"] is RiskLevel.LOW and risk["move_path"] is RiskLevel.LOW
+    assert risk["render_design"] is RiskLevel.LOW          # writes a picture in the workspace, like create_file
     assert risk["run_command"] is RiskLevel.MEDIUM and risk["git_commit"] is RiskLevel.MEDIUM
     assert risk["delete_path"] is RiskLevel.HIGH and risk["git_push"] is RiskLevel.HIGH
     looking_only = {"close_browser", "find_on_screen", "screenshot", "list_windows"}

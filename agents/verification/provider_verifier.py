@@ -127,9 +127,14 @@ class ProviderVerifier(Verifier):
         """Describe what is really on disk for the paths this step touched."""
         seen: list[str] = []
         for res in results:
-            path = (res.data or {}).get("path")
-            if isinstance(path, str) and path not in seen:
-                seen.append(path)
+            # `paths`: a tool that made more than one file (a picture and its
+            # print PDF). With only `path` read, the verifier was sure no PDF
+            # existed and had the agent make another.
+            data = res.data or {}
+            more = data.get("paths") if isinstance(data.get("paths"), list) else []
+            for path in [data.get("path"), *more]:
+                if isinstance(path, str) and path and path not in seen:
+                    seen.append(path)
             if len(seen) >= self.max_files:
                 break
         lines: list[str] = []
@@ -148,6 +153,8 @@ class ProviderVerifier(Verifier):
         for res in results:
             if not res.ok:
                 lines.append(f"  {res.tool_name} FAILED: {res.error[:200]}")
+            elif (res.data or {}).get("recorded"):
+                lines.append(f"  {res.tool_name} recorded: {str(res.data['recorded'])[:200]}")
         return "\n".join(lines)
 
 

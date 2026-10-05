@@ -19,6 +19,7 @@ import logging
 import os
 import threading
 import time
+from datetime import datetime
 from typing import Any, Callable, Optional, Protocol, Union
 
 from concurrent.futures import Future
@@ -471,9 +472,14 @@ class AgentManager:
     @staticmethod
     def _context_lines_for(task: Task) -> list[str]:
         """Facts about the machine the planner and worker should not have
-        to guess. For desktop work: what is installed, so "open Devin" is
-        planned as open_app and not as "find Devin's website"."""
-        lines: list[str] = []
+        to guess. Today's date, for every task: without it the model takes
+        its own training year - asked for a poster for "Saturday 14
+        November" on 5 Oct 2026, it printed 2025 (a Friday). For desktop
+        work: what is installed, so "open Devin" is planned as open_app and
+        not as "find Devin's website"."""
+        now = datetime.now()
+        lines: list[str] = [f"Today is {now:%A} {now.day} {now:%B %Y} ({now:%Y-%m-%d}), {now:%H:%M} local time. "
+                            "A date given without a year is the next one to come."]
         if task.kind in (TaskKind.COMPUTER, TaskKind.GENERAL):
             try:
                 from agents.tools.app_tools import installed_apps

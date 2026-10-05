@@ -1,0 +1,22 @@
+{
+  "id": "marketing",
+  "name": "Marketing",
+  "version": "1.0",
+  "description": "A marketer for your brand: campaign plans, posts for each platform within its rules, a picture designed for every post, Google, Meta and LinkedIn ads, marketing emails - all checked and exported as a kit you schedule. Nothing is posted, sent or paid for you.",
+  "capabilities": ["brand_kit", "campaign_plans", "social_posts", "post_pictures", "ads", "marketing_emails", "campaign_export"],
+  "required_tools": ["files"],
+  "optional_integrations": ["hootsuite", "buffer", "meta", "linkedin", "google_ads", "mailchimp"],
+  "activation_phrases": [
+    "i do marketing", "i work in marketing", "i'm in marketing", "i am in marketing", "i'm a marketer",
+    "i am a marketer", "i'm a social media manager", "i manage our social media", "i run our marketing",
+    "i need to market my business", "i do our social media"
+  ],
+  "offer": [
+    "Campaign plans from a short brief",
+    "Posts for Instagram, Facebook, LinkedIn, X, TikTok and more - within each platform's rules",
+    "A picture designed for every post, in your brand's colours",
+    "Google, Meta and LinkedIn ads within their limits",
+    "Marketing emails with the unsubscribe line in place",
+    "A ready kit: pictures, a posting schedule, a calendar - nothing posted for you"
+  ]
+}

@@ -31,6 +31,7 @@ each pack:
 | Lettings (`lettings`) | Rent roll and arrears, escalating letters, repairs and contractors, certificates, renewals, deposits | Settle a deposit (POST) | Morning lettings | "check the rent roll" | below |
 | Software developers (`developer`) | Change review (secrets, leftovers, tests, size), test failures, dependencies, TODOs, issue triage, release notes | none above DRAFT | Review before pushing, prepare a release | "review my changes" | below |
 | Podcast production (`podcast`) | Transcripts (length, speaking time), clips, chapters for podcast apps, show notes, guests and releases, calendar | none above DRAFT | The week's show | "check this week's podcast" | below |
+| Marketing (`marketing`) | A brand kit, campaign plans, posts within each platform's rules with a picture designed for each, Google/Meta/LinkedIn ads, marketing emails, an export to schedule from | none above DRAFT | Plan a campaign, this week's posts, design a picture | "plan a marketing campaign for our spring sale" | [MARKETING.md](MARKETING.md) |
 
 ## Sales CRM
 
