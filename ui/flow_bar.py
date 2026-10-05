@@ -114,6 +114,80 @@ def parse_dock(text: str) -> tuple[str, float, str]:
     return "bottom", 0.5, ""
 
 
+AVOID_FOR_S = 20.0             # a drawing older than this no longer pushes the card away
+AVOID_PAD = 24.0               # room kept around what Tora drew
+
+
+def shape_bounds(shape: dict) -> Optional[QRectF]:
+    """Where an overlay drawing sits, in logical px, with room around it -
+    from the same shape dicts the overlay draws (companion_manager)."""
+    try:
+        k = shape.get("kind")
+        if k == "circle":
+            x, y, r = shape["x"], shape["y"], shape["r"]
+            rect = QRectF(x - r, y - r, 2 * r, 2 * r)
+        elif k == "rect":
+            rect = QRectF(QPointF(shape["x1"], shape["y1"]), QPointF(shape["x2"], shape["y2"])).normalized()
+        elif k in ("line", "arrow", "poly"):
+            xs = [p[0] for p in shape["pts"]]
+            ys = [p[1] for p in shape["pts"]]
+            rect = QRectF(min(xs), min(ys), max(xs) - min(xs), max(ys) - min(ys))
+        elif k == "underline":
+            rect = QRectF(shape["x"], shape["y"] - 6, shape["w"], 12)
+        elif k == "angle":
+            s = shape["s"]
+            rect = QRectF(shape["x"] - s, shape["y"] - s, 2 * s, 2 * s)
+        elif k == "text":
+            rect = QRectF(shape["x"], shape["y"] - 30, 320, 40)
+        else:
+            return None
+    except (KeyError, TypeError, ValueError, IndexError):
+        return None
+    return rect.adjusted(-AVOID_PAD, -AVOID_PAD, AVOID_PAD, AVOID_PAD)
+
+
+def place_card(edge: str, pill: QRectF, geo: QRect, cw: float, ch: float,
+               avoid: tuple = ()) -> tuple[float, float]:
+    """Top-left of the card: beside the pill, towards the middle, on the
+    screen - and off what Tora drew. It covered the knight its own arrow
+    started from in the wave-1 demo, and a user's board in the field
+    (docs/SHOW_THE_NEXT_MOVE.md, SN-09). The usual place when it is clear;
+    else slid to the screen's left or right, or to the far side; else the
+    one that covers least."""
+    if edge == "bottom":
+        x, y = pill.center().x() - cw / 2, pill.top() - CARD_GAP - ch
+    elif edge == "top":
+        x, y = pill.center().x() - cw / 2, pill.bottom() + CARD_GAP
+    elif edge == "left":
+        x, y = pill.right() + CARD_GAP, pill.center().y() - ch / 2
+    else:
+        x, y = pill.left() - CARD_GAP - cw, pill.center().y() - ch / 2
+
+    def clamp(cx: float, cy: float) -> tuple[float, float]:
+        return (max(geo.left() + 8, min(geo.right() - 8 - cw, cx)),
+                max(geo.top() + 8, min(geo.bottom() - 8 - ch, cy)))
+
+    first = clamp(x, y)
+    if not avoid:
+        return first
+    left, right = geo.left() + 8, geo.right() - 8 - cw
+    top, bottom = geo.top() + 8, geo.bottom() - 8 - ch
+    if edge in ("top", "bottom"):
+        others = [clamp(left, y), clamp(right, y), clamp(x, top if edge == "bottom" else bottom)]
+    else:
+        others = [clamp(x, top), clamp(x, bottom), clamp(right if edge == "left" else left, y)]
+    candidates = [first] + others
+
+    def covered(c: tuple[float, float]) -> float:
+        r = QRectF(c[0], c[1], cw, ch)
+        total = 0.0
+        for a in avoid:
+            i = r.intersected(a)
+            total += max(0.0, i.width()) * max(0.0, i.height())
+        return total
+    return min(candidates, key=lambda c: (covered(c) > 0, covered(c), candidates.index(c)))
+
+
 def nearest_edge(geo: QRect, p: QPoint) -> tuple[str, float]:
     """The side of `geo` nearest `p`, and where along it (0-1)."""
     d = {"left": p.x() - geo.left(), "right": geo.right() - p.x(),
@@ -297,6 +371,7 @@ class FlowBar(QObject):
         self._clock: Optional[Callable[[], Optional[tuple[float, float]]]] = None
         self._last = time.monotonic()
         self._painted: tuple = ()        # what the pill looked like when last painted
+        self._avoid: list[tuple[float, QRectF]] = []   # (when, where) Tora drew - the card keeps off
 
         self.pill = _Pill(self)
         self.pill.setToolTip(f"Hold {hotkey} to talk to Tora · drag me to any side")
@@ -422,21 +497,43 @@ class FlowBar(QObject):
         self._place_card()
 
     def _place_card(self) -> None:
-        """Beside the pill, towards the middle of the screen, on the screen."""
+        """Beside the pill, towards the middle of the screen, on the screen
+        the pill is ACTUALLY on - not the one its saved dock names, which a
+        changed monitor layout can make another (a user's card ran off the
+        screen's edge) - and clear of what Tora drew (SN-09)."""
         r = self.pill.pill_rect().translated(QPointF(self.pill.pos()))
-        geo = self._screen().availableGeometry()
-        cw, ch = CARD_W, CARD_H
-        if self._edge == "bottom":
-            x, y = r.center().x() - cw / 2, r.top() - CARD_GAP - ch
-        elif self._edge == "top":
-            x, y = r.center().x() - cw / 2, r.bottom() + CARD_GAP
-        elif self._edge == "left":
-            x, y = r.right() + CARD_GAP, r.center().y() - ch / 2
-        else:
-            x, y = r.left() - CARD_GAP - cw, r.center().y() - ch / 2
-        x = max(geo.left() + 8, min(geo.right() - 8 - cw, x))
-        y = max(geo.top() + 8, min(geo.bottom() - 8 - ch, y))
+        screen = QGuiApplication.screenAt(r.center().toPoint()) or self._screen()
+        geo = screen.availableGeometry()
+        now = time.monotonic()
+        self._avoid = [(t, a) for t, a in self._avoid if now - t < AVOID_FOR_S]
+        x, y = place_card(self._edge, r, geo, CARD_W, CARD_H, tuple(a for _t, a in self._avoid))
         self.card.move(int(round(x - PAD)), int(round(y - PAD)))
+        # Moved, Windows may have put it on a screen of another size: check again on that one.
+        on = self.card.screen()
+        if on is not None and on is not screen:
+            g = on.availableGeometry()
+            x = max(g.left() + 8, min(g.right() - 8 - CARD_W, x))
+            y = max(g.top() + 8, min(g.bottom() - 8 - CARD_H, y))
+            self.card.move(int(round(x - PAD)), int(round(y - PAD)))
+
+    # ── what Tora drew: the card keeps clear of it ─────────────────────────────
+    def note_drawing(self, shape: dict) -> None:
+        """Slot for CompanionManager.sig_draw."""
+        rect = shape_bounds(shape) if isinstance(shape, dict) else None
+        if rect is not None:
+            self._avoid.append((time.monotonic(), rect))
+            if self.card.isVisible():
+                self._place_card()
+
+    def note_point(self, x: float, y: float, label: str = "") -> None:
+        """Slot for CompanionManager.sig_point_at: the target, its ring and its name bubble."""
+        self._avoid.append((time.monotonic(), QRectF(x - 70, y - 70, 140 + 240, 140)))
+        if self.card.isVisible():
+            self._place_card()
+
+    def clear_drawings(self) -> None:
+        """Slot for CompanionManager.sig_clear_drawings."""
+        self._avoid.clear()
 
     # ── dragging ────────────────────────────────────────────────────────────────
     def _begin_drag(self) -> None:

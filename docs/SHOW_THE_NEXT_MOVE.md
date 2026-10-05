@@ -265,7 +265,16 @@ of the screen look; the live voice turn itself is not included.
 *Proof:* the scorecard line carries cost per answer, and the live run
 compares it with wave 1's.
 
-### SN-09 · The card stays on screen, and off the answer — S
+### SN-09 · The card stays on screen, and off the answer — S — **done; shown live**
+
+**Shown live:** with the board low enough that the card's usual place
+covered the knight, the card slid to the screen's left edge the moment
+the arrow was drawn, clear of the board. It goes back by the pill once
+the drawing is cleared.
+
+**The clipped card:** the card is now placed on the screen the pill is
+actually on, and checked again on the screen it lands on. The two-monitor
+case itself was not reproduced on this PC.
 
 * **The clipped card in the second photo** is reproduced (two monitors,
   mixed scaling, docked right) and fixed.
