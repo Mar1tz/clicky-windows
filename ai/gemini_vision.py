@@ -205,6 +205,7 @@ class Look:
     usage: dict = field(default_factory=dict)     # tokens, summed over every call it took (SN-01)
     sure: bool = True
     path: str = ""                                # "fast", "deep", "fast→deep" (UD-01)
+    cost: float = 0.0                             # US dollars, every call it took (UD-06)
 
     def __bool__(self) -> bool:
         return bool(self.answer)
@@ -418,8 +419,23 @@ async def _ask(question: str, screenshot_b64: str, *, deep: bool, context: str, 
         return None
     out = _parse(data, model, deep)
     out.usage = usage
+    out.cost = cost_usd(model, usage)
     out.sure = data.get("sure") is not False
     return out
+
+
+# US dollars per million tokens, in and out (thinking is billed as out) - the
+# same table HeyTora's server bills with (supabase/functions/heytora/rules.ts).
+PRICES = {"flash-lite": (0.15, 0.6), "flash": (0.5, 3.0), "pro": (2.5, 15.0)}
+
+
+def cost_usd(model: str, usage: dict) -> float:
+    """What one call cost, from its usageMetadata (UD-06)."""
+    m = (model or "").lower()
+    pin, pout = PRICES["flash-lite" if "flash-lite" in m else "flash" if "flash" in m else "pro"]
+    u = usage or {}
+    return (u.get("promptTokenCount", 0) * pin
+            + (u.get("candidatesTokenCount", 0) + u.get("thoughtsTokenCount", 0)) * pout) / 1e6
 
 
 def _summed(*usages: dict) -> dict:
@@ -484,6 +500,7 @@ async def look(
     if careful and careful.answer:
         careful.path = "fast→deep"
         careful.usage = _summed(fast.usage if fast else {}, careful.usage)
+        careful.cost += fast.cost if fast else 0.0
         return careful
     if fast and fast.answer:
         fast.path = "fast (deep failed)"

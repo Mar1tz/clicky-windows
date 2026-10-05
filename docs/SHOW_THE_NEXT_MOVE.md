@@ -210,7 +210,11 @@ button snapped exactly onto the button's rectangle, in 5 ms.
 *Proof:* a recorded look whose box is 20 px off a button rings the
 button's own rectangle.
 
-### UD-04 · No answer without its drawing — S — no dearer than a correct turn
+### UD-04 · No answer without its drawing — S — no dearer than a correct turn — **done**
+
+The target comes from the answer's own words: "Click Checkout to pay" →
+"Checkout", "Pick the Arctic Fan for $39" → "Arctic Fan". An answer that
+names nothing on screen ("maybe go for a walk") draws nothing.
 
 **Done:**
 
@@ -224,7 +228,12 @@ button's own rectangle.
 *Proof:* a scripted "what should I click next?" answered only in words
 still ends with an arrow.
 
-### UD-05 · Don't pay twice — S — saves
+### UD-05 · Don't pay twice — S — saves — **done**
+
+The screen's sketch is a 16×9 average hash. It survives JPEG noise and
+Tora's own arrow, and changes with the screen. Reuse lasts three minutes,
+and applies to the same question or to "again", "where was it" and
+"remind me".
 
 **Done:**
 
@@ -238,7 +247,12 @@ still ends with an arrow.
 *Proof:* a second identical question on an unchanged screen makes 0 vision
 calls.
 
-### UD-06 · Cost per answer, measured — S
+### UD-06 · Cost per answer, measured — S — **done**
+
+Each answer's timeline line now ends with its look's cost, e.g.
+"$0.0014". The scorecard gets the average, and how often each path ran:
+`look cost avg $0.0036 (fast 1, fast→deep 1, reused 1)`. This is the cost
+of the screen look; the live voice turn itself is not included.
 
 **Done:**
 

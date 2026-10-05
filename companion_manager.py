@@ -218,6 +218,29 @@ def _code_addendum(active: bool) -> str:
     return code_system_prompt_addendum()
 
 
+_ACT_RE = re.compile(
+    r"\b(?:click|press|tap|select|choose|pick|hit|toggle|open|use|type\s+[^.]{1,40}?\s+(?:in|into))\s+"
+    r"(?:on\s+)?(?:the\s+)?(?P<t>[^.,;:!?]{2,60})", re.IGNORECASE)
+_ACT_END = re.compile(r"(?:(?<!next)\s+to|\s+(?:and|for|so|which|because|then|button|link|icon|tab|option))\b.*$",
+                      re.IGNORECASE)
+
+
+def _norm_question(q: str) -> str:
+    return " ".join(re.sub(r"[^\w\s]", " ", (q or "").lower()).split())
+
+
+def _target_from_answer(said: str) -> str:
+    """What an answer tells them to act on: "Click Checkout to pay" ->
+    "Checkout", "Pick the Arctic Fan for $39" -> "Arctic Fan". "" when it
+    names nothing to act on - then the safety net does not point (UD-04)."""
+    m = _ACT_RE.search(said or "")
+    if not m:
+        return ""
+    t = _ACT_END.sub("", m.group("t")).strip(" \"'")
+    words = t.split()
+    return " ".join(words[:5]) if words else ""
+
+
 def _guess_label(transcript: str) -> str:
     """Extract a 1-3 word label from a locate query for the speech bubble.
        'where is the search bar' → 'search bar' """
@@ -1135,6 +1158,11 @@ class CompanionManager(QObject):
         if detail:
             a[what + ":"] = detail
 
+    def _note_answer(self, **facts) -> None:
+        """What the look was (its path, its cost) for this answer's line."""
+        if self._ans is not None:
+            self._ans.update(facts)
+
     def _log_answer(self, said: str) -> None:
         """One timeline line for an answer that looked at the screen."""
         a, self._ans = self._ans, None
@@ -1159,6 +1187,11 @@ class CompanionManager(QObject):
                 st["arrows"] = st.get("arrows", 0) + 1
         if "audio" in a:
             st.setdefault("voice", []).append(a["audio"] - t0)
+        if "cost" in a:
+            st.setdefault("cost", []).append(float(a["cost"]))
+        if a.get("path"):
+            paths = st.setdefault("paths", {})
+            paths[a["path"]] = paths.get(a["path"], 0) + 1
 
         def p50(xs):
             return sorted(xs)[len(xs) // 2] if xs else None
@@ -1168,6 +1201,12 @@ class CompanionManager(QObject):
         bits.append(f"{st.get('arrows', 0)} arrow(s), {st['looks'] - len(st.get('drawn', []))} with nothing drawn")
         if st.get("voice"):
             bits.append("voice p50 %.1fs" % p50(st["voice"]))
+        # UD-06: what the looks cost, and how often each path was taken - so a
+        # release can show it did not make a message dearer.
+        if st.get("cost"):
+            bits.append("look cost avg $%.4f" % (sum(st["cost"]) / len(st["cost"])))
+        if st.get("paths"):
+            bits.append("(" + ", ".join(f"{k} {v}" for k, v in sorted(st["paths"].items())) + ")")
         _log.info("answer scorecard: %s", ", ".join(bits))
 
     def _on_realtime_heard(self, text: str) -> None:
@@ -1238,9 +1277,12 @@ class CompanionManager(QObject):
         # otherwise resolve it ourselves and point. The pointer hold is left
         # in place for the safety net to manage, so it is NOT released here
         # when a locate turn produced no arrow.
-        needs_point = is_locate(heard) and not self._pointed_this_turn
+        # UD-04: a what-to-do answer whose action names something ("click
+        # Checkout") gets its arrow too, when the voice only said it.
+        needs_point = not self._pointed_this_turn and (
+            is_locate(heard) or (gemini_vision.is_next_action(heard) and _target_from_answer(said)))
         if needs_point:
-            self._submit(self._ensure_pointed(heard))
+            self._submit(self._ensure_pointed(heard, said))
         elif self._pointing_held:
             self.sig_point_release.emit()
             self._pointing_held = False
@@ -2717,7 +2759,7 @@ class CompanionManager(QObject):
 
         return None
 
-    async def _ensure_pointed(self, transcript: str) -> None:
+    async def _ensure_pointed(self, transcript: str, said: str = "") -> None:
         """Safety net: a locate question must end with an arrow, not words.
 
         The live model is told to point, but it does not always — sometimes it
@@ -2726,8 +2768,18 @@ class CompanionManager(QObject):
         no arrow, resolves the target itself through the full chain (which
         ends in the vision model, so it works even when there is no name), and
         points. It is what turns "once in a while" into "almost always".
+
+        A what-to-do turn (UD-04) points at what the ANSWER said to act on -
+        "Click Checkout to pay" - through the same chain, free tiers first: at
+        most the one look a correct turn would have made.
         """
-        label = _guess_label(transcript)
+        if not is_locate(transcript):
+            label = _target_from_answer(said)
+            if not label:
+                return
+            _log.info("the answer drew nothing - pointing at %r from its words", label)
+        else:
+            label = _guess_label(transcript)
         if label in ("right here!", "here"):
             label = transcript                # no clean target — let vision read it
         if await self._point_to(label, hold=True):
@@ -2788,13 +2840,31 @@ class CompanionManager(QObject):
         hint = look_region.pointer_hint(question, look_region.cursor_position(), region or monitor) \
             if monitor else ""
 
+        # UD-05: asked again about a screen that has not changed - the last
+        # look's answer and drawing again, and no call.
+        fp = look_region.fingerprint(image)
+        again = self._reusable_look(question, fp)
+        if again is not None:
+            for tag in again["tags"]:
+                sh = self._shape_from_tag(tag)
+                if sh:
+                    self.sig_draw.emit(sh)
+            if again["tags"]:
+                self._pointed_this_turn = True
+                self._mark_answer("drawing", "redrawn")
+            self._mark_answer("look", "reused: the screen had not changed, no call")
+            self._note_answer(path="reused", cost=0.0)
+            return dict(again["result"], reused=True)
+
         # UD-01: fast first; the deep model only when the fast look is not sure.
         look = await gemini_vision.look(question, image, context=hint)
         usage = getattr(look, "usage", None) or {}
-        detail = "%s %s, %s in / %s out / %s thinking" % (
-            getattr(look, "path", "") or ("deep" if getattr(look, "deep", False) else "fast"),
-            getattr(look, "model", "") or "?", usage.get("promptTokenCount", "?"),
-            usage.get("candidatesTokenCount", "?"), usage.get("thoughtsTokenCount", 0))
+        cost = float(getattr(look, "cost", 0.0) or 0.0)
+        path = getattr(look, "path", "") or ("deep" if getattr(look, "deep", False) else "fast")
+        self._note_answer(path=path, cost=cost)
+        detail = "%s %s, %s in / %s out / %s thinking, $%.4f" % (
+            path, getattr(look, "model", "") or "?", usage.get("promptTokenCount", "?"),
+            usage.get("candidatesTokenCount", "?"), usage.get("thoughtsTokenCount", 0), cost)
         if region:
             detail += ", window only"
         if hint:
@@ -2835,11 +2905,35 @@ class CompanionManager(QObject):
         # The voice model never sees the screen: without these, a drawing it
         # adds after a look is a guess - in the first launch it ringed empty
         # space beside the line this look had boxed correctly.
-        return {
+        result = {
             "say": _one_line(look.answer),
             "drawn": [("arrow: " if getattr(a, "is_move", False) else f"{a.kind}: ") + a.label for a in drawn],
             "highlights": [{"label": a.label, "tag": a.as_tag()} for a in drawn],
         }
+        self._last_look = {"fp": fp, "question": _norm_question(question), "at": time.monotonic(),
+                           "result": result, "tags": [a.as_tag() for a in drawn]}
+        return result
+
+    # ── UD-05: never pay twice for the same screen ──────────────────────────
+    _last_look: Optional[dict] = None
+    _LOOK_REUSE_S = 180.0
+    _AGAIN_RE = re.compile(r"\b(again|one more time|repeat|where was (it|that)|show me that|remind me)\b",
+                           re.IGNORECASE)
+
+    def _reusable_look(self, question: str, fp) -> Optional[dict]:
+        """The last look, when it can answer this one with no call: the same
+        screen (its sketch, look_region.fingerprint), within three minutes, and
+        either the same question or the user asking for it again."""
+        last = self._last_look
+        if not last or time.monotonic() - last["at"] > self._LOOK_REUSE_S:
+            return None
+        if not look_region.same_screen(fp, last["fp"]):
+            return None
+        heard = " ".join(getattr(self, "_heard_buf", None) or [])
+        if _norm_question(question) == last["question"] or self._AGAIN_RE.search(heard) \
+                or self._AGAIN_RE.search(question):
+            return last
+        return None
 
     async def _snap_to_controls(self, actions, monitor, window) -> int:
         """UD-03: a ring drawn round a button is put on the button itself.

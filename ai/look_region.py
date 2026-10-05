@@ -129,6 +129,29 @@ def control_rect_at(x: float, y: float) -> Optional[Rect]:
         return None
 
 
+def fingerprint(image_b64: str) -> Optional[int]:
+    """A 144-bit sketch of an image (16x9 average hash): two screens that look
+    the same give nearly the same sketch, whatever JPEG noise or a small
+    arrow of Tora's adds. What UD-05 compares to know nothing has changed."""
+    try:
+        import base64
+        import io
+        from PIL import Image
+        im = Image.open(io.BytesIO(base64.b64decode(image_b64))).convert("L").resize((16, 9))
+        px = list(im.getdata())
+    except Exception:  # noqa: BLE001 - no sketch: never reuse
+        return None
+    mean = sum(px) / len(px)
+    bits = 0
+    for v in px:
+        bits = (bits << 1) | (v > mean)
+    return bits
+
+
+def same_screen(a: Optional[int], b: Optional[int], tolerance: int = 6) -> bool:
+    return a is not None and b is not None and bin(a ^ b).count("1") <= tolerance
+
+
 def cursor_position() -> Optional[tuple[float, float]]:
     """Where the mouse is, in physical px (the process is per-monitor DPI aware)."""
     try:
