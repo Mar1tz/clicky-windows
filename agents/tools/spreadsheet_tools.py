@@ -171,6 +171,18 @@ class ReadWorkbook(Tool):
             return self.fail(str(exc))
 
 
+_NUMBER = re.compile(r"-?(0|[1-9][0-9]*)(\.[0-9]+)?")
+
+
+def _number(value: Any) -> Any:
+    """A cell that came as text but IS a number ("1200", "-3.5") is written as
+    one - some models send every cell as text. "007" or "1,200" stay text."""
+    if isinstance(value, str) and _NUMBER.fullmatch(value.strip()):
+        text = value.strip()
+        return float(text) if "." in text else int(text)
+    return value
+
+
 class WriteWorkbook(Tool):
     spec = make_spec("write_workbook", "Write cells into a workbook, keeping its formulas and formatting. Give "
                      "`cells` {\"B7\": 1200, \"C7\": \"=B7*0.15\"} and/or `rows` appended at `start_cell`. Formula "
@@ -189,7 +201,8 @@ class WriteWorkbook(Tool):
         if err:
             return err
         cells = dict(args.get("cells") or {})
-        rows = list(args.get("rows") or [])
+        rows = [[_number(v) for v in row] if isinstance(row, (list, tuple)) else row
+                for row in (args.get("rows") or [])]
         if not cells and not rows:
             return self.fail("give cells and/or rows")
         if not _is_xlsx(path):

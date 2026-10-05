@@ -434,12 +434,52 @@ def test_the_agents_think_through_the_server_with_a_ticket(heytora):
     assert "x-goog-api-key" not in req.headers and req.headers["x-heytora-ticket"].startswith("agent.")
 
 
-def test_signed_in_the_agents_get_a_real_provider(heytora):
+def test_signed_in_the_agents_get_omniroute_through_heytora(heytora, monkeypatch):
+    """The agents' only model is OmniRoute (Claude) - through HeyTora's server
+    for anyone signed in (5 Oct 2026). Never Gemini."""
     from agents.core import TaskKind
-    from agents.providers import GeminiAgentProvider, build_router
+    from agents.providers import GeminiAgentProvider, OpenAICompatibleProvider, build_router
+    monkeypatch.delenv("TORA_OMNIROUTE_BASE_URL", raising=False)
     _signed_in(heytora)
-    picked = build_router().pick(TaskKind.GENERAL)
-    assert isinstance(picked, GeminiAgentProvider) and picked._auth is not None
+    router = build_router()
+    for kind in (TaskKind.GENERAL, TaskKind.CODING, TaskKind.FAST, TaskKind.VISION):
+        picked = router.pick(kind)
+        assert isinstance(picked, OpenAICompatibleProvider) and not isinstance(picked, GeminiAgentProvider)
+        assert picked.base_url == f"{SUPABASE}/functions/v1/heytora/omniroute/v1" and picked._auth is not None
+        assert "claude" in picked.model, (kind, picked.model)
+
+
+def test_omniroute_set_up_on_this_pc_is_used_straight(heytora, monkeypatch):
+    from agents.core import TaskKind
+    from agents.providers import build_router
+    monkeypatch.setenv("TORA_OMNIROUTE_BASE_URL", "https://gateway.example/v1")
+    monkeypatch.setenv("TORA_OMNIROUTE_API_KEY", "sk-test")
+    _signed_in(heytora)
+    picked = build_router().pick(TaskKind.CODING)
+    assert picked.base_url == "https://gateway.example/v1" and picked._auth is None
+
+
+def test_the_agents_calls_carry_the_agent_ticket(heytora):
+    from agents.core import ProviderMessage
+    from agents.providers import provider_via_heytora
+    _signed_in(heytora)
+    seen = []
+
+    def gateway(request):
+        seen.append(request)
+        body = "".join(f"data: {line}\n\n" for line in (
+            '{"choices":[{"delta":{"content":"done"}}]}',
+            '{"choices":[],"usage":{"prompt_tokens":5,"completion_tokens":1}}',
+            "[DONE]"))
+        return httpx.Response(200, text=body, headers={"content-type": "text/event-stream"})
+    provider = provider_via_heytora()
+    provider._client = httpx.AsyncClient(transport=httpx.MockTransport(gateway))
+    reply = asyncio.run(provider.complete([ProviderMessage(role="user", content="plan a site")]))
+    req = seen[0]
+    assert reply.text == "done" and str(req.url).endswith("/heytora/omniroute/v1/chat/completions")
+    assert req.headers["x-heytora-ticket"].startswith("agent.") and req.headers["x-heytora-kind"] == "agent"
+    assert req.headers["Authorization"].startswith("Bearer at"), "the sign-in, never a gateway key"
+    assert asyncio.run(provider.health_check()) is True, "no paid call to check health"
 
 
 # -- the manager: a metered plan opens the voice on the question ---------------------------------------------------

@@ -7,7 +7,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   checkGenerate, costMicro, DEFAULT_PRICES, estimateTokens, family, makeTicket, MAX_OUTPUT_TOKENS,
-  prices, readTicket, UsageReader,
+  omnirouteModels, prices, readTicket, UsageReader,
 } from "../functions/heytora/rules.ts";
 
 test("only the app's model families are forwarded", () => {
@@ -87,4 +87,24 @@ test("usage is read from Google's own counts, plain or streamed", () => {
   assert.deepEqual(streamed.used(), { input: 900, output: 30 });
 
   assert.equal(new UsageReader().used(), null, "no counts, no guess");
+});
+
+test("OmniRoute (OpenAI-style) usage is read from the last chunk of the stream", () => {
+  const sse = [
+    `data: {"choices":[{"delta":{"content":"Hi"}}]}\n\n`,
+    `data: {"choices":[],"usage":{"prompt_tokens":1450,"completion_tokens":212,"prompt_tokens_details":{"cached_tokens":3}}}\n\n`,
+    "data: [DONE]\n\n",
+  ].join("");
+  const reader = new UsageReader();
+  for (let i = 0; i < sse.length; i += 11) reader.push(sse.slice(i, i + 11));
+  assert.deepEqual(reader.used(), { input: 1450, output: 212 });
+  // 1,450 in + 212 out of Claude Sonnet: 1450*3 + 212*15 = 7,530 micro-dollars
+  assert.equal(costMicro(DEFAULT_PRICES, "claude", 1450, 212), 7530);
+});
+
+test("the agents may only reach the Claude models on OmniRoute", () => {
+  const allowed = omnirouteModels(undefined);
+  assert.ok(allowed.has("claude/claude-sonnet-4-6") && allowed.has("cc/claude-sonnet-4-6"));
+  assert.equal(allowed.has("gpt-5"), false);
+  assert.deepEqual([...omnirouteModels(" a/x , b/y ")], ["a/x", "b/y"]);
 });

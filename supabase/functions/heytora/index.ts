@@ -17,6 +17,11 @@
 //                      The app then talks straight to Google.
 //   POST /agent-ticket the agent window's ticket (older apps).
 //   GET  /me           the plan, its allowances and this month's use.
+//   POST /omniroute/v1/chat/completions   the AGENTS' model call: OmniRoute
+//                      (Claude), the only models the agents use (the owner,
+//                      5 Oct 2026). Needs the agent message's ticket; only
+//                      the Claude models; counted and costed like the rest.
+//   GET  /omniroute/v1/models             those models.
 //   *    /v1beta/...   a Gemini REST call, forwarded with the key added:
 //                      the app's model families only; answers (generate)
 //                      need a window ticket; every call is counted, and its
@@ -32,8 +37,8 @@
 
 import { createClient } from "npm:@supabase/supabase-js@2";
 import {
-  checkGenerate, costMicro, estimateTokens, family, makeTicket, MAX_BODY_BYTES, prices, readTicket,
-  UsageReader,
+  checkGenerate, costMicro, estimateTokens, family, makeTicket, MAX_BODY_BYTES, MAX_OUTPUT_TOKENS,
+  omnirouteModels, prices, readTicket, UsageReader,
 } from "./rules.ts";
 
 const GOOGLE = "https://generativelanguage.googleapis.com";
@@ -50,6 +55,11 @@ const VOICE_MODELS: Record<string, Set<string>> = {
 };
 VOICE_MODELS.wake = VOICE_MODELS.dictation; // "is that 'Tora'?" - the dictation model, briefly
 const PRICES = prices(Deno.env.get("HEYTORA_PRICES"));
+// The agents' gateway (secrets: OMNIROUTE_API_KEY, OMNIROUTE_BASE_URL - the
+// OpenAI-compatible root, e.g. https://example.com/v1).
+const OMNIROUTE_KEY = Deno.env.get("OMNIROUTE_API_KEY") ?? "";
+const OMNIROUTE_URL = (Deno.env.get("OMNIROUTE_BASE_URL") ?? "").replace(/\/+$/, "");
+const OMNIROUTE_MODELS = omnirouteModels(Deno.env.get("HEYTORA_OMNIROUTE_MODELS"));
 
 // Only these Gemini REST paths: model calls and the model list. No files,
 // no tuning, no caches - nothing that stores anything on the business account.
@@ -244,6 +254,73 @@ Deno.serve(async (req: Request): Promise<Response> => {
         ...pass, expires_at: Number(p.expires_at), ticket: t.ticket, ticket_expires_at: t.expires_at,
         now: t.now, usage: w,
       });
+    }
+
+    if (path === "omniroute/v1/models" && req.method === "GET") {
+      return json(200, { object: "list", data: [...OMNIROUTE_MODELS].map((id) => ({ id, object: "model" })) });
+    }
+
+    if (path === "omniroute/v1/chat/completions" && req.method === "POST") {
+      if (!OMNIROUTE_KEY || !OMNIROUTE_URL) {
+        return refuse(503, "HEYTORA_SETUP", "HeyTora's agents are not switched on yet.");
+      }
+      // An agent message the plan has paid for - its ticket, nothing else.
+      const t = await readTicket(TICKET_SECRET, user.id, req.headers.get("x-heytora-ticket"), Date.now() / 1000);
+      if (!t || t.kind !== "agent") {
+        return refuse(402, "HEYTORA_TICKET", "That agent job's time is up - ask again.",
+          { reason: "ticket", kind: "agent" });
+      }
+      const raw = await req.arrayBuffer();
+      if (raw.byteLength > MAX_BODY_BYTES) {
+        return refuse(413, "HEYTORA_REQUEST", "That request is too large to forward.");
+      }
+      let body: Record<string, unknown>;
+      try {
+        body = JSON.parse(new TextDecoder().decode(raw));
+      } catch {
+        return refuse(400, "HEYTORA_REQUEST", "Not a model request.");
+      }
+      const model = String(body?.model ?? "");
+      if (!OMNIROUTE_MODELS.has(model)) {
+        return refuse(403, "HEYTORA_MODEL", `HeyTora's agents don't use ${model}.`);
+      }
+      const asked = Number(body.max_tokens);
+      body.max_tokens = Number.isFinite(asked) && asked > 0 ? Math.min(asked, MAX_OUTPUT_TOKENS) : MAX_OUTPUT_TOKENS;
+      body.stream = true;                                 // and the usage, at the end
+      body.stream_options = { include_usage: true };
+      const usage = await rpc("heytora_consume", {
+        p_kind: "calls", p_quantity: 1, p_meta: { kind: "agent", model, via: "omniroute", window: t.window },
+      });
+      if (!usage.ok) {
+        return limitResponse(usage.reason === "limit" ? { ...usage, reason: "budget" } : usage);
+      }
+      const upstream = await fetch(`${OMNIROUTE_URL}/chat/completions`, {
+        method: "POST",
+        headers: { "content-type": "application/json", authorization: `Bearer ${OMNIROUTE_KEY}` },
+        body: JSON.stringify(body),
+      });
+      const type = upstream.headers.get("content-type") ?? "application/json";
+      if (!upstream.ok || !upstream.body) {
+        const text = await upstream.text();
+        console.error("heytora: omniroute", upstream.status, text.slice(0, 300));
+        return refuse(upstream.status >= 500 ? 502 : upstream.status, "HEYTORA_UPSTREAM",
+          `The agents' model said no (${upstream.status}).`, { detail: text.slice(0, 300) });
+      }
+      const admin = createClient(SUPABASE_URL, SERVICE_KEY, { auth: { persistSession: false } });
+      const [toApp, toMeter] = upstream.body.tee();
+      later((async () => {
+        const reader = new UsageReader();
+        const decoder = new TextDecoder();
+        for await (const chunk of toMeter) reader.push(decoder.decode(chunk, { stream: true }));
+        const used = reader.used();
+        if (!used) return;
+        const { error } = await admin.rpc("heytora_record_cost", {
+          p_user: user.id, p_kind: "agent", p_model: model, p_in: used.input, p_out: used.output,
+          p_micro: costMicro(PRICES, "claude", used.input, used.output),
+        });
+        if (error) throw new Error(error.message);
+      })());
+      return new Response(toApp, { status: upstream.status, headers: { "content-type": type } });
     }
 
     // Everything else: forward a Gemini REST call with the business key.

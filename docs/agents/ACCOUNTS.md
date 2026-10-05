@@ -77,6 +77,23 @@ user buys is counted as a *window* the server opens and closes:
   no new download needed. The app and website only ever see talk, dictation
   and agent (`get_usage_summary`).
 
+## The agents' model: OmniRoute (Claude) only
+
+Since 5 Oct 2026 the agents think with Claude Sonnet through OmniRoute and
+nothing else (no Gemini fallback):
+
+* On a PC with `TORA_OMNIROUTE_BASE_URL` / `TORA_OMNIROUTE_API_KEY` set (the
+  owner's source copy), straight to OmniRoute.
+* Everyone else, signed in: through the `heytora` function's
+  `POST /omniroute/v1/chat/completions`. The OmniRoute key and address are the
+  function's secrets (`OMNIROUTE_API_KEY`, `OMNIROUTE_BASE_URL`), never in the
+  app. Each call needs the agent message's ticket (an agent window), only the
+  Claude routes are allowed (`HEYTORA_OMNIROUTE_MODELS` overrides), answers
+  are capped at 16k tokens, and each call's tokens are priced at Claude
+  Sonnet's list price into `usage_costs` - the plan's monthly cost ceiling
+  covers agents too.
+* The owner pays OmniRoute for every user's agent work.
+
 ## What the user sees
 
 - **Settings → "Your HeyTora account"**: the plan and when it starts again;

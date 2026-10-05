@@ -214,13 +214,41 @@ class GeminiAgentProvider(AgentProvider):
                 "parameters": cls.scrub_schema(spec.parameters or {"type": "object", "properties": {}})}
 
     @classmethod
-    def scrub_schema(cls, schema: Any) -> Any:
-        if isinstance(schema, dict):
-            return {k: cls.scrub_schema(v) for k, v in schema.items()
-                    if k not in _UNSUPPORTED_SCHEMA_KEYS}
+    def scrub_schema(cls, schema: Any, _names: bool = False) -> Any:
+        """A tool's JSON schema, as Gemini will take it. Gemini refuses the
+        WHOLE request - every agent step - over one bad schema, and three
+        kinds of it were found on 5 Oct 2026 (write_workbook's rows failed a
+        user's task; sending all 45 tools to Gemini found the rest):
+
+          * an array that does not say what it holds ("items: missing
+            field"): its items are text;
+          * a type that is a list (["array", "string"]): one type - the
+            array when it has items;
+          * a parameter NAMED like a schema word Gemini lacks ("title"):
+            the names under "properties" are kept - stripping them left
+            focus_window requiring a "title" it no longer had. And
+            "required" only names what is there.
+        """
         if isinstance(schema, list):
             return [cls.scrub_schema(v) for v in schema]
-        return schema
+        if not isinstance(schema, dict):
+            return schema
+        if _names:                        # property name -> its schema: every name stays
+            return {name: cls.scrub_schema(v) for name, v in schema.items()}
+        out = {k: cls.scrub_schema(v, _names=(k == "properties")) for k, v in schema.items()
+               if k not in _UNSUPPORTED_SCHEMA_KEYS}
+        kind = out.get("type")
+        if isinstance(kind, list):
+            kinds = [t for t in kind if t != "null"]
+            out["type"] = "array" if ("array" in kinds and "items" in out) else (kinds[0] if kinds else "string")
+        if out.get("type") == "array":
+            items = out.get("items")
+            if not isinstance(items, dict) or not (items.get("type") or items.get("anyOf")):
+                out["items"] = {**(items if isinstance(items, dict) else {}), "type": "string"}
+        if isinstance(out.get("required"), list):
+            props = out.get("properties") if isinstance(out.get("properties"), dict) else {}
+            out["required"] = [r for r in out["required"] if r in props]
+        return out
 
     # -- decoding ------------------------------------------------------------
 

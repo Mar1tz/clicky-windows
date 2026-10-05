@@ -20,7 +20,20 @@ export const DEFAULT_PRICES: Record<string, Price> = {
   "flash-lite": { input: 0.15, output: 0.6 },
   "tts": { input: 1, output: 20 },
   "embedding": { input: 0.15, output: 0 },
+  // The agents' models through OmniRoute: Claude Sonnet, at Anthropic's list
+  // price (what OmniRoute bills is no more than that, as far as we know).
+  "claude": { input: 3, output: 15 },
 };
+
+// The only models the agents may reach through OmniRoute (the owner, 5 Oct
+// 2026: "only use OmniRoute for the agents", Claude). HEYTORA_OMNIROUTE_MODELS
+// (comma list) replaces it without a release.
+export const OMNIROUTE_MODELS = ["claude/claude-sonnet-4-6", "cc/claude-sonnet-4-6", "agy/claude-sonnet-4-6"];
+
+export function omnirouteModels(list: string | undefined): Set<string> {
+  const names = (list ?? "").split(",").map((m) => m.trim()).filter(Boolean);
+  return new Set(names.length ? names : OMNIROUTE_MODELS);
+}
 
 // Never forwarded, whatever their family: billed per image / second / search,
 // or only reachable as Live (which goes by voice pass).
@@ -149,6 +162,10 @@ export async function readTicket(
 export type Used = { input: number; output: number };
 
 const COUNTS: Array<[RegExp, keyof Used]> = [
+  // OpenAI-style (OmniRoute): in the last chunk of a stream, or the body
+  [/"prompt_tokens"\s*:\s*(\d+)/g, "input"],
+  [/"completion_tokens"\s*:\s*(\d+)/g, "output"],
+  // Gemini
   [/"promptTokenCount"\s*:\s*(\d+)/g, "input"],
   [/"toolUsePromptTokenCount"\s*:\s*(\d+)/g, "input"],
   [/"candidatesTokenCount"\s*:\s*(\d+)/g, "output"],
@@ -180,7 +197,7 @@ export class UsageReader {
   }
 
   private scan(line: string): void {
-    if (!line.includes("TokenCount")) return;
+    if (!line.includes("TokenCount") && !line.includes("_tokens")) return;   // Gemini's, or OpenAI's
     for (const [re] of COUNTS) {
       for (const m of line.matchAll(re)) {
         const n = Number(m[1]);

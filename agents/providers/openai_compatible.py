@@ -28,7 +28,7 @@ from __future__ import annotations
 import json
 import logging
 import time
-from typing import Any, Iterable, Optional
+from typing import Any, Awaitable, Callable, Iterable, Optional
 
 import httpx
 
@@ -107,6 +107,7 @@ class OpenAICompatibleProvider(AgentProvider):
         timeout: httpx.Timeout = DEFAULT_TIMEOUT,
         client: Optional[httpx.AsyncClient] = None,
         extra_headers: Optional[dict[str, str]] = None,
+        auth: Optional[Callable[[], Awaitable[dict[str, str]]]] = None,
     ):
         self.base_url = base_url.rstrip("/")
         self.api_key = api_key
@@ -121,6 +122,9 @@ class OpenAICompatibleProvider(AgentProvider):
         self._client = client
         self._owns_client = client is None
         self._extra_headers = dict(extra_headers or {})
+        # Headers made per request - HeyTora's sign-in and the agent
+        # message's ticket, when the gateway is reached through its server.
+        self._auth = auth
         self.health = _Health()
 
     # -- plumbing ------------------------------------------------------------
@@ -139,6 +143,12 @@ class OpenAICompatibleProvider(AgentProvider):
         headers = {"Content-Type": "application/json", **self._extra_headers}
         if self.api_key:
             headers["Authorization"] = f"Bearer {self.api_key}"
+        return headers
+
+    async def _request_headers(self) -> dict[str, str]:
+        headers = self._headers()
+        if self._auth is not None:
+            headers.update(await self._auth())
         return headers
 
     def candidates(self, preferred: Optional[str] = None) -> list[str]:
@@ -203,7 +213,8 @@ class OpenAICompatibleProvider(AgentProvider):
         # Ask for the stream explicitly. Some gateways stream regardless,
         # and asking makes the two cases one case.
         body = {**payload, "stream": True}
-        async with client.stream("POST", url, json=body, headers=self._headers()) as r:
+        headers = await self._request_headers()
+        async with client.stream("POST", url, json=body, headers=headers) as r:
             if r.status_code >= 400:
                 detail = (await r.aread())[:400].decode("utf-8", "replace")
                 raise httpx.HTTPStatusError(f"HTTP {r.status_code}: {detail}",
@@ -347,6 +358,11 @@ class OpenAICompatibleProvider(AgentProvider):
         )
 
     async def health_check(self) -> bool:
+        if self._auth is not None:
+            # Through HeyTora's server: a check would cost an agent ticket,
+            # and the sign-in is what matters - it is there, or this provider
+            # would not have been built.
+            return True
         try:
             r = await self._http().get(f"{self.base_url}/models", headers=self._headers())
             return r.status_code < 400

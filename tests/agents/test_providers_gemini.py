@@ -198,23 +198,23 @@ def test_key_lookup_order(monkeypatch):
     assert api_key_from_env() == "tora"
 
 
-def test_google_key_alone_makes_agents_think(monkeypatch):
-    """The app already requires this key. With nothing else configured the
-    router must still pick a real provider, not the mock."""
+def test_a_google_key_alone_never_makes_the_agents_use_gemini(monkeypatch):
+    """The owner, 5 Oct 2026: "only use OmniRoute for the agents". A Google
+    key is the voice's, not the agents': with nothing else, no Gemini."""
     monkeypatch.setenv("GOOGLE_API_KEY", "AIza-x")
+    monkeypatch.delenv("TORA_OMNIROUTE_BASE_URL", raising=False)
     router = build_router()
-    picked = router.pick(TaskKind.CODING)
-    assert isinstance(picked, GeminiAgentProvider)
-    assert isinstance(router.pick(TaskKind.FAST), GeminiAgentProvider)
+    assert not any(isinstance(p, GeminiAgentProvider) for p in router.providers())
 
 
-def test_a_gateway_outranks_gemini(monkeypatch):
+def test_the_gateway_is_the_agents_only_model(monkeypatch):
     from agents.providers import OpenAICompatibleProvider
     monkeypatch.setenv("GOOGLE_API_KEY", "AIza-x")
     monkeypatch.setenv("TORA_OMNIROUTE_BASE_URL", "https://gw.test/v1")
     router = build_router()
-    assert isinstance(router.pick(TaskKind.CODING), OpenAICompatibleProvider)
-    assert any(isinstance(p, GeminiAgentProvider) for p in router.providers())
+    for kind in (TaskKind.CODING, TaskKind.GENERAL, TaskKind.FAST, TaskKind.VISION):
+        assert isinstance(router.pick(kind), OpenAICompatibleProvider), kind
+    assert not any(isinstance(p, GeminiAgentProvider) for p in router.providers())
 
 
 def test_offline_flag_suppresses_gemini_too(monkeypatch):

@@ -14,7 +14,7 @@ from typing import Optional
 from agents.core import AgentProvider, TaskKind
 
 from .accounts import AccountStore
-from .gemini import GeminiAgentProvider, api_key_from_env as gemini_key
+from .gemini import GeminiAgentProvider
 from .mock import MockCall, MockProvider
 from .openai_compatible import OpenAICompatibleProvider, ProviderError
 from .router import Router
@@ -33,16 +33,18 @@ __all__ = ["AccountStore", "GATEWAY_MODELS", "GeminiAgentProvider", "MockCall",
 # "Gemini 3.5 Flash is no longer available" — healthy-looking and
 # useless. cc/claude-sonnet-4-6 answered in 0.5 s, so it leads the fast
 # chain despite not being a small model. Re-measure before reordering.
+#
+# Claude for every kind (the owner, 5 Oct 2026: "make sure it uses the
+# Claude ones"): Sonnet reads images, and cc/ answered in 0.5 s, which is
+# why it leads the fast chain. Three routes to the same model, so one
+# benched route never sends the work to another vendor.
+_CLAUDE = ["claude/claude-sonnet-4-6", "cc/claude-sonnet-4-6", "agy/claude-sonnet-4-6"]
 GATEWAY_MODELS: dict[str, list[str]] = {
-    "coding": ["claude/claude-sonnet-4-6", "cc/claude-sonnet-4-6",
-               "agy/claude-sonnet-4-6"],
-    "general": ["claude/claude-sonnet-4-6", "cc/claude-sonnet-4-6",
-                "agy/claude-sonnet-4-6"],
+    "coding": list(_CLAUDE),
+    "general": list(_CLAUDE),
     # Classification sits on the voice path: latency is the whole point.
-    "fast": ["cc/claude-sonnet-4-6", "agy/gemini-3.1-flash-lite",
-             "claude/claude-sonnet-4-6"],
-    "vision": ["agy/gemini-3.6-flash-medium", "claude/claude-sonnet-4-6",
-               "cc/claude-sonnet-4-6"],
+    "fast": ["cc/claude-sonnet-4-6", "claude/claude-sonnet-4-6", "agy/claude-sonnet-4-6"],
+    "vision": list(_CLAUDE),
 }
 
 
@@ -90,15 +92,29 @@ def provider_from_env(prefix: str = "OMNIROUTE") -> Optional[OpenAICompatiblePro
 
 
 def _heytora_account() -> bool:
-    """Is the app in HeyTora-account mode and signed in? (No own key.)"""
+    """Is a HeyTora account signed in? (Own Gemini key or not: the agents'
+    models are HeyTora's either way.)"""
     try:
-        from config import cfg
-        if cfg.access_mode() != "account":
-            return False
+        from account import settings
         from account.service import account
-        return account().signed_in()
+        return settings.configured() and account().signed_in()
     except Exception:  # noqa: BLE001 - library use without the app
         return False
+
+
+def provider_via_heytora() -> Optional[OpenAICompatibleProvider]:
+    """OmniRoute through HeyTora's server: the key is a server secret, and
+    each agent message's ticket goes with every call (account.agent_headers)."""
+    try:
+        from account import settings
+        from account.service import account
+    except Exception:  # noqa: BLE001
+        return None
+    chain = GATEWAY_MODELS["general"]
+    return OpenAICompatibleProvider(
+        base_url=settings.function_url("omniroute/v1"), model=chain[0], fallback_models=chain[1:],
+        name="heytora", auth=account().agent_headers,
+    )
 
 
 def build_router(
@@ -148,7 +164,13 @@ def build_router(
             router.register(built, kinds=kinds or None, priority=50 if kinds else 40)
             registered_any = True
 
+        # OmniRoute - Claude - is the agents' only model (the owner, 5 Oct
+        # 2026: "only use OmniRoute for the agents"): straight to it on a PC
+        # where it is set up (TORA_OMNIROUTE_*), otherwise through HeyTora's
+        # server for anyone signed in. No Gemini for the agents.
         remote = None if registered_any else provider_from_env()
+        if remote is None and not registered_any and _heytora_account():
+            remote = provider_via_heytora()
         if remote is not None:
             router.register(remote, kinds=None, priority=20)
             for kind_name, chain in GATEWAY_MODELS.items():
@@ -163,27 +185,9 @@ def build_router(
                         name=f"{remote.name}:{kind_name}",
                         vision=(kind_name == "vision"),
                         cost_tier=0 if kind_name == "fast" else 2,
+                        auth=remote._auth,
                     ),
                     kinds=[kind], priority=30)
-
-    # ── Direct Gemini: the zero-setup provider ──────────────────────────────
-    # The app already requires a Google key, so with nothing else
-    # configured the agents still think. A gateway (priority 20-50)
-    # outranks it; the mock (0) sits below it.
-    if gateway is not False and gemini_key():
-        router.register(GeminiAgentProvider(), kinds=None, priority=10)
-        router.register(GeminiAgentProvider(model="gemini-3.8-flash"),
-                        kinds=[TaskKind.FAST], priority=12)
-    elif gateway is not False and _heytora_account():
-        # A HeyTora account: the same Gemini, through HeyTora's server, on the
-        # user's plan - each agent ticket is one agent message.
-        from account.service import account
-        root = account().proxy_root()
-        router.register(GeminiAgentProvider(base_url=root, auth=account().agent_headers),
-                        kinds=None, priority=10)
-        router.register(GeminiAgentProvider(model="gemini-3.8-flash", base_url=root,
-                                            auth=account().agent_headers),
-                        kinds=[TaskKind.FAST], priority=12)
 
     # ── Phase 2 hooks — register real adapters above the fallback ────────────
     # Each reads its key via accounts.api_key_for(...) and is skipped when the
