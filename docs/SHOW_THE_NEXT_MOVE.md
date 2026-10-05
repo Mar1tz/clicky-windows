@@ -282,7 +282,27 @@ case itself was not reproduced on this PC.
   the board's first rank: the knight the arrow starts from. While a
   drawing is up, the card moves to the side of the screen away from it.
 
-### SN-10 · A live acceptance run, across apps — S (needs your yes)
+### SN-10 · A live acceptance run, across apps — S — **stopped at the owner's word ("this all works")**
+
+**What was tried (5 Oct):** the 16 screens as real Edge windows, with the
+real look path on each.
+
+**Why it is invalid:** a background script may not take the focus, so
+every look saw the window in front instead: the editor. It sent about 16
+screenshots of it through the owner's own key, $0.058. 0/16 was
+therefore not a result.
+
+**The harness fix:** the window made topmost, and checked to be the one
+on screen before any call. It was written, then the owner stopped the
+pop-ups.
+
+**What stands in for it:**
+* the measured comparison (UD-01, 15/16 fast, the miss now routed deep);
+* the live snapping check (UD-03);
+* the live card demo (SN-09).
+
+The voice side (one line, the look called) is to be checked in normal
+use, from the answer timeline and scorecard in `tora.log`.
 
 Twenty questions, each with the kind of answer it should get:
 
