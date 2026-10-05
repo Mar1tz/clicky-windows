@@ -632,6 +632,39 @@ class AppBridge(QObject):
                 _log.warning("could not save a review", exc_info=True)
         self.changed.emit("journal")
 
+    def export_history(self, path: str) -> int:
+        """Everything the journal keeps, as one JSON file (Data & privacy)."""
+        journal = self._journal()
+        if journal is None:
+            from tutor_features import journal
+        return journal.export_all(path)
+
+    def delete_history(self) -> int:
+        """Delete everything the journal keeps. The caller has asked first."""
+        journal = self._journal()
+        if journal is None:
+            from tutor_features import journal
+        n = journal.clear_all()
+        self.changed.emit("journal")
+        return n
+
+    def open_web(self, path: str) -> None:
+        """A page of heytora.com - the privacy policy, the terms."""
+        from account import settings
+        from PyQt6.QtCore import QUrl
+        from PyQt6.QtGui import QDesktopServices
+        QDesktopServices.openUrl(QUrl(settings.website_url() + path))
+
+    def set_user_name(self, name: str) -> None:
+        """The name Tora greets you by, from first launch - changed in Account."""
+        from config import cfg
+        _old, uses = cfg.profile()
+        cfg.set_profile(name, uses)
+
+    def version(self) -> str:
+        from version import __version__
+        return __version__
+
     def open_journal_folder(self) -> None:
         if self.tray is not None:
             self.tray.on_journal_open.emit()

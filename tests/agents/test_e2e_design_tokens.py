@@ -29,6 +29,8 @@ CONSOLIDATED = (
     "ui/app_popover.py",
     "ui/window_frame.py",
     "ui/app_parts.py",
+    "ui/settings_dialog.py",
+    "ui/settings_tabs.py",
 )
 
 

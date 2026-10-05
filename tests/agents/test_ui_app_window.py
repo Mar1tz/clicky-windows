@@ -41,7 +41,7 @@ def test_every_page_builds_and_is_reachable(window):
     for key, *_rest in PAGES:
         window.show_page(key)
         assert window._stack.currentWidget() is window._pages[key], key
-    assert len(window._pages) == len(PAGES) == 9
+    assert len(window._pages) == len(PAGES) == 7
 
 
 def test_the_sidebar_is_the_page_map(window):
@@ -53,10 +53,17 @@ def test_the_sidebar_is_the_page_map(window):
     assert not window._buttons["settings"].isHidden()
 
 
-def test_a_page_without_a_row_lights_nothing(window):
-    """Setup is reached from Help; opening it must not leave Home lit."""
+def test_settings_is_a_dialog_not_a_page(window):
+    """Wispr's Settings: a dialog over the app with its own menu. Setup is
+    its Advanced tab; the page underneath stays where it was."""
+    window.show_page("journal")
     window.show_page("setup")
-    assert not any(b.isChecked() for b in window._buttons.values())
+    assert not window._settings.isHidden() and window._settings.current() == "advanced"
+    assert window._stack.currentWidget() is window._pages["journal"]
+    window.show_page("settings/privacy")
+    assert window._settings.current() == "privacy"
+    window._settings.close_dialog()
+    assert window._settings.isHidden()
 
 
 def test_the_sidebar_opens_and_shuts(window):

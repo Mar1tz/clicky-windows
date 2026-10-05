@@ -275,7 +275,7 @@ def _bridge(wf):
 def test_settings_opens_with_approvals_and_the_switch_works(qapp, wf):
     from PyQt6.QtWidgets import QLabel
     from config import cfg
-    from ui.app_pages import SettingsPage
+    from ui.settings_tabs import AgentsTab as SettingsPage
     from ui.app_widgets import Card, ToggleRow
 
     page = SettingsPage(_bridge(wf))
@@ -294,7 +294,7 @@ def test_settings_opens_with_approvals_and_the_switch_works(qapp, wf):
 
 
 def test_settings_shows_what_the_running_agents_do(qapp, wf):
-    from ui.app_pages import SettingsPage
+    from ui.settings_tabs import AgentsTab as SettingsPage
     from ui.app_widgets import Card, ToggleRow
 
     wf.set_auto_approve(True)                 # e.g. from the last launch

@@ -248,7 +248,7 @@ def _state(**kw):
 def test_the_account_card_shows_the_plan_and_this_months_use(qapp, monkeypatch):
     from PyQt6.QtWidgets import QPushButton
     from ui import app_pages
-    from ui.app_pages import SettingsPage
+    from ui.settings_tabs import AccountTab as SettingsPage
     monkeypatch.setattr(app_pages, "confirm_sign_out", lambda _parent: True)
     bridge = _Bridge(_state())
     page = SettingsPage(bridge)
@@ -276,14 +276,15 @@ def test_sign_out_asks_first_because_it_closes_heytora(qapp, monkeypatch):
     asked = []
     monkeypatch.setattr(app_pages, "confirm_sign_out", lambda _parent: asked.append(1) or False)
     bridge = _Bridge(_state())
-    page = app_pages.SettingsPage(bridge)
+    from ui.settings_tabs import AccountTab
+    page = AccountTab(bridge)
     page.refresh()
     next(b for b in page.findChildren(QPushButton) if b.text() == "Sign out").click()
     assert asked == [1] and "sign out" not in bridge.done, "Cancel keeps them signed in"
 
 
 def test_unlimited_talk_on_pro(qapp):
-    from ui.app_pages import SettingsPage
+    from ui.settings_tabs import AccountTab as SettingsPage
     page = SettingsPage(_Bridge(_state(summary={
         "plan": "pro", "plan_name": "Pro", "limits": {"talk": None, "agent": 150, "dictation": None},
         "usage": {"talk": 210, "agent": 12}, "period_end": "2026-11-01T00:00:00+00:00"})))
@@ -294,7 +295,7 @@ def test_unlimited_talk_on_pro(qapp):
 
 
 def _card_texts(qapp, **state):
-    from ui.app_pages import SettingsPage
+    from ui.settings_tabs import AccountTab as SettingsPage
     page = SettingsPage(_Bridge(_state(**state)))
     page.refresh()
     return page, _texts(page)
@@ -329,7 +330,7 @@ def test_a_spent_month_and_todays_fair_use_are_said_plainly(qapp):
 
 def test_signed_out_offers_to_sign_in(qapp):
     from PyQt6.QtWidgets import QPushButton
-    from ui.app_pages import SettingsPage
+    from ui.settings_tabs import AccountTab as SettingsPage
     bridge = _Bridge(_state(signed_in=False, summary=None))
     page = SettingsPage(bridge)
     page.refresh()
@@ -340,7 +341,7 @@ def test_signed_out_offers_to_sign_in(qapp):
 
 def test_own_key_mode_is_still_a_signed_in_account(qapp):
     from PyQt6.QtWidgets import QPushButton
-    from ui.app_pages import SettingsPage
+    from ui.settings_tabs import AccountTab as SettingsPage
     bridge = _Bridge(_state(mode="own_key", own_key=True))
     page = SettingsPage(bridge)
     page.refresh()
@@ -354,7 +355,7 @@ def test_own_key_mode_is_still_a_signed_in_account(qapp):
 
 def test_own_key_mode_signed_out_offers_an_account(qapp):
     from PyQt6.QtWidgets import QPushButton
-    from ui.app_pages import SettingsPage
+    from ui.settings_tabs import AccountTab as SettingsPage
     bridge = _Bridge(_state(mode="own_key", own_key=True, signed_in=False))
     page = SettingsPage(bridge)
     page.refresh()

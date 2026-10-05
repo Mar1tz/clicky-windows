@@ -180,6 +180,32 @@ real data, gone when all are.
   only when she can't answer, a "Happening now" list only while something is.
 - **Empty states are written**: what will be here and the one thing to do.
 
+## 3D. Settings (after Wispr Flow's)
+
+A dialog over the app, not a page: the app dims behind it, a rounded card
+with a menu down its left (the page's soft grey) and one tab at a time on
+white. Escape or a click on the dimmed app closes it. Built in
+`ui/settings_dialog.py`; the tabs are `ui/settings_tabs.py`.
+
+| Section | Tab | What is in it |
+|---|---|---|
+| Settings | General | Microphone, hold to talk, always listening · appearance |
+| | System | Start with Windows, the floating panel · sounds (the listening pop) · updates |
+| | Agents | Approvals · agent rails · agent endpoints (the agents' own panels, with their dark sheet removed so they take the app's look - `app_pages._tidy`) |
+| | Models | Live or Classic · which model does each job · refresh |
+| | Advanced | API keys · diagnostics · report, setup again · Quit |
+| Account | Account | Your name · the HeyTora account: plan, this month's use, own key, sign out |
+| | Plans & billing | Free, Pro, Max side by side - the website's words and prices (`settings_tabs.PLANS`, from heytora-web `site.ts`), yours marked · billing on heytora.com |
+| | Data & privacy | What she looks at · what she keeps (journal on/off, on this PC only, download, delete) · desktop actions allowed · Privacy policy, Terms |
+
+Account follows Wispr's order: who you are, what you pay, what is kept.
+The footer is the version and a cloud: ticked when up to date, an arrow
+when an update is waiting. A group on a tab is a filled block in the
+page's soft grey on the dialog's white, rows split by hairlines.
+`show_page("settings/<tab>")` opens a tab; `"setup"` is Advanced. The
+Tora page keeps only what makes her yours: voice, teaching style,
+instructions.
+
 ## 3A. Where the values live
 
 Every colour, radius, shadow and button size is a name in **`ui/tokens.py`**;
@@ -507,7 +533,7 @@ snap targets and the pop sound below.
 | 4A | Consolidation: every value into `ui/tokens.py`, one `ui/kit.py`, a test that keeps it (§3A) | Done |
 | A1 | App shell (§3B): own title bar, sidebar that opens and shuts, page map, no description lines, Home greeting, profile / notifications / free month / help cards | Done |
 | A1b | Page template (§3C): hero, side card, history list, centred column, no outlined cards; Home rebuilt | Done |
-| A2 | Settings as a dialog with its own menu (General, Privacy, Models, Account, Advanced); Setup and Models leave the sidebar | Next |
+| A2 | Settings as a dialog (§3D) - Done; was: Settings as a dialog with its own menu (General, Privacy, Models, Account, Advanced); Setup and Models leave the sidebar | Next |
 | A3 | Notifications feed: agent tasks, approvals, progress, usage, achievements | |
 | A3b | Insights page (§3C), `ui/insights_data.py` | Done |
 | A4 | Agents, Learn (Journal leaves the sidebar), Packs, Tora - each on the §3C template | |

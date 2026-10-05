@@ -107,10 +107,13 @@ def _toggle_row(page, heading) -> ToggleRow:
     ("Web search", "web_search"),
 ])
 def test_every_tutor_switch_is_real(qapp, heading, name):
-    from ui.app_pages import TutorPage
+    """Teaching style is on the Tora page; what she may look at is in
+    Settings > Data & privacy."""
+    from ui.app_pages import ToraPage
+    from ui.settings_tabs import PrivacyTab
 
     bridge = FakeBridge(switches={name: True})
-    page = TutorPage(bridge)             # kept: Qt deletes an orphaned page's children
+    page = (PrivacyTab if name in ("privacy_guard", "ocr", "web_search") else ToraPage)(bridge)             # kept: Qt deletes an orphaned page's children
     row = _toggle_row(page, heading)
     assert row.switch.isChecked() is True, "shows what is true"
     row.switch.setChecked(False)
@@ -118,18 +121,18 @@ def test_every_tutor_switch_is_real(qapp, heading, name):
 
 
 def test_the_tutor_page_offers_nothing_that_does_nothing(qapp):
-    from ui.app_pages import TutorPage
+    from ui.app_pages import ToraPage
 
-    texts = _texts(TutorPage(FakeBridge()))
+    texts = _texts(ToraPage(FakeBridge()))
     assert "Answer in my language" not in texts, "Tora is English-only"
     assert "What she may see" not in texts, "no code ever read that choice"
 
 
 def test_the_instructions_box_saves_through_the_tray(qapp):
-    from ui.app_pages import TutorPage
+    from ui.app_pages import ToraPage
 
     bridge = FakeBridge(instructions="Only help with Excel")
-    page = TutorPage(bridge)
+    page = ToraPage(bridge)
     (box,) = page.findChildren(QPlainTextEdit)
     assert box.toPlainText() == "Only help with Excel"
     box.setPlainText("Keep answers short")
@@ -142,10 +145,10 @@ def test_the_instructions_box_saves_through_the_tray(qapp):
 # ── Settings ─────────────────────────────────────────────────────────────────
 
 def test_allowed_desktop_actions_are_listed_and_can_be_forgotten(qapp):
-    from ui.app_pages import SettingsPage
+    from ui.settings_tabs import PrivacyTab
 
     bridge = FakeBridge(grants=["spotify.next", "windows.volume"])
-    page = SettingsPage(bridge)
+    page = PrivacyTab(bridge)
     assert {"spotify.next", "windows.volume"} <= set(_texts(page))
     forget = [b for b in page.findChildren(QPushButton) if b.text() == "Forget"]
     forget[0].click()
@@ -154,15 +157,15 @@ def test_allowed_desktop_actions_are_listed_and_can_be_forgotten(qapp):
 
 
 def test_with_nothing_allowed_it_says_so(qapp):
-    from ui.app_pages import SettingsPage
-    assert "Nothing is allowed without asking" in _texts(SettingsPage(FakeBridge()))
+    from ui.settings_tabs import PrivacyTab
+    assert "Nothing is allowed without asking" in _texts(PrivacyTab(FakeBridge()))
 
 
 def test_the_real_microphones_are_offered_and_one_can_be_picked(qapp):
-    from ui.app_pages import SettingsPage
+    from ui.settings_tabs import GeneralTab
 
     bridge = FakeBridge(mics=[(1, "Microphone Array", True), (4, "Headset", False)], mic=4)
-    page = SettingsPage(bridge)
+    page = GeneralTab(bridge)
     select = next(s for s in page.findChildren(Select) if s.count() == 2)
     assert select.currentText() == "Headset", "the one in use"
     assert "Realme" not in " ".join(select.itemText(i) for i in range(select.count()))
@@ -176,28 +179,28 @@ def test_the_real_microphones_are_offered_and_one_can_be_picked(qapp):
     ("Start HeyTora when Windows starts", ("autostart", True)),
 ])
 def test_the_settings_switches_are_real(qapp, heading, action):
-    from ui.app_pages import SettingsPage
+    from ui.settings_tabs import GeneralTab, SystemTab
 
     bridge = FakeBridge()
-    page = SettingsPage(bridge)          # kept: Qt deletes an orphaned page's children
+    page = (GeneralTab if heading == "Always listening" else SystemTab)(bridge)          # kept: Qt deletes an orphaned page's children
     _toggle_row(page, heading).switch.setChecked(True)
     assert bridge.done == [action]
 
 
 def test_the_page_says_so_when_the_agents_did_not_start(qapp):
-    from ui.app_pages import SettingsPage
-    assert "The agents did not start" in _texts(SettingsPage(FakeBridge()))
+    from ui.settings_tabs import AgentsTab
+    assert "The agents did not start" in _texts(AgentsTab(FakeBridge()))
 
 
 def test_the_real_agent_settings_are_embedded(qapp, tmp_path):
     from agents.bootstrap import build_agent_manager
     from agents.ui.settings import AgentSettingsDialog
-    from ui.app_pages import SettingsPage
+    from ui.settings_tabs import AgentsTab
 
     wf = build_agent_manager(workspace_root=str(tmp_path), in_memory=True,
                              offline=True).start()
     try:
-        page = SettingsPage(FakeBridge(workforce=wf))
+        page = AgentsTab(FakeBridge(workforce=wf))
         (embedded,) = page.findChildren(AgentSettingsDialog)
         buttons = {b.text() for b in embedded.findChildren(QPushButton)
                    if b.isVisibleTo(embedded)}

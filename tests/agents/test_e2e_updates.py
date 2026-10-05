@@ -276,7 +276,7 @@ class _Bridge:
 
 def _card(qapp, **state):
     from PyQt6.QtWidgets import QLabel, QPushButton
-    from ui.app_pages import SettingsPage
+    from ui.settings_tabs import SystemTab as SettingsPage
     base = {"state": "current", "current": "1.6.4", "latest": "1.6.4", "notes": "", "progress": 0.0,
             "error": "", "required": False, "auto": True}
     bridge = _Bridge(base | state)

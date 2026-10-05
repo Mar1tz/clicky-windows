@@ -669,7 +669,14 @@ class InsightsPage(Page):
 
 def _tidy(embedded: QWidget, *titles: str) -> QWidget:
     """Fit a floating window's widget into a card: its Close would hide it
-    and leave the card empty, and its own title repeats the card's."""
+    and leave the card empty, and its own title repeats the card's.
+
+    Its own stylesheet goes too. The agents' dialogs (agents/ui) were drawn
+    for the old dark floating windows - white-on-charcoal fields that stayed
+    dark in the light theme. Without it they take the app's sheet, which
+    names their parts (setLabel, acctCard...) in app_theme.qss()."""
+    embedded.setStyleSheet("")
+    embedded.setObjectName("embedded")          # "panel" is the app window's own frame
     for b in embedded.findChildren(QPushButton):
         if b.text().strip().lower() == "close":
             b.hide()
@@ -763,7 +770,7 @@ class AgentsPage(Page):
         super().__init__(bridge)
 
     def build_actions(self) -> None:
-        self.action("Agent settings").clicked.connect(lambda: self.navigate.emit("settings"))
+        self.action("Agent settings").clicked.connect(lambda: self.navigate.emit("settings/agents"))
         self.action("Stop all", "danger").clicked.connect(self.bridge.stop_agents)
 
     def build(self) -> None:
@@ -1210,10 +1217,14 @@ class JournalPage(Page):
         QTimer.singleShot(0, self.refresh)
 
 
-# ── Tutor ─────────────────────────────────────────────────────────────────────
+# ── Tora ──────────────────────────────────────────────────────────────────────
 
-class TutorPage(Page):
-    HEADING = "Tutor"
+class ToraPage(Page):
+    """Make her yours: her voice, how she teaches, and what she always keeps
+    in mind. The technical half - models, the conversation route, what she
+    may look at - is in Settings (ui/settings_tabs.py)."""
+
+    HEADING = "Tora"
     LIVE = True
 
     def _toggle(self, card: Card, name: str, heading: str, sub: str, *, first=False) -> None:
@@ -1222,6 +1233,18 @@ class TutorPage(Page):
         card.add(row)
 
     def build(self) -> None:
+        br = self.bridge
+        voice = Card("Her voice")
+        voices = br.voices()
+        pick = Select(*voices, width=240)
+        if br.voice() in voices:
+            pick.setCurrentIndex(voices.index(br.voice()))
+        pick.currentIndexChanged.connect(
+            lambda k: br.set_voice(voices[k]) if 0 <= k < len(voices) else None)
+        voice.add(Row("Spoken voice", "Both routes use it; the live session restarts to switch.",
+                      trailing=pick, first=True))
+        self.body.add(voice)
+
         how = Card("Teaching style")
         self._toggle(how, "slow_mode", "Slow mode",
                      "A calmer pace on screen. For someone new to the machine.", first=True)
@@ -1233,23 +1256,13 @@ class TutorPage(Page):
                      "Notice when you are in an editor and explain like a developer.")
         self.body.add(how)
 
-        eyes = Card("Eyes on screen")
-        self._toggle(eyes, "privacy_guard", "Privacy guard",
-                     "Never send a screenshot when a password manager, banking "
-                     "page or private window is in front.", first=True)
-        self._toggle(eyes, "ocr", "Read text on screen (OCR)",
-                     "Read fine print when you ask her to. Runs on this machine.")
-        self._toggle(eyes, "web_search", "Web search",
-                     "Look things up for news, prices and releases.")
-        self.body.add(eyes)
-
         # The tray's "Instructions for Tora…" - standing orders she keeps in
         # mind on every answer. Saved through the tray's own signal.
         rules = Card("Instructions for Tora",
                      "Kept in mind on every answer - “only help with Excel”, "
                      "“keep answers very short”.")
         from PyQt6.QtWidgets import QPlainTextEdit
-        box = QPlainTextEdit(self.bridge.instructions())
+        box = QPlainTextEdit(br.instructions())
         box.setPlaceholderText("Nothing yet - she helps with anything.")
         box.setFixedHeight(84)
         rules.body.addWidget(box)
@@ -1259,7 +1272,7 @@ class TutorPage(Page):
         save = button("Save instructions", "primary")
 
         def _save() -> None:
-            self.bridge.set_instructions(box.toPlainText())
+            br.set_instructions(box.toPlainText())
             saved.setText("Saved - used from the next answer.")
 
         save.clicked.connect(_save)
@@ -1269,99 +1282,7 @@ class TutorPage(Page):
         self.body.add(rules)
 
 
-# ── Voice & models ────────────────────────────────────────────────────────────
-
-class VoicePage(Page):
-    HEADING = "Voice & models"
-    LIVE = True
-
-    # What each model role is FOR, in words (gemini.Models.all_roles).
-    _ROLES = (("realtime", "Conversation", "Hears you and answers, live"),
-              ("vision_fast", "Quick look · walkthrough planner", "Fast; plans step one first"),
-              ("vision_deep", "Careful look", "Slower, much better at detail"),
-              ("planner", "Careful planner", "Only when the quick plan fails"),
-              ("stt", "Transcription", "Wake word, and the classic route"),
-              ("tts", "Tora's own voice", "Walkthrough steps and local replies"),
-              ("embed", "Memory", "Finding what she remembers"))
-
-    def build_actions(self) -> None:
-        self.action("Refresh model list").clicked.connect(self.bridge.refresh_models)
-
-    def build(self) -> None:
-        br = self.bridge
-
-        voice = Card("Voice")
-        voices = br.voices()
-        pick = Select(*voices, width=240)
-        if br.voice() in voices:
-            pick.setCurrentIndex(voices.index(br.voice()))
-        pick.currentIndexChanged.connect(
-            lambda k: br.set_voice(voices[k]) if 0 <= k < len(voices) else None)
-        voice.add(Row("Spoken voice", "Both routes use it; the live session restarts to switch.",
-                      trailing=pick, first=True))
-        routes = ("realtime", "cascade")
-        route = Select("Live - answers in about a second",
-                       "Classic - transcribe, think, then speak", width=320)
-        route.setCurrentIndex(routes.index(br.route()) if br.route() in routes else 0)
-        route.currentIndexChanged.connect(
-            lambda k: br.set_route(routes[k]) if 0 <= k < 2 else None)
-        voice.add(Row("Conversation", trailing=route))
-        self.body.add(voice)
-
-        models = Card("Models", "One job each. Set in .env; the list refreshes itself weekly.")
-        roles = br.models()
-        for i, (role, job, why) in enumerate(self._ROLES):
-            if role in roles:
-                models.add(Row(job, why, trailing=label(roles[role], "dim"), first=(i == 0)))
-        self.body.add(models)
-
-        # The workforce's own endpoint editor - the same one "Connected
-        # accounts…" opens: add, test and remove OpenAI-compatible endpoints
-        # and route agents to them. It applies to the live agents on Save.
-        ends = Card("Agent endpoints", "Where the agents' requests go.")
-        wf = br.workforce()
-        if wf is not None:
-            from agents.ui.accounts import ConnectedAccountsDialog
-            embedded = _tidy(ConnectedAccountsDialog(wf))
-            embedded.setMinimumHeight(420)
-            ends.body.addWidget(embedded)
-        else:
-            ends.add(Row("The agents did not start",
-                         "Endpoints can be set once they do - see tora.log.",
-                         dot=T.WARN, first=True))
-        self.body.add(ends)
-
-
-# ── Tora ──────────────────────────────────────────────────────────────────────
-
-class ToraPage(TutorPage, VoicePage):
-    """Make her yours: how she teaches and how she sounds, on one page.
-    (Step 1 of the shell puts the two pages' cards together; the page gets
-    its own design in step A4 - DESIGN.md §9.)"""
-    HEADING = "Tora"
-
-    def build(self) -> None:
-        VoicePage.build(self)
-        self.body.add(self._sounds())
-        TutorPage.build(self)
-
-    def _sounds(self) -> QWidget:
-        """The pop as she starts listening (ui/sounds.py). Choosing one plays it."""
-        from ui import sounds
-        card = Card("Sounds")
-        keys = [k for k, _n in sounds.SOUNDS] + [sounds.OFF]
-        pick = Select(*[n for _k, n in sounds.SOUNDS], "Off", width=240)
-        now = _ask(self.bridge, "listen_sound", keys[0])
-        pick.setCurrentIndex(keys.index(now) if now in keys else 0)
-        pick.currentIndexChanged.connect(
-            lambda i: self.bridge.set_listen_sound(keys[i]) if 0 <= i < len(keys) else None)
-        card.add(Row("When she starts listening",
-                     "A short pop the moment you can talk. Pick one to hear it.",
-                     trailing=pick, first=True))
-        return card
-
-
-# ── Settings ──────────────────────────────────────────────────────────────────
+# ── shared with the Settings tabs ─────────────────────────────────────────────
 
 def _checked_ago(when: float) -> str:
     """"just now", "5 min ago", "3 h ago" - when updates were last checked.
@@ -1388,390 +1309,10 @@ def confirm_sign_out(parent) -> bool:
     return answer == QMessageBox.StandardButton.Yes
 
 
-class SettingsPage(Page):
-    HEADING = "Settings"
-    LIVE = True
-    # The plan and usage arrive after the page is drawn, and move with every
-    # question; an update downloads in the background. Both are redrawn in
-    # place (refresh_topics) - never the whole page.
-    TOPICS = frozenset({"account", "updates"})
-
-    # The allowances shown, in the user's words. "calls" is a hidden backstop.
-    _USAGE = (("talk", "Talk", "messages"), ("agent", "Agent", "messages"),
-              ("dictation", "Dictation", "dictations"))
-
-    def showEvent(self, event) -> None:
-        """Every time the page comes on screen - opened, switched to, or the
-        window back from being closed - the plan is read again (at most once a
-        minute). What is known shows at once; the answer redraws the card."""
-        super().showEvent(event)
-        self.bridge.refresh_account()
-
-    def refresh_topics(self, topics: set) -> None:
-        """The plan moved (every question moves it), or an update did: only
-        that card is swapped. The rest of Settings - a switch being reached
-        for, something half-typed, where the page is scrolled to - stays
-        exactly as it is."""
-        for topic, slot_name, make in (("account", "_account_slot", self._account_card),
-                                       ("updates", "_updates_slot", self._updates_card)):
-            if topic not in topics:
-                continue
-            slot = getattr(self, slot_name, None)
-            if slot is None or not slot.layout():
-                self.refresh()
-                return
-            lay = slot.layout()
-            while lay.count():
-                old = lay.takeAt(0).widget()
-                if old is not None:
-                    old.setParent(None)
-                    old.deleteLater()
-            lay.addWidget(make())
-
-    def _updates_card(self) -> Card:
-        """HeyTora keeps itself up to date (updates/service.py): which version
-        this is, what is happening, and the one switch."""
-        br = self.bridge
-        try:
-            st = br.update_state()
-        except Exception:  # noqa: BLE001 - a bridge without updates
-            st = {"state": "dev", "current": "", "latest": "", "notes": "", "progress": 0.0,
-                  "error": "", "auto": True}
-        card = Card("Updates", "HeyTora keeps itself up to date - nothing to download, nothing to set up.")
-        state, now, latest = st["state"], st["current"], st["latest"]
-
-        def check_button(kind: str = "ghost"):
-            b = button("Check for updates", kind)
-            b.clicked.connect(br.check_updates)
-            return b
-        checked = st.get("checked_at") or 0
-        ago = _checked_ago(checked) if checked else ""
-        if state == "dev":
-            words = "Running from source: updates come from git, not from here."
-            if latest:
-                words += f" Latest published: {latest}" + (f" (checked {ago})." if ago else ".")
-            if st.get("error"):
-                words += f" {st['error']}"
-            card.add(Row(f"HeyTora {now}", words, dot=T.TEXT_DIM, trailing=check_button(), first=True))
-            return card
-        if state == "ready":
-            go = button("Restart to update", "primary")
-            go.clicked.connect(br.install_update)
-            card.add(Row(f"HeyTora {latest} is ready", f"You have {now}. " + (
-                "It installs by itself the next time HeyTora starts - or now."
-                if st["auto"] else "Restart to update when it suits you."),
-                dot=T.ACCENT, trailing=go, first=True))
-        elif state == "downloading":
-            card.add(Row(f"Downloading HeyTora {latest}…", f"You have {now} · {round(st['progress'] * 100)}%",
-                         dot=T.ACCENT, first=True))
-            card.body.addWidget(Meter(st["progress"]))
-        elif state == "installing":
-            card.add(Row(f"Installing HeyTora {latest}…", "HeyTora opens again in a moment.",
-                         dot=T.ACCENT, first=True))
-        elif state == "checking" or (st.get("busy") and state not in ("downloading", "ready")):
-            card.add(Row(f"HeyTora {now}", "Checking for updates…", dot=T.OK, first=True))
-        elif state == "failed":
-            page = button("Download page")
-            page.clicked.connect(br.open_download_page)
-            card.add(Row(f"HeyTora {now}", st["error"] or "Couldn't update.", dot=T.WARN,
-                         trailing=page, first=True))
-            card.body.addWidget(check_button("link"), 0, Qt.AlignmentFlag.AlignLeft)
-        else:
-            if state == "current":
-                words = "Up to date" + (f" · checked {ago}." if ago else ".")
-            else:
-                words = st.get("error") or "Checks for updates every few hours."
-            card.add(Row(f"HeyTora {now}", words, dot=T.WARN if st.get("error") else T.OK,
-                         trailing=check_button(), first=True))
-        if st["notes"] and state in ("ready", "downloading"):
-            card.add(label(f"What's new: {st['notes']}", "faint", wrap=True))
-        auto = ToggleRow("Install updates automatically",
-                         "When an update is ready it installs by itself - the next time HeyTora "
-                         "starts, or as you quit it. HeyTora keeps everything you set.", st["auto"])
-        auto.switch.toggled.connect(br.set_auto_update)
-        card.add(auto)
-        return card
-
-    def _sign_out_button(self):
-        out = button("Sign out")
-        out.clicked.connect(lambda: confirm_sign_out(self) and self.bridge.account_sign_out())
-        return out
-
-    def _account_card(self) -> Card:
-        """The HeyTora account (1 Oct 2026) - who is signed in, the plan, and
-        this month's use - or the user's own key."""
-        br = self.bridge
-        st = br.account_state()
-        if st["mode"] == "own_key":
-            card = Card("Your HeyTora account", "Thinking with your own Gemini key, straight to "
-                                                "Google - no plan limits.")
-            first = True
-            if st["configured"] and st["signed_in"]:
-                card.add(Row(st["email"] or "Signed in", "Signed in", dot=T.OK,
-                             trailing=self._sign_out_button(), first=True))
-                first = False
-            card.add(Row("Using your own Gemini key", "Change it in Setup → API keys.",
-                         dot=T.OK if st["own_key"] else T.WARN, first=first))
-            if st["configured"] and st["signed_in"]:
-                switch = button("Use my plan instead")
-                switch.clicked.connect(lambda: br.set_access_mode("account"))
-                known = st["summary"] or {}
-                plan = known.get("plan_name") or (known.get("plan") or "").capitalize()
-                card.add(Row(f"Your HeyTora plan{f' ({plan})' if plan else ''}",
-                             "Think on your plan instead of your key.", trailing=switch))
-            elif st["configured"]:
-                switch = button("Use a HeyTora account instead")
-                switch.clicked.connect(lambda: (br.set_access_mode("account"), br.run_setup()))
-                card.add(Row("Have a HeyTora plan?", "Sign in and use it here.", trailing=switch))
-            return card
-
-        manage = button("Manage plan", "primary") if st["website"] else None
-        if manage is not None:
-            manage.clicked.connect(br.open_website)
-        card = Card("Your HeyTora account", "Your plan and this month's use.", action=manage)
-        if not st["configured"]:
-            card.add(Row("HeyTora accounts aren't set up in this build",
-                         "Use your own Gemini key instead.", dot=T.WARN, first=True))
-            return card
-        if not st["signed_in"]:
-            sign_in = button("Sign in…", "primary")
-            sign_in.clicked.connect(br.run_setup)
-            card.add(Row("Not signed in", "Sign in with the email you used on the website.",
-                         dot=T.WARN, trailing=sign_in, first=True))
-            return card
-
-        from account.service import resets_on
-        who = st["email"] or "Signed in"
-        summary = st["summary"]
-        if summary is None:
-            # Nothing known yet: say what is happening - never a silent wait.
-            if st["error"] and not st["busy"]:
-                again = button("Try again")
-                again.clicked.connect(lambda: br.refresh_account(force=True))
-                card.add(Row(who, "Couldn't read your plan", dot=T.WARN, trailing=again, first=True))
-                card.add(label(st["error"], "faint", wrap=True))
-            else:
-                card.add(Row(who, "Reading your plan…", dot=T.OK,
-                             trailing=self._sign_out_button(), first=True))
-        else:
-            plan = summary.get("plan_name") or (summary.get("plan") or "").capitalize() or "HeyTora"
-            when = resets_on(summary)
-            card.add(Row(who, f"{plan} plan · this month's use starts again on {when}",
-                         dot=T.OK, trailing=self._sign_out_button(), first=True))
-            if st["error"] and not st["busy"]:
-                again = button("Try again")
-                again.clicked.connect(lambda: br.refresh_account(force=True))
-                card.add(Row("Couldn't update just now", "This is your last known use.",
-                             dot=T.WARN, trailing=again))
-            blocked = summary.get("blocked") or {}
-            if blocked.get("all") == "budget":
-                card.add(Row("This month's use is up",
-                             f"Everything starts again on {when} - or upgrade on the website, or "
-                             "use your own Gemini key.", dot=T.WARN))
-            limits, usage = summary.get("limits") or {}, summary.get("usage") or {}
-            for kind, name, unit in self._USAGE:
-                if kind not in limits:
-                    continue
-                used, limit = int(usage.get(kind) or 0), limits[kind]
-                if limit is None:
-                    words = f"{used} this month - unlimited"
-                else:
-                    left = max(0, int(limit) - used)
-                    words = f"{used} of {limit} {unit} this month · " + (f"{left} left" if left else "all used")
-                done_today = int((summary.get("today") or {}).get(kind) or 0)
-                if done_today:
-                    words += f" · {done_today} today"
-                if blocked.get(kind) == "day":
-                    words += " · today's fair use reached"
-                full = limit is not None and used >= int(limit)
-                meter = Meter(0.0 if limit is None else min(1.0, used / max(1, int(limit))),
-                              colour=T.WARN if full or blocked.get(kind) else T.ACCENT)
-                box = QVBoxLayout()
-                box.setSpacing(6)
-                box.addWidget(label(f"{name}:  {words}"))
-                box.addWidget(meter)
-                card.body.addLayout(box)
-            fair = summary.get("fair_use")
-            if isinstance(fair, (int, float)):
-                box = QVBoxLayout()
-                box.setSpacing(6)
-                box.addWidget(label(f"Overall use this month:  {round(fair * 100)}%"))
-                box.addWidget(Meter(min(1.0, float(fair)), colour=T.WARN if fair >= 0.8 else T.ACCENT))
-                box.addWidget(label("Everything Tora does for you - looking at your screen, planning, "
-                                    "agents thinking - counts a little towards this.", "faint", wrap=True))
-                card.body.addLayout(box)
-        own = button("Use my own Gemini key instead", "link")
-        own.clicked.connect(lambda: (br.set_access_mode("own_key"), br.run_setup()))
-        card.body.addWidget(own, 0, Qt.AlignmentFlag.AlignLeft)
-        return card
-
-    def build(self) -> None:
-        br = self.bridge
-
-        # APP-14. One switch for "stop asking me": the field log had 71
-        # approval boxes in three days and not one "no". What it still asks
-        # about is said on the page, because a switch like this is only
-        # safe when its edges are plain.
-        approvals = Card("Approvals", "When Tora and her agents stop to ask you first.")
-        auto = ToggleRow("Approve automatically",
-                         "Agents and the desktop actions you ask for go ahead without the "
-                         "approval box - files, commands, the browser, your mouse and "
-                         "keyboard - whatever “Run without asking” below says.",
-                         br.auto_approve(), first=True)
-        auto.switch.toggled.connect(br.set_auto_approve)
-        approvals.add(auto)
-        approvals.add(label("Still asks, every time: anything that pays, files a return, "
-                            "sends, posts or deletes for others to see. A plan still waits "
-                            "for you while “Show me the plan before anything runs” is on. "
-                            "Esc takes your mouse and keyboard back. What an agent runs "
-                            "this way is marked in its task's activity.", "faint", wrap=True))
-        self.body.add(approvals)
-        # The HeyTora account (or own key): second, after the approvals that
-        # APP-14 put first. In a slot of its own, so the plan can move with
-        # every question without the page around it being rebuilt.
-        self._account_slot = QWidget()
-        slot = QVBoxLayout(self._account_slot)
-        slot.setContentsMargins(0, 0, 0, 0)
-        slot.addWidget(self._account_card())
-        self.body.add(self._account_slot)
-        self._updates_slot = QWidget()
-        slot = QVBoxLayout(self._updates_slot)
-        slot.setContentsMargins(0, 0, 0, 0)
-        slot.addWidget(self._updates_card())
-        self.body.add(self._updates_slot)
-
-        # The workforce's own settings widget - the one "Agent settings…" in
-        # the tray opens: workspace, what runs without asking, plan first,
-        # how many at once. It saves to config AND applies to the running
-        # agents, so it is embedded rather than re-implemented (APP-11).
-        rails = Card("Agent rails", "Agents may only ever write inside the workspace.")
-        wf = br.workforce()
-        if wf is not None:
-            from agents.ui.settings import AgentSettingsDialog
-            rails.body.addWidget(_tidy(AgentSettingsDialog(wf), "Agent settings"))
-        else:
-            rails.add(Row("The agents did not start",
-                          "Nothing here can be changed until they do - see "
-                          "tora.log for why.", dot=T.WARN, first=True))
-        self.body.add(rails)
-
-        allowed = Card("Desktop actions you allowed",
-                       "Everything else on your desktop asks first, every time.")
-        grants = br.grants()
-        for i, key in enumerate(grants):
-            forget = button("Forget")
-            row = Row(key, "Runs without asking", dot=T.WARN, trailing=forget,
-                      first=(i == 0))
-            forget.clicked.connect(lambda _c=False, k=key, r=row: (br.forget_grant(k), r.hide()))
-            allowed.add(row)
-        if not grants:
-            allowed.add(Row("Nothing is allowed without asking",
-                            "Say “always allow” in a confirmation to add one.",
-                            first=True))
-        self.body.add(allowed)
-
-        mic = Card("Microphone")
-        devices = br.mics()
-        dev = Select(*(name + ("  (system default)" if default else "")
-                       for _i, name, default in devices) or ("No microphone found",),
-                     width=420)
-        current = br.mic_index()
-        indexes = [i for i, _n, _d in devices]
-        chosen = (indexes.index(current) if current in indexes else
-                  next((k for k, (_i, _n, d) in enumerate(devices) if d), 0))
-        dev.setCurrentIndex(chosen)
-        dev.currentIndexChanged.connect(
-            lambda k: br.set_mic(indexes[k]) if 0 <= k < len(indexes) else None)
-        mic.add(Row("Input device", trailing=dev, first=True))
-        listen = ToggleRow("Always listening",
-                           "Wake on “Tora”. Off means she only hears you while "
-                           "the hotkey is held.", br.switch("wake_word"))
-        listen.switch.toggled.connect(lambda on: br.set_switch("wake_word", on))
-        mic.add(listen)
-        mic.add(Row("Hold to talk", br.hotkey() or "not set",
-                    trailing=label("set in .env as TORA_HOTKEY", "faint")))
-        self.body.add(mic)
-
-        look = Card("HeyTora on this PC")
-        panel = ToggleRow("Show the floating panel",
-                          "The small window with the conversation in it.",
-                          br.panel_visible(), first=True)
-        panel.switch.toggled.connect(br.set_panel_visible)
-        look.add(panel)
-        start = ToggleRow("Start HeyTora when Windows starts",
-                          "For you only - no admin rights needed.", br.autostart())
-        start.switch.toggled.connect(br.set_autostart)
-        look.add(start)
-        modes = (("system", "Match Windows"), ("light", "Light"), ("dark", "Dark"))
-        theme = Select(*(words for _m, words in modes), width=180)
-        keys = [m for m, _w in modes]
-        theme.setCurrentIndex(keys.index(br.theme()) if br.theme() in keys else 0)
-        theme.currentIndexChanged.connect(
-            lambda k: br.set_theme(keys[k]) if 0 <= k < len(keys) else None)
-        look.add(Row("Appearance", "Light is heytora.com's soft grey; dark is its black.",
-                     trailing=theme))
-        self.body.add(look)
-
-
-# ── Setup ─────────────────────────────────────────────────────────────────────
-
-class SetupPage(Page):
-    HEADING = "Setup"
-
-    LIVE = True
-    TOPICS = frozenset({"state", "account", "agents"})
-
-    _LEVEL = {"ok": T.OK, "warn": T.WARN, "bad": T.DANGER}
-
-    def build(self) -> None:
-        br = self.bridge
-        change = button("Change keys…", "primary")
-        change.clicked.connect(br.open_keys)
-        keys = Card("API keys", "Stored in .env on this machine - never shown here.",
-                    action=change)
-        problem = br.problem()
-        for i, k in enumerate(br.keys()):
-            if not k["set"]:
-                state, colour = ("Not set - Tora cannot answer without it"
-                                 if k["env"] == "GOOGLE_API_KEY" else
-                                 "Not set - web search uses the free engine"), (
-                    T.DANGER if k["env"] == "GOOGLE_API_KEY" else T.TEXT_FAINT)
-            elif k["env"] == "GOOGLE_API_KEY" and problem == "key":
-                state, colour = f"Set (…{k['tail']}) but Google refused it", T.DANGER
-            elif k["env"] == "GOOGLE_API_KEY" and problem == "billing":
-                state, colour = f"Set (…{k['tail']}) - but the credits have run out", T.DANGER
-            else:
-                state, colour = (f"Set · ends in {k['tail']}" if k["tail"] else "Set"), T.OK
-            keys.add(Row(k["label"], state, dot=colour, first=(i == 0)))
-        self.body.add(keys)
-
-        checks = Card("Diagnostics", "What is working right now. Nothing here goes online.")
-        for i, (name, detail, level) in enumerate(br.diagnostics()):
-            checks.add(Row(name, detail, dot=self._LEVEL.get(level, T.TEXT_FAINT),
-                           first=(i == 0)))
-        self.body.add(checks)
-
-        foot = QHBoxLayout()
-        foot.setSpacing(10)
-        wizard = button("Run the setup wizard again")
-        wizard.clicked.connect(br.run_setup)
-        foot.addWidget(wizard)
-        report = button("Save diagnostics report", "primary")
-        report.clicked.connect(br.save_report)
-        foot.addWidget(report)
-        foot.addStretch(1)
-        quit_ = button("Quit HeyTora", "danger")
-        quit_.clicked.connect(br.quit)
-        foot.addWidget(quit_)
-        wrap = QWidget()
-        wrap.setLayout(foot)
-        self.body.add(wrap)
-
-
 # The sidebar, top to bottom, and the single place a new page gets added.
 # place: "main" (the list), "pack" (a pack's page: a row while the pack is
-# on - PACK_ROWS), "bottom" (under the list, with the free month and help),
-# "hidden" (reached from elsewhere: Help -> Keys and diagnostics).
+# on - PACK_ROWS), "hidden" (reached from elsewhere). Settings is not a page:
+# it is a dialog (ui/settings_dialog.py, ui/settings_tabs.py).
 PAGES = (
     ("home",       "Home",       "main",   HomePage),
     ("insights",   "Insights",   "main",   InsightsPage),
@@ -1780,8 +1321,6 @@ PAGES = (
     ("extensions", "Packs",      "main",   ExtensionsPage),
     ("accounting", "Accounting", "pack",   AccountingPage),
     ("tora",       "Tora",       "main",   ToraPage),
-    ("settings",   "Settings",   "bottom", SettingsPage),
-    ("setup",      "Setup",      "hidden", SetupPage),
 )
 
 # A pack page's row -> the pack that must be on for it to show.

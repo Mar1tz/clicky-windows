@@ -142,7 +142,7 @@ def test_agent_settings_opens_the_settings_page(qapp, wf):
     w = ToraApp(_bridge(wf))
     w.show_page("agents")
     _buttons(w._pages["agents"], "Agent settings")[0].click()
-    assert w._stack.currentWidget() is w._pages["settings"]
+    assert not w._settings.isHidden() and w._settings.current() == "agents", "Settings opens on its Agents tab"
 
 
 def test_recent_tasks_say_what_happened(qapp, wf):

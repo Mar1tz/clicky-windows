@@ -102,10 +102,10 @@ def _button(page, text):
 # ── Voice & models ───────────────────────────────────────────────────────────
 
 def test_the_voice_in_use_is_selected_and_can_be_changed(qapp):
-    from ui.app_pages import VoicePage
+    from ui.app_pages import ToraPage
 
     bridge = FakeBridge()
-    page = VoicePage(bridge)
+    page = ToraPage(bridge)
     voice = next(s for s in page.findChildren(Select) if s.count() == 3)
     assert voice.currentText() == "Kore"
     voice.setCurrentIndex(1)
@@ -113,10 +113,10 @@ def test_the_voice_in_use_is_selected_and_can_be_changed(qapp):
 
 
 def test_the_route_can_be_changed(qapp):
-    from ui.app_pages import VoicePage
+    from ui.settings_tabs import ModelsTab
 
     bridge = FakeBridge(route="cascade")
-    page = VoicePage(bridge)
+    page = ModelsTab(bridge)
     route = next(s for s in page.findChildren(Select) if s.count() == 2)
     assert route.currentText().startswith("Classic")
     route.setCurrentIndex(0)
@@ -124,10 +124,10 @@ def test_the_route_can_be_changed(qapp):
 
 
 def test_the_real_models_are_shown_and_the_list_refreshes(qapp):
-    from ui.app_pages import VoicePage
+    from ui.settings_tabs import ModelsTab
 
     bridge = FakeBridge()
-    page = VoicePage(bridge)
+    page = ModelsTab(bridge)
     texts = _texts(page)
     assert {"gemini-live-x", "gemini-flash-x", "tts-x"} <= set(texts)
     assert "claude-sonnet-4.6" not in texts, "no model typed in by hand"
@@ -138,12 +138,12 @@ def test_the_real_models_are_shown_and_the_list_refreshes(qapp):
 def test_the_real_endpoint_editor_is_embedded(qapp, tmp_path):
     from agents.bootstrap import build_agent_manager
     from agents.ui.accounts import ConnectedAccountsDialog
-    from ui.app_pages import VoicePage
+    from ui.settings_tabs import AgentsTab
 
     wf = build_agent_manager(workspace_root=str(tmp_path), in_memory=True,
                              offline=True).start()
     try:
-        page = VoicePage(FakeBridge(workforce=wf))
+        page = AgentsTab(FakeBridge(workforce=wf))
         (embedded,) = page.findChildren(ConnectedAccountsDialog)
         visible = {b.text() for b in embedded.findChildren(QPushButton)
                    if b.isVisibleTo(embedded)}
@@ -153,14 +153,14 @@ def test_the_real_endpoint_editor_is_embedded(qapp, tmp_path):
 
 
 def test_without_agents_the_endpoints_say_why(qapp):
-    from ui.app_pages import VoicePage
-    assert "The agents did not start" in _texts(VoicePage(FakeBridge()))
+    from ui.settings_tabs import AgentsTab
+    assert "The agents did not start" in _texts(AgentsTab(FakeBridge()))
 
 
 # ── Setup ────────────────────────────────────────────────────────────────────
 
 def test_keys_show_their_real_state_never_the_key(qapp):
-    from ui.app_pages import SetupPage
+    from ui.settings_tabs import AdvancedTab as SetupPage
 
     texts = _texts(SetupPage(FakeBridge()))
     assert "Set · ends in Plig" in texts
@@ -170,14 +170,14 @@ def test_keys_show_their_real_state_never_the_key(qapp):
 @pytest.mark.parametrize("problem, words", [
     ("key", "but Google refused it"), ("billing", "the credits have run out")])
 def test_a_refused_key_is_not_called_connected(qapp, problem, words):
-    from ui.app_pages import SetupPage
+    from ui.settings_tabs import AdvancedTab as SetupPage
 
     texts = " ".join(_texts(SetupPage(FakeBridge(problem=problem))))
     assert words in texts
 
 
 def test_the_diagnostics_are_the_real_ones(qapp):
-    from ui.app_pages import SetupPage
+    from ui.settings_tabs import AdvancedTab as SetupPage
 
     texts = _texts(SetupPage(FakeBridge()))
     assert "Refused - the API key" in texts and "Headset" in texts
@@ -188,7 +188,7 @@ def test_the_diagnostics_are_the_real_ones(qapp):
     ("Change keys…", ("keys",)), ("Run the setup wizard again", ("wizard",)),
     ("Save diagnostics report", ("report",)), ("Quit HeyTora", ("quit",))])
 def test_every_setup_button_does_what_the_trays_does(qapp, button, action):
-    from ui.app_pages import SetupPage
+    from ui.settings_tabs import AdvancedTab as SetupPage
 
     bridge = FakeBridge()
     page = SetupPage(bridge)

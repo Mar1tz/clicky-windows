@@ -51,7 +51,7 @@ def test_settings_does_not_stick_on_reading_your_plan(qapp, heytora):
     w = ToraApp(AppBridge())
     try:
         w.show()
-        w.show_page("settings")                       # built for the first time
+        w.show_page("settings/account")                       # built for the first time
         _until(qapp, lambda: any(t.startswith("Free plan") for t in _texts(w)))
         assert "Talk:  3 of 25 messages this month · 22 left" in _texts(w)
 
@@ -74,7 +74,7 @@ def test_the_card_moves_with_every_question(qapp, heytora):
     w = ToraApp(AppBridge())
     try:
         w.show()
-        w.show_page("settings")
+        w.show_page("settings/account")
         _until(qapp, lambda: "Talk:  3 of 25 messages this month · 22 left" in _texts(w))
         heytora.account.new_talk()
         heytora.account.voice_pass("talk", "gemini-3.8-live")   # the server says: talk 1 this month
@@ -251,7 +251,7 @@ def test_home_has_no_plan_card_on_an_own_key(qapp):
 
 def test_settings_says_todays_use(qapp):
     from tests.agents.test_e2e_first_launch import _Bridge, _state
-    from ui.app_pages import SettingsPage
+    from ui.settings_tabs import AccountTab as SettingsPage
     summary = _state()["summary"] | {"today": {"talk": 2}}
     page = SettingsPage(_Bridge(_state(summary=summary)))
     page.refresh()
@@ -270,9 +270,9 @@ def test_talking_moves_settings_in_place(qapp, heytora):
     w = ToraApp(AppBridge())
     try:
         w.show()
-        w.show_page("settings")
+        w.show_page("settings/account")
         _until(qapp, lambda: "Talk:  3 of 25 messages this month · 22 left" in _texts(w))
-        page = w._pages["settings"]
+        page = w._settings.tab("account")
         untouched = page.body.widget().findChildren(QWidget)[0]
         for n in (1, 2, 3):                           # three questions, one after another
             heytora.account.new_talk()

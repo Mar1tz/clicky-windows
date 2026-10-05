@@ -578,7 +578,6 @@ ICONS = {
     "accounting": "calculator",
     "tora": "sparkles",
     "settings": "settings",
-    "setup": "key-round",
     "help": "circle-help",
     "free_month": "gift",
     "sidebar": "panel-left",

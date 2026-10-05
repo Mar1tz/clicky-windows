@@ -218,6 +218,23 @@ def qss() -> str:
     QLabel#statValue {{ font-size: 30px; font-weight: 700; letter-spacing: -0.6px; }}
     QLabel#statLabel {{ color: {TEXT_DIM}; font-size: 14px; }}
     QLabel#footTitle {{ font-size: 14px; font-weight: 700; }}
+    /* ── the Settings dialog (ui/settings_dialog.py) ───────────────────── */
+    QFrame#settingsCard {{ background: {SURFACE}; border: none; border-radius: {tokens.RADIUS_XL}px; }}
+    QFrame#settingsNav {{
+        background: {BG}; border: none; border-right: 1px solid {BORDER};
+        border-top-left-radius: {tokens.RADIUS_XL}px; border-bottom-left-radius: {tokens.RADIUS_XL}px;
+    }}
+    QStackedWidget#settingsStack {{ background: transparent; }}
+    /* On the dialog's white, a group is the page's soft grey (Wispr's blocks). */
+    QFrame#settingsCard QFrame#card {{ background: {BG}; border: none; border-radius: {RADIUS + 0}px; }}
+    QFrame#plansBox {{ background: transparent; border: 1px solid {BORDER}; border-radius: {RADIUS + 0}px; }}
+    QFrame#vr {{ background: {BORDER}; border: none; }}
+    QLabel#planName  {{ font-size: 18px; font-weight: 700; }}
+    QLabel#planPrice {{ font-size: 26px; font-weight: 700; letter-spacing: -0.5px; }}
+    QLabel#planFlag  {{
+        background: {ACCENT_SOFT}; color: {ACCENT}; border-radius: 9px;
+        font-size: 11px; font-weight: 700; padding: 2px 8px;
+    }}
     QFrame#infoCard {{ background: {SURFACE}; border: none; border-radius: {tokens.RADIUS_LG}px; }}
     QLabel#infoTitle {{ font-size: 15px; font-weight: 700; }}
     QLabel#infoBig   {{ font-size: 22px; font-weight: 700; letter-spacing: -0.4px; }}
@@ -310,6 +327,32 @@ def qss() -> str:
     QLineEdit:focus, QComboBox:focus, QPlainTextEdit:focus, QTextEdit:focus {{
         border: 1px solid {ACCENT};
     }}
+    QSpinBox {{
+        background: {SURFACE}; border: 1px solid {BORDER_STRONG};
+        border-radius: {RADIUS_SMALL}px; padding: 6px 8px;
+        selection-background-color: {ACCENT}; selection-color: {ON_ACCENT};
+    }}
+    QSpinBox:focus {{ border: 1px solid {ACCENT}; }}
+    QSpinBox::up-button, QSpinBox::down-button {{ border: none; background: transparent; width: 16px; }}
+    QCheckBox {{ spacing: 8px; font-size: 13px; }}
+    QCheckBox::indicator {{
+        width: 16px; height: 16px; border-radius: 4px;
+        border: 1px solid {BORDER_STRONG}; background: {SURFACE};
+    }}
+    QCheckBox::indicator:checked {{ background: {ACCENT}; border: 1px solid {ACCENT}; }}
+
+    /* The agents' own panels, embedded in Settings (app_pages._tidy). */
+    QLabel#setLabel, QLabel#acctLabel {{ font-size: 13px; font-weight: 600; color: {TEXT}; }}
+    QLabel#setHint, QLabel#acctHint {{ font-size: 12px; color: {TEXT_FAINT}; }}
+    QPushButton#setSave, QPushButton#acctSave {{
+        background: {ACCENT}; border: none; border-radius: {BUTTON_PILL}px;
+        color: {ON_ACCENT}; font-size: 13px; font-weight: 700; padding: 8px 18px;
+    }}
+    QPushButton#setSave:hover, QPushButton#acctSave:hover {{ background: {ACCENT_HOVER}; }}
+    QFrame#acctCard {{
+        background: transparent; border: 1px solid {BORDER}; border-radius: {RADIUS_CARD}px;
+    }}
+    QWidget#embedded, QWidget#acctHolder {{ background: transparent; }}
     QComboBox::drop-down {{ border: none; width: 22px; }}
     /* The chevron is painted by ui.app_widgets.Select. Every CSS way of
        drawing one collapses to a dash inside Qt's down-arrow subcontrol, and
