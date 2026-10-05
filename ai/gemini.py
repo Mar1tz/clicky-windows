@@ -489,14 +489,19 @@ async def generate_json(
     max_tokens: int = 2048,
     think: Optional[int] = None,
     timeout: float = 120.0,
+    usage: Optional[dict] = None,
 ) -> Optional[dict]:
     """generateContent constrained to a JSON schema. None if it came back
-    unparseable — every caller has a sane path for 'no structured answer'."""
+    unparseable — every caller has a sane path for 'no structured answer'.
+    `usage`, when given, is filled with the call's usageMetadata (tokens in,
+    out and thinking), so a caller can log what an answer cost."""
     resp = await generate(
         model, contents,
         system=system, max_tokens=max_tokens, temperature=0.2,
         think=think, schema=schema, timeout=timeout,
     )
+    if usage is not None:
+        usage.update(resp.get("usageMetadata") or {})
     text = first_text(resp)
     if not text:
         return None

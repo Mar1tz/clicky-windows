@@ -26,6 +26,7 @@ separate and stays.
 from __future__ import annotations
 
 import math
+import re
 import time
 from typing import Callable, Optional
 
@@ -53,6 +54,7 @@ LONGEST = max(s[0] for s in SIZES.values())
 THICKEST = max(s[1] for s in SIZES.values())
 BARS = 11
 CARD_W, CARD_H = 460.0, 182.0
+_MARKS = re.compile(r"[*•#`]+")
 CARD_HOLD_S = 12.0             # the card stays this long after she has finished
 CHARS_PER_S = 42.0             # the card's pace with no voice to keep time with
 VOICE_LEAD_S = 0.15            # words show a hair before they are heard
@@ -363,6 +365,9 @@ class FlowBar(QObject):
         self._clock = clock
 
     def push_answer(self, text: str) -> None:
+        # The voice's transcript can carry list marks ("• Black has 7
+        # pawns", 5 Oct): the card shows words, never bullets or stars.
+        text = _MARKS.sub("", text or "")
         if not text:
             return
         if self._sealed:                  # a new answer after a finished one

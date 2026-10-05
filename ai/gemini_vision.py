@@ -54,12 +54,24 @@ _DENSE_RE = re.compile(
     re.IGNORECASE,
 )
 
+# "What should I do?" - the best move, the next step, which one to pick. The
+# answer to these is an action, drawn: one arrow, one line. On 5 Oct a user
+# asked for their best chess move and got the board read back to them.
+_NEXT_ACTION_RE = re.compile(
+    r"\b(best|next|good|winning|strongest|right)\s+(move|play|step)|"
+    r"\bwhat\s+(should|do|can)\s+i\s+(do|play|move|pick|choose|click|press)|"
+    r"\bwhich\s+(one\s+)?(should|do)\s+i\b|\bwhere\s+(should|do)\s+i\s+(move|go|click|put|place)|"
+    r"\bmy\s+(next|best)\s+move\b|\bhow\s+do\s+i\s+(win|move)\b",
+    re.IGNORECASE,
+)
+
 _SCHEMA = {
     "type": "object",
     "properties": {
         "answer": {
             "type": "string",
-            "description": "The spoken answer. At most 2 short sentences, no markdown.",
+            "description": ("Spoken aloud: ONE short sentence, no markdown. For a what-to-do "
+                            "question it states the action itself."),
         },
         "actions": {
             "type": "array",
@@ -75,7 +87,13 @@ _SCHEMA = {
                     },
                     "kind": {
                         "type": "string",
-                        "description": "point | circle | rect | arrow",
+                        "description": ("point | circle | rect | move. move: something goes from box "
+                                        "to to_box - a piece to its square, a file to a folder."),
+                    },
+                    "to_box": {
+                        "type": "array",
+                        "items": {"type": "integer"},
+                        "description": "For a move: where it goes, [ymin,xmin,ymax,xmax] 0-1000.",
                     },
                 },
                 "required": ["label", "box"],
@@ -103,14 +121,22 @@ _DEEP_TIMEOUT_S = 35.0
 _SYSTEM = """You are the eyes of Tora, a visual tutor that points at things
 on the user's screen while it talks.
 
-  • answer is SPOKEN aloud: 1-3 plain sentences, no markdown, no lists.
-  • Describe only what is genuinely in the image. If you cannot see the thing
-    being asked about, say so plainly rather than guessing.
-  • Put every element the user needs to look at in actions, with a tight box
-    around it. Order them the way the user should look at them.
+  • answer is SPOKEN aloud: ONE short plain sentence, no markdown, no lists.
+    Never describe your own process: no "let me", no recounting, no counts
+    the user did not ask for.
+  • When they ask what to do - the best move, the next step, which one to
+    pick, where to click - answer with the action itself ("Knight from b1 to
+    c3, to develop a piece.") and put exactly ONE thing in actions: a move as
+    kind "move" with box on the piece or thing where it is now and to_box on
+    where it goes; otherwise the one thing to click or pick.
+  • Describe only what is genuinely in the image. If you cannot read the
+    thing being asked about clearly, say so in one sentence rather than
+    guessing.
+  • For other questions, put every element the user needs to look at in
+    actions, with a tight box around it, in the order to look at them.
   • observations are the specific things you read off the screen that your
     answer depends on — piece positions, axis values, the exact error text.
-    Be concrete; this is what lets the answer be checked."""
+    They are kept for checking and are never read to the user."""
 
 
 @dataclass
@@ -118,11 +144,24 @@ class Action:
     label: str
     box: tuple[int, int, int, int]   # ymin, xmin, ymax, xmax — 0-1000
     kind: str = "point"
+    # Where a move goes. A move used to be impossible to draw: one box per
+    # action, every kind a labelled circle, so "knight b1 to c3" reached the
+    # screen as two circles and no arrow (5 Oct, a user's chess game).
+    to_box: Optional[tuple[int, int, int, int]] = None
+
+    @property
+    def is_move(self) -> bool:
+        return self.to_box is not None and self.kind in ("move", "arrow")
 
     @property
     def center(self) -> tuple[int, int]:
         """(x, y) normalized 0-1000 — what an arrow aims at."""
         ymin, xmin, ymax, xmax = self.box
+        return (xmin + xmax) // 2, (ymin + ymax) // 2
+
+    @property
+    def to_center(self) -> tuple[int, int]:
+        ymin, xmin, ymax, xmax = self.to_box or self.box
         return (xmin + xmax) // 2, (ymin + ymax) // 2
 
     @property
@@ -135,6 +174,10 @@ class Action:
         """The drawing tag the overlay already knows how to render - in
         Tora's own colour, the one the user picked for her cursor."""
         x, y = self.center
+        if self.is_move:
+            # One arrow, piece to square, and no label on the board.
+            tx, ty = self.to_center
+            return f"[ARROW:{x},{y}->{tx},{ty}:tora]"
         if self.kind == "rect":
             ymin, xmin, ymax, xmax = self.box
             return f"[RECT:{xmin},{ymin},{xmax},{ymax}:tora]"
@@ -151,6 +194,7 @@ class Look:
     observations: list[str] = field(default_factory=list)
     model: str = ""
     deep: bool = False
+    usage: dict = field(default_factory=dict)     # the call's usageMetadata (SN-01)
 
     def __bool__(self) -> bool:
         return bool(self.answer)
@@ -263,23 +307,37 @@ def wants_deep(question: str) -> bool:
     return bool(_ADVICE_RE.search(q) or _DENSE_RE.search(q))
 
 
+def is_next_action(question: str) -> bool:
+    """True for "what should I do?" - the best move, the next step, which one
+    to pick: the answer is one action, drawn, said in a line."""
+    return bool(_NEXT_ACTION_RE.search(question or ""))
+
+
+def _box(raw) -> Optional[tuple[int, int, int, int]]:
+    if not isinstance(raw, (list, tuple)) or len(raw) != 4:
+        return None
+    try:
+        ymin, xmin, ymax, xmax = [max(0, min(1000, int(v))) for v in raw]
+    except (TypeError, ValueError):
+        return None
+    if xmax <= xmin or ymax <= ymin:
+        return None
+    return ymin, xmin, ymax, xmax
+
+
 def _parse(data: dict, model: str, deep: bool) -> Look:
     actions = []
     for a in data.get("actions", []):
-        box = a.get("box") or []
-        if len(box) != 4:
+        box = _box(a.get("box"))
+        if box is None:
             continue
-        try:
-            vals = [max(0, min(1000, int(v))) for v in box]
-        except (TypeError, ValueError):
-            continue
-        ymin, xmin, ymax, xmax = vals
-        if xmax <= xmin or ymax <= ymin:
-            continue
+        kind = (a.get("kind") or "point").strip().lower()
+        to_box = _box(a.get("to_box")) if kind in ("move", "arrow") else None
         actions.append(Action(
             label=(a.get("label") or "").strip()[:40] or "here",
-            box=(ymin, xmin, ymax, xmax),
-            kind=(a.get("kind") or "point").strip().lower(),
+            box=box,
+            kind=kind if (to_box or kind not in ("move", "arrow")) else "point",
+            to_box=to_box,
         ))
     return Look(
         answer=(data.get("answer") or "").strip(),
@@ -319,6 +377,7 @@ async def look(
     ]}]
 
     data = None
+    usage: dict = {}
     try:
         data = await gemini.generate_json(
             model, contents, _SCHEMA,
@@ -328,6 +387,7 @@ async def look(
             # gets a bounded budget so it always has room left to answer.
             think=_DEEP_THINK if use_deep else 0,
             timeout=min(timeout, _DEEP_TIMEOUT_S) if use_deep else timeout,
+            usage=usage,
         )
     except Exception as e:
         _log.warning("%s look failed: %s", "deep" if use_deep else "fast", e)
@@ -340,7 +400,11 @@ async def look(
             question, screenshot_b64, deep=False,
             context=context, timeout=timeout,
         )
-    return _parse(data, model, use_deep) if data else Look()
+    if not data:
+        return Look()
+    out = _parse(data, model, use_deep)
+    out.usage = usage
+    return out
 
 
 # ── Pointing ─────────────────────────────────────────────────────────────────

@@ -144,8 +144,10 @@ def tool_declarations() -> list[dict]:
                 "a photo, a chart, a chessboard, a diagram, handwriting, an "
                 "error with no name, or any 'what is the best…' question. "
                 "Do NOT use it to find a named button — point_at is instant "
-                "and this takes a second or two. It highlights what it finds "
-                "on screen, so describe the highlight in your answer."
+                "and this takes a second or two. It draws the answer on "
+                "screen (a what-to-do question: one arrow) and returns "
+                "`say`: say that one line and stop. Never read out what it "
+                "saw."
             ),
             "parameters": {
                 "type": "object",

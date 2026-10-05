@@ -255,6 +255,20 @@ def _speakable(text: str) -> str:
     return t
 
 
+def _one_line(text: str, limit: int = 240) -> str:
+    """What a screen look hands the voice to say: its first sentence (and a
+    second when the first is only a few words), plain, never a list - see
+    docs/SHOW_THE_NEXT_MOVE.md, SN-02."""
+    t = re.sub(r"(?m)^\s*(?:[-*•]+|\d+[.)])\s+", "", text or "")
+    t = re.sub(r"[*_#`•]+", "", t)
+    t = re.sub(r"\s+", " ", t).strip()
+    parts = re.split(r"(?<=[.!?])\s+", t)
+    out = parts[0]
+    if len(out) < 40 and len(parts) > 1:
+        out = f"{out} {parts[1]}"
+    return out if len(out) <= limit else out[:limit].rsplit(" ", 1)[0] + "…"
+
+
 POINT_RE = re.compile(r'\[POINT:(\d+),(\d+):([^:\]]+):screen(\d+)\]')
 # A partial "[POINT..." prefix that hasn't closed yet — hold it back from display
 # until the next chunk so we never leak a half tag.
@@ -1100,10 +1114,69 @@ class CompanionManager(QObject):
             _log.info("realtime unavailable (%s) — cascade will be used", e)
             return False
 
+    # ── SN-01: every screen answer measured ───────────────────────────────
+    #
+    # A question that needed a look - the last words heard, the look called,
+    # the look back (which model, how many tokens), the first drawing, the
+    # first word of the answer - as one line, and a running scorecard. The
+    # chess complaint of 5 Oct came with no numbers at all; the next one
+    # will not. See docs/SHOW_THE_NEXT_MOVE.md.
+
+    _ans: Optional[dict] = None          # this answer's moments
+    _ans_stats: Optional[dict] = None    # the session's, for the scorecard
+
+    def _mark_answer(self, what: str, detail: str = "") -> None:
+        a = self._ans
+        if a is None:
+            return
+        if what not in a:
+            a[what] = time.monotonic()
+        if detail:
+            a[what + ":"] = detail
+
+    def _log_answer(self, said: str) -> None:
+        """One timeline line for an answer that looked at the screen."""
+        a, self._ans = self._ans, None
+        if not a or "tool" not in a:
+            return
+        t0 = a.get("asked", a.get("heard", a["tool"]))
+        parts = ["look called +%.1fs" % (a["tool"] - t0)]
+        if "look" in a:
+            parts.append("look +%.1fs (%s)" % (a["look"] - t0, a.get("look:", "")))
+        parts.append("drawn +%.1fs (%s)" % (a["drawing"] - t0, a.get("drawing:", ""))
+                     if "drawing" in a else "nothing drawn")
+        if "audio" in a:
+            parts.append("voice +%.1fs" % (a["audio"] - t0))
+        parts.append("said %d chars" % len(said or ""))
+        _log.info("answer timeline: %s", ", ".join(parts))
+        st = self._ans_stats if self._ans_stats is not None else {}
+        self._ans_stats = st
+        st["looks"] = st.get("looks", 0) + 1
+        if "drawing" in a:
+            st.setdefault("drawn", []).append(a["drawing"] - t0)
+            if "arrow" in a.get("drawing:", ""):
+                st["arrows"] = st.get("arrows", 0) + 1
+        if "audio" in a:
+            st.setdefault("voice", []).append(a["audio"] - t0)
+
+        def p50(xs):
+            return sorted(xs)[len(xs) // 2] if xs else None
+        bits = [f"{st['looks']} look(s)"]
+        if st.get("drawn"):
+            bits.append("drawn p50 %.1fs" % p50(st["drawn"]))
+        bits.append(f"{st.get('arrows', 0)} arrow(s), {st['looks'] - len(st.get('drawn', []))} with nothing drawn")
+        if st.get("voice"):
+            bits.append("voice p50 %.1fs" % p50(st["voice"]))
+        _log.info("answer scorecard: %s", ", ".join(bits))
+
     def _on_realtime_heard(self, text: str) -> None:
+        now = time.monotonic()
         if not self._heard_buf:
             self._rearm_desktop_control()
             self._count_question()
+            self._ans = {"heard": now}
+        if self._ans is not None and "tool" not in self._ans:
+            self._ans["asked"] = now          # the last words before Tora acted
         self._heard_buf.append(text)
 
     def _count_question(self) -> None:
@@ -1149,6 +1222,7 @@ class CompanionManager(QObject):
             return None
 
     def _on_realtime_speaking(self) -> None:
+        self._mark_answer("audio")
         self._activity("")          # it's talking now — nothing to report
         self._emit_state(AppState.SPEAKING)
 
@@ -1174,6 +1248,10 @@ class CompanionManager(QObject):
             self.sig_response_done.emit(said)
             self._last_response = said
             self._record_turn(heard, said)
+        try:
+            self._log_answer(said)
+        except Exception:  # noqa: BLE001 - measuring must never break an answer
+            _log.debug("answer timeline failed", exc_info=True)
         self._heard_buf = []
         self._emit_state(AppState.IDLE)
         if self._metered_talk():
@@ -2658,10 +2736,18 @@ class CompanionManager(QObject):
                 self._pointing_held = False
 
     async def _tool_look_at_screen(self, args: dict) -> dict:
-        """The expensive one: capture the screen and actually look at it."""
+        """The expensive one: capture the screen and actually look at it.
+
+        What goes back to the voice is the line to SAY and what is now drawn,
+        never the look's readings. Handed those (piece lists, values), the
+        voice read them out - "Black has 7 pawns... let me recount" - instead
+        of answering (SN-02). For a what-should-I-do question exactly one
+        thing is drawn: the move as an arrow, or the one thing to click
+        (SN-03). See docs/SHOW_THE_NEXT_MOVE.md."""
         question = str(args.get("question") or "").strip()
         if not question:
             return {"error": "no question given"}
+        self._mark_answer("tool")
 
         title = active_window_title()
         if self._privacy_guard and is_sensitive_window(title):
@@ -2689,28 +2775,41 @@ class CompanionManager(QObject):
             question, shot.base64_jpeg,
             deep=careful or None,
         )
+        usage = getattr(look, "usage", None) or {}
+        self._mark_answer("look", "%s %s, %s in / %s out / %s thinking" % (
+            "deep" if getattr(look, "deep", False) else "fast", getattr(look, "model", "") or "?",
+            usage.get("promptTokenCount", "?"), usage.get("candidatesTokenCount", "?"),
+            usage.get("thoughtsTokenCount", 0)))
         if not look:
             return {"error": "could not read the screen clearly"}
+        if look.observations:
+            _log.info("look read: %s", "; ".join(look.observations[:8])[:600])
 
-        # Ring what the answer rests on, so the user can see the working.
-        drawn = 0
-        for action in look.actions[:4]:
+        # A what-to-do question gets ONE thing drawn: the move, else the first
+        # action. Anything else rings what the answer rests on, as before.
+        actions = list(look.actions or [])
+        if gemini_vision.is_next_action(question):
+            moves = [a for a in actions if getattr(a, "is_move", False)]
+            actions = (moves or actions)[:1]
+        drawn = []
+        for action in actions[:4]:
             sh = self._shape_from_tag(action.as_tag())
             if sh:
                 self.sig_draw.emit(sh)
-                drawn += 1
+                drawn.append(action)
         if drawn:
             self._pointed_this_turn = True
+            self._mark_answer("drawing", ", ".join(
+                "arrow" if getattr(a, "is_move", False) else a.kind for a in drawn))
 
         # Where each highlight is, in the draw tool's 0-1000 coordinates.
         # The voice model never sees the screen: without these, a drawing it
         # adds after a look is a guess - in the first launch it ringed empty
         # space beside the line this look had boxed correctly.
         return {
-            "answer": look.answer,
-            "observations": look.observations[:8],
-            "highlighted_on_screen": [a.label for a in look.actions[:4]],
-            "highlights": [{"label": a.label, "tag": a.as_tag()} for a in look.actions[:4]],
+            "say": _one_line(look.answer),
+            "drawn": [("arrow: " if getattr(a, "is_move", False) else f"{a.kind}: ") + a.label for a in drawn],
+            "highlights": [{"label": a.label, "tag": a.as_tag()} for a in drawn],
         }
 
     async def _tool_draw(self, args: dict) -> dict:
