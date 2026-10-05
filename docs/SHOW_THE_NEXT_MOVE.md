@@ -55,7 +55,7 @@ and getting one is chess-only work. See *Parked* below.
 | **1. Hearing what they want** | The live model picks a tool from its rules. The only local safety net is for "where is…" (`is_locate` → `_ensure_pointed`). | – | – |
 | **2. Finding a named thing** | `point_at`'s chain: the last arrow, the accessibility tree, OCR, then vision. Cheapest first. **Sound.** | ~5 ms to ~1 s | free unless vision |
 | **3. Looking at pixels** | `look_at_screen`: one vision call on the **whole monitor**. | see 4 | see 4 |
-| **4. Which model** | **Deep:** Pro, up to 1,536 thinking tokens. **Fast:** Flash, no thinking. | deep 8–20 s; fast ~1.4 s | deep **≈ $0.026**; fast **≈ $0.001** (HeyTora's own price table: Pro $2.5/$15, Flash $0.5/$3 per million) |
+| **4. Which model** | **Deep:** Pro, up to 1,536 thinking tokens. **Fast:** Flash, no thinking. | measured: deep 4–7 s; fast 2–3 s | measured: deep **≈ $0.008**; fast **≈ $0.0014** (HeyTora's own price table: Pro $2.5/$15, Flash $0.5/$3 per million). The estimate before measuring was $0.026 and 8–20 s for deep. |
 | **5. Where it draws** | The vision model's box, as it came. Snapping exists only for geometry figures. | – | – |
 | **6. Saying it** | Fixed in wave 1. | – | – |
 | **7. Asking again** | A look is never reused. "Show me again" on the same screen pays again. | full | full |
@@ -107,7 +107,54 @@ and getting one is chess-only work. See *Parked* below.
 
 ## Next: the general path (UD-01 to UD-06)
 
-### UD-01 · Fast first; deep only when needed — M — **cuts the cost of most looks by ~20× and their time by ~10 s**
+### UD-01 · Fast first; deep only when needed — M — **done, measured**
+
+**The comparison** (5 Oct, $0.10): 16 everyday screens with known answers,
+built as HTML and rendered.
+
+| screen | what was asked |
+|---|---|
+| sign-in page | where to click |
+| settings | the switch |
+| products | the cheapest with 4+ stars |
+| chart | the highest month |
+| spreadsheet | the wrong total |
+| error dialog | what to click |
+| inbox | the boss's email |
+| checkout | how to pay |
+| video player | the unlabelled subtitles icon |
+| form | the missing field |
+| file list | the biggest file |
+| tic-tac-toe | where to play |
+| worksheet | the wrong sum |
+| menu | the cheapest vegetarian dish |
+| payment form | where the card number goes |
+| chess | a mate in one |
+
+**What the fast model did:**
+* It drew the right thing on **15 of 16**, at a median of 2.6 s and
+  ~$0.0014 a look.
+* **Its one miss was the chess move, made with confidence.** It said
+  "you are checkmated" and marked itself `sure`. The deep model played
+  Ra8#.
+* So a move in a game (`needs_judgement`) goes deep first, like dense
+  reading. Everything else starts fast.
+
+**Measured costs:**
+
+| | cost per look | time |
+|---|---|---|
+| fast | $0.0014 | 2–3 s |
+| deep | $0.008 | 4–7 s |
+
+Deep is about **6×** the fast cost, not the 23× estimated before
+measuring.
+
+**What this saves:**
+* The saving depends on how often looks went deep before.
+* Deep was picked by the question's wording (11 of 20 everyday questions)
+  and by the voice's `careful` flag, which no longer forces it.
+* The live scorecard's fast/deep share shows it.
 
 **Done:**
 
@@ -132,7 +179,7 @@ and getting one is chess-only work. See *Parked* below.
 *Cost:* the comparison is about 20 fast and 10 deep calls, **≈ $0.30**. It
 waits for a yes.
 
-### UD-02 · Look where they are looking — S — free
+### UD-02 · Look where they are looking — S — free — **done** (offline tests; the crop's effect on accuracy shows in SN-10)
 
 **Done:**
 
@@ -147,7 +194,10 @@ waits for a yes.
 *Proof:* a cropped look's box lands on the right screen pixels across
 mixed-scale monitors, and the hint is in the prompt.
 
-### UD-03 · Land on the real thing — S — free
+### UD-03 · Land on the real thing — S — free — **done; checked live**
+
+Checked live on this PC: a box drawn a little off the taskbar's Start
+button snapped exactly onto the button's rectangle, in 5 ms.
 
 **Done:**
 
@@ -265,7 +315,7 @@ model for hard judgement.
 
 | milestone | effect |
 |---|---|
-| UD-01 | Most looks go from **~$0.026 to ~$0.001**, and are about 10 s faster. |
+| UD-01 | Every look that used to go deep and need not (by its words or the `careful` flag) goes from **~$0.008 to ~$0.0014**, and is 2–4 s faster (measured). |
 | UD-02 | The same pixels or fewer. |
 | UD-03, UD-05 | Free; UD-05 saves whole calls. |
 | UD-04 | Only the look a correct turn would have made. |

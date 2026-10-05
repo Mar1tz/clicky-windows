@@ -39,7 +39,8 @@ from ai import gemini, gemini_memory, gemini_planner, gemini_vision
 from ai.gemini import Models
 from audio.ambient_listener import AmbientListener
 from screen import monitors
-from screen.capture import capture_all_screens
+from screen.capture import capture_all_screens, capture_region
+from ai import look_region
 from ui.panel import AppState
 from tutor import (
     active_window_title, app_key,
@@ -2771,16 +2772,35 @@ class CompanionManager(QObject):
         self.sig_clear_drawings.emit()
 
         shot = self._active_shot(screens) or screens[0]
-        look = await gemini_vision.look(
-            question, shot.base64_jpeg,
-            deep=careful or None,
-        )
+        # UD-02: the window in front, sharper, and the mouse as a hint. A
+        # shot without monitor numbers (tests) looks at what it was given.
+        image, monitor, region, window = shot.base64_jpeg, None, None, None
+        try:
+            monitor = (shot.physical_left, shot.physical_top, shot.physical_width, shot.physical_height)
+            from tutor import foreground_window_rect
+            window = foreground_window_rect()
+            region = look_region.window_region(window, monitor)
+            if region:
+                grabbed = await asyncio.to_thread(capture_region, *region, 1280 if careful else 1024)
+                image, region = (grabbed[0], region) if grabbed else (image, None)
+        except Exception:  # noqa: BLE001 - the whole monitor is always a fine fallback
+            region = None
+        hint = look_region.pointer_hint(question, look_region.cursor_position(), region or monitor) \
+            if monitor else ""
+
+        # UD-01: fast first; the deep model only when the fast look is not sure.
+        look = await gemini_vision.look(question, image, context=hint)
         usage = getattr(look, "usage", None) or {}
-        self._mark_answer("look", "%s %s, %s in / %s out / %s thinking" % (
-            "deep" if getattr(look, "deep", False) else "fast", getattr(look, "model", "") or "?",
-            usage.get("promptTokenCount", "?"), usage.get("candidatesTokenCount", "?"),
-            usage.get("thoughtsTokenCount", 0)))
+        detail = "%s %s, %s in / %s out / %s thinking" % (
+            getattr(look, "path", "") or ("deep" if getattr(look, "deep", False) else "fast"),
+            getattr(look, "model", "") or "?", usage.get("promptTokenCount", "?"),
+            usage.get("candidatesTokenCount", "?"), usage.get("thoughtsTokenCount", 0))
+        if region:
+            detail += ", window only"
+        if hint:
+            detail += ", mouse hint"
         if not look:
+            self._mark_answer("look", detail)
             return {"error": "could not read the screen clearly"}
         if look.observations:
             _log.info("look read: %s", "; ".join(look.observations[:8])[:600])
@@ -2791,6 +2811,15 @@ class CompanionManager(QObject):
         if gemini_vision.is_next_action(question):
             moves = [a for a in actions if getattr(a, "is_move", False)]
             actions = (moves or actions)[:1]
+        if region:
+            for a in actions:
+                a.box = look_region.to_monitor_box(a.box, region, monitor)
+                if getattr(a, "to_box", None):
+                    a.to_box = look_region.to_monitor_box(a.to_box, region, monitor)
+        snapped = await self._snap_to_controls(actions, monitor, window) if monitor else 0
+        if snapped:
+            detail += f", {snapped} snapped to the real control"
+        self._mark_answer("look", detail)
         drawn = []
         for action in actions[:4]:
             sh = self._shape_from_tag(action.as_tag())
@@ -2811,6 +2840,29 @@ class CompanionManager(QObject):
             "drawn": [("arrow: " if getattr(a, "is_move", False) else f"{a.kind}: ") + a.label for a in drawn],
             "highlights": [{"label": a.label, "tag": a.as_tag()} for a in drawn],
         }
+
+    async def _snap_to_controls(self, actions, monitor, window) -> int:
+        """UD-03: a ring drawn round a button is put on the button itself.
+        Windows knows the control's exact rectangle at the box's centre in a
+        few ms; it replaces the model's box only when it is plainly the same
+        thing (see look_region.snap_rect). Moves - pieces on a board, a file
+        to a folder - and pictures are left as drawn."""
+        snapped = 0
+        for a in actions:
+            if getattr(a, "is_move", False):
+                continue
+            rect = look_region.box_to_rect(a.box, monitor)
+            cx, cy = (rect[0] + rect[2]) / 2, (rect[1] + rect[3]) / 2
+            try:
+                element = await asyncio.wait_for(
+                    asyncio.to_thread(look_region.control_rect_at, cx, cy), 0.3)
+            except Exception:  # noqa: BLE001 - a slow or missing tree: keep the model's box
+                element = None
+            exact = look_region.snap_rect(rect, element, window)
+            if exact:
+                a.box = look_region.rect_to_box(exact, monitor)
+                snapped += 1
+        return snapped
 
     async def _tool_draw(self, args: dict) -> dict:
         tags = str(args.get("tags") or "")

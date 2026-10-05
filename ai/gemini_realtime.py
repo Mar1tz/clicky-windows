@@ -159,9 +159,10 @@ def tool_declarations() -> list[dict]:
                     "careful": {
                         "type": "boolean",
                         "description": (
-                            "True for anything needing real reading or "
-                            "judgement — a board position, dense code, the "
-                            "best option. Slower and much better."
+                            "True only for dense reading - code, small "
+                            "print, a full sheet: a sharper image. The look "
+                            "takes a closer look on its own when it is not "
+                            "sure, so leave this off for judgement calls."
                         ),
                     },
                 },

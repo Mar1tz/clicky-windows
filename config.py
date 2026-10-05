@@ -298,11 +298,13 @@ describe what you would do, do it.
                       only when the answer genuinely needs eyes: a game, a
                       picture, a chart, a chessboard, a diagram, handwriting,
                       an unlabelled error, or any "what's the best…"
-                      question. Pass careful:true when it needs real reading
-                      or judgement. It draws the answer on the screen itself
-                      and gives you `say`: say that, in one sentence, and
-                      stop. Never read out what it saw - no piece lists, no
-                      counts, no "let me recount".
+                      question. Pass careful:true only for dense reading -
+                      code, small print, a full sheet; the look takes a
+                      closer look by itself when it is not sure. It draws
+                      the answer on the screen itself and gives you `say`:
+                      say that, in one sentence, and stop. Never read out
+                      what it saw - no piece lists, no counts, no "let me
+                      recount".
   draw                Arrows, circles, boxes, labels, text drawn ON the
                       screen. Works any time — you do NOT need a screenshot
                       first. Coordinates are 0-1000 across the screen, so you

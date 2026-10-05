@@ -124,6 +124,26 @@ def capture_all_screens(max_width: int = 1280) -> List[ScreenShot]:
     return results
 
 
+def capture_region(left: int, top: int, width: int, height: int, max_width: int = 1280):
+    """(base64 JPEG, its width, its height) of a PHYSICAL-pixel region - the
+    window the user is working in (UD-02). Grabbed at full resolution and
+    then downscaled, so a window that is a third of the monitor reaches the
+    model three times sharper than in a whole-screen shot. None on failure."""
+    if width < 16 or height < 16:
+        return None
+    try:
+        with mss.mss() as sct:
+            raw = sct.grab({"left": int(left), "top": int(top), "width": int(width), "height": int(height)})
+        img = Image.frombytes("RGB", raw.size, raw.bgra, "raw", "BGRX")
+    except Exception:
+        return None
+    if img.width > max_width:
+        img = img.resize((max_width, max(1, int(img.height * max_width / img.width))), Image.Resampling.LANCZOS)
+    buf = io.BytesIO()
+    img.save(buf, format="JPEG", quality=75, optimize=True)
+    return base64.b64encode(buf.getvalue()).decode("utf-8"), img.width, img.height
+
+
 def capture_primary() -> ScreenShot:
     """The main monitor's screenshot. Not screens[0]: mss lists monitors in
     its own order, and with three it was the right-hand one. The main
