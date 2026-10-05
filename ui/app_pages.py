@@ -554,33 +554,27 @@ class InsightsPage(Page):
 
     def build(self) -> None:
         from ui import insights_data as data
-        from ui.app_parts import DayBars, Gauge, GrowMeter, InfoCard, StreakGrid, legend, stat_tile
+        from ui.app_parts import GrowMeter, InfoCard, StreakGrid, legend
         d = _ask(self.bridge, "insights", {}) or {}
         if not d:
             d = data.summarise([])
             d.update(agents=data.agents_month([]), plan=[], plan_summary=None, due=0)
+        d.setdefault("time", data.time_worked([], []))
+        d.setdefault("handled", data.handled(d, []))
+        d.setdefault("knows", {"facts": 0, "documents": 0, "recent": []})
 
-        # ── three tiles
-        change = d["change"]
-        week = (f"{'+' if change > 0 else ''}{change}%" if change is not None else "–")
+        # ── three tiles: time worked (the lead), things handled, what she knows
         tiles = QHBoxLayout()
         tiles.setSpacing(T.GAP)
-        tiles.addWidget(stat_tile(str(d["questions"]), "questions asked",
-                                  [("This week", str(d["this_week"])), ("On last week", week)],
-                                  chart=DayBars(data.daily(d["days"]))), 1)
-        tiles.addWidget(stat_tile(str(d["walkthroughs"]), "walkthroughs finished",
-                                  [("Time she guided you", f"{d['guided_minutes']} min")]), 1)
-        share = d["remembered"] / d["learnable"] if d["learnable"] else 0.0
-        tiles.addWidget(stat_tile(f"{d['remembered']}", "things remembered",
-                                  [("Of all she taught you", str(d["learnable"])),
-                                   ("Due for review", str(d["due"]))],
-                                  chart=Gauge(share, "remembered")), 1)
+        tiles.addWidget(self._time_tile(d["time"]), 3)
+        tiles.addWidget(self._handled_tile(d["handled"]), 2)
+        tiles.addWidget(self._knows_tile(d["knows"]), 2)
         self.body.add_layout(tiles)
 
-        # ── where you ask · the streak
+        # ── where you use Tora · the streak
         mid = QHBoxLayout()
         mid.setSpacing(T.GAP)
-        apps = InfoCard("Where you ask", f"apps · {d['apps_used']}", big=True)
+        apps = InfoCard("Where you use Tora", f"apps · {d['apps_used']}", big=True)
         if d["apps"]:
             for rank, (name, n, share) in enumerate(d["apps"]):
                 from ui.app_parts import ShareBar
@@ -600,8 +594,8 @@ class InsightsPage(Page):
             apps.body.addWidget(label("Ask about something in another app - Excel, a PDF, a "
                                       "website - and it shows up here.", "infoFaint", wrap=True))
         mid.addWidget(apps, 1)
-        streak = InfoCard(f"{d['streak']} day streak", f"longest · {d['longest']} "
-                          f"day{'s' if d['longest'] != 1 else ''}", big=True)
+        streak = InfoCard(f"{d['streak']} day streak", f"longest · {d['longest']} · "
+                          f"active days · {d['active_days']}", big=True)
         streak.body.addWidget(StreakGrid(data.calendar(d["days"])), 0, Qt.AlignmentFlag.AlignLeft)
         streak.body.addWidget(legend())
         mid.addWidget(streak, 1)
@@ -614,17 +608,83 @@ class InsightsPage(Page):
         low.addWidget(self._agents_card(d["agents"]), 1)
         self.body.add_layout(low)
 
+    def _time_tile(self, t: dict) -> QWidget:
+        """Time Tora worked for you: measured - the time she guided your
+        walkthroughs and the time your agent jobs ran. Never "saved"."""
+        from ui import insights_data as data
+        from ui.app_parts import DayBars, stat_tile
+        change = t["change"]
+        week = f"{'+' if change > 0 else ''}{change}%" if change is not None else "–"
+        return stat_tile(data.minutes(t["total_min"]), "time Tora worked for you",
+                         [("This week", data.minutes(t["this_week_min"])), ("On last week", week),
+                          ("Guiding you · agents running",
+                           f"{data.minutes(t['guided_min'])} · {data.minutes(t['agents_min'])}")],
+                         chart=DayBars(t["daily"]))
+
+    def _handled_tile(self, h: dict) -> QWidget:
+        """Everything she did, by kind: Ask (answered), Show (walked you
+        through), Do (an agent finished)."""
+        from ui.app_parts import InfoCard, SplitBar, swatch
+        card = InfoCard()
+        card.body.setSpacing(4)
+        card.body.addWidget(label(str(h["total"]), "tileValue"))
+        card.body.addWidget(label("THINGS TORA HANDLED", "infoNote"))
+        card.body.addSpacing(12)
+        card.body.addWidget(SplitBar([h["ask"], h["show"], h["do"]]))
+        card.body.addSpacing(10)
+        for (words, n), shade in zip((("Ask · answered", h["ask"]), ("Show · walked you through", h["show"]),
+                                      ("Do · agent jobs finished", h["do"])), SplitBar.SHADES):
+            row = QHBoxLayout()
+            row.setSpacing(8)
+            row.addWidget(swatch(shade), 0, Qt.AlignmentFlag.AlignVCenter)
+            row.addWidget(label(words, "tileLine"))
+            row.addStretch(1)
+            row.addWidget(label(str(n), "tileLineValue"))
+            card.body.addLayout(row)
+        return card
+
+    def _knows_tile(self, k: dict) -> QWidget:
+        """What Tora knows about you: the facts her remember tool kept (and
+        attached documents), with the two she learned most recently."""
+        from ui.app_parts import InfoCard
+        card = InfoCard()
+        card.body.setSpacing(4)
+        card.body.addWidget(label(str(k["facts"]), "tileValue"))
+        card.body.addWidget(label("THINGS TORA KNOWS ABOUT YOU", "infoNote"))
+        card.body.addSpacing(12)
+        if k["recent"]:
+            card.body.addWidget(label("LEARNED RECENTLY", "infoNote"))
+            for text, when in k["recent"]:
+                card.body.addWidget(label(f"“{_clip(text, 90)}” · {_ago(when)}", "tileLine", wrap=True))
+        else:
+            card.body.addWidget(label("Tell her something to keep - “remember I use metric” - "
+                                      "and it shows here.", "infoFaint", wrap=True))
+        if k["documents"]:
+            card.body.addSpacing(4)
+            card.body.addWidget(label(f"{k['documents']} document{'s' if k['documents'] != 1 else ''} "
+                                      "attached", "infoFaint"))
+        return card
+
     def _plan_card(self, d: dict) -> QWidget:
         from ui.app_parts import GrowMeter, InfoCard
         summary = d.get("plan_summary")
         if not d["plan"]:
-            card = InfoCard("This month")
+            card = InfoCard("Monthly usage")
             card.body.addWidget(label("Your plan's use shows here when you are signed in to "
                                       "a HeyTora plan.", "infoFaint", wrap=True))
             return card
         from account.service import resets_on
         name = summary.get("plan_name") or (summary.get("plan") or "").capitalize() or "HeyTora"
-        card = InfoCard("This month", f"{name} plan · resets {resets_on(summary)}")
+        card = InfoCard("Monthly usage", f"{name} plan · resets {resets_on(summary)}")
+        fair = summary.get("fair_use")
+        if isinstance(fair, (int, float)):
+            row = QHBoxLayout()
+            row.addWidget(label("Overall", "tileValueSmall"))
+            row.addStretch(1)
+            row.addWidget(label(f"{round(fair * 100)}% used", "tileLineValue"))
+            card.body.addLayout(row)
+            card.body.addWidget(GrowMeter(min(1.0, float(fair)), T.WARN if fair >= 0.8 else T.ACCENT, 10))
+            card.body.addSpacing(8)
         for words, used, limit in d["plan"]:
             row = QHBoxLayout()
             row.addWidget(label(words, "tileLine"))
@@ -651,6 +711,9 @@ class InsightsPage(Page):
             nums.addLayout(col)
         nums.addStretch(1)
         card.body.addLayout(nums)
+        if a.get("ran_min"):
+            from ui import insights_data as data
+            card.body.addWidget(label(f"Ran for {data.minutes(a['ran_min'])} this month", "tileLine"))
         if a["recent"]:
             card.body.addSpacing(6)
             for t in a["recent"]:

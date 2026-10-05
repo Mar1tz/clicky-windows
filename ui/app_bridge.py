@@ -607,7 +607,17 @@ class AppBridge(QObject):
             except Exception:  # noqa: BLE001
                 _log.debug("could not read the journal for insights", exc_info=True)
         out = data.summarise(rows, seconds, tag)
-        out["agents"] = data.agents_month(self.tasks(500))
+        tasks = self.tasks(500)
+        out["agents"] = data.agents_month(tasks)
+        walks = []
+        if journal is not None:
+            try:
+                walks = journal.walkthrough_times()
+            except Exception:  # noqa: BLE001
+                walks = []
+        out["time"] = data.time_worked(walks, tasks)
+        out["handled"] = data.handled(out, tasks)
+        out["knows"] = self._knows()
         try:
             st = self.account_state()
             summary = st.get("summary") if st.get("signed_in") and st.get("mode") == "account" else None
@@ -617,6 +627,20 @@ class AppBridge(QObject):
         out["plan_summary"] = summary
         out["due"] = self.due_count()
         return out
+
+    def _knows(self) -> dict:
+        """What Tora remembers about the user (ai/gemini_memory.py): the
+        facts the remember tool kept, the two newest, and attached documents."""
+        if self.manager is None:
+            return {"facts": 0, "documents": 0, "recent": []}
+        try:
+            from ai import gemini_memory
+            st = gemini_memory.stats()
+            return {"facts": st["facts"], "documents": st["documents"],
+                    "recent": gemini_memory.recent_facts(2)}
+        except Exception:  # noqa: BLE001
+            _log.debug("could not read Tora's memory", exc_info=True)
+            return {"facts": 0, "documents": 0, "recent": []}
 
     def search(self, text: str, limit: int = 100) -> list[dict]:
         """Everything asked that mentions `text`, newest first."""
@@ -718,6 +742,7 @@ class AppBridge(QObject):
                 "status": str(getattr(t.status, "value", t.status)),
                 "error": (t.error or "").strip().split("\n")[0][:160],
                 "when": float(t.updated_at or t.created_at or 0.0),
+                "created": float(t.created_at or 0.0),
             })
             if len(out) >= limit:
                 break

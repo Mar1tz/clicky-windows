@@ -574,6 +574,9 @@ class DayBars(Grows):
         n = max(1, len(self._v))
         gap = 4.0
         bw = max(3.0, (self.width() - gap * (n - 1)) / n)
+        if bw > 26:                       # a week of bars stays slim, spread across the width
+            bw = 26.0
+            gap = (self.width() - bw * n) / max(1, n - 1)
         top = max(self._v) if self._v and max(self._v) > 0 else 1
         h = float(self.height())
         p.setPen(Qt.PenStyle.NoPen)
@@ -652,3 +655,59 @@ class GrowMeter(Grows):
             p.setBrush(QColor(self._colour))
             p.drawRoundedRect(QRectF(0, 0, max(h, self.width() * f), h), h / 2, h / 2)
         p.end()
+
+
+class SplitBar(Grows):
+    """One bar in parts - Ask / Show / Do - each a strength of the accent
+    (no new colours), growing in left to right. `SHADES` is shared with the
+    key under it so a part and its name match."""
+
+    SHADES = (1.0, 0.6, 0.3)
+    H = 12
+
+    def __init__(self, parts: list[int]):
+        super().__init__()
+        self._parts = [max(0, int(n)) for n in parts]
+        self.setFixedHeight(self.H)
+        self.setMinimumWidth(120)
+
+    def paintEvent(self, _e) -> None:
+        from PyQt6.QtCore import QRectF
+        from PyQt6.QtGui import QPainterPath
+        from ui import kit, tokens
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        w, h = float(self.width()), float(self.H)
+        clip = QPainterPath()
+        clip.addRoundedRect(QRectF(0, 0, w, h), h / 2, h / 2)
+        p.setClipPath(clip)
+        p.fillRect(QRectF(0, 0, w, h), QColor(T.SURFACE_HOVER))
+        total = sum(self._parts)
+        if total:
+            x, reach = 0.0, w * self.t
+            for n, shade in zip(self._parts, self.SHADES):
+                seg = w * n / total
+                if n and x < reach:
+                    p.fillRect(QRectF(x, 0, min(seg, reach - x) - (2 if x + seg < w else 0), h),
+                               kit.with_alpha(tokens.BLUE, shade))
+                x += seg
+        p.end()
+
+
+def swatch(shade: float) -> QWidget:
+    """A small square of the accent at `shade` - a SplitBar's key."""
+    from ui import kit, tokens
+
+    class _Swatch(QWidget):
+        def __init__(self):
+            super().__init__()
+            self.setFixedSize(10, 10)
+
+        def paintEvent(self, _e):
+            p = QPainter(self)
+            p.setRenderHint(QPainter.RenderHint.Antialiasing)
+            p.setPen(Qt.PenStyle.NoPen)
+            p.setBrush(kit.with_alpha(tokens.BLUE, shade))
+            p.drawRoundedRect(self.rect(), 3, 3)
+            p.end()
+    return _Swatch()

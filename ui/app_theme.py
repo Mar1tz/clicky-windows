@@ -242,6 +242,7 @@ def qss() -> str:
     QLabel#infoFaint {{ color: {TEXT_FAINT}; font-size: 12px; }}
     QLabel#tileValue {{ font-size: 30px; font-weight: 700; letter-spacing: -0.6px; }}
     QLabel#tileLine  {{ font-size: 13px; }}
+    QLabel#tileValueSmall {{ font-size: 15px; font-weight: 700; }}
     QLabel#tileLineValue {{ color: {TEXT_DIM}; font-size: 13px; }}
     QFrame#upNext {{ background: {SURFACE}; border: none; border-radius: {tokens.RADIUS_XL}px; }}
     QLabel#upTitle  {{ font-size: 22px; font-weight: 700; letter-spacing: -0.4px; }}

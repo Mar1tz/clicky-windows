@@ -63,6 +63,7 @@ def summarise(rows: Iterable[tuple], walkthrough_seconds: float = 0.0,
         "days": per_day,                           # date -> questions
         "streak": current,
         "longest": longest,
+        "active_days": sum(1 for n in per_day.values() if n),
     }
 
 
@@ -110,6 +111,65 @@ def daily(per_day: Counter, days: int = 21, today: Optional[date] = None) -> lis
     return [per_day.get(today - timedelta(days=days - 1 - i), 0) for i in range(days)]
 
 
+def _ran_seconds(t: dict) -> float:
+    """How long an agent job ran: from when it was made to when it last
+    moved (its finish, for a finished one). Recorded, not estimated - it
+    includes any time it waited on you."""
+    start, end = float(t.get("created") or 0), float(t.get("when") or 0)
+    return max(0.0, end - start) if start and end else 0.0
+
+
+def time_worked(walks: Iterable[tuple], tasks: Iterable[dict], today: Optional[date] = None,
+                now: Optional[float] = None, days: int = 7) -> dict:
+    """Time Tora worked for you - measured, never estimated: the seconds she
+    guided each walkthrough (journal) plus the time each finished agent job
+    ran (its own timestamps). By day for the last week, this week against
+    last week, and the two parts."""
+    today = today or date.today()
+    now = now if now is not None else time.time()
+    per_day: Counter = Counter()
+    guided = agents = 0.0
+    week = now - 7 * 86400
+    this_week = last_week = 0.0
+    events = [(float(ts), float(sec), "guide") for ts, sec in walks if sec]
+    events += [(float(t.get("when") or 0), _ran_seconds(t), "agent") for t in tasks
+                if t.get("status") in ("completed", "failed", "cancelled")]
+    for ts, sec, kind in events:
+        if not sec or not ts:
+            continue
+        if kind == "guide":
+            guided += sec
+        else:
+            agents += sec
+        per_day[date.fromtimestamp(ts)] += sec
+        if ts >= week:
+            this_week += sec
+        elif ts >= week - 7 * 86400:
+            last_week += sec
+    daily = [round(per_day.get(today - timedelta(days=days - 1 - i), 0.0) / 60) for i in range(days)]
+    change = round((this_week - last_week) / last_week * 100) if last_week else None
+    return {"total_min": round((guided + agents) / 60), "guided_min": round(guided / 60),
+            "agents_min": round(agents / 60), "this_week_min": round(this_week / 60),
+            "last_week_min": round(last_week / 60), "change": change, "daily": daily}
+
+
+def handled(summary: dict, tasks: Iterable[dict]) -> dict:
+    """Things Tora handled, by the three things she does: Ask (questions
+    answered), Show (walkthroughs guided), Do (agent jobs finished)."""
+    do = sum(1 for t in tasks if t.get("status") == "completed")
+    ask, show = int(summary.get("questions", 0)), int(summary.get("walkthroughs", 0))
+    return {"ask": ask, "show": show, "do": do, "total": ask + show + do}
+
+
+def minutes(m: int) -> str:
+    """"45 min", "1h 12m", "3h"."""
+    m = int(m)
+    if m < 60:
+        return f"{m} min"
+    h, r = divmod(m, 60)
+    return f"{h}h {r}m" if r else f"{h}h"
+
+
 def plan(summary: Optional[dict]) -> list[tuple[str, int, Optional[int]]]:
     """This month on the plan: (what, used, limit or None for unlimited)."""
     if not summary:
@@ -141,4 +201,6 @@ def agents_month(tasks: Iterable[dict], today: Optional[date] = None) -> dict:
         else:
             running += 1
         recent.append(t)
-    return {"done": done, "failed": failed, "running": running, "recent": recent[:3]}
+    ran = sum(_ran_seconds(t) for t in recent if t.get("status") in ("completed", "failed", "cancelled"))
+    return {"done": done, "failed": failed, "running": running, "recent": recent[:3],
+            "ran_min": round(ran / 60)}

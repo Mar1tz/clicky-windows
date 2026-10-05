@@ -127,7 +127,7 @@ to Home, review and saved walkthroughs to **Learn**.
 | Page | Wispr | Top card | Under it |
 |---|---|---|---|
 | Home | Dictation | Up next (running · review · try asking) | side card (questions, walkthroughs, day streak; plan or review); everything asked, by day |
-| Insights | Insights | (none - the tiles are the top) | three tiles (questions + week on week; walkthroughs + minutes guided; remembered of all taught + due); where you ask (top apps, Tora's own window left out); streak calendar (20 weeks, current + longest); this month on the plan; agents this month. Only measured numbers: no words per minute, no percentiles, no time saved |
+| Insights | Insights | (none - the tiles are the top) | **Time Tora worked for you** (lead tile: walkthrough guiding time + finished agent jobs' run time, both recorded; a week of bars, this week on last) · **Things Tora handled** (Ask answered / Show walked through / Do agent jobs finished, one split bar) · **What Tora knows** (facts her remember tool kept, the two newest, documents attached) · where you use Tora · streak (current, longest, active days) · monthly usage (one overall bar, then each allowance) · agents (finished, didn't finish, running, how long they ran). Only what HeyTora records: no time saved, no words per minute, no percentiles; an estimate would have to say it is one |
 | Agents | Notetaker | "Tora works while you don't." | "give her a first job" card, running, approvals, past tasks |
 | Learn | Dictionary / Snippets | "Keep what she taught you." | review, saved walkthroughs, recorded lessons, captured workflows |
 | Packs | Transforms | "Tora, for your work." | a grid of pack cards; "more packs coming" |

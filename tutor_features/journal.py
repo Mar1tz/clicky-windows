@@ -248,6 +248,15 @@ def insight_rows() -> list[tuple]:
             "COALESCE(streak, 0) FROM entries").fetchall()
 
 
+def walkthrough_times() -> list[tuple[float, float]]:
+    """(when, seconds) for every timed walkthrough - when it was kept and
+    how long Tora guided for (Insights' time, by day)."""
+    with _connect() as conn:
+        return conn.execute(
+            "SELECT e.created_at, w.seconds FROM walkthroughs w JOIN entries e ON e.id = w.entry_id "
+            "WHERE w.seconds > 0").fetchall()
+
+
 def walkthrough_seconds() -> float:
     """How long all the walkthroughs took, together."""
     with _connect() as conn:

@@ -290,6 +290,18 @@ def format_for_prompt(hits: list[Hit]) -> str:
     return "".join(out)
 
 
+def recent_facts(limit: int = 2) -> list[tuple[str, float]]:
+    """The facts most recently learned about the user, newest first, as
+    (text, created_at) - Insights' "What Tora knows"."""
+    conn = _connect()
+    try:
+        return conn.execute(
+            "SELECT text, created_at FROM passages WHERE kind='fact' "
+            "ORDER BY created_at DESC LIMIT ?", (limit,)).fetchall()
+    finally:
+        conn.close()
+
+
 def stats() -> dict:
     conn = _connect()
     try:
