@@ -221,6 +221,18 @@ def main():
     app.setQuitOnLastWindowClosed(False)
     app.setApplicationName("HeyTora")
     app.setApplicationDisplayName("HeyTora - AI Companion")
+
+    # ── One HeyTora at a time (ui/single_instance.py) ─────────────────────────
+    # Started again while it runs (the Start menu, the desktop icon): the
+    # running HeyTora opens its window, and this copy goes.
+    from ui.single_instance import SingleInstance, bring_forward
+    single = SingleInstance()
+    if not single.claim():
+        return
+    # Until the app is up, a second start brings the sign-in window forward;
+    # once it is, it opens the app window (set below, with _open_app).
+    _activate = [lambda: bring_forward(QApplication.topLevelWidgets)]
+    single.activated.connect(lambda: _activate[0]())
     # The site's typeface and palette (ui/tokens.py), before the first
     # window - the sign-in gate below is already in the new look.
     from ui import app_theme, tokens
@@ -398,6 +410,7 @@ def main():
             return
         import logging as _lg
         _lg.getLogger("tora").info("signed out - restarting at the sign-in window")
+        single.release()                      # so the new copy becomes the one
         sign_in_gate.restart()
         _shutdown()                           # not _quit: no update installs under the new copy
     sign_in_gate.relay().lost.connect(_sign_in_lost)
@@ -437,6 +450,7 @@ def main():
             tray.show_notification("HeyTora", f"Couldn't open the app: {exc}")
 
     tray.on_open_app.connect(lambda: _open_app())
+    _activate[0] = lambda: _open_app()        # HeyTora started again: its window
     tray.on_open_app_page.connect(_open_app)
     tray.panel_visible = panel.isVisible
 
