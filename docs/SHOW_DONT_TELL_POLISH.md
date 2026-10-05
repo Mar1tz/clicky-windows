@@ -359,7 +359,17 @@ change touches, not only the total. The baseline is now this run.
 *Prove:* the chosen setting keeps accuracy and lowers tokens and time.
 *Cost:* about $0.10 (three resolutions × 23 screens, fast).
 
-### SP-07 · Typed questions follow the same rule — S — free
+### SP-07 · Typed questions follow the same rule — S — free — **done (6 Oct)**
+
+**Done:**
+* `GeminiProvider.pick_model` goes deep only for `needs_reading` or
+  `needs_judgement`, the same rule as a spoken look.
+* `wants_deep` and its word lists are gone.
+* **Tested:** 20 typed everyday questions go fast, among them "which one
+  should I pick?", "why is this cell red" and "explain this chart". A game
+  move and dense reading go deep, and the tray's chosen model still wins.
+* **Not added:** the "think harder" retry. Nothing measures typed answers
+  yet, so it waits until one is missed.
 
 **Why:** `ai/gemini_provider.py` (the typed path, and the fallback when
 the live session is down) still picks the deep model with `wants_deep()`.
@@ -606,7 +616,7 @@ answered the mate-in-one correctly.
 | SP-04 | Thinking under control — done | B | S | ~$0.08 | SP-01 |
 | SP-05 | Fewer words back — done | B | S | ~$0.05 | SP-01 |
 | SP-06 | Right image size — done | B | S | ~$0.13 | SP-01 |
-| SP-07 | Typed path, same rule | B | S | free | – |
+| SP-07 | Typed path, same rule — done | B | S | free | – |
 | SP-08 | Sharper routing words | B | S | free | SP-01 screen |
 | SP-16 | A lighter live prompt | B | S | ~$0.25 | SP-02 |
 | SP-17 | "Let me look" or not | B | S | ~$0.25 | SP-02 |

@@ -284,3 +284,24 @@ def test_a_resolution_goes_in_the_generation_config(monkeypatch):
     asyncio.run(gemini.generate("gemini-3.8-flash", []))
     assert bodies[0]["generationConfig"]["mediaResolution"] == "MEDIA_RESOLUTION_MEDIUM"
     assert "mediaResolution" not in bodies[1]["generationConfig"], "unsaid: the model's default"
+
+
+# -- SP-07: typed questions follow the same rule --------------------------------------------------------------
+
+@pytest.mark.parametrize("q", [
+    "which one should I pick?", "what should I click next", "why is this cell red", "explain this chart",
+    "what does this error mean", "check my email draft", "what does this graph show", "how do I export this video",
+    "what's wrong with this form", "which plan is better", "where is the save button", "what does this icon do",
+    "how to change my password", "review this slide", "is this the right file", "what's the cheapest one",
+    "recommend a font for this", "what is this table about", "fix the layout of this page", "summarise this page"])
+def test_a_typed_everyday_question_goes_to_the_fast_model(q):
+    from ai.gemini_provider import GeminiProvider
+    assert GeminiProvider.pick_model(q, True, None) == Models.VISION_FAST
+
+
+@pytest.mark.parametrize("q", ["what's my best move?", "where should I play to win this game?",
+                               "what's wrong with this code?", "read the small print in this contract"])
+def test_a_typed_game_move_or_dense_reading_goes_deep(q):
+    from ai.gemini_provider import GeminiProvider
+    assert GeminiProvider.pick_model(q, True, None) == Models.VISION_DEEP
+    assert GeminiProvider.pick_model(q, True, "my-model") == "my-model", "the tray's choice always wins"

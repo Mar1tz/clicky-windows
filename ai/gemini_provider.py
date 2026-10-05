@@ -13,9 +13,13 @@ Model choice is per question rather than fixed:
                           reasoning pass, and skipping it takes roughly half
                           a second off every reply.
 
-  gemini-3.1-pro-preview  when the question asks for judgement or the screen
-                          needs real reading — best move, what's wrong with
-                          this, read this chart. Slower on purpose.
+  gemini-3.1-pro-preview  for a move in a game, or dense reading - code, a
+                          contract, small print. The same rule as a spoken
+                          look (gemini_vision.needs_judgement/needs_reading);
+                          the old word list sent 11 of 20 everyday questions
+                          here (SP-07). A typed answer streams, so it cannot
+                          escalate when the fast model is unsure the way a
+                          look does. Slower on purpose.
 
 An explicitly chosen model from the tray always wins over both.
 """
@@ -27,7 +31,7 @@ from typing import AsyncIterator, List, Optional
 from ai import gemini
 from ai.base_provider import BaseLLMProvider, Message
 from ai.gemini import Models
-from ai.gemini_vision import wants_deep
+from ai.gemini_vision import needs_judgement, needs_reading
 
 DEFAULT_MODEL = Models.VISION_FAST
 
@@ -45,7 +49,8 @@ class GeminiProvider(BaseLLMProvider):
     def pick_model(user_text: str, has_screens: bool, override: Optional[str]) -> str:
         if override:
             return override
-        return Models.VISION_DEEP if wants_deep(user_text) else Models.VISION_FAST
+        deep = needs_reading(user_text) or needs_judgement(user_text)
+        return Models.VISION_DEEP if deep else Models.VISION_FAST
 
     async def stream_response(
         self,

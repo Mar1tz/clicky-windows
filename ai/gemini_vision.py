@@ -34,26 +34,6 @@ from ai.gemini import Models
 
 _log = logging.getLogger("tora.vision")
 
-# Questions where a quick answer is the wrong answer. These ask for judgement
-# — the best option, the right move, what to do next — and the flash pass
-# reliably produces something plausible and shallow. Straight to the deep
-# model.
-_ADVICE_RE = re.compile(
-    r"\b(best|better|optimal|strongest|should\s+i|which\s+(one|should|is)|"
-    r"recommend|what'?s?\s+wrong|why\s+(is|does|did|isn'?t|doesn'?t)|"
-    r"how\s+do\s+i|how\s+to|explain|analyse|analyze|review|check\s+my|"
-    r"next\s+move|winning|solve|fix)\b",
-    re.IGNORECASE,
-)
-
-# Things that need reading rather than glancing at.
-_DENSE_RE = re.compile(
-    r"\b(chess|board|graph|chart|plot|diagram|equation|formula|table|"
-    r"spreadsheet|code|stack\s*trace|error|log|handwrit|proof|circuit|"
-    r"schematic|score|sheet\s*music|contract|clause)\b",
-    re.IGNORECASE,
-)
-
 # "What should I do?" - the best move, the next step, which one to pick. The
 # answer to these is an action, drawn: one arrow, one line. On 5 Oct a user
 # asked for their best chess move and got the board read back to them.
@@ -334,12 +314,6 @@ async def judge_step(instruction: str, before_b64: str, after_b64: str,
     except Exception as e:
         _log.warning("judge_step failed: %s", e)
         return None
-
-
-def wants_deep(question: str) -> bool:
-    """True when the glance should be skipped and the pro model asked directly."""
-    q = question or ""
-    return bool(_ADVICE_RE.search(q) or _DENSE_RE.search(q))
 
 
 # Dense reading: here the fast model misreads, so the deep one goes first.
