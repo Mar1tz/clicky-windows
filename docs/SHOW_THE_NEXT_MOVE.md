@@ -1,361 +1,252 @@
-# Show the next move: Tora answers "what should I do?" by drawing it
+# Show, don't tell: understand what they want, and draw it - fast, and no dearer
 
-**Written for:** whoever decides what is built first, and the session (or
-Dylan) building it. One milestone at a time; the next starts when the last is
-proven. Each lands as one commit.
+**Written for:** whoever decides what is built first, and whoever builds it
+(Claude or Dylan). One milestone at a time; each lands as one commit.
 
-**The complaint:** a user playing on chess.com asked "what's my best next
-move?". Tora described the board instead of showing the move.
+## Where this started, and what it is about
 
-**Evidence:**
+A user on chess.com asked "what's my best next move?".
 
-* **Two photos of that user's screen.**
-  * The card read: "…identified a piece. Let me recount. • Black has 7
-    pawns (a5, c6, d7, e7, f7, g7, h7). Lost…".
-  * The board had two labelled circles, "Knight on b1" and "c3 square". There
-    was no arrow.
-  * A second card began "A solid next move is … which develops another … e4
-    pawn". The move was never stated, and the card ran past the edge of the
-    screen.
-* **The code.** Every stage between the question and the drawing was read:
-  * `ai/gemini_realtime.py`, `config.py` (`_REALTIME_RULES`);
-  * `companion_manager.py` (`_tool_look_at_screen`);
-  * `ai/gemini_vision.py`;
-  * `ui/overlay.py`, `ui/flow_bar.py`.
-* **No log from that PC.** The owner's `tora.log` has no chess session. So
-  the "today" numbers below come from the code, and SN-01 measures them.
+* **What Tora said.** It read the board back: "…identified a piece. Let me
+  recount. Black has 7 pawns (a5, c6, d7, e7, f7, g7, h7)".
+* **What it drew.** Two labelled circles, "Knight on b1" and "c3 square",
+  and no arrow.
+* **The card.** Long, and it ran off the screen.
+
+The owner's direction after wave 1 (5 Oct): this is **not** about Tora
+playing chess well. It is about:
+
+* **understanding** what the user wants;
+* **knowing where to draw;**
+* doing both **fast**;
+* **without raising the API cost** of a message.
+
+Chess was only where it showed.
 
 ---
 
-## What "done" means
+## Done: wave 1 (`e30465f`)
 
-| moment | today (from the code) | done |
-|---|---|---|
-| question ends → the move is on the board | 10–25 s: the deep vision model, up to 1,536 thinking tokens, 35 s timeout | **≤ 2 s** when the site's move list can be read; **≤ 5 s** when the board has to be read from pixels |
-| what is drawn | up to 4 labelled circles; a move cannot be an arrow at all | **one arrow**, piece → square, nothing else on the board |
-| what is said | the look's answer plus its piece-by-piece readings, sometimes recounted aloud | **one line**: "Knight to c3: it develops and guards e4" |
-| where the move comes from | a vision model's opinion of a whole-screen screenshot | a **chess engine on the PC**, from an **exact** position, always legal |
-| a follow-up ("and then?") | the whole board read again | **no new look**: the position is kept |
-| board it cannot read | guesses, recounts aloud | **one line**: "I can't read this board clearly - can you show the move list?" |
-| cost per "best move" | one deep vision call (~1.3k image tokens in, up to ~1.8k out: roughly $0.02–0.03 at Pro list prices), plus the live model reading ~300 tokens of readings | **$0 of vision** when the move list can be read; otherwise **one fast call on the board alone**, thinking off. **Never more than today.** |
+* **SN-01 · Every screen answer is timed.**
+  * `tora.log` gets an answer timeline: look called, look back (model and
+    tokens), first drawing, first word.
+  * A running *answer scorecard* sums them up.
+* **SN-02 · One line, never thinking out loud.**
+  * The look gives the voice a `say` line and what it drew. Its readings go
+    to `tora.log`, not to the voice.
+  * The rules say "say it and stop". The card shows no bullets.
+  * This is fewer tokens into every live turn.
+* **SN-03 · What to do is drawn as one thing.**
+  * A move is an arrow: the look's schema has `move` with a `to_box`.
+  * A what-to-do question (best move, what next, which one, where to
+    click) gets exactly one thing drawn.
+  * It was shown live: one arrow b1→c3, and the line in the card.
 
----
-
-## Why it fails today
-
-### 1. A move cannot be an arrow
-
-`ai/gemini_vision.py` is the only pipe from "the model saw it" to "the user
-sees it", and it carries one box per item:
-
-* `Action` holds one box.
-* `Action.as_tag()` turns every kind except `rect` and `underline` into a
-  labelled `CIRCLE`.
-* The schema has no "from → to".
-
-So "knight from b1 to c3" can only ever reach the screen as two labelled
-circles. That is exactly the photo. The voice model could draw an arrow
-between the two highlights itself, but nothing asks it to.
-
-### 2. Tora's working is handed to the voice to read out
-
-`_tool_look_at_screen` returns four things to the voice model:
-
-* `answer`;
-* **`observations[:8]`**, the readings the vision model is told to make
-  concrete ("piece positions");
-* the highlight labels;
-* their tags.
-
-Then:
-
-* The realtime rules say "say where the highlight is", and nothing says
-  "don't read the readings out".
-* So the voice narrates the board. When the readings disagree with each
-  other, it recounts aloud: "Let me recount. Black has 7 pawns…".
-* The card shows the voice's transcript, list markers included.
-
-### 3. A general vision model both reads the board and picks the move
-
-"Best move" matches both `_ADVICE_RE` and `_DENSE_RE`. That sends it to
-`gemini-3.1-pro-preview` with:
-
-* a 1,280-px shot of the **whole screen**: a board of about 500 px, so each
-  square is about 60 px;
-* a request for the best move, in prose.
-
-The model has to identify 32 pieces on 64 squares. The recount is the
-tell: it is not sure. A language model's opinion is also not a chess
-engine's, and nothing checks that the move is legal.
-
-### 4. Slow by construction
-
-The total is 10–25 s before anything useful is drawn. It adds up from:
-
-* the deep model with a 1,536-token thinking budget and a 35 s timeout;
-* "say 'let me look' first" in the realtime rules;
-* a full-screen capture on every question;
-* no reuse between questions in the same game: every "and now?" reads the
-  whole board again.
-
-### 5. Nothing measures a question's answer
-
-`tora.log` records `tool look_at_screen -> ok`, with:
-
-* no timings;
-* no model;
-* no tokens;
-* nothing about what was drawn.
-
-The "guide scorecard" (LG-09) covers walkthroughs only. So a complaint like
-this one arrives with no numbers.
-
-### 6. (To check) The card left the screen
-
-`FlowBar._place_card` clamps the card to the pill's screen, yet the second
-photo shows it cut off at the right edge. A multi-monitor or mixed-scaling
-mismatch between the saved dock's screen and the real one is the suspect.
-It needs a repro before it is called a cause.
+**Built, then parked (`f48da3d`):** a chess engine on the PC, SN-06. It is
+free, legal, and answers in about 0.8 s. But it needs an exact position,
+and getting one is chess-only work. See *Parked* below.
 
 ---
 
-## The shape of the fix
+## The review: how a screen question becomes a drawing today
 
-This is the general path, with chess as the first specialist:
-
-1. **Understand the ask.** "What should I do / best move / which one / where
-   do I click" is a *next-action* question. The answer is something drawn,
-   not a description. The voice model's choice of `look_at_screen` plus a
-   local pattern decides it, with no extra model call.
-2. **Read exactly.** Use structured data before pixels. On chess.com and
-   lichess, read the move list from the page and replay it into the exact
-   position. Look at pixels only when that is impossible, and only at the
-   board.
-3. **Decide on the PC.** A chess engine picks the move: free, instant,
-   legal.
-4. **Draw one thing.** One arrow from the piece's square to the target
-   square. The squares come from where the board is on screen, not from a
-   guessed box per move.
-5. **Say one line.** The tool hands the voice a `say` line, and the voice
-   says that and stops.
-
-The new parts live inside `look_at_screen`, so no new tool is declared.
-Every live turn already pays for the declarations, and this adds none.
-
----
-
-## Milestones
-
-### SN-01 · Measure every answer, and save a chess test set — S — **timeline and scorecard done; the test set moves to SN-04, the baseline waits for a yes**
-
-The timeline and scorecard are done (wave 1). The screenshot test set is
-built with SN-04, which renders the boards. The baseline waits for a yes.
-
-**Done:**
-
-* **A timeline line per look-type answer:**
-  * question end;
-  * tool called;
-  * look done: path (specialist or vision), model, tokens in and out;
-  * first drawing;
-  * first audio.
-* **An answer scorecard line,** like the guide scorecard.
-* **A test set.** About 20 saved screenshots of chess.com and lichess
-  games:
-  * white at the bottom and black at the bottom;
-  * light and dark board themes;
-  * opening, middlegame and endgame;
-  * the move list shown and hidden.
-
-  Each comes with its true position (FEN) and its move list. Every
-  milestone below tests against these, offline.
-
-*Cost:* the baseline needs today's path replayed on 5 of the screenshots,
-5 deep calls ≈ **$0.15**. It waits for a yes.
-*Proof:* a scripted look writes the timeline line; the test set loads; the
-baseline numbers replace "from the code" in the table above.
-
-### SN-02 · One line, never thinking out loud — S — cost goes *down* — **done**
-
-**Done:**
-
-* **`look_at_screen` hands the voice two things:**
-  * `say`, one sentence;
-  * `drawn`, what is on screen now.
-
-  The readings stay in `tora.log` for diagnosis and never reach the voice.
-  That means fewer tokens into the live turn.
-* **The vision prompt.** `answer` is one sentence that states the action:
-  no hedging, no counts unless the user asked for counts.
-* **The realtime rules:** "When `look_at_screen` returns `say`, say it and
-  stop. Never read out what it saw, and never recount. If it could not
-  read the screen, say that in one line."
-* **The card** strips list markers.
-
-*Proof:* the photo's situation is replayed with a recorded tool result. What
-is spoken is one line, and "pawns" is not in it.
-
-### SN-03 · A move is an arrow — S — **done; the model's side is confirmed in the SN-01 baseline**
-
-The code is done. Whether the vision model actually returns `move` with a
-`to_box` is checked in the SN-01 baseline. A recorded reply was shown live
-(5 Oct): one arrow b1→c3 and the line in the card, with no circles.
-
-**Done:**
-
-* **The vision schema** gets a `move` action, with `from` and `to` boxes.
-  It is drawn as one `ARROW` from centre to centre, with no labels on the
-  board.
-* **For a next-action question:**
-  * the old drawings are cleared first;
-  * at most one action is drawn;
-  * the voice model is told never to add circles on top of a move arrow.
-* **It is general:** "drag this there", "move X into Y" use the same
-  action.
-
-*Proof:* a recorded vision reply b1→c3 draws exactly one arrow, from b1's
-centre to c3's centre, and nothing else.
-
-### SN-04 · Find the board once: where it is and which way up — M
-
-**Done:**
-
-* **From the page first.**
-  * **Spike:** does UI Automation give the board element's rectangle on
-    chess.com and lichess, in Chrome and in Edge?
-  * Otherwise, **one fast vision call**, thinking off, on the normal
-    1,024-px shot, for the board's box and whether white is at the
-    bottom.
-* **Kept per window** until it moves, resizes or scrolls.
-* **Square centres are worked out** from the board's rectangle and which
-  way up it is. Arrows land exactly, with no box guessed per move.
-
-*Cost:* at most one fast call per board, then nothing.
-*Proof:* on the test set, every square centre is within 15% of a square's
-width of the truth, both ways up.
-
-### SN-05 · The exact position, from the moves — M — free
-
-**Done:**
-
-* **Read the move list.**
-  * **Spike first:** is the move list in the UI Automation tree on
-    chess.com and lichess, in Chrome and in Edge?
-  * Where it is not, read the move-list panel with the local OCR
-    (`hybrid_pointer`'s), on that panel only.
-* **Replay the moves** into the position. This needs the move generator
-  from SN-06.
-* **Whose turn it is** comes from the move list.
-
-*Proof:* the test set's screenshots with a visible move list, 100% of
-them, give the exact FEN, with no network.
-
-### SN-06 · The move is chosen on the PC — M — free — **needs your decision**
-
-**Done:**
-
-* **An engine chooses the move.** It is always legal. Mate in one and free
-  material are never missed.
-* **The "why" is made from the move itself,** with no model:
-  * captures, checks, threats;
-  * development, castling;
-  * "stops their threat on f7".
-* **One move, under a second.**
-
-**Choose one:**
-
-| | engine | strength | size and licence |
+| stage | what happens | time | cost |
 |---|---|---|---|
-| **(a)** recommended | A small engine written here (move generator plus search), pure Python | Good club level at depth 3–4 in about 1 s. Right for "a solid move". | No new dependency, no licence question |
-| (b) | Stockfish, run as a separate program | Far stronger than anyone using this | GPL-3, shipped as its own `.exe` with its licence; adds tens of MB to the installer |
-| (c) not recommended | the `python-chess` library | (move generation only) | GPL-3 and imported into our code, which raises a licence question for the whole app |
+| **1. Hearing what they want** | The live model picks a tool from its rules. The only local safety net is for "where is…" (`is_locate` → `_ensure_pointed`). | – | – |
+| **2. Finding a named thing** | `point_at`'s chain: the last arrow, the accessibility tree, OCR, then vision. Cheapest first. **Sound.** | ~5 ms to ~1 s | free unless vision |
+| **3. Looking at pixels** | `look_at_screen`: one vision call on the **whole monitor**. | see 4 | see 4 |
+| **4. Which model** | **Deep:** Pro, up to 1,536 thinking tokens. **Fast:** Flash, no thinking. | deep 8–20 s; fast ~1.4 s | deep **≈ $0.026**; fast **≈ $0.001** (HeyTora's own price table: Pro $2.5/$15, Flash $0.5/$3 per million) |
+| **5. Where it draws** | The vision model's box, as it came. Snapping exists only for geometry figures. | – | – |
+| **6. Saying it** | Fixed in wave 1. | – | – |
+| **7. Asking again** | A look is never reused. "Show me again" on the same screen pays again. | full | full |
 
-*Proof:*
-* every test position gets a legal move;
-* a set of about 30 tactics (mate in one, hanging pieces, forks) is solved;
-* ≤ 1 s on this PC.
+### The findings, in order of what they cost the user
 
-### SN-07 · Pixels only when the moves cannot be read — M — cheaper than today
+#### 1. Most looks go to the expensive, slow model
+
+* **The question's wording sends it there.** `wants_deep()` sends anything
+  with words like *best, which, how do I, why, explain, check, fix, chart,
+  error, code* to the deep model. Measured on 20 everyday screen
+  questions, **11 of 20** went deep on their words alone.
+* **The voice sends it there too.** Its rules say "pass careful:true when
+  it needs real reading or judgement", which forces deep as well.
+* **The cost.** Most looks probably pay about **23× the fast price** and
+  wait **5–10× longer**. This is the biggest lever on both speed and cost.
+  The new timeline line ("deep"/"fast") will confirm the share.
+
+#### 2. It looks at the whole monitor and ignores the strongest hint
+
+* **The whole monitor.** The look gets the full screen at 1,024–1,280 px
+  wide. The window the user is working in may be a fraction of it, so the
+  thing asked about is small and costs as many tokens as the rest.
+* **No mouse position.** Where the mouse is never reaches the look. It is
+  the best free clue there is for "this", "here" and "which of these
+  should I pick". People hover over what they mean.
+
+#### 3. A drawing lands where the model guessed, not on the real thing
+
+* A look's ring around a button sits wherever the box came out, sometimes
+  half off.
+* Windows knows that button's exact rectangle and will say so in about
+  5 ms. That is never asked.
+
+#### 4. Nothing catches a what-to-do answer with no drawing
+
+* **"Where is X":** if the voice answers in words, the safety net still
+  points.
+* **"What should I do / which one":** if the voice answers in words, the
+  user gets words.
+
+#### 5. Asking again pays again
+
+* Pointing remembers the last arrow, so "that" works.
+* A look remembers nothing. "Show me again" and "where was it?" on an
+  unchanged screen make the same paid call twice.
+
+---
+
+## Next: the general path (UD-01 to UD-06)
+
+### UD-01 · Fast first; deep only when needed — M — **cuts the cost of most looks by ~20× and their time by ~10 s**
 
 **Done:**
 
-* **When it applies:** there is no readable move list (a puzzle, a
-  screenshot, a video, a book diagram).
-* **How it reads:** the shot is cropped to the board (SN-04), and the
-  **fast** model, thinking off, is asked for the position as FEN with a
-  strict schema.
-* **Every read is checked:**
-  * one king each;
-  * at most 8 pawns a side;
-  * no pawn on the first or last rank;
-  * whose turn it is: asked once if the screen does not say.
-* **If the check fails,** it says one line: "I can't read this board
-  clearly - can you show me the move list?". It never guesses.
+* **Every look starts on the fast model,** thinking off, with the action
+  schema.
+* **The schema adds `sure`:** "could you read what was asked and answer
+  it?".
+* **Deep runs only when:**
+  * the fast look is not sure; or
+  * a what-to-do question came back with nothing to draw; or
+  * it is dense reading: code, small print, a full sheet.
 
-*Cost:* a crop of the board, instead of the whole screen at 1,280 px, on
-the fast model without thinking. That is cheaper per question than
-today's deep look.
+  It runs **once**, never both by default.
+* **`careful` from the voice** no longer forces deep by itself.
+
 *Proof:*
-* ≥ 18 of the 20 test screenshots read to the exact position. This is
-  measured: 20 fast calls on crops, **< $0.02**. It waits for a yes.
-* Every failed read says so in one line.
+* About 20 saved screenshots of everyday questions. Fast and deep agree on
+  what to draw in ≥ 85% of cases, and the rest escalate.
+* Average cost per look ≤ ⅕ of today's.
+* p50 time to the drawing ≤ 2.5 s.
 
-### SN-08 · One path for "what should I do next?" — M
+*Cost:* the comparison is about 20 fast and 10 deep calls, **≈ $0.30**. It
+waits for a yes.
+
+### UD-02 · Look where they are looking — S — free
 
 **Done:**
 
-* **Inside `look_at_screen`.** A next-action question goes to a
-  specialist that recognises the screen:
-  * chess first, by the window title or URL (chess.com, lichess), or by
-    SN-04 finding a board;
-  * otherwise, vision with the action schema from SN-03.
-* **A specialist returns `{say, drawing}`.**
-* **Follow-ups in the same game** ("and after that?", "what if he
-  takes?") use the kept board and position. There is no new look.
-* **The same contract for other next-action questions.** "Which one
-  should I pick?" gets one ring or arrow on the choice and one line.
+* **The window in front, cropped.** The look gets that window at the same
+  pixel budget: sharper for the same tokens, or fewer tokens when the
+  window is small.
+* **The mouse position** goes in as a hint: "the user's pointer is at
+  (x, y)".
+* **Boxes map back** from the crop to the screen, on any monitor and
+  scaling.
 
-*Proof:*
-* Scripted end to end on the test set, from question to one arrow and
-  one line, in ≤ 2 s on the move-list path, with 0 vision calls.
-* A follow-up makes 0 calls.
+*Proof:* a cropped look's box lands on the right screen pixels across
+mixed-scale monitors, and the hint is in the prompt.
+
+### UD-03 · Land on the real thing — S — free
+
+**Done:**
+
+* **Snap to the real control.** A look's box over a UI control is snapped
+  to that control's exact rectangle: the accessibility tree's element at
+  the box centre, kept only when its size is close to the box.
+* **Rings and arrows then sit exactly** on the button, cell or link.
+* **Pictures and games are left alone:** there is no control there.
+
+*Proof:* a recorded look whose box is 20 px off a button rings the
+button's own rectangle.
+
+### UD-04 · No answer without its drawing — S — no dearer than a correct turn
+
+**Done:**
+
+* **When it applies:** a where-is or what-to-do turn that ended with
+  nothing drawn.
+* **How it is finished:** with the point chain first (free tiers), using
+  the answer's own words; else with **one fast look**.
+* **The cost:** that look is the one the voice should have made, so it
+  costs nothing over a correct turn.
+
+*Proof:* a scripted "what should I click next?" answered only in words
+still ends with an arrow.
+
+### UD-05 · Don't pay twice — S — saves
+
+**Done:**
+
+* **The last look is kept,** with a small fingerprint of the window it
+  saw.
+* **On an unchanged screen,** a follow-up ("show me again", "where was
+  it?", "and why?") is answered from it: the drawing is redrawn, with no
+  call.
+* **A changed screen** gets a new look.
+
+*Proof:* a second identical question on an unchanged screen makes 0 vision
+calls.
+
+### UD-06 · Cost per answer, measured — S
+
+**Done:**
+
+* **The answer scorecard adds:**
+  * the estimated cost per answer, from the tokens and the same price
+    table the server bills with;
+  * the share of fast and deep looks.
+* Each release can then show it did not get dearer.
+
+*Proof:* the scorecard line carries cost per answer, and the live run
+compares it with wave 1's.
 
 ### SN-09 · The card stays on screen, and off the answer — S
 
-**Done:**
+* **The clipped card in the second photo** is reproduced (two monitors,
+  mixed scaling, docked right) and fixed.
+* **The card never covers what Tora drew.** In the wave-1 demo it covered
+  the board's first rank: the knight the arrow starts from. While a
+  drawing is up, the card moves to the side of the screen away from it.
 
-* The clipped card in the second photo is reproduced: two monitors, mixed
-  scaling, docked right.
-* The card is clamped to the screen it is actually on.
-* **The card never covers what Tora drew.** In the wave-1 demo, the card,
-  docked at the bottom, covered the board's first rank: the knight the
-  arrow starts from. The user's photo shows the same thing. While a
-  drawing is on screen, the card moves to the side of the screen away
-  from it.
+### SN-10 · A live acceptance run, across apps — S (needs your yes)
 
-*Proof:*
-* a flow-bar test across mixed-scale monitors: the card is inside the
-  screen in every dock position;
-* with an arrow drawn under the card's place, the card sits clear of it.
+Twenty questions, each with the kind of answer it should get:
 
-### SN-10 · A live acceptance run — S (needs your yes)
-
-**Done:** "what's my best move?" is asked live:
-
-* 10 times on chess.com;
-* 10 times on lichess;
-* playing white and playing black;
-* with follow-ups.
+| where | question | expected |
+|---|---|---|
+| Excel | "which cell is wrong?" | ring |
+| a web form | "where do I click next?" | arrow |
+| Windows Settings | "how do I turn on dark mode?" | walkthrough |
+| a chart | "which month was highest?" | ring and one line |
+| a chess game | "best move?" | one arrow |
+| and others | "which one should I pick?" | one thing drawn |
 
 **Pass:**
-* every number in the "done" table;
-* 20/20 arrows on the right squares;
-* 20/20 legal moves;
-* no narration;
-* cost per answer ≤ today's, from the scorecard.
+* ≥ 18/20 drawn on the right thing;
+* one line each;
+* p50 time to the drawing ≤ 2.5 s;
+* average cost per answer **≤ wave 1's**, with a target of ≤ ⅓.
 
-*Cost:* the live turns, plus vision only where SN-07 runs: about
-**$0.10–0.30**.
+*Cost:* **≈ $0.20**.
+
+---
+
+## Parked: exact chess
+
+These help chess alone. They are not planned unless chess becomes a
+priority.
+
+* **SN-06, the engine:** built (`f48da3d`). It is legal, answers in about
+  0.8 s, says why, and is free. It is only useful with an exact position.
+* **SN-05, reading the move list:** the spike (5 Oct) found lichess's move
+  list is **not** in the accessibility tree (279 elements, no moves).
+  Reading it would need OCR of the move-list panel, or a browser hook.
+* **SN-04 and SN-07:** board geometry, and the position from pixels.
+
+Without them, a chess question takes the general path: UD-01's look,
+escalating to deep when the fast model is not sure. That is the right
+model for hard judgement.
 
 ---
 
@@ -363,41 +254,34 @@ today's deep look.
 
 | wave | milestones | what you will notice |
 |---|---|---|
-| 1 | SN-01, SN-02, SN-03 | One line and one arrow instead of a lecture. The board is still read by vision, now measured. |
-| 2 | SN-04, SN-05, SN-06 | The arrow is on the right squares, the move is real, it is under 2 s, and it costs nothing. |
-| 3 | SN-07, SN-08 | Any board works. Follow-ups are instant. "Which one should I pick" uses the same path. |
-| 4 | SN-09, SN-10 | The card stays on screen, and a live run proves it. |
-
-Waves 1 and 2 are local code tested against the saved screenshots, with
-no paid calls except SN-01's baseline.
+| 1 — done | SN-01, SN-02, SN-03 | One thing drawn and one line instead of a lecture; every answer timed |
+| 2 | UD-01, UD-02, UD-03 | Most answers in ~2 s instead of 10–20, for a fraction of the cost, drawn exactly on the real thing |
+| 3 | UD-04, UD-05, UD-06 | Never just words; never paid twice; the cost of each answer on the scorecard |
+| 4 | SN-09, SN-10 | The card stays clear of the drawing; a live run proves it across apps |
 
 ## Cost
 
-* **Per answer, after wave 2:** no vision call on chess.com and lichess
-  when the move list can be read. The live turn is shorter too, since the
-  voice no longer receives the readings.
-* **Building it** needs a few paid calls, and each waits for a yes:
+**Per answer:**
 
-| milestone | what | about |
-|---|---|---|
-| SN-01 | baseline | $0.15 |
-| SN-07 | reading accuracy | < $0.02 |
-| SN-10 | live run | $0.10–0.30 |
+| milestone | effect |
+|---|---|
+| UD-01 | Most looks go from **~$0.026 to ~$0.001**, and are about 10 s faster. |
+| UD-02 | The same pixels or fewer. |
+| UD-03, UD-05 | Free; UD-05 saves whole calls. |
+| UD-04 | Only the look a correct turn would have made. |
 
-* **No new third-party dependency**, unless you choose Stockfish in SN-06.
+**To build:**
 
-## Decisions needed
+| what | about |
+|---|---|
+| UD-01's comparison | $0.30 |
+| SN-10's live run | $0.20 |
 
-1. **SN-06's engine:**
-   * **(a)** written here (recommended);
-   * **(b)** Stockfish (strongest; GPL, shipped as a separate program, a
-     bigger installer).
-2. **The measured runs:** about $0.45 in all, across SN-01, SN-07 and
-   SN-10.
+Each waits for a yes.
 
-## Out of scope
+## Decision needed
 
-* **Making the move for the user,** by clicking or dragging the piece.
-* **Coaching:** analysis lines, mistakes in the game so far, openings.
-* **Other games** (checkers, sudoku, cards). Each is a later specialist
-  on the SN-08 contract.
+* **UD-01's comparison run (≈ $0.30).** It proves the fast model is good
+  enough before it becomes the default.
+* Without it, UD-01 can still ship with deep as the fallback when the
+  fast look is not sure. That is safe, but unmeasured.
