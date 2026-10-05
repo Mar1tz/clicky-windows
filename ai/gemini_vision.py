@@ -133,6 +133,16 @@ _FAST_SCHEMA = {
 # $0.037 and 20 s for one chess look (SP-01). Gemini 3 takes a level; "low"
 # is its least (SP-04, gemini.thinking).
 _DEEP_THINK = "low"
+
+# How many tokens the screenshot becomes (SP-06). The fast look sees it at
+# medium, about 550 tokens instead of 1,120: on the 23 test screens it was
+# as right as the full image (22/23), 0.5 s faster and 12% cheaper. Low
+# (about 280) misread the chess board and drew on the decoy. The deep look -
+# a game, dense reading, or a fast look that was not sure - keeps the full
+# image. RESOLUTION, when set, overrides both: tools/look_eval.py
+# --resolution measures with it.
+_FAST_RESOLUTION = "medium"
+RESOLUTION: Optional[str] = None
 _DEEP_TIMEOUT_S = 35.0
 
 _SYSTEM = """You are the eyes of Tora, a visual tutor that points at things
@@ -423,6 +433,7 @@ async def _ask(question: str, screenshot_b64: str, *, deep: bool, context: str, 
             # As little thinking as each model takes: "low" on Gemini 3, for
             # the deep look too, so it always has room left to answer (SP-04).
             think=_DEEP_THINK if deep else 0,
+            media_resolution=RESOLUTION or (None if deep else _FAST_RESOLUTION),
             timeout=min(timeout, _DEEP_TIMEOUT_S) if deep else timeout,
             usage=usage,
         )

@@ -248,3 +248,39 @@ def test_the_fast_look_writes_no_observations_and_the_deep_one_keeps_its_trail(m
     assert "observations" not in fast_schema["properties"] and "observations" not in fast_system
     assert "observations" in deep_schema["properties"] and "observations" in deep_system
     assert fast_schema["required"] == ["answer", "actions", "sure"]
+
+
+# -- SP-06: the right image size ------------------------------------------------------------------------------
+
+def test_the_fast_look_sees_medium_and_the_deep_look_the_full_image(monkeypatch):
+    sent = {}
+
+    async def fake_generate_json(model, contents, schema, **kw):
+        sent[model] = kw.get("media_resolution")
+        return {"answer": "Click Sign in.", "actions": [], "sure": False}
+    monkeypatch.setattr(gemini, "generate_json", fake_generate_json)
+    asyncio.run(gemini_vision.look("where do I sign in?", "img"))      # unsure: fast, then deep
+    assert sent == {Models.VISION_FAST: "medium", Models.VISION_DEEP: None}
+    monkeypatch.setattr(gemini_vision, "RESOLUTION", "low")            # the bench's --resolution
+    asyncio.run(gemini_vision.look("where do I sign in?", "img"))
+    assert sent == {Models.VISION_FAST: "low", Models.VISION_DEEP: "low"}
+
+
+def test_a_resolution_goes_in_the_generation_config(monkeypatch):
+    bodies = []
+
+    class Reply:
+        status_code = 200
+
+        @staticmethod
+        def json():
+            return {"candidates": []}
+
+    async def fake_post(url, body, timeout):
+        bodies.append(body)
+        return Reply()
+    monkeypatch.setattr(gemini, "_post", fake_post)
+    asyncio.run(gemini.generate("gemini-3.8-flash", [], media_resolution="medium"))
+    asyncio.run(gemini.generate("gemini-3.8-flash", []))
+    assert bodies[0]["generationConfig"]["mediaResolution"] == "MEDIA_RESOLUTION_MEDIUM"
+    assert "mediaResolution" not in bodies[1]["generationConfig"], "unsaid: the model's default"

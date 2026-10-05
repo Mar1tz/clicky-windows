@@ -470,18 +470,23 @@ async def generate(
     schema: Optional[dict] = None,
     tools: Optional[list] = None,
     audio_voice: Optional[str] = None,
+    media_resolution: Optional[str] = None,
     timeout: float = 120.0,
 ) -> dict:
     """One non-streaming generateContent call. Returns the raw response.
 
     audio_voice switches the response from text to speech — that is how the
     TTS model is addressed, since it shares this same endpoint.
+    media_resolution - low, medium or high - is how many tokens an image
+    becomes (SP-06); unsaid, the model's default.
     """
     gen: dict[str, Any] = {
         "maxOutputTokens": max_tokens,
         "temperature": temperature,
     }
     gen.update(thinking(think, model))
+    if media_resolution:
+        gen["mediaResolution"] = "MEDIA_RESOLUTION_" + media_resolution.upper()
     if schema is not None:
         gen["responseMimeType"] = "application/json"
         gen["responseSchema"] = schema
@@ -511,6 +516,7 @@ async def generate_json(
     system: str = "",
     max_tokens: int = 2048,
     think: "Optional[int | str]" = None,
+    media_resolution: Optional[str] = None,
     timeout: float = 120.0,
     usage: Optional[dict] = None,
 ) -> Optional[dict]:
@@ -521,7 +527,7 @@ async def generate_json(
     resp = await generate(
         model, contents,
         system=system, max_tokens=max_tokens, temperature=0.2,
-        think=think, schema=schema, timeout=timeout,
+        think=think, schema=schema, media_resolution=media_resolution, timeout=timeout,
     )
     if usage is not None:
         usage.update(resp.get("usageMetadata") or {})

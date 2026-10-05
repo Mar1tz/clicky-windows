@@ -338,6 +338,7 @@ async def main():
     ap.add_argument("--deep-only", action="store_true")
     ap.add_argument("--only", default="", help="comma-separated screen names")
     ap.add_argument("--max-dollars", type=float, default=0.30)
+    ap.add_argument("--resolution", default="", help="low | medium | high: the image's tokens (SP-06)")
     ap.add_argument("--against", default="", help="an earlier report.json to compare with")
     args = ap.parse_args()
 
@@ -352,6 +353,9 @@ async def main():
     assert gemini.own_key() and gemini.api_key(), "no own key in .env (GOOGLE_API_KEY)"
     deep = False if args.fast_only else True if args.deep_only else None
     mode = "fast-only" if args.fast_only else "deep-only" if args.deep_only else "app routing"
+    if args.resolution:
+        gemini_vision.RESOLUTION = args.resolution
+        mode += f", {args.resolution} resolution"
     rows, spent = [], 0.0
     for sc in s:
         if spent >= args.max_dollars:

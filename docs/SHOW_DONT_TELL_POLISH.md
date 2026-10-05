@@ -322,7 +322,27 @@ change touches, not only the total. The baseline is now this run.
 *Prove:* SP-01 output tokens and p50 time down, with accuracy unchanged.
 *Cost:* about $0.03.
 
-### SP-06 · The right image size — S
+### SP-06 · The right image size — S — **done (6 Oct)**
+
+**What changed:**
+* The fast look sends `mediaResolution: MEDIA_RESOLUTION_MEDIUM`: about
+  550 image tokens instead of 1,120.
+* The deep look keeps the full image: games, dense reading, and fast
+  looks that were not sure.
+* `tools/look_eval.py --resolution` measures any setting.
+
+**SP-01, in the app's routing** ($0.13 in all):
+
+| image | right | p50 | avg look | prompt |
+|---|---|---|---|---|
+| full (before) | 22/23 | 2.60 s | $0.0021 | 1,400 |
+| low, both looks | **20/23**: misread the chess board, drew on the decoy | 2.28 s | $0.0021 | 566 |
+| medium, both looks | 22/23 | 2.14 s | $0.0019 | 829 |
+| **medium fast, full deep (chosen)** | **22/23** | **2.21 s** | **$0.0018 (−15%)** | 828 |
+
+* **Low saved nothing.** With less to see, the model thought more:
+  thinking rose from 2,145 to 3,515 tokens.
+* **The baseline** is the chosen run.
 
 **Why:**
 * A fast look's prompt was about 1,450 tokens, almost all of it the
@@ -585,7 +605,7 @@ answered the mate-in-one correctly.
 | SP-03 | Whole answer's cost — done | A | S | (with SP-02) | – |
 | SP-04 | Thinking under control — done | B | S | ~$0.08 | SP-01 |
 | SP-05 | Fewer words back — done | B | S | ~$0.05 | SP-01 |
-| SP-06 | Right image size | B | S | ~$0.10 | SP-01 |
+| SP-06 | Right image size — done | B | S | ~$0.13 | SP-01 |
 | SP-07 | Typed path, same rule | B | S | free | – |
 | SP-08 | Sharper routing words | B | S | free | SP-01 screen |
 | SP-16 | A lighter live prompt | B | S | ~$0.25 | SP-02 |
@@ -608,7 +628,10 @@ SP-12.
 * **Done:**
   * SP-04 took the deep look from $0.054 to $0.020 and from 5.3 s to
     3.9 s;
-  * SP-05 took the fast look from 2.73 s to 2.39 s.
+  * SP-05 took the fast look from 2.73 s to 2.39 s;
+  * SP-06 took the average look from $0.0021 to $0.0018, at p50 2.21 s.
+  * Since SP-01: the average look is down from $0.0035 to $0.0018, and
+    p50 from 2.61 s to 2.21 s, with the same 22/23 right.
 
 Each has its bench (SP-01 or SP-02), so nothing changes without a
 before-and-after.
