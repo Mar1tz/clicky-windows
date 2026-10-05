@@ -256,6 +256,27 @@ stay for the tray. Two columns, as Home:
 Later, if wanted: a map of a project's agents in the details (the data -
 a lead job, its agents and who waits on whom - is already recorded).
 
+## 3G. Packs - every pack the same
+
+`ui/packs_page.py`. Seventeen packs; none is special - none first, none
+with a page the others lack.
+
+- **Packs** - *Your packs* (on): each with its headline numbers and Open.
+  *All packs*: a card each in a grid - its tile (its colour family from
+  `tokens.PACK` and its own icon, `packs_page.LOOK`), name, what it does,
+  a switch. A card opens a drawer: everything it adds, what to say (its
+  own examples when on; its activation phrase when off), what it works
+  with, what it needs, its switch, Open.
+- **A row per pack you turn on**, under Packs in the sidebar
+  (`pack/<id>`); off, its row goes.
+- **A pack's page** - kit packs: the pack's own snapshot (numbers as
+  tiles, up to three lists, its action buttons as jobs, its folder, what to
+  say) drawn in the app's parts; a pack that draws its own dashboard
+  (Accounting) has it in the same shell, restyled, kept while on and
+  deleted - clocks stopped - when turned off. Off: "Turn on <pack>".
+- The Agents page's example jobs are the same for everyone; a pack's own
+  jobs are its buttons, on its page.
+
 ## 3A. Where the values live
 
 Every colour, radius, shadow and button size is a name in **`ui/tokens.py`**;

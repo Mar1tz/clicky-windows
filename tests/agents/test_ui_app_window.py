@@ -41,16 +41,12 @@ def test_every_page_builds_and_is_reachable(window):
     for key, *_rest in PAGES:
         window.show_page(key)
         assert window._stack.currentWidget() is window._pages[key], key
-    assert len(window._pages) == len(PAGES) == 7
+    assert len(window._pages) == len(PAGES)
 
 
-def test_the_sidebar_is_the_page_map(window):
-    """Five pages in the list, then the free month, Settings and Help."""
-    rows = [b.text() for b in window._sidebar.findChildren(QAbstractButton)]
-    assert rows == ["Home", "Tora", "Insights", "Agents", "Packs", "Accounting",
-                    "Get a free month", "Settings", "Help"]
-    assert window._buttons["accounting"].isHidden(), "a pack's page only while the pack is on"
-    assert not window._buttons["settings"].isHidden()
+def test_settings_free_month_and_help_are_always_there(window):
+    for key in ("settings", "free_month", "help"):
+        assert not window._buttons[key].isHidden(), key
 
 
 def test_settings_is_a_dialog_not_a_page(window):
@@ -89,8 +85,8 @@ def test_pages_are_built_only_when_asked_for(qapp):
     w = ToraApp()
     try:
         assert len(w._pages) == 1, "only the landing page at startup"
-        w.show_page("accounting")
-        assert set(w._pages) == {"home", "accounting"}
+        w.show_page("journal")
+        assert set(w._pages) == {"home", "journal"}
     finally:
         w.deleteLater()
 

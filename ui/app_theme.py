@@ -243,6 +243,8 @@ def qss() -> str:
     }}
     QPushButton#pageTab:hover {{ color: {TEXT}; }}
     QPushButton#pageTab:checked {{ color: {TEXT}; border-bottom: 2px solid {TEXT}; }}
+    QFrame#packCard {{ background: {SURFACE}; border: none; border-radius: {tokens.RADIUS_LG}px; }}
+    QFrame#packCard:hover {{ background: {SURFACE_HOVER}; }}
     QFrame#drawer {{ background: {SURFACE}; border: none; border-radius: {tokens.RADIUS_XL}px; }}
     QLabel#drawerTitle {{ font-size: 22px; font-weight: 700; letter-spacing: -0.4px; }}
     QFrame#modeTile {{

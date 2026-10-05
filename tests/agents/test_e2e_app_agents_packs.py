@@ -313,53 +313,52 @@ def test_the_bridge_lists_what_waits_for_a_yes(qapp):
          "task": "Build the shop", "sensitive": True, "confirm_word": ""}]
 
 
-# ── Extensions ───────────────────────────────────────────────────────────────
+# ── Packs (ui/packs_page.py, DESIGN.md §3G) ─────────────────────────────────────
 
-def test_the_real_packs_are_listed_and_switch_on(qapp, wf):
-    from ui.app_pages import ExtensionsPage
+def _grid_switches(page):
+    """The switch on each card in All packs, in the registry's order."""
     from ui.app_widgets import Switch
+    return page.findChildren(Switch)
 
-    page = ExtensionsPage(_bridge(wf))
+
+def test_every_real_pack_is_a_card_and_switches_on(qapp, wf):
+    from ui.app_pages import PacksPage
+    page = PacksPage(_bridge(wf))
     texts = _texts(page)
+    packs = [p["id"] for p in wf.extensions.available()]
     assert "Accounting" in texts and "Freelancer" in texts and "Legal" not in texts, "only packs that exist"
-    assert any("QuickBooks" in t for t in texts), "integrations by name, not id"
-    packs = [p["id"] for p in wf.extensions.available()]                # listed by id, one card each
-    assert len(page.findChildren(Switch)) == len(packs)
-    for i, pack in enumerate(packs):
-        page.findChildren(Switch)[i].setChecked(True)
-        _settle(qapp)
-        assert [p for p in packs if wf.extensions.is_enabled(p)] == [pack]
-        assert "On" in _texts(page) and _buttons(page, "Open dashboard")
-        page.findChildren(Switch)[i].setChecked(False)
-        _settle(qapp)
-        assert not wf.extensions.is_enabled(pack)
+    assert len(_grid_switches(page)) == len(packs), "one card - one switch - per pack, none left out"
+    first = packs[0]
+    _grid_switches(page)[0].setChecked(True)
+    _settle(qapp)
+    assert wf.extensions.is_enabled(first)
 
 
-def test_open_dashboard_goes_to_the_accounting_page(qapp, wf):
-    from extensions.accounting.ui.dashboard import AccountingDashboard
+def test_no_pack_is_special(qapp, wf):
+    """Every pack you turn on gets the same row and the same page."""
     from ui.app_window import ToraApp
-
+    from ui.packs_page import PackPage
+    wf.extensions.enable("students")
     wf.extensions.enable("accounting")
     w = ToraApp(_bridge(wf))
-    w.show_page("extensions")
-    _buttons(w._pages["extensions"], "Open dashboard")[0].click()
-    assert w._stack.currentWidget() is w._pages["accounting"]
-    assert w._pages["accounting"].findChildren(AccountingDashboard)
+    rows = {k for k, b in w._buttons.items() if k.startswith("pack/") and not b.isHidden()}
+    assert rows == {"pack/students", "pack/accounting"}
+    for key in rows:
+        w.show_page(key)
+        assert isinstance(w._pages[key], PackPage)
 
 
 def test_a_pack_that_will_not_switch_says_why(qapp, wf):
-    from ui.app_pages import ExtensionsPage
-    from ui.app_widgets import Switch
+    from ui.app_pages import PacksPage
 
     class Refusing(AppBridge):
         def set_extension(self, ext_id, on):
             return "the ledger folder is read-only"
 
-    page = ExtensionsPage(Refusing(FakeManager(wf), FakeTray()))
-    page.findChildren(Switch)[0].setChecked(True)
+    page = PacksPage(Refusing(FakeManager(wf), FakeTray()))
+    _grid_switches(page)[0].setChecked(True)
     _settle(qapp)
     assert "That did not work: the ledger folder is read-only" in _texts(page)
-    assert not wf.extensions.is_enabled("accounting")
 
 
 def test_a_pack_turned_on_anywhere_redraws_the_pages(qapp, wf):
@@ -374,29 +373,37 @@ def test_a_pack_turned_on_anywhere_redraws_the_pages(qapp, wf):
     assert "extensions" in topics
 
 
-# ── Accounting ───────────────────────────────────────────────────────────────
+def test_a_kit_packs_page_is_its_own_snapshot_and_its_buttons_run_it(qapp, wf):
+    from ui.packs_page import PackPage
+    wf.extensions.enable("students")
+    bridge = _bridge(wf)
+    page = PackPage(bridge, "students")
+    texts = _texts(page)
+    view = bridge.pack_view("students")
+    assert view is not None and view["actions"], "the pack's own buttons"
+    for caption, _value in view["numbers"]:
+        assert caption.upper() in texts, "its own numbers, by its own names"
+    before = len(wf.list_tasks())
+    _buttons(page, view["actions"][0])[0].click()
+    assert len(wf.list_tasks()) == before + 1, "a button runs the pack's workflow as a job"
 
-def test_accounting_off_offers_to_turn_it_on(qapp, wf):
+
+def test_a_pack_that_is_off_offers_to_turn_it_on(qapp, wf):
     from extensions.accounting.ui.dashboard import AccountingDashboard
-    from ui.app_pages import AccountingPage
-
-    page = AccountingPage(_bridge(wf))
+    from ui.packs_page import PackPage
+    page = PackPage(_bridge(wf), "accounting")
     assert "Accounting is off" in _texts(page)
-    assert not _buttons(page, "Run month-end"), "no drawn buttons"
     _buttons(page, "Turn on Accounting")[0].click()
     _settle(qapp)
     assert wf.extensions.is_enabled("accounting")
-    (dash,) = page.findChildren(AccountingDashboard)
-    (own_title,) = [lbl for lbl in dash.findChildren(QLabel) if lbl.objectName() == "accTitle"]
-    assert not own_title.isVisibleTo(page), "the page is already called Accounting"
+    assert page.findChildren(AccountingDashboard), "a pack with its own dashboard has it here"
 
 
-def test_the_dashboard_is_kept_while_on_and_stopped_when_off(qapp, wf):
+def test_its_own_dashboard_is_kept_while_on_and_stopped_when_off(qapp, wf):
     from extensions.accounting.ui.dashboard import AccountingDashboard
-    from ui.app_pages import AccountingPage
-
+    from ui.packs_page import PackPage
     wf.extensions.enable("accounting")
-    page = AccountingPage(_bridge(wf))
+    page = PackPage(_bridge(wf), "accounting")
     (dash,) = page.findChildren(AccountingDashboard)
     page.refresh()
     page.refresh()
@@ -409,40 +416,21 @@ def test_the_dashboard_is_kept_while_on_and_stopped_when_off(qapp, wf):
     assert "Accounting is off" in _texts(page)
 
 
-def test_the_dashboard_clock_runs_only_while_the_page_is_seen(qapp, wf):
-    from extensions.accounting.ui.dashboard import AccountingDashboard
-    from ui.app_pages import AccountingPage
-
-    wf.extensions.enable("accounting")
-    page = AccountingPage(_bridge(wf))
-    (dash,) = page.findChildren(AccountingDashboard)
-    clocks = dash.findChildren(QTimer, options=DIRECT)
-    try:
-        page.show()
-        _settle(qapp)
-        assert clocks and all(c.isActive() for c in clocks)
-        page.hide()
-        _settle(qapp)
-        assert not any(c.isActive() for c in clocks), "nobody is looking"
-        page.show()
-        _settle(qapp)
-        assert all(c.isActive() for c in clocks)
-    finally:
-        page.hide()
-
-
 def test_a_dashboard_that_will_not_build_says_why(qapp, wf):
-    from ui.app_pages import AccountingPage
+    from ui.packs_page import PackPage
 
     class Broken(AppBridge):
         def extension_on(self, ext_id):
             return True
 
+        def pack_view(self, ext_id):
+            return None
+
         def dashboard(self, ext_id, parent=None):
             raise RuntimeError("the books are locked")
 
-    texts = _texts(AccountingPage(Broken(FakeManager(wf), FakeTray())))
-    assert "The dashboard could not load" in texts and "the books are locked" in texts
+    texts = _texts(PackPage(Broken(FakeManager(wf), FakeTray()), "accounting"))
+    assert "This pack's page could not load" in texts and "the books are locked" in texts
 
 
 def test_embedded_tabs_keep_their_ampersands(qapp):

@@ -32,6 +32,7 @@ CONSOLIDATED = (
     "ui/settings_dialog.py",
     "ui/settings_tabs.py",
     "ui/agents_page.py",
+    "ui/packs_page.py",
 )
 
 

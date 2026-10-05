@@ -942,6 +942,58 @@ class AppBridge(QObject):
                 return module.factory(self.workforce(), reg.get(ext_id), parent)
         return None
 
+    # ── a pack's page (ui/packs_page.py, DESIGN.md §3G) ──────────────────────
+
+    def _pack(self, ext_id: str):
+        """(the pack, its store) when it is on, else (None, None)."""
+        reg = self._packs()
+        ext = reg.get(ext_id) if reg is not None else None
+        if ext is None:
+            return None, None
+        try:
+            store = ext.ensure_store(reg._context(ext_id)) if hasattr(ext, "ensure_store") else None
+        except Exception:  # noqa: BLE001 - a pack not set up yet has no store
+            store = None
+        return ext, store
+
+    def pack_view(self, ext_id: str) -> Optional[dict]:
+        """What a kit pack shows on its page - its own snapshot: a title, a
+        line, a few numbers, up to three lists - plus its action buttons, the
+        things to say, and its folder. None for a pack that draws its own
+        dashboard (Accounting), or one that is off."""
+        ext, store = self._pack(ext_id)
+        if ext is None or store is None or not hasattr(ext, "snapshot"):
+            return None
+        try:
+            snap = ext.snapshot(store) or {}
+        except Exception:  # noqa: BLE001 - the pack's code; the page says so
+            _log.debug("%s snapshot failed", ext_id, exc_info=True)
+            snap = {"error": True}
+        return {"title": snap.get("title") or ext.manifest.name, "meta": snap.get("meta") or "",
+                "numbers": list(snap.get("numbers") or []), "lists": list(snap.get("lists") or [])[:3],
+                "actions": [text for text, _w in getattr(ext, "ACTIONS", [])],
+                "say": [said for said, _w in getattr(ext, "EXAMPLES", [])][:4],
+                "folder": getattr(store, "root", "") or "", "error": bool(snap.get("error"))}
+
+    def pack_action(self, ext_id: str, text: str) -> bool:
+        """Run one of a pack's buttons - its workflow, as an ordinary agent
+        job, so anything it changes still asks first."""
+        ext, store = self._pack(ext_id)
+        wf = self.workforce()
+        if ext is None or store is None or wf is None:
+            return False
+        workflow = next((w for t, w in getattr(ext, "ACTIONS", []) if t == text), None)
+        if workflow is None:
+            return False
+        try:
+            task, spec = ext.task_for(workflow, store.root)
+            wf.submit_task(task, agent=spec)
+        except Exception:  # noqa: BLE001
+            _log.warning("could not run %s/%s", ext_id, workflow, exc_info=True)
+            return False
+        self.changed.emit("agents")
+        return True
+
     def open_dashboard(self, ext_id: str) -> None:
         """The floating dashboard, for a pack with no page of its own."""
         wf = self.workforce()

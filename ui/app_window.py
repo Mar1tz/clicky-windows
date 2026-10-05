@@ -37,7 +37,7 @@ from PyQt6.QtWidgets import (
 
 from ui import app_popover
 from ui import app_theme as T
-from ui.app_pages import PACK_ROWS, PAGES
+from ui.app_pages import PAGES
 from ui.app_shell import BrandRow, IconButton, NavItem, Sidebar, WindowButton
 from ui.app_widgets import Dot, label
 from ui.window_frame import NativeFrame
@@ -198,6 +198,7 @@ class ToraApp(QWidget):
 
         group = QButtonGroup(self)
         group.setExclusive(True)
+        self._nav_group = group
         for key, text, place, _cls in PAGES:
             if place == "hidden":
                 continue
@@ -250,11 +251,29 @@ class ToraApp(QWidget):
             self._show_sidebar(want)
 
     def _sync_pack_rows(self) -> None:
-        """A pack's own page has a row only while the pack is on."""
-        for key, ext_id in PACK_ROWS.items():
+        """Every pack you turn on gets a row of its own, under Packs - the
+        same for all of them (ui/packs_page.py); off, its row goes."""
+        from ui.packs_page import look, page_key
+        packs = self._call("extensions", []) or []
+        anchor = self._buttons.get("packs")
+        if anchor is None:
+            return
+        lay = self._sidebar.lay
+        at = lay.indexOf(anchor) + 1
+        for info in packs:
+            key = page_key(info["id"])
             item = self._buttons.get(key)
-            if item is not None:
-                item.setVisible(bool(self._call("extension_on", False, ext_id)))
+            if item is None:
+                _colours, glyph = look(info["id"])
+                item = NavItem(key, info.get("name") or info["id"],
+                               lambda: self._sidebar.openness, glyph=glyph)
+                item.clicked.connect(lambda _c=False, k=key: self.show_page(k))
+                self._nav_group.addButton(item)
+                self._buttons[key] = item
+                item.setToolTip("" if self._sidebar.is_open() else item.text())
+            lay.insertWidget(at, item)
+            at += 1
+            item.setVisible(bool(info.get("enabled")))
 
     # ── cards from the title bar and sidebar ─────────────────────────────────
 
@@ -304,6 +323,15 @@ class ToraApp(QWidget):
         if key == "setup" or key.startswith("settings"):
             self.open_settings("advanced" if key == "setup" else key.partition("/")[2] or "general")
             return
+        # Older names: the Extensions page is Packs; a pack's page is pack/<id>.
+        key = {"extensions": "packs", "accounting": "pack/accounting"}.get(key, key)
+        if key.startswith("pack/") and key not in self._pages:
+            from ui.packs_page import PackPage
+            widget = PackPage(self.bridge, key.partition("/")[2])
+            widget.navigate.connect(self.show_page)
+            self._pages[key] = widget
+            self._stack.addWidget(widget)
+            self.setStyleSheet(T.qss())
         if key not in self._pages:
             for k, _text, _place, cls in PAGES:
                 if k == key:

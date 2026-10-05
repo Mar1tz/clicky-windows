@@ -20,11 +20,9 @@ from __future__ import annotations
 import time
 from typing import Optional
 
-from PyQt6.QtCore import QEasingCurve, QPropertyAnimation, QRect, Qt, QTimer
+from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtGui import QColor, QPainter
-from PyQt6.QtWidgets import (
-    QFrame, QHBoxLayout, QLabel, QLineEdit, QScrollArea, QVBoxLayout, QWidget,
-)
+from PyQt6.QtWidgets import QFrame, QHBoxLayout, QLabel, QLineEdit, QVBoxLayout, QWidget
 
 from ui import app_theme as T
 from ui import tokens
@@ -63,7 +61,7 @@ def ran_for(start: float, end: float) -> str:
 EXAMPLES = (("Coffee shop website", "Build a one-page website for my coffee shop"),
             ("Compare laptops", "Research the best laptops under R15,000 and compare them in a table"),
             ("Rename my photos", "Write a script that renames my photos by the date they were taken"))
-PACK_EXAMPLES = {"accounting": ("Start month-end", "Start month-end for my client")}
+
 
 
 class AgentsPage(Page):
@@ -153,11 +151,9 @@ class AgentsPage(Page):
         return card
 
     def _examples(self) -> list[tuple[str, str]]:
-        out = []
-        for pack, example in PACK_EXAMPLES.items():
-            if _ask(self.bridge, "extension_on", False, pack):
-                out.append(example)
-        return (out + list(EXAMPLES))[:3]
+        # The same three for everyone: a pack's own jobs are its buttons, on
+        # its page - no pack is put first here.
+        return list(EXAMPLES)[:3]
 
     def _start(self) -> None:
         text = self._job.toPlainText().strip()
@@ -373,84 +369,31 @@ def _no_agents() -> QWidget:
 
 # ── the drawer ────────────────────────────────────────────────────────────────
 
-class JobDrawer(QWidget):
-    """A job's details, sliding in from the right over the page: what it was
-    asked, its plan as a checklist, its live activity, how it ended, its
-    folder. The page stays visible behind it; Escape or a click on the page
-    closes it."""
+from ui.app_parts import Drawer  # noqa: E402
 
-    W = 500
+
+class JobDrawer(Drawer):
+    """A job's details (Drawer): what it was asked, its plan as a checklist,
+    its live activity, how it ended, its folder."""
 
     def __init__(self, page: QWidget, bridge):
-        super().__init__(page.window())
+        super().__init__(page)
         self.bridge = bridge
         self._task_id = ""
         self._events = None
         self._timeline = None
-        self.hide()
-        page.window().installEventFilter(self)
-        self.panel = QFrame(self)
-        self.panel.setObjectName("drawer")
-        from ui import kit
-        kit.drop_shadow(self.panel, "hero")
-        outer = QVBoxLayout(self.panel)
-        outer.setContentsMargins(0, 0, 0, 0)
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setFrameShape(QFrame.Shape.NoFrame)
-        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        inner = QWidget()
-        self.body = QVBoxLayout(inner)
-        self.body.setContentsMargins(28, 24, 28, 28)
-        self.body.setSpacing(12)
-        scroll.setWidget(inner)
-        outer.addWidget(scroll)
-        self._anim = QPropertyAnimation(self.panel, b"geometry", self)
-        self._anim.setDuration(tokens.DURATION)
-        self._anim.setEasingCurve(QEasingCurve(QEasingCurve.Type.OutCubic))
 
     def show_job(self, task_id: str) -> None:
         self._task_id = task_id
-        self.setGeometry(self.parentWidget().rect())
-        self.refresh()
-        was = self.isVisible()
-        self.show()
-        self.raise_()
-        self.setFocus()
-        end = self._panel_rect()
-        if not was:
-            self._anim.stop()
-            self._anim.setStartValue(end.translated(self.W, 0))
-            self._anim.setEndValue(end)
-            self._anim.start()
-        else:
-            self.panel.setGeometry(end)
-
-    def _panel_rect(self) -> QRect:
-        w = min(self.W, self.width() - 40)
-        return QRect(self.width() - w - 8, 8, w, self.height() - 16)
+        self.open()
 
     def refresh(self) -> None:
         job = self.bridge.job(self._task_id) if self._task_id else None
-        while self.body.count():
-            item = self.body.takeAt(0)
-            if item.widget() is not None:
-                if item.widget() is self._timeline:
-                    item.widget().setParent(None)
-                else:
-                    item.widget().deleteLater()
+        self.clear(keep=(self._timeline,))
         if job is None:
             self.body.addWidget(label("That job is no longer here.", "dim"))
             return
-        head = QHBoxLayout()
-        title = label(job["title"], "drawerTitle", wrap=True)
-        head.addWidget(title, 1)
-        close = button("Close")
-        close.clicked.connect(self.close_drawer)
-        head.addWidget(close, 0, Qt.AlignmentFlag.AlignTop)
-        holder = QWidget()
-        holder.setLayout(head)
-        self.body.addWidget(holder)
+        self.header(job["title"])
         words, colour = status_words(job["status"])
         meta = words
         took = ran_for(job["started"], job["updated"] if job["status"] in
@@ -532,33 +475,6 @@ class JobDrawer(QWidget):
             return self._timeline
         except Exception:  # noqa: BLE001
             return label("No activity to show.", "faint")
-
-    def close_drawer(self) -> None:
-        self.hide()
-
-    def eventFilter(self, obj, event) -> bool:
-        from PyQt6.QtCore import QEvent
-        if obj is self.parentWidget() and event.type() == QEvent.Type.Resize and self.isVisible():
-            self.setGeometry(obj.rect())
-            self.panel.setGeometry(self._panel_rect())
-        return False
-
-    def paintEvent(self, _e) -> None:
-        p = QPainter(self)
-        p.fillRect(self.rect(), QColor(0, 0, 0, 60 if not T.is_dark() else 110))
-        p.end()
-
-    def mousePressEvent(self, e) -> None:
-        if not self.panel.geometry().contains(e.position().toPoint()):
-            self.close_drawer()
-            return
-        super().mousePressEvent(e)
-
-    def keyPressEvent(self, e) -> None:
-        if e.key() == Qt.Key.Key_Escape:
-            self.close_drawer()
-            return
-        super().keyPressEvent(e)
 
 
 def _step_row(i: int, st: dict) -> QWidget:

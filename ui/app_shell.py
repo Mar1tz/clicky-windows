@@ -33,9 +33,10 @@ class NavItem(QAbstractButton):
     """One sidebar row: a page (checkable) or an action (not)."""
 
     def __init__(self, key: str, text: str, openness: Callable[[], float], *,
-                 page: bool = True):
+                 page: bool = True, glyph: str = ""):
         super().__init__()
         self.key = key
+        self.glyph = glyph or key            # the icon: a pack's row names its own
         self.setText(text)
         self._openness = openness
         self.setCheckable(page)
@@ -68,7 +69,7 @@ class NavItem(QAbstractButton):
             p.setBrush(QColor(T.NAV_PLATE if on else T.NAV_HOVER))
             p.drawRoundedRect(r, tokens.RADIUS_SM, tokens.RADIUS_SM)
         p.drawPixmap(ICON_X, (self.height() - ICON) // 2,
-                     icon(self.key, T.ACCENT if on else T.TEXT, ICON))
+                     icon(self.glyph, T.ACCENT if on else T.TEXT, ICON))
         shown = self._openness()
         if shown > 0.02:
             p.setOpacity(shown)

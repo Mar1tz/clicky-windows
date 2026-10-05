@@ -813,194 +813,6 @@ def _coming(ts: float) -> str:
 # ── Agents ────────────────────────────────────────────────────────────────────
 
 # A task's status, as its row says it, and the colour of its dot.
-# ── Extensions ────────────────────────────────────────────────────────────────
-
-# Packs whose dashboard is a page of this window. Any other pack's opens in
-# the floating dashboard, as it does from the tray.
-PACK_PAGES = {"accounting": "accounting"}
-
-
-class ExtensionsPage(Page):
-    HEADING = "Packs"
-    LIVE = True
-    TOPICS = frozenset({"extensions"})
-
-    def __init__(self, bridge=None):
-        self._errors: dict[str, str] = {}      # a pack that would not switch says why
-        super().__init__(bridge)
-
-    def build(self) -> None:
-        br = self.bridge
-        if br.workforce() is None:
-            self.body.add(_no_agents("Packs plug into the agents, so none can run "
-                                     "until they do - see tora.log for why."))
-            return
-        packs = br.extensions()
-        if not packs:
-            card = Card()
-            card.add(Row("No packs found",
-                         "Packs live in the extensions folder next to HeyTora.", first=True))
-            self.body.add(card)
-            return
-        for info in packs:
-            ext_id, on = info["id"], bool(info.get("enabled"))
-            card = Card(info.get("name") or ext_id, info.get("description") or "")
-            if info.get("offer"):
-                card.add(label("Adds: " + " · ".join(info["offer"]), "faint", wrap=True))
-            if info.get("optional_integrations"):
-                card.add(label("Works with: " + ", ".join(_brand(i) for i in info["optional_integrations"]),
-                               "faint", wrap=True))
-            card.add(spacer(10))
-            foot = QHBoxLayout()
-            foot.setSpacing(10)
-            foot.addWidget(Pill("On" if on else "Off", T.OK if on else T.TEXT_FAINT, dot=on))
-            if info.get("version"):
-                foot.addWidget(label(f"v{info['version']}", "faint"))
-            foot.addStretch(1)
-            if on:
-                opener = button("Open dashboard")
-                opener.clicked.connect(lambda _c=False, e=ext_id: self._open(e))
-                foot.addWidget(opener)
-            switch = Switch(on)
-            switch.toggled.connect(lambda v, e=ext_id: self._turn(e, v))
-            foot.addWidget(switch, 0, Qt.AlignmentFlag.AlignVCenter)
-            card.body.addLayout(foot)
-            if self._errors.get(ext_id):
-                why = label(f"That did not work: {self._errors[ext_id]}", wrap=True)
-                why.setStyleSheet(f"color: {T.DANGER};")
-                card.add(spacer(8))
-                card.add(why)
-            self.body.add(card)
-
-    def _turn(self, ext_id: str, on: bool) -> None:
-        why = self.bridge.set_extension(ext_id, on)
-        if why:
-            self._errors[ext_id] = why
-        else:
-            self._errors.pop(ext_id, None)
-        # Redrawn after the click has finished: the switch being clicked is
-        # one of the widgets a redraw replaces.
-        QTimer.singleShot(0, self.refresh)
-
-    def _open(self, ext_id: str) -> None:
-        page = PACK_PAGES.get(ext_id)
-        if page:
-            self.navigate.emit(page)
-        else:
-            self.bridge.open_dashboard(ext_id)
-
-
-# ── Accounting ────────────────────────────────────────────────────────────────
-
-class AccountingPage(Page):
-    HEADING = "Accounting"
-    LIVE = True
-    TOPICS = frozenset({"extensions"})
-    PACK = "accounting"
-
-    def __init__(self, bridge=None):
-        # The pack's own dashboard (extensions/accounting/ui/dashboard.py) -
-        # client picker, month-end, exceptions, drafts, reports. Built when
-        # the pack is on and kept while it stays on: it holds the chosen
-        # client and redraws itself.
-        self._dash = None
-        self._drawn_for = ""
-        self._error = ""
-        super().__init__(bridge)
-
-    def _mode(self) -> str:
-        if self.bridge.workforce() is None:
-            return "no agents"
-        return "on" if self.bridge.extension_on(self.PACK) else "off"
-
-    def build(self) -> None:
-        br = self.bridge
-        mode = self._drawn_for = self._mode()
-        if mode == "no agents":
-            self.body.add(_no_agents("The Accounting pack runs on them - see tora.log for why."))
-            return
-        if mode == "on":
-            why = ""
-            try:
-                dash = br.dashboard(self.PACK)
-            except Exception as exc:  # noqa: BLE001 - the pack's code; the page says why
-                dash, why = None, str(exc) or type(exc).__name__
-            if dash is not None:
-                self._dash = _tidy(dash)
-                dash.setMinimumHeight(640)
-                holder = Card()
-                holder.add(dash)
-                self.body.add(holder)
-                return
-            card = Card()
-            card.add(Row("The dashboard could not load", why or "See tora.log for why.",
-                         dot=T.DANGER, first=True, wrap=True))
-            self.body.add(card)
-            return
-
-        info = next((p for p in br.extensions() if p.get("id") == self.PACK), None)
-        if info is None:
-            card = Card()
-            card.add(Row("The Accounting pack is not installed",
-                         "It lives in the extensions folder next to HeyTora.", first=True))
-            self.body.add(card)
-            return
-        card = Card("Accounting is off", info.get("description") or "")
-        if info.get("offer"):
-            card.add(label("Adds: " + " · ".join(info["offer"]), "faint", wrap=True))
-        card.add(spacer(10))
-        foot = QHBoxLayout()
-        foot.setSpacing(10)
-        turn_on = button("Turn on Accounting", "primary")
-        turn_on.clicked.connect(self._turn_on)
-        every = button("All extensions")
-        every.clicked.connect(lambda: self.navigate.emit("extensions"))
-        foot.addWidget(turn_on)
-        foot.addWidget(every)
-        foot.addStretch(1)
-        card.body.addLayout(foot)
-        if self._error:
-            why = label(f"That did not work: {self._error}", wrap=True)
-            why.setStyleSheet(f"color: {T.DANGER};")
-            card.add(spacer(8))
-            card.add(why)
-        self.body.add(card)
-
-    def refresh(self) -> None:
-        if self._mode() == self._drawn_for:
-            if self._dash is not None:
-                try:
-                    self._dash.refresh()
-                except Exception:  # noqa: BLE001 - the pack's code
-                    _log.debug("the accounting dashboard could not refresh", exc_info=True)
-            return
-        self._clock(False)                # the old dashboard's clock stops before it goes
-        self._dash = None
-        super().refresh()
-
-    def _turn_on(self) -> None:
-        self._error = self.bridge.set_extension(self.PACK, True)
-        self._drawn_for = ""              # redraw even if it stayed off: to say why
-        QTimer.singleShot(0, self.refresh)
-
-    # The dashboard redraws itself every few seconds. Only while it can be
-    # seen: kept for the life of the window, it would otherwise read the
-    # books all day behind a page nobody has open.
-    def showEvent(self, event) -> None:
-        super().showEvent(event)
-        self._clock(True)
-
-    def hideEvent(self, event) -> None:
-        super().hideEvent(event)
-        self._clock(False)
-
-    def _clock(self, on: bool) -> None:
-        if self._dash is None:
-            return
-        for timer in self._dash.findChildren(QTimer, options=Qt.FindChildOption.FindDirectChildrenOnly):
-            timer.start() if on else timer.stop()
-
-
 # ── Journal ───────────────────────────────────────────────────────────────────
 
 class JournalPage(Page):
@@ -1376,25 +1188,23 @@ def confirm_sign_out(parent) -> bool:
     return answer == QMessageBox.StandardButton.Yes
 
 
-# The Agents page lives in its own module; it builds on Page and the helpers
-# above, so it is imported here, after them.
+# The Agents and Packs pages live in their own modules; they build on Page
+# and the helpers above, so they are imported here, after them.
 from ui.agents_page import AgentsPage  # noqa: E402
+from ui.packs_page import PacksPage  # noqa: E402
 
 # The sidebar, top to bottom, and the single place a new page gets added.
-# place: "main" (the list), "pack" (a pack's page: a row while the pack is
-# on - PACK_ROWS), "hidden" (reached from elsewhere). Settings is not a page:
+# place: "main" (the list), "hidden" (reached from elsewhere). Each pack you
+# turn on adds a row of its own under Packs (ui/packs_page.py, app_window). Settings is not a page:
 # it is a dialog (ui/settings_dialog.py, ui/settings_tabs.py).
 PAGES = (
     ("home",       "Home",       "main",   HomePage),
     ("tora",       "Tora",       "main",   ToraPage),
     ("insights",   "Insights",   "main",   InsightsPage),
     ("agents",     "Agents",     "main",   AgentsPage),
-    ("extensions", "Packs",      "main",   ExtensionsPage),
-    ("accounting", "Accounting", "pack",   AccountingPage),
+    ("packs",      "Packs",      "main",   PacksPage),
     # Home shows everything asked and the next review; the full list of
     # reviews is one link away ("Review now"), not a row of its own.
     ("journal",    "Journal",    "hidden", JournalPage),
 )
 
-# A pack page's row -> the pack that must be on for it to show.
-PACK_ROWS = {"accounting": "accounting"}

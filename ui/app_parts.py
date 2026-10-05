@@ -871,3 +871,110 @@ def growing_text(text: str, placeholder: str, least: int = 84, most: int = 320):
             self._fit()           # a narrower box wraps to more lines
 
     return _Growing()
+
+
+class Drawer(QWidget):
+    """A panel that slides in from the right over a page - a job's details,
+    a pack's - with the page dimmed but visible behind it. Escape or a click
+    on the page closes it. A subclass fills `body` in refresh()."""
+
+    W = 500
+
+    def __init__(self, page: QWidget):
+        from PyQt6.QtCore import QEasingCurve, QPropertyAnimation
+        from PyQt6.QtWidgets import QScrollArea
+        from ui import kit, tokens
+        super().__init__(page.window())
+        self.hide()
+        page.window().installEventFilter(self)
+        self.panel = QFrame(self)
+        self.panel.setObjectName("drawer")
+        kit.drop_shadow(self.panel, "hero")
+        outer = QVBoxLayout(self.panel)
+        outer.setContentsMargins(0, 0, 0, 0)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        inner = QWidget()
+        self.body = QVBoxLayout(inner)
+        self.body.setContentsMargins(28, 24, 28, 28)
+        self.body.setSpacing(12)
+        scroll.setWidget(inner)
+        outer.addWidget(scroll)
+        self._anim = QPropertyAnimation(self.panel, b"geometry", self)
+        self._anim.setDuration(tokens.DURATION)
+        self._anim.setEasingCurve(QEasingCurve(QEasingCurve.Type.OutCubic))
+
+    def refresh(self) -> None:          # pragma: no cover - per drawer
+        pass
+
+    def open(self) -> None:
+        self.setGeometry(self.parentWidget().rect())
+        self.refresh()
+        was = self.isVisible()
+        self.show()
+        self.raise_()
+        self.setFocus()
+        end = self._panel_rect()
+        if not was:
+            self._anim.stop()
+            self._anim.setStartValue(end.translated(self.W, 0))
+            self._anim.setEndValue(end)
+            self._anim.start()
+        else:
+            self.panel.setGeometry(end)
+
+    def _panel_rect(self):
+        from PyQt6.QtCore import QRect
+        w = min(self.W, self.width() - 40)
+        return QRect(self.width() - w - 8, 8, w, self.height() - 16)
+
+    def clear(self, keep=()) -> None:
+        """Empty the body; widgets in `keep` are taken out, not deleted."""
+        while self.body.count():
+            item = self.body.takeAt(0)
+            w = item.widget()
+            if w is not None:
+                if w in keep:
+                    w.setParent(None)
+                else:
+                    w.deleteLater()
+
+    def header(self, title: str) -> None:
+        """The drawer's title and its Close."""
+        head = QHBoxLayout()
+        head.addWidget(label(title, "drawerTitle", wrap=True), 1)
+        close = QPushButton("Close")
+        close.clicked.connect(self.close_drawer)
+        head.addWidget(close, 0, Qt.AlignmentFlag.AlignTop)
+        holder = QWidget()
+        holder.setLayout(head)
+        self.body.addWidget(holder)
+
+    def close_drawer(self) -> None:
+        self.hide()
+
+    def eventFilter(self, obj, event) -> bool:
+        from PyQt6.QtCore import QEvent
+        if obj is self.parentWidget() and event.type() == QEvent.Type.Resize and self.isVisible():
+            self.setGeometry(obj.rect())
+            self.panel.setGeometry(self._panel_rect())
+        return False
+
+    def paintEvent(self, _e) -> None:
+        p = QPainter(self)
+        p.fillRect(self.rect(), QColor(0, 0, 0, 60 if not T.is_dark() else 110))
+        p.end()
+
+    def mousePressEvent(self, e) -> None:
+        if not self.panel.geometry().contains(e.position().toPoint()):
+            self.close_drawer()
+            return
+        super().mousePressEvent(e)
+
+    def keyPressEvent(self, e) -> None:
+        if e.key() == Qt.Key.Key_Escape:
+            self.close_drawer()
+            return
+        super().keyPressEvent(e)
