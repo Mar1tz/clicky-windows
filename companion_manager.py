@@ -39,7 +39,8 @@ from ai import gemini, gemini_memory, gemini_planner, gemini_vision
 from ai.gemini import Models
 from audio.ambient_listener import AmbientListener
 from screen import monitors
-from screen.capture import capture_all_screens
+from screen.capture import capture_all_screens, capture_region
+from ai import look_region
 from ui.panel import AppState
 from tutor import (
     active_window_title, app_key,
@@ -222,6 +223,29 @@ def _code_addendum(active: bool) -> str:
     return code_system_prompt_addendum()
 
 
+_ACT_RE = re.compile(
+    r"\b(?:click|press|tap|select|choose|pick|hit|toggle|open|use|type\s+[^.]{1,40}?\s+(?:in|into))\s+"
+    r"(?:on\s+)?(?:the\s+)?(?P<t>[^.,;:!?]{2,60})", re.IGNORECASE)
+_ACT_END = re.compile(r"(?:(?<!next)\s+to|\s+(?:and|for|so|which|because|then|button|link|icon|tab|option))\b.*$",
+                      re.IGNORECASE)
+
+
+def _norm_question(q: str) -> str:
+    return " ".join(re.sub(r"[^\w\s]", " ", (q or "").lower()).split())
+
+
+def _target_from_answer(said: str) -> str:
+    """What an answer tells them to act on: "Click Checkout to pay" ->
+    "Checkout", "Pick the Arctic Fan for $39" -> "Arctic Fan". "" when it
+    names nothing to act on - then the safety net does not point (UD-04)."""
+    m = _ACT_RE.search(said or "")
+    if not m:
+        return ""
+    t = _ACT_END.sub("", m.group("t")).strip(" \"'")
+    words = t.split()
+    return " ".join(words[:5]) if words else ""
+
+
 def _guess_label(transcript: str) -> str:
     """Extract a 1-3 word label from a locate query for the speech bubble.
        'where is the search bar' → 'search bar' """
@@ -258,6 +282,20 @@ def _speakable(text: str) -> str:
     t = re.sub(r'[*_#`]+', '', t)                   # markdown emphasis/headers
     t = re.sub(r'\s+', ' ', t).strip()
     return t
+
+
+def _one_line(text: str, limit: int = 240) -> str:
+    """What a screen look hands the voice to say: its first sentence (and a
+    second when the first is only a few words), plain, never a list - see
+    docs/SHOW_THE_NEXT_MOVE.md, SN-02."""
+    t = re.sub(r"(?m)^\s*(?:[-*•]+|\d+[.)])\s+", "", text or "")
+    t = re.sub(r"[*_#`•]+", "", t)
+    t = re.sub(r"\s+", " ", t).strip()
+    parts = re.split(r"(?<=[.!?])\s+", t)
+    out = parts[0]
+    if len(out) < 40 and len(parts) > 1:
+        out = f"{out} {parts[1]}"
+    return out if len(out) <= limit else out[:limit].rsplit(" ", 1)[0] + "…"
 
 
 POINT_RE = re.compile(r'\[POINT:(\d+),(\d+):([^:\]]+):screen(\d+)\]')
@@ -1105,10 +1143,85 @@ class CompanionManager(QObject):
             _log.info("realtime unavailable (%s) — cascade will be used", e)
             return False
 
+    # ── SN-01: every screen answer measured ───────────────────────────────
+    #
+    # A question that needed a look - the last words heard, the look called,
+    # the look back (which model, how many tokens), the first drawing, the
+    # first word of the answer - as one line, and a running scorecard. The
+    # chess complaint of 5 Oct came with no numbers at all; the next one
+    # will not. See docs/SHOW_THE_NEXT_MOVE.md.
+
+    _ans: Optional[dict] = None          # this answer's moments
+    _ans_stats: Optional[dict] = None    # the session's, for the scorecard
+
+    def _mark_answer(self, what: str, detail: str = "") -> None:
+        a = self._ans
+        if a is None:
+            return
+        if what not in a:
+            a[what] = time.monotonic()
+        if detail:
+            a[what + ":"] = detail
+
+    def _note_answer(self, **facts) -> None:
+        """What the look was (its path, its cost) for this answer's line."""
+        if self._ans is not None:
+            self._ans.update(facts)
+
+    def _log_answer(self, said: str) -> None:
+        """One timeline line for an answer that looked at the screen."""
+        a, self._ans = self._ans, None
+        if not a or "tool" not in a:
+            return
+        t0 = a.get("asked", a.get("heard", a["tool"]))
+        parts = ["look called +%.1fs" % (a["tool"] - t0)]
+        if "look" in a:
+            parts.append("look +%.1fs (%s)" % (a["look"] - t0, a.get("look:", "")))
+        parts.append("drawn +%.1fs (%s)" % (a["drawing"] - t0, a.get("drawing:", ""))
+                     if "drawing" in a else "nothing drawn")
+        if "audio" in a:
+            parts.append("voice +%.1fs" % (a["audio"] - t0))
+        parts.append("said %d chars" % len(said or ""))
+        _log.info("answer timeline: %s", ", ".join(parts))
+        st = self._ans_stats if self._ans_stats is not None else {}
+        self._ans_stats = st
+        st["looks"] = st.get("looks", 0) + 1
+        if "drawing" in a:
+            st.setdefault("drawn", []).append(a["drawing"] - t0)
+            if "arrow" in a.get("drawing:", ""):
+                st["arrows"] = st.get("arrows", 0) + 1
+        if "audio" in a:
+            st.setdefault("voice", []).append(a["audio"] - t0)
+        if "cost" in a:
+            st.setdefault("cost", []).append(float(a["cost"]))
+        if a.get("path"):
+            paths = st.setdefault("paths", {})
+            paths[a["path"]] = paths.get(a["path"], 0) + 1
+
+        def p50(xs):
+            return sorted(xs)[len(xs) // 2] if xs else None
+        bits = [f"{st['looks']} look(s)"]
+        if st.get("drawn"):
+            bits.append("drawn p50 %.1fs" % p50(st["drawn"]))
+        bits.append(f"{st.get('arrows', 0)} arrow(s), {st['looks'] - len(st.get('drawn', []))} with nothing drawn")
+        if st.get("voice"):
+            bits.append("voice p50 %.1fs" % p50(st["voice"]))
+        # UD-06: what the looks cost, and how often each path was taken - so a
+        # release can show it did not make a message dearer.
+        if st.get("cost"):
+            bits.append("look cost avg $%.4f" % (sum(st["cost"]) / len(st["cost"])))
+        if st.get("paths"):
+            bits.append("(" + ", ".join(f"{k} {v}" for k, v in sorted(st["paths"].items())) + ")")
+        _log.info("answer scorecard: %s", ", ".join(bits))
+
     def _on_realtime_heard(self, text: str) -> None:
+        now = time.monotonic()
         if not self._heard_buf:
             self._rearm_desktop_control()
             self._count_question()
+            self._ans = {"heard": now}
+        if self._ans is not None and "tool" not in self._ans:
+            self._ans["asked"] = now          # the last words before Tora acted
         self._heard_buf.append(text)
 
     def _count_question(self) -> None:
@@ -1154,6 +1267,7 @@ class CompanionManager(QObject):
             return None
 
     def _on_realtime_speaking(self) -> None:
+        self._mark_answer("audio")
         self._activity("")          # it's talking now — nothing to report
         self._emit_state(AppState.SPEAKING)
 
@@ -1168,9 +1282,12 @@ class CompanionManager(QObject):
         # otherwise resolve it ourselves and point. The pointer hold is left
         # in place for the safety net to manage, so it is NOT released here
         # when a locate turn produced no arrow.
-        needs_point = is_locate(heard) and not self._pointed_this_turn
+        # UD-04: a what-to-do answer whose action names something ("click
+        # Checkout") gets its arrow too, when the voice only said it.
+        needs_point = not self._pointed_this_turn and (
+            is_locate(heard) or (gemini_vision.is_next_action(heard) and _target_from_answer(said)))
         if needs_point:
-            self._submit(self._ensure_pointed(heard))
+            self._submit(self._ensure_pointed(heard, said))
         elif self._pointing_held:
             self.sig_point_release.emit()
             self._pointing_held = False
@@ -1179,6 +1296,10 @@ class CompanionManager(QObject):
             self.sig_response_done.emit(said)
             self._last_response = said
             self._record_turn(heard, said)
+        try:
+            self._log_answer(said)
+        except Exception:  # noqa: BLE001 - measuring must never break an answer
+            _log.debug("answer timeline failed", exc_info=True)
         self._heard_buf = []
         self._emit_state(AppState.IDLE)
         if self._metered_talk():
@@ -2643,7 +2764,7 @@ class CompanionManager(QObject):
 
         return None
 
-    async def _ensure_pointed(self, transcript: str) -> None:
+    async def _ensure_pointed(self, transcript: str, said: str = "") -> None:
         """Safety net: a locate question must end with an arrow, not words.
 
         The live model is told to point, but it does not always — sometimes it
@@ -2652,8 +2773,18 @@ class CompanionManager(QObject):
         no arrow, resolves the target itself through the full chain (which
         ends in the vision model, so it works even when there is no name), and
         points. It is what turns "once in a while" into "almost always".
+
+        A what-to-do turn (UD-04) points at what the ANSWER said to act on -
+        "Click Checkout to pay" - through the same chain, free tiers first: at
+        most the one look a correct turn would have made.
         """
-        label = _guess_label(transcript)
+        if not is_locate(transcript):
+            label = _target_from_answer(said)
+            if not label:
+                return
+            _log.info("the answer drew nothing - pointing at %r from its words", label)
+        else:
+            label = _guess_label(transcript)
         if label in ("right here!", "here"):
             label = transcript                # no clean target — let vision read it
         if await self._point_to(label, hold=True):
@@ -2663,10 +2794,18 @@ class CompanionManager(QObject):
                 self._pointing_held = False
 
     async def _tool_look_at_screen(self, args: dict) -> dict:
-        """The expensive one: capture the screen and actually look at it."""
+        """The expensive one: capture the screen and actually look at it.
+
+        What goes back to the voice is the line to SAY and what is now drawn,
+        never the look's readings. Handed those (piece lists, values), the
+        voice read them out - "Black has 7 pawns... let me recount" - instead
+        of answering (SN-02). For a what-should-I-do question exactly one
+        thing is drawn: the move as an arrow, or the one thing to click
+        (SN-03). See docs/SHOW_THE_NEXT_MOVE.md."""
         question = str(args.get("question") or "").strip()
         if not question:
             return {"error": "no question given"}
+        self._mark_answer("tool")
 
         title = active_window_title()
         if self._privacy_guard and is_sensitive_window(title):
@@ -2690,33 +2829,139 @@ class CompanionManager(QObject):
         self.sig_clear_drawings.emit()
 
         shot = self._active_shot(screens) or screens[0]
-        look = await gemini_vision.look(
-            question, shot.base64_jpeg,
-            deep=careful or None,
-        )
-        if not look:
-            return {"error": "could not read the screen clearly"}
+        # UD-02: the window in front, sharper, and the mouse as a hint. A
+        # shot without monitor numbers (tests) looks at what it was given.
+        image, monitor, region, window = shot.base64_jpeg, None, None, None
+        try:
+            monitor = (shot.physical_left, shot.physical_top, shot.physical_width, shot.physical_height)
+            from tutor import foreground_window_rect
+            window = foreground_window_rect()
+            region = look_region.window_region(window, monitor)
+            if region:
+                grabbed = await asyncio.to_thread(capture_region, *region, 1280 if careful else 1024)
+                image, region = (grabbed[0], region) if grabbed else (image, None)
+        except Exception:  # noqa: BLE001 - the whole monitor is always a fine fallback
+            region = None
+        hint = look_region.pointer_hint(question, look_region.cursor_position(), region or monitor) \
+            if monitor else ""
 
-        # Ring what the answer rests on, so the user can see the working.
-        drawn = 0
-        for action in look.actions[:4]:
+        # UD-05: asked again about a screen that has not changed - the last
+        # look's answer and drawing again, and no call.
+        fp = look_region.fingerprint(image)
+        again = self._reusable_look(question, fp)
+        if again is not None:
+            for tag in again["tags"]:
+                sh = self._shape_from_tag(tag)
+                if sh:
+                    self.sig_draw.emit(sh)
+            if again["tags"]:
+                self._pointed_this_turn = True
+                self._mark_answer("drawing", "redrawn")
+            self._mark_answer("look", "reused: the screen had not changed, no call")
+            self._note_answer(path="reused", cost=0.0)
+            return dict(again["result"], reused=True)
+
+        # UD-01: fast first; the deep model only when the fast look is not sure.
+        look = await gemini_vision.look(question, image, context=hint)
+        usage = getattr(look, "usage", None) or {}
+        cost = float(getattr(look, "cost", 0.0) or 0.0)
+        path = getattr(look, "path", "") or ("deep" if getattr(look, "deep", False) else "fast")
+        self._note_answer(path=path, cost=cost)
+        detail = "%s %s, %s in / %s out / %s thinking, $%.4f" % (
+            path, getattr(look, "model", "") or "?", usage.get("promptTokenCount", "?"),
+            usage.get("candidatesTokenCount", "?"), usage.get("thoughtsTokenCount", 0), cost)
+        if region:
+            detail += ", window only"
+        if hint:
+            detail += ", mouse hint"
+        if not look:
+            self._mark_answer("look", detail)
+            return {"error": "could not read the screen clearly"}
+        if look.observations:
+            _log.info("look read: %s", "; ".join(look.observations[:8])[:600])
+
+        # A what-to-do question gets ONE thing drawn: the move, else the first
+        # action. Anything else rings what the answer rests on, as before.
+        actions = list(look.actions or [])
+        if gemini_vision.is_next_action(question):
+            moves = [a for a in actions if getattr(a, "is_move", False)]
+            actions = (moves or actions)[:1]
+        if region:
+            for a in actions:
+                a.box = look_region.to_monitor_box(a.box, region, monitor)
+                if getattr(a, "to_box", None):
+                    a.to_box = look_region.to_monitor_box(a.to_box, region, monitor)
+        snapped = await self._snap_to_controls(actions, monitor, window) if monitor else 0
+        if snapped:
+            detail += f", {snapped} snapped to the real control"
+        self._mark_answer("look", detail)
+        drawn = []
+        for action in actions[:4]:
             sh = self._shape_from_tag(action.as_tag())
             if sh:
                 self.sig_draw.emit(sh)
-                drawn += 1
+                drawn.append(action)
         if drawn:
             self._pointed_this_turn = True
+            self._mark_answer("drawing", ", ".join(
+                "arrow" if getattr(a, "is_move", False) else a.kind for a in drawn))
 
         # Where each highlight is, in the draw tool's 0-1000 coordinates.
         # The voice model never sees the screen: without these, a drawing it
         # adds after a look is a guess - in the first launch it ringed empty
         # space beside the line this look had boxed correctly.
-        return {
-            "answer": look.answer,
-            "observations": look.observations[:8],
-            "highlighted_on_screen": [a.label for a in look.actions[:4]],
-            "highlights": [{"label": a.label, "tag": a.as_tag()} for a in look.actions[:4]],
+        result = {
+            "say": _one_line(look.answer),
+            "drawn": [("arrow: " if getattr(a, "is_move", False) else f"{a.kind}: ") + a.label for a in drawn],
+            "highlights": [{"label": a.label, "tag": a.as_tag()} for a in drawn],
         }
+        self._last_look = {"fp": fp, "question": _norm_question(question), "at": time.monotonic(),
+                           "result": result, "tags": [a.as_tag() for a in drawn]}
+        return result
+
+    # ── UD-05: never pay twice for the same screen ──────────────────────────
+    _last_look: Optional[dict] = None
+    _LOOK_REUSE_S = 180.0
+    _AGAIN_RE = re.compile(r"\b(again|one more time|repeat|where was (it|that)|show me that|remind me)\b",
+                           re.IGNORECASE)
+
+    def _reusable_look(self, question: str, fp) -> Optional[dict]:
+        """The last look, when it can answer this one with no call: the same
+        screen (its sketch, look_region.fingerprint), within three minutes, and
+        either the same question or the user asking for it again."""
+        last = self._last_look
+        if not last or time.monotonic() - last["at"] > self._LOOK_REUSE_S:
+            return None
+        if not look_region.same_screen(fp, last["fp"]):
+            return None
+        heard = " ".join(getattr(self, "_heard_buf", None) or [])
+        if _norm_question(question) == last["question"] or self._AGAIN_RE.search(heard) \
+                or self._AGAIN_RE.search(question):
+            return last
+        return None
+
+    async def _snap_to_controls(self, actions, monitor, window) -> int:
+        """UD-03: a ring drawn round a button is put on the button itself.
+        Windows knows the control's exact rectangle at the box's centre in a
+        few ms; it replaces the model's box only when it is plainly the same
+        thing (see look_region.snap_rect). Moves - pieces on a board, a file
+        to a folder - and pictures are left as drawn."""
+        snapped = 0
+        for a in actions:
+            if getattr(a, "is_move", False):
+                continue
+            rect = look_region.box_to_rect(a.box, monitor)
+            cx, cy = (rect[0] + rect[2]) / 2, (rect[1] + rect[3]) / 2
+            try:
+                element = await asyncio.wait_for(
+                    asyncio.to_thread(look_region.control_rect_at, cx, cy), 0.3)
+            except Exception:  # noqa: BLE001 - a slow or missing tree: keep the model's box
+                element = None
+            exact = look_region.snap_rect(rect, element, window)
+            if exact:
+                a.box = look_region.rect_to_box(exact, monitor)
+                snapped += 1
+        return snapped
 
     async def _tool_draw(self, args: dict) -> dict:
         tags = str(args.get("tags") or "")

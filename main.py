@@ -127,6 +127,7 @@ def _install_crash_guards():
     """
     import faulthandler
     import logging
+    import re
     import threading
     import time
     from config import data_dir
@@ -154,9 +155,19 @@ def _install_crash_guards():
         if path.exists():
             text = path.read_text(encoding="utf-8", errors="replace")
             last = text.rsplit("=== HeyTora started", 1)[-1]
-            if "Fatal Python error" in last or "Windows fatal exception" in last:
+            # faulthandler writes down every Windows exception as it is raised,
+            # handled ones included. 0x8001xxxx are COM/RPC errors - an app
+            # Tora was reading through the accessibility tree went away - which
+            # are caught and carried on from: 1.7.0 logged fifteen in seven
+            # hours of normal running, and the next start called it a crash.
+            raised = re.findall(r"Windows fatal exception: (.+)", last)
+            fatal = [r for r in raised if not r.strip().lower().startswith("code 0x8")]
+            if "Fatal Python error" in last or fatal:
                 log.warning("the last run crashed - its stacks are in crash.log:\n%s",
                             last.strip()[:1500])
+            elif raised:
+                log.info("the last run met %d handled Windows error(s) (%s) - not crashes",
+                         len(raised), ", ".join(sorted(set(r.strip() for r in raised)))[:120])
             elif "Timeout (" in last:
                 log.warning("the last run's main thread stood still for %ss at least "
                             "once (or the PC slept) - stacks in crash.log", HANG_DUMP_S)
@@ -460,6 +471,12 @@ def main():
     # Teaching drawings — generic shape channel with progressive animation
     manager.sig_draw.connect(overlay.add_shape)
     manager.sig_clear_drawings.connect(overlay.clear_annotations)
+    # The card keeps clear of what she drew and points at (SN-09): it covered
+    # the very piece her arrow started from.
+    manager.sig_draw.connect(flow.note_drawing)
+    manager.sig_point_at.connect(flow.note_point)
+    manager.sig_guide_point.connect(flow.note_point)
+    manager.sig_clear_drawings.connect(flow.clear_drawings)
 
     # Errors. The toast names the log file because it only has room for the
     # message itself — issue #15 was reported with no traceback simply because

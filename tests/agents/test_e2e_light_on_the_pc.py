@@ -197,6 +197,23 @@ def test_a_crash_leaves_its_stacks_and_the_next_start_says_so(guards, caplog):
     assert text.rstrip().splitlines()[-1].startswith("=== HeyTora started"), "this run's marker"
 
 
+def test_handled_com_errors_are_not_called_a_crash(guards, caplog):
+    """faulthandler writes down every Windows exception as it is raised, the
+    handled ones too: 1.7.0 logged fifteen 0x80010108 (a COM object gone - an
+    app Tora was reading closed) in seven hours of normal running, and the
+    next start announced a crash."""
+    main, folder = guards
+    (folder / "crash.log").write_text(
+        "\n=== HeyTora started 2026-10-05 16:03:41 pid 1 ===\n"
+        + "Windows fatal exception: code 0x80010108\n\nThread 0x01 (most recent call first):\n  <no Python frame>\n" * 3,
+        encoding="utf-8")
+    with caplog.at_level(logging.INFO, logger="tora.crash"):
+        main._install_crash_guards()
+    assert "crashed" not in caplog.text
+    assert "3 handled Windows error(s) (code 0x80010108) - not crashes" in caplog.text
+    assert faulthandler.is_enabled(), "and the recorder is still on"
+
+
 def test_a_clean_last_run_says_nothing(guards, caplog):
     main, folder = guards
     (folder / "crash.log").write_text("\n=== HeyTora started 2026-10-05 10:00:00 pid 1 ===\n",

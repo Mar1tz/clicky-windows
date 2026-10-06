@@ -1,15 +1,15 @@
 """
 Two ways of looking at the screen.
 
-  fast  gemini-3.8-flash with thinking switched off. The cheap glance, and
-        the first pass on any ordinary screen question. ~1.4 s.
+  fast  gemini-3.8-flash with thinking switched off. The first look at
+        nearly every question: measured on 16 everyday screens, 2-3 s and
+        about $0.0014, and the right thing drawn on 15 of them.
 
-  deep  gemini-3.1-pro-preview. The careful look: the model that can read a
-        chessboard, a dense chart, a page of code, handwriting. Slower and
-        worth it. Advice-shaped questions — "what's the best move", "which
-        of these should I pick", "how do I…" — skip the glance and come
-        straight here, because a fast answer to that kind of question is
-        usually a wrong one.
+  deep  gemini-3.1-pro-preview. The careful look: dense reading (code,
+        small print, formulas) and a move in a game go here first; anything
+        else only when the fast look says it is not sure, or has nothing to
+        draw for a what-to-do question. 4-7 s, about $0.008 (UD-01,
+        docs/SHOW_THE_NEXT_MOVE.md).
 
 Both return the same shape:
 
@@ -54,12 +54,24 @@ _DENSE_RE = re.compile(
     re.IGNORECASE,
 )
 
+# "What should I do?" - the best move, the next step, which one to pick. The
+# answer to these is an action, drawn: one arrow, one line. On 5 Oct a user
+# asked for their best chess move and got the board read back to them.
+_NEXT_ACTION_RE = re.compile(
+    r"\b(best|next|good|winning|strongest|right)\s+(move|play|step)|"
+    r"\bwhat\s+(should|do|can)\s+i\s+(do|play|move|pick|choose|click|press)|"
+    r"\bwhich\s+(one\s+)?(should|do)\s+i\b|\bwhere\s+(should|do)\s+i\s+(move|go|click|put|place|play)|"
+    r"\bmy\s+(next|best)\s+move\b|\bhow\s+do\s+i\s+(win|move)\b",
+    re.IGNORECASE,
+)
+
 _SCHEMA = {
     "type": "object",
     "properties": {
         "answer": {
             "type": "string",
-            "description": "The spoken answer. At most 2 short sentences, no markdown.",
+            "description": ("Spoken aloud: ONE short sentence, no markdown. For a what-to-do "
+                            "question it states the action itself."),
         },
         "actions": {
             "type": "array",
@@ -75,7 +87,13 @@ _SCHEMA = {
                     },
                     "kind": {
                         "type": "string",
-                        "description": "point | circle | rect | arrow",
+                        "description": ("point | circle | rect | move. move: something goes from box "
+                                        "to to_box - a piece to its square, a file to a folder."),
+                    },
+                    "to_box": {
+                        "type": "array",
+                        "items": {"type": "integer"},
+                        "description": "For a move: where it goes, [ymin,xmin,ymax,xmax] 0-1000.",
                     },
                 },
                 "required": ["label", "box"],
@@ -86,8 +104,13 @@ _SCHEMA = {
             "items": {"type": "string"},
             "description": "What is actually on screen that the answer rests on.",
         },
+        "sure": {
+            "type": "boolean",
+            "description": ("true only when you could clearly read what was asked about and are confident "
+                            "in the answer; false hands it to a stronger look."),
+        },
     },
-    "required": ["answer", "actions"],
+    "required": ["answer", "actions", "sure"],
     # Coordinates are emitted BEFORE the prose. If the reply is ever cut
     # off, it is the tail of a sentence that is lost, not the pointer.
     "propertyOrdering": ["actions", "answer", "observations"],
@@ -103,14 +126,25 @@ _DEEP_TIMEOUT_S = 35.0
 _SYSTEM = """You are the eyes of Tora, a visual tutor that points at things
 on the user's screen while it talks.
 
-  • answer is SPOKEN aloud: 1-3 plain sentences, no markdown, no lists.
-  • Describe only what is genuinely in the image. If you cannot see the thing
-    being asked about, say so plainly rather than guessing.
-  • Put every element the user needs to look at in actions, with a tight box
-    around it. Order them the way the user should look at them.
+  • answer is SPOKEN aloud: ONE short plain sentence, no markdown, no lists.
+    Never describe your own process: no "let me", no recounting, no counts
+    the user did not ask for.
+  • When they ask what to do - the best move, the next step, which one to
+    pick, where to click - answer with the action itself ("Knight from b1 to
+    c3, to develop a piece.") and put exactly ONE thing in actions: a move as
+    kind "move" with box on the piece or thing where it is now and to_box on
+    where it goes; otherwise the one thing to click or pick.
+  • Describe only what is genuinely in the image. If you cannot read the
+    thing being asked about clearly, say so in one sentence rather than
+    guessing.
+  • For other questions, put every element the user needs to look at in
+    actions, with a tight box around it, in the order to look at them.
   • observations are the specific things you read off the screen that your
     answer depends on — piece positions, axis values, the exact error text.
-    Be concrete; this is what lets the answer be checked."""
+    They are kept for checking and are never read to the user.
+  • sure: false when you cannot read the thing clearly, or the judgement is
+    genuinely hard (a strong chess move, a subtle bug) - a stronger look
+    then takes over. Never guess to seem sure."""
 
 
 @dataclass
@@ -118,11 +152,24 @@ class Action:
     label: str
     box: tuple[int, int, int, int]   # ymin, xmin, ymax, xmax — 0-1000
     kind: str = "point"
+    # Where a move goes. A move used to be impossible to draw: one box per
+    # action, every kind a labelled circle, so "knight b1 to c3" reached the
+    # screen as two circles and no arrow (5 Oct, a user's chess game).
+    to_box: Optional[tuple[int, int, int, int]] = None
+
+    @property
+    def is_move(self) -> bool:
+        return self.to_box is not None and self.kind in ("move", "arrow")
 
     @property
     def center(self) -> tuple[int, int]:
         """(x, y) normalized 0-1000 — what an arrow aims at."""
         ymin, xmin, ymax, xmax = self.box
+        return (xmin + xmax) // 2, (ymin + ymax) // 2
+
+    @property
+    def to_center(self) -> tuple[int, int]:
+        ymin, xmin, ymax, xmax = self.to_box or self.box
         return (xmin + xmax) // 2, (ymin + ymax) // 2
 
     @property
@@ -135,6 +182,10 @@ class Action:
         """The drawing tag the overlay already knows how to render - in
         Tora's own colour, the one the user picked for her cursor."""
         x, y = self.center
+        if self.is_move:
+            # One arrow, piece to square, and no label on the board.
+            tx, ty = self.to_center
+            return f"[ARROW:{x},{y}->{tx},{ty}:tora]"
         if self.kind == "rect":
             ymin, xmin, ymax, xmax = self.box
             return f"[RECT:{xmin},{ymin},{xmax},{ymax}:tora]"
@@ -151,6 +202,10 @@ class Look:
     observations: list[str] = field(default_factory=list)
     model: str = ""
     deep: bool = False
+    usage: dict = field(default_factory=dict)     # tokens, summed over every call it took (SN-01)
+    sure: bool = True
+    path: str = ""                                # "fast", "deep", "fast→deep" (UD-01)
+    cost: float = 0.0                             # US dollars, every call it took (UD-06)
 
     def __bool__(self) -> bool:
         return bool(self.answer)
@@ -263,23 +318,70 @@ def wants_deep(question: str) -> bool:
     return bool(_ADVICE_RE.search(q) or _DENSE_RE.search(q))
 
 
+# Dense reading: here the fast model misreads, so the deep one goes first.
+# Everything else - charts, boards, choices, "which one" - starts fast and
+# escalates only if the fast look says it is not sure (UD-01).
+_READING_RE = re.compile(
+    r"\b(code|coding|stack\s*trace|traceback|log\s*file|logs|handwrit\w*|contract|clause|small\s+print|"
+    r"fine\s+print|terms\s+and\s+conditions|sheet\s*music|circuit|schematic|proof|equation|formula)\b",
+    re.IGNORECASE,
+)
+
+
+# A move in a game is judgement the fast model gets confidently wrong: on
+# the UD-01 comparison it answered a mate-in-one with "you are checkmated"
+# and said it was sure; the deep model played Ra8#. Every other screen it
+# drew right (15 of 16), so only these go deep first.
+_GAME_RE = re.compile(
+    r"\b(move|moves|play|win|winning|chess|checkmate|mate|board|puzzle|game|sudoku|crossword|poker|"
+    r"cards|solitaire|opening)\b",
+    re.IGNORECASE,
+)
+
+
+def needs_reading(question: str) -> bool:
+    """True when the question is dense reading, which the deep model reads first."""
+    return bool(_READING_RE.search(question or ""))
+
+
+def needs_judgement(question: str) -> bool:
+    """True for a what-to-do question about a game - the best move, where to
+    play to win - which the deep model answers first."""
+    q = question or ""
+    return bool(_NEXT_ACTION_RE.search(q) and _GAME_RE.search(q))
+
+
+def is_next_action(question: str) -> bool:
+    """True for "what should I do?" - the best move, the next step, which one
+    to pick: the answer is one action, drawn, said in a line."""
+    return bool(_NEXT_ACTION_RE.search(question or ""))
+
+
+def _box(raw) -> Optional[tuple[int, int, int, int]]:
+    if not isinstance(raw, (list, tuple)) or len(raw) != 4:
+        return None
+    try:
+        ymin, xmin, ymax, xmax = [max(0, min(1000, int(v))) for v in raw]
+    except (TypeError, ValueError):
+        return None
+    if xmax <= xmin or ymax <= ymin:
+        return None
+    return ymin, xmin, ymax, xmax
+
+
 def _parse(data: dict, model: str, deep: bool) -> Look:
     actions = []
     for a in data.get("actions", []):
-        box = a.get("box") or []
-        if len(box) != 4:
+        box = _box(a.get("box"))
+        if box is None:
             continue
-        try:
-            vals = [max(0, min(1000, int(v))) for v in box]
-        except (TypeError, ValueError):
-            continue
-        ymin, xmin, ymax, xmax = vals
-        if xmax <= xmin or ymax <= ymin:
-            continue
+        kind = (a.get("kind") or "point").strip().lower()
+        to_box = _box(a.get("to_box")) if kind in ("move", "arrow") else None
         actions.append(Action(
             label=(a.get("label") or "").strip()[:40] or "here",
-            box=(ymin, xmin, ymax, xmax),
-            kind=(a.get("kind") or "point").strip().lower(),
+            box=box,
+            kind=kind if (to_box or kind not in ("move", "arrow")) else "point",
+            to_box=to_box,
         ))
     return Look(
         answer=(data.get("answer") or "").strip(),
@@ -290,6 +392,61 @@ def _parse(data: dict, model: str, deep: bool) -> Look:
     )
 
 
+async def _ask(question: str, screenshot_b64: str, *, deep: bool, context: str, timeout: float) -> Optional[Look]:
+    """One call to one model. None when it failed or came back unusable."""
+    model = Models.VISION_DEEP if deep else Models.VISION_FAST
+    ask = f"{context}\n\n{question}" if context else question
+    contents = [{"role": "user", "parts": [
+        gemini.image_part(screenshot_b64),
+        gemini.text_part(ask),
+    ]}]
+    usage: dict = {}
+    try:
+        data = await gemini.generate_json(
+            model, contents, _SCHEMA,
+            system=_SYSTEM,
+            max_tokens=4096,
+            # The fast look skips its reasoning pass entirely; the deep look
+            # gets a bounded budget so it always has room left to answer.
+            think=_DEEP_THINK if deep else 0,
+            timeout=min(timeout, _DEEP_TIMEOUT_S) if deep else timeout,
+            usage=usage,
+        )
+    except Exception as e:
+        _log.warning("%s look failed: %s", "deep" if deep else "fast", e)
+        return None
+    if not data:
+        return None
+    out = _parse(data, model, deep)
+    out.usage = usage
+    out.cost = cost_usd(model, usage)
+    out.sure = data.get("sure") is not False
+    return out
+
+
+# US dollars per million tokens, in and out (thinking is billed as out) - the
+# same table HeyTora's server bills with (supabase/functions/heytora/rules.ts).
+PRICES = {"flash-lite": (0.15, 0.6), "flash": (0.5, 3.0), "pro": (2.5, 15.0)}
+
+
+def cost_usd(model: str, usage: dict) -> float:
+    """What one call cost, from its usageMetadata (UD-06)."""
+    m = (model or "").lower()
+    pin, pout = PRICES["flash-lite" if "flash-lite" in m else "flash" if "flash" in m else "pro"]
+    u = usage or {}
+    return (u.get("promptTokenCount", 0) * pin
+            + (u.get("candidatesTokenCount", 0) + u.get("thoughtsTokenCount", 0)) * pout) / 1e6
+
+
+def _summed(*usages: dict) -> dict:
+    out: dict = {}
+    for u in usages:
+        for k, v in (u or {}).items():
+            if isinstance(v, (int, float)):
+                out[k] = out.get(k, 0) + v
+    return out
+
+
 async def look(
     question: str,
     screenshot_b64: str,
@@ -298,49 +455,57 @@ async def look(
     context: str = "",
     timeout: float = 90.0,
 ) -> Look:
-    """Look at the screen and answer.
+    """Look at the screen and answer: fast first, deep only when needed (UD-01).
 
-    deep=None picks the model from the question; pass True or False to force
-    one. A deep look that fails falls back to the fast one rather than
-    returning nothing — a quick answer beats an error.
+    The deep model (Pro, with up to 1,536 thinking tokens) costs about 23
+    times the fast one and takes 8-20 s to its ~1.4 s. It used to be chosen
+    by the question's words - 11 of 20 everyday questions went to it - and
+    by the voice's `careful` flag. Now:
+
+      deep=None   fast first; the deep model only when the fast look is
+                  not sure, came back unusable, or answered a what-to-do
+                  question with nothing to draw - once. Dense reading (code,
+                  small print, formulas) and a move in a game go deep first.
+      deep=True   the deep model (a fast answer if it fails)
+      deep=False  the fast model only
     """
     if not screenshot_b64:
         return Look()
 
-    use_deep = wants_deep(question) if deep is None else deep
-    model = Models.VISION_DEEP if use_deep else Models.VISION_FAST
-
-    ask = question
-    if context:
-        ask = f"{context}\n\n{question}"
-    contents = [{"role": "user", "parts": [
-        gemini.image_part(screenshot_b64),
-        gemini.text_part(ask),
-    ]}]
-
-    data = None
-    try:
-        data = await gemini.generate_json(
-            model, contents, _SCHEMA,
-            system=_SYSTEM,
-            max_tokens=4096,
-            # The glance skips its reasoning pass entirely; the deep look
-            # gets a bounded budget so it always has room left to answer.
-            think=_DEEP_THINK if use_deep else 0,
-            timeout=min(timeout, _DEEP_TIMEOUT_S) if use_deep else timeout,
-        )
-    except Exception as e:
-        _log.warning("%s look failed: %s", "deep" if use_deep else "fast", e)
-
-    if data is None and use_deep:
+    if deep is True or (deep is None and (needs_reading(question) or needs_judgement(question))):
+        first = await _ask(question, screenshot_b64, deep=True, context=context, timeout=timeout)
+        if first:
+            first.path = "deep"
+            return first
         # Was: only an EXCEPTION fell back. A truncated or unparseable reply
         # returned an empty Look and the user heard nothing after 40 s.
         _log.info("deep look gave nothing usable — answering with the fast model")
-        return await look(
-            question, screenshot_b64, deep=False,
-            context=context, timeout=timeout,
-        )
-    return _parse(data, model, use_deep) if data else Look()
+        fast = await _ask(question, screenshot_b64, deep=False, context=context, timeout=timeout)
+        if fast:
+            fast.path = "deep→fast"
+        return fast or Look()
+
+    fast = await _ask(question, screenshot_b64, deep=False, context=context, timeout=timeout)
+    if deep is False:
+        if fast:
+            fast.path = "fast"
+        return fast or Look()
+    if fast and fast.answer and fast.sure and not (is_next_action(question) and not fast.actions):
+        fast.path = "fast"
+        return fast
+    why = ("gave nothing usable" if not fast or not fast.answer else
+           "was not sure" if not fast.sure else "had nothing to draw")
+    _log.info("fast look %s — asking the deep model", why)
+    careful = await _ask(question, screenshot_b64, deep=True, context=context, timeout=timeout)
+    if careful and careful.answer:
+        careful.path = "fast→deep"
+        careful.usage = _summed(fast.usage if fast else {}, careful.usage)
+        careful.cost += fast.cost if fast else 0.0
+        return careful
+    if fast and fast.answer:
+        fast.path = "fast (deep failed)"
+        return fast
+    return Look()
 
 
 # ── Pointing ─────────────────────────────────────────────────────────────────
