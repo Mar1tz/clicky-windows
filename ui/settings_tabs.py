@@ -598,17 +598,14 @@ class AccountTab(Tab):
         wrap.setLayout(foot)
         self.body.add(wrap)
 
-    @staticmethod
-    def _close_account(email: str) -> None:
-        """Closing an account is done by HeyTora, on request (the privacy
-        policy: deleted within 30 days) - so this starts that email."""
-        from urllib.parse import quote
-        from PyQt6.QtCore import QUrl
-        from PyQt6.QtGui import QDesktopServices
-        from ui.app_popover import SUPPORT_EMAIL
-        body = f"Please close my HeyTora account{f' ({email})' if email else ''} and delete its data."
-        QDesktopServices.openUrl(QUrl(f"mailto:{SUPPORT_EMAIL}?subject={quote('Close my HeyTora account')}"
-                                      f"&body={quote(body)}"))
+    def _close_account(self, email: str) -> None:
+        """Closing the account, done by HeyTora's server once the email is
+        typed to confirm (settings_parts.DeleteAccountDialog)."""
+        from ui.settings_parts import DeleteAccountDialog
+        w = self.window()
+        over = getattr(w, "_settings", None)
+        over = over if over is not None and over.isVisible() else w
+        DeleteAccountDialog(over, self.bridge, email, self.bridge.account_deleted).open()
 
 
 # ── Usage ─────────────────────────────────────────────────────────────────────

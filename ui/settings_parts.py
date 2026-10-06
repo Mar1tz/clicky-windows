@@ -475,3 +475,80 @@ class MicDialog(SubDialog):
     def close_dialog(self) -> None:
         self._stop()
         super().close_dialog()
+
+
+class DeleteAccountDialog(SubDialog):
+    """Closing the account (Settings > Account): say what goes, have the
+    email typed to confirm, then ask HeyTora's server off the UI thread.
+    `gone` runs on the UI thread once the server has deleted it."""
+
+    _answer = pyqtSignal(str)
+
+    def __init__(self, over: QWidget, bridge, email: str, gone: Callable[[], None]):
+        super().__init__(over, "Delete your HeyTora account?",
+                         "Your account, plan and usage history, and your agents' history on "
+                         "HeyTora's server are deleted for good. What is kept on this PC (your "
+                         "journal) stays - clear it in Data & privacy.")
+        from PyQt6.QtWidgets import QLineEdit
+        self.bridge, self.email, self.gone = bridge, (email or "").strip(), gone
+        self.body.addWidget(label(f"Type {self.email} to confirm.", "setDesc", wrap=True))
+        self.typed = QLineEdit()
+        self.typed.setPlaceholderText(self.email)
+        self.typed.textChanged.connect(self._check)
+        self.body.addWidget(self.typed)
+        self.problem = label("", "setNote", wrap=True)
+        self.problem.hide()
+        self.body.addWidget(self.problem)
+        self.foot.addStretch(1)
+        cancel = button("Cancel")
+        cancel.clicked.connect(self.close_dialog)
+        self.foot.addWidget(cancel)
+        self.delete = button("Delete account", "danger")
+        self.delete.setEnabled(False)
+        self.delete.clicked.connect(self._go)
+        self.foot.addWidget(self.delete)
+        self._answer.connect(self._heard)
+        self._busy = False
+
+    def _check(self) -> None:
+        same = self.typed.text().strip().lower() == self.email.lower() and bool(self.email)
+        self.delete.setEnabled(same and not self._busy)
+
+    def _go(self) -> None:
+        import threading
+        if self._busy:
+            return
+        self._busy = True
+        self.delete.setEnabled(False)
+        self.delete.setText("Deleting…")
+        self.typed.setEnabled(False)
+        self.problem.hide()
+        typed = self.typed.text().strip()
+
+        def ask() -> None:
+            words = self.bridge.delete_account(typed)
+            try:
+                self._answer.emit(words)            # queued to the UI thread
+            except RuntimeError:
+                pass                                # the dialog is gone
+
+        threading.Thread(target=ask, name="heytora-delete-account", daemon=True).start()
+
+    def close_dialog(self) -> None:
+        """Not while the server is deciding: the answer must be heard (a
+        deleted account takes the app back to sign-in)."""
+        if not self._busy:
+            super().close_dialog()
+
+    def _heard(self, words: str) -> None:
+        self._busy = False
+        if not words:
+            self.close_dialog()
+            self.gone()
+            return
+        self.problem.setText(words)
+        self.problem.show()
+        self.delete.setText("Delete account")
+        self.typed.setEnabled(True)
+        self._check()
+        self._place()

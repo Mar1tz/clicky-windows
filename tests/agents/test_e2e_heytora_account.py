@@ -53,6 +53,8 @@ class FakeHeyTora:
         self.pass_refusal = ""                  # "passes" / "window": refuse a reused window once
         self.clock_offset = 0.0                 # the server's clock minus this PC's
         self.standby = 0                        # standby passes (0007): the voice waiting, uncounted
+        self.paid = False                       # a paid plan still running: no deleting
+        self.deleted = False
 
     def window(self, kind: str, new: bool) -> tuple[int, float, bool]:
         held = self.windows.get(kind)
@@ -107,6 +109,17 @@ class FakeHeyTora:
         if self.ended and "/functions/v1/heytora" in path:
             return httpx.Response(401, json={"error": {"code": 401, "status": "HEYTORA_SIGNIN",
                                                        "message": "Sign in to HeyTora to keep talking."}})
+        if path.endswith("/heytora/account") and request.method == "DELETE":
+            if body.get("confirm", "").lower() != "amy@example.com":
+                return httpx.Response(400, json={"error": {"code": 400, "status": "HEYTORA_CONFIRM",
+                                                           "message": "Type the email you sign in with to confirm."}})
+            if self.paid:
+                return httpx.Response(409, json={"error": {
+                    "code": 409, "status": "HEYTORA_PAID", "heytora": {"reason": "paid", "plan": "pro"},
+                    "message": "Cancel your plan on the HeyTora website first, then delete the account."}})
+            self.deleted, self.ended = True, True
+            self.accounts.discard("amy@example.com")
+            return httpx.Response(200, json={"deleted": True})
         if path.endswith("/heytora/me"):
             return httpx.Response(200, json={
                 "plan": self.plan, "plan_name": self.plan.capitalize(), "limits": self.limits,
@@ -324,6 +337,51 @@ def test_signing_out_forgets_everything(heytora):
     heytora.account.sign_out()
     assert not heytora.account.signed_in() and not store.path().exists()
     assert "/auth/v1/logout" in heytora.fake.paths()
+
+
+def test_deleting_the_account_closes_it_on_the_server_and_forgets_it_here(heytora):
+    from account import store
+    _signed_in(heytora)
+    heytora.account.delete_account(" Amy@example.com ")
+    assert heytora.fake.deleted, "the server was asked, with the sign-in"
+    method, _path, headers, body = next(c for c in heytora.fake.calls if c[1].endswith("/heytora/account"))
+    assert method == "DELETE" and headers["authorization"].startswith("Bearer ")
+    assert body == {"confirm": "Amy@example.com"}
+    assert not heytora.account.signed_in() and not store.path().exists()
+
+
+def test_a_refused_delete_keeps_the_account_and_says_why(heytora):
+    from account.service import AccountError
+    _signed_in(heytora)
+    heytora.fake.paid = True
+    with pytest.raises(AccountError, match="Cancel your plan"):
+        heytora.account.delete_account("amy@example.com")
+    assert heytora.account.signed_in(), "nothing forgotten unless it worked"
+    heytora.fake.paid = False
+    with pytest.raises(AccountError, match="Type the email"):
+        heytora.account.delete_account("someone@else.com")
+    assert heytora.account.signed_in() and not heytora.fake.deleted
+
+
+def test_the_bridge_gives_the_reason_in_words(heytora):
+    from ui.app_bridge import AppBridge
+    _signed_in(heytora)
+    heytora.fake.paid = True
+    assert "Cancel your plan" in AppBridge().delete_account("amy@example.com")
+    heytora.fake.paid = False
+    assert AppBridge().delete_account("amy@example.com") == ""
+
+
+def test_the_server_deletes_only_on_a_typed_email_and_never_a_paid_plan():
+    fn = (ROOT / "supabase/functions/heytora/index.ts").read_text(encoding="utf-8")
+    route = fn[fn.index('path === "account" && req.method === "DELETE"'):]
+    route = route[:route.index("return json(200, { deleted: true });")]
+    assert "HEYTORA_CONFIRM" in route and "user.email" in route
+    assert route.index("HEYTORA_PAID") < route.index("deleteUser(user.id)"), "paid plans refused first"
+    for sql in ("0001_auth_usage.sql", "0002_agent_tasks.sql", "0004_heytora_metering.sql"):
+        text = (ROOT / "supabase/migrations" / sql).read_text(encoding="utf-8")
+        refs = re.findall(r"references auth\.users\(id\)[^,;]*", text)
+        assert refs and all("on delete cascade" in r for r in refs), sql
 
 
 # -- the plan ----------------------------------------------------------------------------------------------------

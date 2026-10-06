@@ -299,6 +299,19 @@ class Account:
             except Exception:  # noqa: BLE001 - signed out here either way
                 pass
 
+    def delete_account(self, confirm_email: str) -> None:
+        """Close the account on HeyTora's server - its profile, usage and agent
+        history go with it - then forget the sign-in here. The server checks
+        the typed email again, and refuses while a paid plan is active
+        (AccountError, in words). Nothing is forgotten here unless it worked."""
+        self._call("DELETE", "account", {"confirm": (confirm_email or "").strip()})
+        with self._lock:
+            self._session, self._summary, self._tickets, self._new_talk = None, None, {}, False
+            self._summary_error = ""
+            store.clear()
+        _log.info("account deleted")
+        self._changed()
+
     # -- the session -------------------------------------------------------------------------------------
 
     def token(self) -> str:

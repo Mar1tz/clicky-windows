@@ -540,6 +540,26 @@ class AppBridge(QObject):
         from ui import sign_in_gate
         sign_in_gate.lost()
 
+    def delete_account(self, confirm_email: str) -> str:
+        """Close the account on HeyTora's server. A network call - run it off
+        the UI thread. "" when it is gone, else why not, in words."""
+        from account.service import AccountError, account
+        try:
+            account().delete_account(confirm_email)
+        except AccountError as e:
+            return str(e) or "HeyTora's server had a problem - try again."
+        except Exception:  # noqa: BLE001
+            _log.exception("could not delete the account")
+            return "Something went wrong - try again."
+        return ""
+
+    def account_deleted(self) -> None:
+        """After delete_account, on the UI thread: as after signing out, the
+        app goes back to the sign-in window."""
+        self._access_changed()
+        from ui import sign_in_gate
+        sign_in_gate.lost()
+
     def set_access_mode(self, mode: str) -> None:
         """"account" or "own_key", for every launch, and taken up now."""
         from config import cfg

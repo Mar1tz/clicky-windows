@@ -225,6 +225,11 @@ def qss() -> str:
         border-top-left-radius: {tokens.RADIUS_XL}px; border-bottom-left-radius: {tokens.RADIUS_XL}px;
     }}
     QStackedWidget#settingsStack {{ background: transparent; }}
+    /* The tab's scrollbar runs down the card's rounded right edge: kept clear
+       of the corners, and in from the edge. */
+    QFrame#settingsCard QScrollBar:vertical {{
+        margin: {tokens.RADIUS_XL}px 6px {tokens.RADIUS_XL}px 0px; width: 14px;
+    }}
     /* A tab's groups (ui/settings_parts.py): a name above a soft block, rows of a
        title and at most one short line, larger and darker than a page's rows. */
     QLabel#setGroup {{ font-size: 15px; font-weight: 700; }}

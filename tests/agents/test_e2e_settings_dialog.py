@@ -180,3 +180,46 @@ def test_the_microphone_list_is_each_mic_once(monkeypatch):
     monkeypatch.setattr(sd, "query_devices", lambda: devices)
     monkeypatch.setattr(sd.default, "device", (1, 3))
     assert AppBridge().mics() == [(1, "Microphone (Realtek(R) Audio)", True), (2, "Headset (Jabra)", False)]
+
+
+
+# ── Account: deleting it ──────────────────────────────────────────────────────
+
+def test_delete_account_needs_the_email_typed_and_goes_back_to_sign_in(qapp):
+    """Delete stays off until the email is typed; the server's no is shown
+    in the dialog; a yes closes it and takes the app back to sign-in."""
+    import time
+    from PyQt6.QtWidgets import QWidget
+    from ui.settings_parts import DeleteAccountDialog
+
+    class Bridge:
+        answer, asked = "Cancel your plan on the HeyTora website first.", []
+
+        def delete_account(self, email):
+            self.asked.append(email)
+            return self.answer
+
+    br, gone, host = Bridge(), [], QWidget()
+    host.resize(800, 600)
+    dlg = DeleteAccountDialog(host, br, "amy@example.com", lambda: gone.append(1))
+    dlg.open()
+
+    def wait(cond):
+        end = time.time() + 5
+        while not cond() and time.time() < end:
+            qapp.processEvents()
+        assert cond()
+
+    assert not dlg.delete.isEnabled()
+    dlg.typed.setText("amy@example.co")
+    assert not dlg.delete.isEnabled()
+    dlg.typed.setText(" AMY@example.com")
+    assert dlg.delete.isEnabled()
+    dlg.delete.click()
+    wait(lambda: not dlg._busy)
+    assert br.asked == ["AMY@example.com"] and not gone
+    assert "Cancel your plan" in dlg.problem.text() and dlg.delete.isEnabled()
+    br.answer = ""
+    dlg.delete.click()
+    wait(lambda: gone == [1])
+    assert dlg.isHidden()

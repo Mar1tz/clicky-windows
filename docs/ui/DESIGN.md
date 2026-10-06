@@ -195,7 +195,7 @@ white. Escape or a click on the dimmed app closes it. Built in
 | | System | Start with Windows, the floating panel · sounds (the listening pop) · updates |
 | | Agents | When they ask you (approve automatically - its limits in its one line -, show the plan first, run without asking up to) · Where they work (workspace: Open, Change) · Limits for each job (jobs at once, time, tokens - fixed choices) · Where their requests go (each endpoint; Manage opens the editor in a dialog) · History (clear). Every choice saves at once and reaches the running agents (`bridge.set_agent_rail`); no Save button, no embedded panel |
 | | Advanced | API keys · models in use (read-only, refresh) · diagnostics · report, setup again · Quit |
-| Account | Account | Profile (name, email, picture) · how Tora thinks (your plan or your own key) · Sign out · Delete account (an email to support: closing is done by HeyTora, as the privacy policy says) |
+| Account | Account | Profile (name, email, picture) · how Tora thinks (your plan or your own key) · Sign out · Delete account (type your email to confirm; the server deletes it and everything that cascades from it, refuses while a paid plan is active; then back to sign-in) |
 | | Usage | This month on the plan: each allowance with a bar (amber from 80%), today, overall use, when it starts again · Change plan · Manage on heytora.com |
 | | Plans & billing | Free, Pro, Max side by side - the website's words and prices (`settings_tabs.PLANS`, from heytora-web `site.ts`), yours marked · billing on heytora.com |
 | | Data & privacy | What she looks at · what she keeps (journal on/off, on this PC only, download, delete) · desktop actions allowed · Privacy policy, Terms |
