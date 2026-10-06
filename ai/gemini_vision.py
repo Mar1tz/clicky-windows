@@ -330,9 +330,18 @@ _READING_RE = re.compile(
 # the UD-01 comparison it answered a mate-in-one with "you are checkmated"
 # and said it was sure; the deep model played Ra8#. Every other screen it
 # drew right (15 of 16), so only these go deep first.
+#
+# "play" is not one of them on its own (SP-08): "what should I play next?"
+# on Spotify went to the deep model, $0.009 and 5 s to name a song. It
+# counts when the window in front is a game - _GAME_TITLE_RE.
 _GAME_RE = re.compile(
-    r"\b(move|moves|play|win|winning|chess|checkmate|mate|board|puzzle|game|sudoku|crossword|poker|"
+    r"\b(move|moves|win|winning|chess|checkmate|mate|board|puzzle|game|sudoku|crossword|poker|"
     r"cards|solitaire|opening)\b",
+    re.IGNORECASE,
+)
+_GAME_TITLE_RE = re.compile(
+    r"\b(chess|lichess|sudoku|solitaire|poker|minesweeper|crossword|wordle|checkers|backgammon|mahjong|"
+    r"tic\W?tac\W?toe|connect\s*four|games?)\b",
     re.IGNORECASE,
 )
 
@@ -342,11 +351,12 @@ def needs_reading(question: str) -> bool:
     return bool(_READING_RE.search(question or ""))
 
 
-def needs_judgement(question: str) -> bool:
+def needs_judgement(question: str, title: str = "") -> bool:
     """True for a what-to-do question about a game - the best move, where to
-    play to win - which the deep model answers first."""
+    play to win, or anything asked with a game in front (its window title) -
+    which the deep model answers first."""
     q = question or ""
-    return bool(_NEXT_ACTION_RE.search(q) and _GAME_RE.search(q))
+    return bool(_NEXT_ACTION_RE.search(q) and (_GAME_RE.search(q) or _GAME_TITLE_RE.search(title or "")))
 
 
 def is_next_action(question: str) -> bool:
@@ -452,6 +462,7 @@ async def look(
     *,
     deep: Optional[bool] = None,
     context: str = "",
+    title: str = "",
     timeout: float = 90.0,
 ) -> Look:
     """Look at the screen and answer: fast first, deep only when needed (UD-01).
@@ -467,11 +478,14 @@ async def look(
                   small print, formulas) and a move in a game go deep first.
       deep=True   the deep model (a fast answer if it fails)
       deep=False  the fast model only
+
+    title is the window in front; a game there makes "what should I play?"
+    a move (SP-08).
     """
     if not screenshot_b64:
         return Look()
 
-    if deep is True or (deep is None and (needs_reading(question) or needs_judgement(question))):
+    if deep is True or (deep is None and (needs_reading(question) or needs_judgement(question, title))):
         first = await _ask(question, screenshot_b64, deep=True, context=context, timeout=timeout)
         if first:
             first.path = "deep"

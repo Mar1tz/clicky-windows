@@ -385,7 +385,20 @@ their words alone.
 *Prove:* unit tests on the same 20 questions; a typed "which one should I
 pick?" goes fast.
 
-### SP-08 · Sharper routing words — S — free
+### SP-08 · Sharper routing words — S — free — **done (6 Oct)**
+
+**Done:**
+* **"play" is no longer a game word on its own.** "move", "win", "chess",
+  "board" and the rest still are.
+* **A game in the window title counts.** On lichess, Solitaire and the
+  like, any what-to-do question is a game move: `look()` gets the title,
+  and `needs_judgement(question, title)` checks it.
+* **SP-01, music, chess and tic-tac-toe** ($0.012):
+  * "what should I play next?" on the music screen is now **fast and
+    right**: $0.0009 and 3.1 s, where the deep look cost $0.005;
+  * chess and tic-tac-toe still go deep and are right.
+  * **The bench is 23/23.** The baseline's music row is from this run, and
+    its note says so.
 
 **Why:** `_GAME_RE` treats "play" as a game word, so "what should I play
 next?" on Spotify goes to the deep model.
@@ -617,7 +630,7 @@ answered the mate-in-one correctly.
 | SP-05 | Fewer words back — done | B | S | ~$0.05 | SP-01 |
 | SP-06 | Right image size — done | B | S | ~$0.13 | SP-01 |
 | SP-07 | Typed path, same rule — done | B | S | free | – |
-| SP-08 | Sharper routing words | B | S | free | SP-01 screen |
+| SP-08 | Sharper routing words — done | B | S | free | SP-01 screen |
 | SP-16 | A lighter live prompt | B | S | ~$0.25 | SP-02 |
 | SP-17 | "Let me look" or not | B | S | ~$0.25 | SP-02 |
 | SP-09 | Snap to the real control | C | M | free | – |

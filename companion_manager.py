@@ -2896,7 +2896,7 @@ class CompanionManager(QObject):
             return dict(again["result"], reused=True)
 
         # UD-01: fast first; the deep model only when the fast look is not sure.
-        look = await gemini_vision.look(question, image, context=hint)
+        look = await gemini_vision.look(question, image, context=hint, title=active_window_title())
         usage = getattr(look, "usage", None) or {}
         cost = float(getattr(look, "cost", 0.0) or 0.0)
         path = getattr(look, "path", "") or ("deep" if getattr(look, "deep", False) else "fast")

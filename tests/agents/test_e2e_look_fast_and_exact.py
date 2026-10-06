@@ -305,3 +305,33 @@ def test_a_typed_game_move_or_dense_reading_goes_deep(q):
     from ai.gemini_provider import GeminiProvider
     assert GeminiProvider.pick_model(q, True, None) == Models.VISION_DEEP
     assert GeminiProvider.pick_model(q, True, "my-model") == "my-model", "the tray's choice always wins"
+
+
+# -- SP-08: sharper routing words -----------------------------------------------------------------------------
+
+@pytest.mark.parametrize("q,title,deep", [
+    ("what should I play next?", "Spotify Premium", False),        # a song: SP-01's music screen
+    ("what should I play next?", "", False),
+    ("what should I play?", "Play chess online - lichess.org - Google Chrome", True),
+    ("where should I play now?", "Microsoft Solitaire Collection", True),
+    ("where should I play to win?", "", True),                     # "win" is a game word
+    ("what's my best move?", "", True),
+    ("where is the settings button?", "Play chess online - lichess.org", False),  # not a what-to-do question
+])
+def test_play_is_a_game_word_only_with_a_game_in_front(q, title, deep):
+    assert gemini_vision.needs_judgement(q, title) is deep
+
+
+def test_the_look_is_given_the_window_in_front(monkeypatch):
+    sent = {}
+
+    async def fake_generate_json(model, contents, schema, **kw):
+        sent.setdefault("models", []).append(model)
+        return {"answer": "Play Blinding Lights.", "actions": [{"label": "Blinding Lights", "box": [1, 1, 9, 9]}],
+                "sure": True}
+    monkeypatch.setattr(gemini, "generate_json", fake_generate_json)
+    asyncio.run(gemini_vision.look("what should I play next?", "img", title="Spotify Premium"))
+    assert sent["models"] == [Models.VISION_FAST]
+    sent.clear()
+    asyncio.run(gemini_vision.look("what should I play next?", "img", title="lichess.org"))
+    assert sent["models"] == [Models.VISION_DEEP]
