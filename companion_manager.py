@@ -373,7 +373,6 @@ class CompanionManager(QObject):
     sig_activity            = pyqtSignal(str, str)        # (state_key, human message)
     sig_agent_event         = pyqtSignal(object)          # agents.core.Event → Active Agents UI
     sig_agent_notice        = pyqtSignal(str, str)        # (title, body) → tray toast
-    sig_open_extension = pyqtSignal(str, str)   # (extension id, "" | "dashboard" | "wizard:<template>")
     sig_agents_ready        = pyqtSignal()                # workforce built (or failed); wire the UI now
     sig_account_problem     = pyqtSignal(str, str)        # (kind, plain words); ("", "") = over
     sig_hands_free          = pyqtSignal(bool)            # listening with no key held: the flow bar's ✕ ✓
@@ -767,16 +766,30 @@ class CompanionManager(QObject):
         if recent:
             parts.append("Recently finished: " + "; ".join(
                 f"'{t.title}' {t.status.value}" for t in recent))
-        reg = getattr(mgr, "extensions", None)
-        if reg is not None:
-            try:
-                parts.extend(reg.voice_hints(include_off=False))
-            except Exception:  # noqa: BLE001
-                pass
-        if not parts:
+        line = ""
+        if parts:
+            line = (" ".join(parts) + ". If the user asks how it is going, answer from this; "
+                    "to pause, resume, cancel or approve, call manage_agents.")
+        skills = self.skills_line()
+        return f"{line} {skills}".strip()
+
+    def skills_line(self) -> str:
+        """The user's skills, one line each (docs/agents/SKILLS.md): what
+        lets the model start a job the user's way, or walk them through
+        it. Only names and when-lines - a skill's text is read when used."""
+        lib = getattr(self._agents, "skills", None) if self._agents is not None else None
+        if lib is None:
             return ""
-        return (" ".join(parts) + ". If the user asks how it is going, answer from this; "
-                "to pause, resume, cancel or approve, call manage_agents.")
+        try:
+            catalogue = lib.catalogue()
+        except Exception:  # noqa: BLE001
+            _log.debug("could not read the skills", exc_info=True)
+            return ""
+        if not catalogue:
+            return ""
+        return ("The user's skills - how they want these jobs done:\n" + catalogue + "\n"
+                "When they ask you to DO one of these jobs, call delegate_task with skill set to its id. "
+                "When they ask HOW to do one, call read_skill and guide them through it on screen.")
 
     @property
     def agents(self):
@@ -1695,6 +1708,7 @@ class CompanionManager(QObject):
             "search_web":      self._tool_search,
             "recall":          self._tool_recall,
             "delegate_task":   self._tool_delegate_task,
+            "read_skill":      self._tool_read_skill,
             "desktop_action":  self._tool_desktop_action,
             "manage_agents":   self._tool_manage_agents,
         }
@@ -1721,12 +1735,20 @@ class CompanionManager(QObject):
         goal = str(args.get("goal") or "").strip()
         if not goal:
             return {"error": "goal is required"}
-        title = str(args.get("title") or goal[:60]).strip()
+        skill = None
+        skill_id = str(args.get("skill") or "").strip()
+        if skill_id:
+            skill = self._agents.skills.get(skill_id) if self._agents.skills is not None else None
+            if skill is None:
+                return {"error": f"there is no skill {skill_id!r} - check the list, or leave skill out"}
+        title = str(args.get("title") or (skill.name if skill else goal[:60])).strip()
         try:
-            kind = TaskKind(str(args.get("kind") or "coding").lower())
+            kind = TaskKind(str(args.get("kind") or ("computer" if skill else "coding")).lower())
         except ValueError:
             kind = TaskKind.CODING
         meta = {"request": goal, "reply": f"Understood. Starting on {title} now."}
+        if skill is not None:
+            meta["skill"] = skill.id
         hint = str(args.get("workspace_hint") or "").strip().strip("'\"")
         if hint:
             meta["subdir"] = hint
@@ -1749,6 +1771,19 @@ class CompanionManager(QObject):
             "note": ("The agent is working in the background. Read the steps back "
                      "briefly and tell the user they can carry on with other things."),
         }
+
+    async def _tool_read_skill(self, args: dict) -> dict:
+        """One of the user's skills, in full - to guide them through it on
+        screen, or to answer how they like something done."""
+        lib = getattr(self._agents, "skills", None) if self._agents is not None else None
+        if lib is None:
+            return {"error": "skills are not available"}
+        skill = lib.get(str(args.get("id") or "").strip())
+        if skill is None:
+            return {"error": "no such skill", "skills": [s.id for s in lib.enabled()]}
+        return {"ok": True, "name": skill.name, "when": skill.when, "apps": skill.apps,
+                "steps": skill.body, "ask_before": skill.ask_before,
+                "note": "Guide them one step at a time; point at what to click."}
 
     async def _tool_desktop_action(self, args: dict) -> dict:
         """One app action, now: "Spotify, next song", "open this project in
@@ -1999,10 +2034,6 @@ class CompanionManager(QObject):
             mgr.approve(req.id, action == "approve")
             return {"ok": True, "action": action, "what": req.reason}
 
-        if action in ("list_extensions", "enable_extension", "disable_extension", "open_dashboard",
-                      "create_agent"):
-            return self._manage_extensions(mgr, action, args)
-
         candidates = [t for t in top if not t.status.is_terminal]
         if wanted:
             candidates = [t for t in candidates if wanted in t.title.lower()] or candidates
@@ -2011,51 +2042,10 @@ class CompanionManager(QObject):
         target = candidates[0]
         done = {"pause": mgr.pause, "resume": mgr.resume, "cancel": mgr.cancel}.get(action)
         if done is None:
-            return {"error": "action must be status, pause, resume, cancel, approve, deny, list_extensions, "
-                             "enable_extension, disable_extension, open_dashboard or create_agent"}
+            return {"error": "action must be status, pause, resume, cancel, approve or deny"}
         ok = done(target.id)
         return {"ok": bool(ok), "action": action, "task": target.title,
                 "status": (mgr.get_task(target.id) or target).status.value}
-
-    def _manage_extensions(self, mgr, action: str, args: dict) -> dict:
-        """Industry packs by voice: "turn on the accounting tools", "open the
-        accounting dashboard", "create an accounts payable agent"."""
-        reg = getattr(mgr, "extensions", None)
-        if reg is None:
-            return {"error": "extensions are not available in this build"}
-        ext_id = str(args.get("id") or args.get("extension") or "").strip().lower()
-        if action == "list_extensions":
-            return {"ok": True, "extensions": [
-                {"id": e["id"], "name": e["name"], "enabled": e["enabled"], "adds": e.get("offer", [])}
-                for e in reg.available()]}
-        if not ext_id:
-            on = [e["id"] for e in reg.available() if e["enabled"]]
-            ext_id = on[0] if len(on) == 1 and action != "enable_extension" else ""
-        if not ext_id:
-            return {"error": "say which extension (id), e.g. 'accounting'"}
-        try:
-            if action == "enable_extension":
-                ext = reg.enable(ext_id)
-                self.sig_open_extension.emit(ext_id, "")
-                return {"ok": True, "enabled": ext.manifest.name, "adds": ext.manifest.offer,
-                        "agents": [t.name for t in ext.get_agent_templates()],
-                        "note": ("Tell the user it is on and what it adds, in one breath. The dashboard is "
-                                 "opening. Suggest trying the demo client, or 'prepare month-end for <client>'.")}
-            if action == "disable_extension":
-                reg.disable(ext_id)
-                return {"ok": True, "disabled": ext_id, "note": "Their data is kept."}
-            if action == "open_dashboard":
-                self.sig_open_extension.emit(ext_id, "dashboard")
-                return {"ok": True, "note": "The dashboard is opening on screen."}
-            if action == "create_agent":
-                template = str(args.get("template") or "").strip()
-                self.sig_open_extension.emit(ext_id, f"wizard:{template}")
-                return {"ok": True, "note": ("The setup wizard is on screen: accounting system, inbox, "
-                                             "permission level, approval threshold and schedule. Walk the "
-                                             "user through it briefly.")}
-        except KeyError as exc:
-            return {"error": str(exc.args[0]) if exc.args else "unknown extension"}
-        return {"error": "unknown extension action"}
 
     async def _delegate_if_task(self, text: str):
         """Cascade route: start a background task if the transcript is one.

@@ -69,11 +69,9 @@ title bar buttons), `ui/app_popover.py` (the cards), `ui/window_frame.py`
 ┌─[▥][◯]──────────────────────────── [●Listening] [🔔] ─ ▢ ✕ ┐
 │ heytora      ╭───────────────────────────────────────────╮ │
 │ ⌂ Home       │ Hey Dylan, just hold [Ctrl + Win] and ask │ │
-│ ◇ Agents     │                                           │ │
-│ ▢ Journal    │ …the page…                                │ │
-│ ▦ Packs      │                                           │ │
-│   Accounting │   (only while the Accounting pack is on)  │ │
 │ ✦ Tora       │                                           │ │
+│ ▥ Insights   │ …the page…                                │ │
+│ ◇ Agents     │                                           │ │
 │ 🎁 Free month │                                           │ │
 │ ⚙ Settings   │                                           │ │
 │ ? Help       ╰───────────────────────────────────────────╯ │
@@ -112,8 +110,6 @@ with two settings on it.
 | Home | Greeting, measured stats, one hero card, recent activity by day | Home + Journal's history |
 | Agents | Background work: plans, progress, approvals | Agents |
 | Journal | What you learned, walkthroughs worth keeping | Journal |
-| Packs | Turn industry packs on and off | Extensions |
-| (pack) | A pack's own page, e.g. Accounting, while it is on | Accounting |
 | Tora | Make her yours: voice, colour, how she teaches and answers | Tutor + Voice |
 | Get a free month | Referral - coming soon | new |
 | Settings | Opens a dialog with its own menu: General, Privacy, Models, Account, Advanced | Settings + Setup + Models |
@@ -221,13 +217,13 @@ instructions.
 
 ## 3E. The Tora page - make her yours
 
-Second in the sidebar (Home, **Tora**, Insights, Agents, Packs). The Journal
+Second in the sidebar (Home, **Tora**, Insights, Agents). The Journal
 has no row: Home shows everything asked and the next review, and the full
 review list is Home's "Review now".
 
-Three tabs of its own (Wispr's Style page: words on a hairline, the one
+Four tabs of its own (Wispr's Style page: words on a hairline, the one
 you are on underlined): **Voice & look** (1-3), **How she works** (4-5),
-**Teach her** (6).
+**Skills** (7), **Teach her** (6).
 
 1. **Her voice** - the first launch's carousel: her name, audio bars that
    move with the clip, arrows; settling on one (0.7 s) saves it.
@@ -241,6 +237,14 @@ you are on underlined): **Voice & look** (1-3), **How she works** (4-5),
 5. **Instructions for Tora** - only the user's own words, added after her
    prompt on every answer (config._instructions_from_env).
 6. **Teach her how you work** - Record a lesson · Show her what you did.
+7. **Her skills** (`ui/skills_page.py`, docs/agents/SKILLS.md) - how you
+   like jobs done. A hairline list: the starter skills and yours ("Yours",
+   "Edited"), "Used when…", a schedule and when it last ran; a switch on
+   each; hover for Edit. New skill opens the editor over the window: Name,
+   Use it when…, one growing box for the steps and what to know, then Apps,
+   Always ask me before and Runs by itself (all optional). Files that could
+   not be read are listed with why. A finished job's details offer
+   "Save as a skill": a draft from its plan, in the same editor.
 
 ## 3F. The Agents page
 
@@ -248,8 +252,9 @@ you are on underlined): **Voice & look** (1-3), **How she works** (4-5),
 through the bridge; the workforce's floating panels (agents/ui, worker 1)
 stay for the tray. Two columns, as Home:
 
-- **Give Tora a job** - a box that grows, three example jobs (one from an
-  enabled pack first), Start. A job that reads as a question is said so.
+- **Give Tora a job** - a box that grows, three example jobs, Start. A job
+  that reads as a question is said so; one a skill describes runs as that
+  skill.
 - **Needs your OK** - only while an agent waits: what it wants, for which
   job, Approve / Deny on the page (a sensitive one needs its typed word).
   The approval window still opens; whichever answer comes first counts.
@@ -262,31 +267,17 @@ stay for the tray. Two columns, as Home:
 - **Details** slide in from the right over the page: what you asked, the
   plan as a checklist (done, on now, waiting, failed), the live activity
   log (the workforce's own, restyled), the result or why it stopped,
-  Open folder, Run again or Stop.
+  Open folder, Run again or Stop - and, when it went well, Save as a skill.
 
 Later, if wanted: a map of a project's agents in the details (the data -
 a lead job, its agents and who waits on whom - is already recorded).
 
-## 3G. Packs - every pack the same
+## 3G. Packs - removed
 
-`ui/packs_page.py`. Seventeen packs; none is special - none first, none
-with a page the others lack.
-
-- **Packs** - *Your packs* (on): each with its headline numbers and Open.
-  *All packs*: a card each in a grid - its tile (its colour family from
-  `tokens.PACK` and its own icon, `packs_page.LOOK`), name, what it does,
-  a switch. A card opens a drawer: everything it adds, what to say (its
-  own examples when on; its activation phrase when off), what it works
-  with, what it needs, its switch, Open.
-- **A row per pack you turn on**, under Packs in the sidebar
-  (`pack/<id>`); off, its row goes.
-- **A pack's page** - kit packs: the pack's own snapshot (numbers as
-  tiles, up to three lists, its action buttons as jobs, its folder, what to
-  say) drawn in the app's parts; a pack that draws its own dashboard
-  (Accounting) has it in the same shell, restyled, kept while on and
-  deleted - clocks stopped - when turned off. Off: "Turn on <pack>".
-- The Agents page's example jobs are the same for everyone; a pack's own
-  jobs are its buttons, on its page.
+Packs were replaced by skills on 6 Oct 2026 (docs/agents/SKILLS.md): the
+Packs page, a pack's page and their sidebar rows are gone, and old links to
+them open the Tora page's Skills tab. The pack tiles' colours
+(`tokens.PACK`) stay for the onboarding's "Made for your work" cards.
 
 ## 3A. Where the values live
 
@@ -371,8 +362,7 @@ that capability is the subject (Home, walkthrough cards, Tutor):
 | Build it | `#FBF3DD` | `#9CE9DA` `#FFE08A` `#F6B96B` `#FFF0C4` `#B6EE7A` |
 
 **Packs** (`home/packs.tsx`): a two-stop 145° gradient icon tile with a
-white glyph. Used on Extensions, the pack's own page header, and any agent
-card working for that pack:
+white glyph. Used on the onboarding's "Made for your work" cards:
 
 | Pack icon | From → to |
 |---|---|

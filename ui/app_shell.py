@@ -36,7 +36,7 @@ class NavItem(QAbstractButton):
                  page: bool = True, glyph: str = ""):
         super().__init__()
         self.key = key
-        self.glyph = glyph or key            # the icon: a pack's row names its own
+        self.glyph = glyph or key            # the icon, when it isn't the key's
         self.setText(text)
         self._openness = openness
         self.setCheckable(page)

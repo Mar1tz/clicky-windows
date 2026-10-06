@@ -1,23 +1,16 @@
-"""The nine pages of the app window.
-
-Each one is the single-window home of something that was its own floating
-window or a branch of the tray menu:
+"""The pages of the app window (PAGES, at the end).
 
     Home         what is happening now, and what to try
-    Agents       agents/ui/agents_panel · plan_view · timeline, embedded
-    Extensions   the pack switches (agents/extensions)
-    Accounting   extensions/accounting/ui/dashboard, embedded
-    Journal      the Journal / Lesson Recording / Workflow Capture menus
-    Tutor        the Tutor Mode menu
-    Voice        the Conversation / Voice / Models menus
-    Settings     agents/ui/settings · the mic, hotkey and privacy items
-    Setup        ui/api_keys_dialog · the setup wizard · diagnostics
+    Tora         her voice and look, how she works, her skills, teaching her
+    Insights     what she measured
+    Agents       the jobs: give one, answer approvals, watch, look back
+    Journal      everything asked (reached from Home)
 
-Every page reads the running app through ui/app_bridge.py and changes it
-down the tray's own path, so the menu and the window cannot disagree
-(APP-10 to APP-19). Where a worker already built the real thing - the
-agents panel, the endpoint editor, a pack's dashboard - it is embedded, not
-drawn again. The floating windows still open from the tray.
+Settings is a dialog, not a page (ui/settings_dialog.py). Every page reads
+the running app through ui/app_bridge.py and changes it down the tray's own
+path, so the menu and the window cannot disagree (APP-10 to APP-19). Where
+a worker already built the real thing - the endpoint editor, say - it is
+embedded, not drawn again.
 """
 
 from __future__ import annotations
@@ -766,15 +759,6 @@ def _tidy(embedded: QWidget, *titles: str) -> QWidget:
     return embedded
 
 
-# How a pack's integration ids read to a person.
-_BRANDS = {"quickbooks": "QuickBooks", "onedrive": "OneDrive", "sharepoint": "SharePoint",
-           "google_drive": "Google Drive", "gmail": "Gmail"}
-
-
-def _brand(ident: str) -> str:
-    return _BRANDS.get(ident, ident.replace("_", " ").title())
-
-
 def _no_agents(why: str) -> Card:
     card = Card()
     card.add(Row("The agents did not start", why, dot=T.WARN, first=True))
@@ -931,7 +915,7 @@ class ToraPage(Page):
 
     HEADING = "Tora"
     LIVE = True
-    TOPICS = frozenset({"recording"})
+    TOPICS = frozenset({"recording", "skills"})
     VOICE_WAIT_MS = 700          # carousel settles before the live session restarts
 
     # Her modes: switch, icon, what it is, what it does.
@@ -945,7 +929,8 @@ class ToraPage(Page):
               "Notice when you are in an editor and explain like a developer."))
 
     # The page's own tabs (Wispr's Style page): one long page was three.
-    TABS = (("look", "Voice & look"), ("works", "How she works"), ("teach", "Teach her"))
+    TABS = (("look", "Voice & look"), ("works", "How she works"), ("skills", "Skills"),
+            ("teach", "Teach her"))
 
     def __init__(self, bridge=None):
         self._tab = self.TABS[0][0]
@@ -972,12 +957,22 @@ class ToraPage(Page):
         elif self._tab == "works":
             self.body.add(self._modes())
             self.body.add(self._instructions())
+        elif self._tab == "skills":
+            from ui.skills_page import skills_card
+            self.body.add(skills_card(self.bridge, self.edit_skill))
         else:
             teach = QHBoxLayout()
             teach.setSpacing(T.GAP)
             teach.addWidget(self._recording(), 1)
             teach.addWidget(self._capture(), 1)
             self.body.add_layout(teach)
+
+    def edit_skill(self, skill=None) -> None:
+        """The skill editor over the window; a new skill when None, a draft
+        to finish when it has no id (from a job - see JobDrawer)."""
+        from ui.skills_page import open_editor
+        self._editor = open_editor(self.window(), self.bridge, skill,
+                                   lambda: self._later(self.refresh))
 
     def _later(self, fn) -> None:
         """After the click returns: the tab clicked is one the redraw replaces."""
@@ -1188,21 +1183,18 @@ def confirm_sign_out(parent) -> bool:
     return answer == QMessageBox.StandardButton.Yes
 
 
-# The Agents and Packs pages live in their own modules; they build on Page
-# and the helpers above, so they are imported here, after them.
+# The Agents page lives in its own module; it builds on Page and the helpers
+# above, so it is imported here, after them.
 from ui.agents_page import AgentsPage  # noqa: E402
-from ui.packs_page import PacksPage  # noqa: E402
 
 # The sidebar, top to bottom, and the single place a new page gets added.
-# place: "main" (the list), "hidden" (reached from elsewhere). Each pack you
-# turn on adds a row of its own under Packs (ui/packs_page.py, app_window). Settings is not a page:
-# it is a dialog (ui/settings_dialog.py, ui/settings_tabs.py).
+# place: "main" (the list), "hidden" (reached from elsewhere). Settings is
+# not a page: it is a dialog (ui/settings_dialog.py, ui/settings_tabs.py).
 PAGES = (
     ("home",       "Home",       "main",   HomePage),
     ("tora",       "Tora",       "main",   ToraPage),
     ("insights",   "Insights",   "main",   InsightsPage),
     ("agents",     "Agents",     "main",   AgentsPage),
-    ("packs",      "Packs",      "main",   PacksPage),
     # Home shows everything asked and the next review; the full list of
     # reviews is one link away ("Review now"), not a row of its own.
     ("journal",    "Journal",    "hidden", JournalPage),

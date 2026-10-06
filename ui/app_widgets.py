@@ -579,8 +579,6 @@ ICONS = {
     "insights": "chart-column",
     "agents": "bot",
     "journal": "book-open",
-    "extensions": "blocks",
-    "packs": "blocks",
     "accounting": "calculator",
     "tora": "sparkles",
     "settings": "settings",

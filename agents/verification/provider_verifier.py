@@ -92,9 +92,22 @@ class ProviderVerifier(Verifier):
 
     # -- prompts -------------------------------------------------------------
 
+    @staticmethod
+    def _skill(ctx: AgentContext) -> list[str]:
+        """The user's skill for this job (agents/skills), when it has one. The
+        agent was told to follow it, so what it asks for is the goal too:
+        judged without it, a shopping list skill's "always add milk" failed
+        the job for adding milk nobody asked for (6 Oct 2026)."""
+        skills = [k for k in (ctx.extras or {}).get("skills") or [] if k]
+        if not skills:
+            return []
+        return ["The user's own instructions for this kind of job - the agent was told to follow "
+                "them, so what they ask for is part of the goal, not extra:\n" + "\n\n".join(skills)]
+
     def _step_prompt(self, step: Step, ctx: AgentContext) -> str:
         parts = [
             f"Overall goal: {ctx.task.goal}",
+            *self._skill(ctx),
             f"Step: {step.title}",
         ]
         if step.description:
@@ -117,6 +130,7 @@ class ProviderVerifier(Verifier):
         results: list[ToolResult] = [r for s in done for r in s.results]
         return "\n\n".join([
             f"Goal: {ctx.task.goal}",
+            *self._skill(ctx),
             "Steps taken:\n" + ("\n".join(lines) or "  (none)"),
             "Actual state on disk:\n" + (self._evidence(results, ctx)
                                          or _tree(ctx.workspace) or "  (workspace is empty)"),

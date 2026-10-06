@@ -219,7 +219,7 @@ class PrivacyTab(Tab):
     on this PC only."""
 
     HEADING = "Data & privacy"
-    TOPICS = frozenset({"journal"})
+    TOPICS = frozenset({"journal", "skills"})
 
     def build(self) -> None:
         from ui.settings_parts import Group
@@ -261,6 +261,22 @@ class PrivacyTab(Tab):
                         "Say “always allow” when she asks, to add one.")
         self.body.add(allowed)
 
+        # The agents' own browser (SK-06): the sites the user signed in to,
+        # once, so skills can run in the background. On this PC only.
+        sites = _ask(br, "browser_sites", []) or []
+        signed = Group("Signed in for the agents")
+        for site in sites:
+            signed.row(site["name"], site["site"])
+        if sites:
+            out = button("Sign out everywhere", "danger")
+            out.clicked.connect(self._sign_out_sites)
+            signed.row("Sign the agents' browser out", "Of every site above. Your own browser "
+                       "isn't touched.", out)
+        else:
+            signed.row("Not signed in anywhere", "When a job needs a site, she asks you to sign "
+                       "in once, in a window you can see.")
+        self.body.add(signed)
+
         links = QHBoxLayout()
         links.setSpacing(8)
         for words, path in (("Privacy policy", "/privacy"), ("Terms", "/terms")):
@@ -275,6 +291,21 @@ class PrivacyTab(Tab):
     def _say(self, words: str) -> None:
         self._note.setText(words)
         self._note.show()
+
+    def _sign_out_sites(self) -> None:
+        from PyQt6.QtWidgets import QMessageBox
+        sure = QMessageBox.question(self, "Sign out everywhere",
+                                    "Sign the agents' browser out of every site? Jobs will ask "
+                                    "you to sign in again when they need to.",
+                                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
+                                    QMessageBox.StandardButton.Cancel)
+        if sure != QMessageBox.StandardButton.Yes:
+            return
+        why = self.bridge.forget_browser_sites()
+        if why:
+            self._say(why)
+        else:
+            self.refresh()
 
     def _export(self) -> None:
         from PyQt6.QtWidgets import QFileDialog

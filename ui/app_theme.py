@@ -1,7 +1,7 @@
 """The one-window app's design language.
 
-Tora grew as a tray app: every surface — agents, extensions, the accounting
-dashboard, settings, API keys — is its own floating window, and the only way
+Tora grew as a tray app: every surface — agents, settings, API keys — is
+its own floating window, and the only way
 between them is the tray menu. This module is the stylesheet and the type
 scale for the single window that holds all of them instead.
 
@@ -267,8 +267,6 @@ def qss() -> str:
     }}
     QPushButton#pageTab:hover {{ color: {TEXT}; }}
     QPushButton#pageTab:checked {{ color: {TEXT}; border-bottom: 2px solid {TEXT}; }}
-    QFrame#packCard {{ background: {SURFACE}; border: none; border-radius: {tokens.RADIUS_LG}px; }}
-    QFrame#packCard:hover {{ background: {SURFACE_HOVER}; }}
     QFrame#drawer {{ background: {SURFACE}; border: none; border-radius: {tokens.RADIUS_XL}px; }}
     QLabel#drawerTitle {{ font-size: 22px; font-weight: 700; letter-spacing: -0.4px; }}
     QFrame#modeTile {{
@@ -345,9 +343,9 @@ def qss() -> str:
     QPushButton#link:hover {{ color: {ACCENT_HOVER}; }}
 
     /* ── what the embedded windows bring ───────────────────────────────── */
-    /* A pack's dashboard is drawn by the pack, and its buttons and tabs
-       have no names here. These give them the same pills and tabs as the
-       rest. A named rule above still wins wherever it applies. */
+    /* An embedded window (the endpoint editor) draws its own buttons and
+       tabs, with no names here. These give them the same pills and tabs as
+       the rest. A named rule above still wins wherever it applies. */
     QPushButton {{
         background: {SURFACE}; border: 1px solid {BORDER_STRONG};
         border-radius: {tokens.pill(tokens.BUTTON_H['sm'])}px; color: {TEXT};

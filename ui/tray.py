@@ -95,8 +95,6 @@ class TrayManager(QObject):
     on_open_agents        = pyqtSignal()        # Active Agents panel
     on_agent_settings     = pyqtSignal()        # agent rails
     on_stop_agents        = pyqtSignal()        # cancel every running agent
-    on_open_extensions    = pyqtSignal()        # industry packs on/off
-    on_open_dashboard     = pyqtSignal()        # the enabled packs' dashboards
     on_open_app           = pyqtSignal()        # the one-window app (ui/app_window)
     on_open_app_page      = pyqtSignal(str)     # ...on a page: "settings", "agents"
     # The HeyTora plan or its use changed - emitted from any thread by the

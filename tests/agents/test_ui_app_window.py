@@ -145,7 +145,5 @@ def test_the_tray_offers_a_way_in():
 def test_the_old_windows_are_left_alone():
     """This is additive: every surface it mirrors still opens on its own."""
     from agents.ui.agents_panel import ActiveAgentsPanel
-    from agents.ui.extensions import ExtensionsDialog
     from agents.ui.settings import AgentSettingsDialog
-    assert all(cls is not None for cls in
-               (ActiveAgentsPanel, ExtensionsDialog, AgentSettingsDialog))
+    assert all(cls is not None for cls in (ActiveAgentsPanel, AgentSettingsDialog))

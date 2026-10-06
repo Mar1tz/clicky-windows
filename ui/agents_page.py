@@ -67,7 +67,7 @@ EXAMPLES = (("Coffee shop website", "Build a one-page website for my coffee shop
 class AgentsPage(Page):
     HEADING = "Agents"
     LIVE = True
-    TOPICS = frozenset({"agents", "extensions"})
+    TOPICS = frozenset({"agents"})
 
     def __init__(self, bridge=None):
         self._parts = None
@@ -151,8 +151,7 @@ class AgentsPage(Page):
         return card
 
     def _examples(self) -> list[tuple[str, str]]:
-        # The same three for everyone: a pack's own jobs are its buttons, on
-        # its page - no pack is put first here.
+        # The same three for everyone; the user's own jobs are their skills.
         return list(EXAMPLES)[:3]
 
     def _start(self) -> None:
@@ -441,6 +440,11 @@ class JobDrawer(Drawer):
             again = button("Run again", "primary")
             again.clicked.connect(lambda: (self.bridge.give_job(job["goal"]), self.close_drawer()))
             foot.addWidget(again)
+        if job["status"] == "completed" and not job.get("skill") and job["steps"]:
+            keep = button("Save as a skill")
+            keep.setToolTip("Do it this way next time: a draft from this job, for you to check first")
+            keep.clicked.connect(lambda: self._save_as_skill(job["id"]))
+            foot.addWidget(keep)
         elif job["status"] not in ("completed", "failed", "cancelled"):
             stop = button("Stop", "danger")
             stop.clicked.connect(lambda: self.bridge.stop_job(job["id"]))
@@ -451,6 +455,17 @@ class JobDrawer(Drawer):
         self.body.addSpacing(8)
         self.body.addWidget(fw)
         self.body.addStretch(1)
+
+    def _save_as_skill(self, task_id: str) -> None:
+        """A draft skill from this job, in the editor - nothing is saved
+        until the user has read it and pressed Save (SK-05)."""
+        draft = self.bridge.skill_from_job(task_id)
+        if draft is None:
+            return
+        from ui.skills_page import open_editor
+        over = self.window()
+        self.close_drawer()
+        self._editor = open_editor(over, self.bridge, draft, lambda: None)
 
     def _activity(self, task_id: str) -> QWidget:
         """The workforce's own activity log for the job - every tool it ran,

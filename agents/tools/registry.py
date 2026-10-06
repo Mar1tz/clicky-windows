@@ -76,8 +76,7 @@ class Registry(ToolRegistry):
         self._tools[tool.name] = tool
 
     def unregister(self, name: str) -> bool:
-        """Remove a tool. Extensions call this on disable, so a pack that is
-        switched off leaves nothing behind for a model to call."""
+        """Remove a tool, so nothing is left behind for a model to call."""
         return self._tools.pop(name, None) is not None
 
     def get(self, name: str) -> BaseTool:

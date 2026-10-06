@@ -38,6 +38,7 @@ class _Stub:
     _on_agent_event = _CM._on_agent_event
     _say_when_idle = _CM._say_when_idle
     agent_context_line = _CM.agent_context_line
+    skills_line = _CM.skills_line
     _tool_manage_agents = _CM._tool_manage_agents
     _WORKER_FOR_KIND = _CM._WORKER_FOR_KIND
 
@@ -163,6 +164,12 @@ def test_announcements_survive_a_missing_workforce():
 # -- the model knows what its agents are doing --------------------------------
 
 def test_context_line_is_empty_with_nothing_to_say(mgr):
+    # The user's skills are always worth saying (docs/agents/SKILLS.md) -
+    # and only them, while no agent is working.
+    line = _Stub(mgr).agent_context_line()
+    assert line.startswith("The user's skills") and "Agents working" not in line
+    for skill in mgr.skills.all():
+        mgr.skills.set_enabled(skill.id, False)
     assert _Stub(mgr).agent_context_line() == ""
     assert _Stub(None).agent_context_line() == ""
 

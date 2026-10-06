@@ -1,14 +1,11 @@
-"""APP-17, APP-18, APP-19: the Agents, Extensions and Accounting pages are live.
+"""APP-17: the Agents page is live.
 
-They were drawings (M29): an "Application Builder" stuck at 70%, a plan
-and a timeline typed in by hand, four packs of which three do not exist,
-and an accounting page of invented exceptions. Now:
-
-  * Agents (rebuilt 5 Oct, ui/agents_page.py) takes a job typed on the
-    page, answers approvals there, pauses and stops what runs, lists how
-    each job went, and opens a job's plan in a drawer.
-  * Extensions lists the packs that are really there and switches them.
-  * Accounting is the pack's own dashboard, or the way to turn it on.
+It was a drawing (M29): an "Application Builder" stuck at 70%, a plan and
+a timeline typed in by hand. Now (rebuilt 5 Oct, ui/agents_page.py) it
+takes a job typed on the page, answers approvals there, pauses and stops
+what runs, lists how each job went, and opens a job's plan in a drawer.
+(The packs this file also covered were replaced by skills, 6 Oct 2026 -
+tests/agents/test_e2e_skills.py.)
 """
 from __future__ import annotations
 
@@ -311,126 +308,6 @@ def test_the_bridge_lists_what_waits_for_a_yes(qapp):
     assert AppBridge(FakeManager(workforce)).approvals() == [
         {"id": req.id, "tool": "delete_path", "reason": "Delete build/",
          "task": "Build the shop", "sensitive": True, "confirm_word": ""}]
-
-
-# ── Packs (ui/packs_page.py, DESIGN.md §3G) ─────────────────────────────────────
-
-def _grid_switches(page):
-    """The switch on each card in All packs, in the registry's order."""
-    from ui.app_widgets import Switch
-    return page.findChildren(Switch)
-
-
-def test_every_real_pack_is_a_card_and_switches_on(qapp, wf):
-    from ui.app_pages import PacksPage
-    page = PacksPage(_bridge(wf))
-    texts = _texts(page)
-    packs = [p["id"] for p in wf.extensions.available()]
-    assert "Accounting" in texts and "Freelancer" in texts and "Legal" not in texts, "only packs that exist"
-    assert len(_grid_switches(page)) == len(packs), "one card - one switch - per pack, none left out"
-    first = packs[0]
-    _grid_switches(page)[0].setChecked(True)
-    _settle(qapp)
-    assert wf.extensions.is_enabled(first)
-
-
-def test_no_pack_is_special(qapp, wf):
-    """Every pack you turn on gets the same row and the same page."""
-    from ui.app_window import ToraApp
-    from ui.packs_page import PackPage
-    wf.extensions.enable("students")
-    wf.extensions.enable("accounting")
-    w = ToraApp(_bridge(wf))
-    rows = {k for k, b in w._buttons.items() if k.startswith("pack/") and not b.isHidden()}
-    assert rows == {"pack/students", "pack/accounting"}
-    for key in rows:
-        w.show_page(key)
-        assert isinstance(w._pages[key], PackPage)
-
-
-def test_a_pack_that_will_not_switch_says_why(qapp, wf):
-    from ui.app_pages import PacksPage
-
-    class Refusing(AppBridge):
-        def set_extension(self, ext_id, on):
-            return "the ledger folder is read-only"
-
-    page = PacksPage(Refusing(FakeManager(wf), FakeTray()))
-    _grid_switches(page)[0].setChecked(True)
-    _settle(qapp)
-    assert "That did not work: the ledger folder is read-only" in _texts(page)
-
-
-def test_a_pack_turned_on_anywhere_redraws_the_pages(qapp, wf):
-    """By voice, from the tray's window, from here: the registry says so on
-    the workforce's bus, and the bridge passes it on."""
-    mgr = FakeManager(wf)
-    wf.events.subscribe(mgr.sig_agent_event.emit)      # what the manager does
-    bridge = AppBridge(mgr, FakeTray())
-    topics = []
-    bridge.changed.connect(topics.append)
-    wf.extensions.enable("accounting")
-    assert "extensions" in topics
-
-
-def test_a_kit_packs_page_is_its_own_snapshot_and_its_buttons_run_it(qapp, wf):
-    from ui.packs_page import PackPage
-    wf.extensions.enable("students")
-    bridge = _bridge(wf)
-    page = PackPage(bridge, "students")
-    texts = _texts(page)
-    view = bridge.pack_view("students")
-    assert view is not None and view["actions"], "the pack's own buttons"
-    for caption, _value in view["numbers"]:
-        assert caption.upper() in texts, "its own numbers, by its own names"
-    before = len(wf.list_tasks())
-    _buttons(page, view["actions"][0])[0].click()
-    assert len(wf.list_tasks()) == before + 1, "a button runs the pack's workflow as a job"
-
-
-def test_a_pack_that_is_off_offers_to_turn_it_on(qapp, wf):
-    from extensions.accounting.ui.dashboard import AccountingDashboard
-    from ui.packs_page import PackPage
-    page = PackPage(_bridge(wf), "accounting")
-    assert "Accounting is off" in _texts(page)
-    _buttons(page, "Turn on Accounting")[0].click()
-    _settle(qapp)
-    assert wf.extensions.is_enabled("accounting")
-    assert page.findChildren(AccountingDashboard), "a pack with its own dashboard has it here"
-
-
-def test_its_own_dashboard_is_kept_while_on_and_stopped_when_off(qapp, wf):
-    from extensions.accounting.ui.dashboard import AccountingDashboard
-    from ui.packs_page import PackPage
-    wf.extensions.enable("accounting")
-    page = PackPage(_bridge(wf), "accounting")
-    (dash,) = page.findChildren(AccountingDashboard)
-    page.refresh()
-    page.refresh()
-    assert page.findChildren(AccountingDashboard) == [dash], "kept: it holds the chosen client"
-    clocks = dash.findChildren(QTimer, options=DIRECT)
-    wf.extensions.disable("accounting")
-    page.refresh()
-    assert not page.findChildren(AccountingDashboard)
-    assert clocks and not any(c.isActive() for c in clocks), "its clock stops before it goes"
-    assert "Accounting is off" in _texts(page)
-
-
-def test_a_dashboard_that_will_not_build_says_why(qapp, wf):
-    from ui.packs_page import PackPage
-
-    class Broken(AppBridge):
-        def extension_on(self, ext_id):
-            return True
-
-        def pack_view(self, ext_id):
-            return None
-
-        def dashboard(self, ext_id, parent=None):
-            raise RuntimeError("the books are locked")
-
-    texts = _texts(PackPage(Broken(FakeManager(wf), FakeTray()), "accounting"))
-    assert "This pack's page could not load" in texts and "the books are locked" in texts
 
 
 def test_embedded_tabs_keep_their_ampersands(qapp):

@@ -289,12 +289,13 @@ def tool_declarations() -> list[dict]:
             "name": "delegate_task",
             "description": (
                 "Hand real work to a background agent: creating folders and "
-                "projects, scaffolding apps, writing files, running installs. "
-                "Use when the user asks you to BUILD or MAKE something on "
-                "their machine — never for questions, explanations, or "
-                "anything about what is on their screen. The agent works "
-                "while you keep talking: read the returned steps back "
-                "briefly, say it has started, and that they can carry on."
+                "projects, scaffolding apps, writing files, running installs, "
+                "and any job one of the user's skills describes. Use when the "
+                "user asks you to BUILD, MAKE or DO something on their machine "
+                "— never for questions, explanations, or anything about what "
+                "is on their screen. The agent works while you keep talking: "
+                "read the returned steps back briefly, say it has started, "
+                "and that they can carry on."
             ),
             "parameters": {
                 "type": "object",
@@ -319,10 +320,30 @@ def tool_declarations() -> list[dict]:
                     },
                     "kind": {
                         "type": "string",
-                        "enum": ["coding", "file", "terminal", "research"],
+                        "enum": ["coding", "file", "terminal", "research", "computer"],
+                    },
+                    "skill": {
+                        "type": "string",
+                        "description": (
+                            "The id of the user's skill this job is, from the "
+                            "skills in your context. Omit when none fits."
+                        ),
                     },
                 },
                 "required": ["goal"],
+            },
+        },
+        {
+            "name": "read_skill",
+            "description": (
+                "Read one of the user's skills in full: the steps and what to "
+                "know. Use when they ask HOW to do a job a skill covers, to "
+                "guide them through it on screen."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {"id": {"type": "string"}},
+                "required": ["id"],
             },
         },
         {
@@ -374,33 +395,18 @@ def tool_declarations() -> list[dict]:
                 "Check on or control background agents. Use when the user "
                 "asks how a build is going, whether something is ready, or "
                 "says stop / pause / resume / cancel that, or approve / deny "
-                "when an agent is waiting for permission. Also turns industry "
-                "extensions on and off (e.g. id 'accounting' when the user says "
-                "they are an accountant and agrees), opens an extension's "
-                "dashboard, and opens the wizard to create a specialist agent."
+                "when an agent is waiting for permission."
             ),
             "parameters": {
                 "type": "object",
                 "properties": {
                     "action": {
                         "type": "string",
-                        "enum": ["status", "pause", "resume", "cancel", "approve", "deny",
-                                 "list_extensions", "enable_extension", "disable_extension",
-                                 "open_dashboard", "create_agent"],
+                        "enum": ["status", "pause", "resume", "cancel", "approve", "deny"],
                     },
                     "task": {
                         "type": "string",
                         "description": "A few words from the task's title, if they named one.",
-                    },
-                    "id": {
-                        "type": "string",
-                        "description": "Extension id for the extension actions, e.g. 'accounting'.",
-                    },
-                    "template": {
-                        "type": "string",
-                        "description": "For create_agent: bookkeeper, accounts_payable, accounts_receivable, "
-                                       "month_end, tax_preparation, audit_assistant, payroll_review or "
-                                       "management_reporting.",
                     },
                 },
                 "required": ["action"],

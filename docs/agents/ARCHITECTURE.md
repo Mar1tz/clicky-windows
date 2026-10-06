@@ -48,6 +48,7 @@ layer and the memory layer are all just subscribers.
 | `agents/verification`  | worker 3 | `RuleVerifier`                                                  |
 | `agents/persistence`   | worker 3 | `SQLiteTaskStore(TaskStore)`                                    |
 | `agents/ui`            | worker 1 | Qt bridge + Active Agents panel + timeline (round 2)            |
+| `agents/skills`        | manager  | `SkillLibrary` (the skill files), schedules (docs/agents/SKILLS.md) |
 | `tests/agents`         | everyone | `test_<package>_*.py`                                           |
 
 Cross-package imports go **only** through `agents.core`. A worker package

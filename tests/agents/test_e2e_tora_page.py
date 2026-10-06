@@ -51,7 +51,7 @@ def test_each_tab_shows_its_own_cards(qapp, tab, shows, hides):
 def test_it_opens_on_voice_and_look(qapp):
     from ui.app_pages import ToraPage
     page = ToraPage(Bridge())
-    assert page._tab == "look" and [k for k, _w in ToraPage.TABS] == ["look", "works", "teach"]
+    assert page._tab == "look" and [k for k, _w in ToraPage.TABS] == ["look", "works", "skills", "teach"]
 
 
 def test_an_ampersand_in_a_tab_is_drawn(qapp):

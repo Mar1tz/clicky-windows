@@ -3,11 +3,11 @@
 Gemini refuses the WHOLE request over one bad tool schema, so one tool
 failed every step of a user's File Agent task ("Create Three Monkeys Ball
 poster": write_workbook's rows were an array of arrays with no item type).
-Sending all 262 tools - every pack on - to Gemini's countTokens found three
-more (install_package and git_add: a type that was a list; focus_window: a
-parameter named "title", which the scrubber deleted as if it were the
-schema keyword). Gemini then accepted all 262. These rules are checked here
-offline for every tool, so a new tool cannot bring it back.
+Sending all 262 tools (the packs' too, then) to Gemini's countTokens found
+three more (install_package and git_add: a type that was a list;
+focus_window: a parameter named "title", which the scrubber deleted as if it
+were the schema keyword). Gemini then accepted all 262. These rules are
+checked here offline for every tool, so a new tool cannot bring it back.
 """
 from __future__ import annotations
 
@@ -46,17 +46,12 @@ def _problems(schema, where="parameters") -> list[str]:
 def every_tool():
     from agents.bootstrap import build_agent_manager
     mgr = build_agent_manager(workspace_root=tempfile.mkdtemp(), in_memory=True, offline=True)
-    for pack in mgr.extensions.available():
-        try:
-            mgr.extensions.enable(pack.get("id"))
-        except Exception:  # noqa: BLE001 - a pack that cannot start here is not the point
-            pass
     return mgr.tools.specs()
 
 
-def test_every_tool_with_every_pack_is_one_gemini_takes(every_tool):
+def test_every_tool_is_one_gemini_takes(every_tool):
     from agents.providers.gemini import GeminiAgentProvider
-    assert len(every_tool) > 200, "the packs' tools are in"
+    assert len(every_tool) > 40, "every tool is in"
     bad = {s.name: p for s in every_tool
            if (p := _problems(GeminiAgentProvider.encode_tool(s)["parameters"]))}
     assert not bad, bad

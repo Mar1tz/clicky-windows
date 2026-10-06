@@ -60,8 +60,8 @@ class AppBridge(QObject):
     """What the app window can read and do. Nothing else."""
 
     # Something the pages show has changed: "state", "account", "agents",
-    # "guide", "switches", "journal", "recording", "extensions". A page
-    # shown at the time refreshes itself.
+    # "guide", "switches", "journal", "recording", "skills". A page shown at
+    # the time refreshes itself.
     changed = pyqtSignal(str)
 
     def __init__(self, manager: Any = None, tray: Any = None, panel: Any = None):
@@ -91,11 +91,6 @@ class AppBridge(QObject):
 
     def _on_agent_event(self, ev) -> None:
         self.changed.emit("agents")
-        # A pack turned on or off is announced on the same bus - from the
-        # Extensions page, or by voice ("turn on the accounting tools").
-        data = getattr(ev, "data", None)
-        if isinstance(data, dict) and data.get("extension"):
-            self.changed.emit("extensions")
 
     # ── what is happening ────────────────────────────────────────────────────
 
@@ -1029,7 +1024,113 @@ class AppBridge(QObject):
                 "doing": task.current_action or "", "steps": steps,
                 "result": task.result or "", "error": (task.error or "").strip(),
                 "folder": task.workspace or "", "started": float(task.created_at or 0.0),
-                "updated": float(task.updated_at or 0.0)}
+                "updated": float(task.updated_at or 0.0),
+                "skill": str((task.metadata or {}).get("skill") or "")}
+
+    # ── skills (docs/agents/SKILLS.md) ───────────────────────────────────────
+
+    def _skills(self):
+        """The workforce's skill library - or one of its own when the agents
+        did not start, so the page still shows and edits the files."""
+        wf = self.workforce()
+        lib = getattr(wf, "skills", None) if wf is not None else None
+        if lib is None:
+            from agents.skills import SkillLibrary
+            lib = getattr(self, "_own_skills", None) or SkillLibrary()
+            self._own_skills = lib
+        return lib
+
+    def skills(self) -> list[dict]:
+        """Every skill, with when it last ran (from the job history)."""
+        lib = self._skills()
+        last: dict[str, dict] = {}
+        wf = self.workforce()
+        if wf is not None:
+            try:
+                for t in wf.list_tasks():               # newest first
+                    sid = (t.metadata or {}).get("skill")
+                    if sid and sid not in last:
+                        last[sid] = {"at": float(t.updated_at or t.created_at or 0.0),
+                                     "status": str(getattr(t.status, "value", t.status)), "job": t.id}
+            except Exception:  # noqa: BLE001
+                _log.debug("could not read the skills' runs", exc_info=True)
+        return [{**s.to_dict(), "last": last.get(s.id)} for s in lib.all()]
+
+    def skill_problems(self) -> dict[str, str]:
+        """Skill files that were skipped, and why (read by skills())."""
+        return dict(self._skills().problems)
+
+    def skill(self, skill_id: str) -> Optional[dict]:
+        s = self._skills().get(skill_id)
+        return s.to_dict() if s is not None else None
+
+    def save_skill(self, data: dict) -> str:
+        """Save a skill from the editor. "" when saved, else why not."""
+        from agents.skills import Skill, SkillError
+        from agents.skills.schedule import ScheduleError, parse_every
+        asks = data.get("ask_before") or []
+        if isinstance(asks, str):
+            asks = [a.strip() for a in asks.replace(";", ",").split(",") if a.strip()]
+        skill = Skill(id=str(data.get("id") or ""), name=str(data.get("name") or "").strip(),
+                      when=str(data.get("when") or "").strip(), body=str(data.get("body") or ""),
+                      apps=str(data.get("apps") or "").strip(), ask_before=list(asks),
+                      every=str(data.get("every") or "").strip())
+        if skill.every:
+            try:
+                parse_every(skill.every)
+            except ScheduleError as e:
+                return f"“Runs by itself” - {e}"
+        try:
+            self._skills().save(skill)
+        except SkillError as e:
+            return str(e).capitalize()
+        except OSError as e:
+            return f"It could not be saved: {e.strerror or e}"
+        self._skills_changed()
+        return ""
+
+    def delete_skill(self, skill_id: str) -> bool:
+        ok = self._skills().delete(skill_id)
+        self._skills_changed()
+        return ok
+
+    def set_skill_enabled(self, skill_id: str, on: bool) -> None:
+        self._skills().set_enabled(skill_id, bool(on))
+        self._skills_changed()
+
+    def _skills_changed(self) -> None:
+        wf = self.workforce()
+        if wf is not None:
+            try:
+                from agents.skills.schedule import sync_jobs
+                sync_jobs(wf)
+            except Exception:  # noqa: BLE001
+                _log.warning("could not reschedule the skills", exc_info=True)
+        self.changed.emit("skills")
+
+    def browser_sites(self) -> list[dict]:
+        """The sites the agents' browser is signed in to (SK-06)."""
+        from agents.tools import browser_tools
+        return browser_tools.signed_in_sites()
+
+    def forget_browser_sites(self) -> str:
+        """Sign the agents' browser out everywhere. "" when done, else why not."""
+        from agents.tools import browser_tools
+        return browser_tools.forget_sign_ins()
+
+    def skill_from_job(self, task_id: str) -> Optional[dict]:
+        """A first draft of a skill from a job that went well: its request
+        as the 'when', its plan as the steps. The user reads and edits it
+        before anything is saved (SK-05)."""
+        job = self.job(task_id)
+        if job is None:
+            return None
+        steps = [s["title"] for s in job["steps"] if s.get("status") != "skipped" and s.get("title")]
+        body = "## Steps\n" + "\n".join(f"{i}. {t}" for i, t in enumerate(steps, 1)) if steps else ""
+        body += "\n\n## What to know\n- "
+        goal = " ".join((job["goal"] or "").split())
+        return {"id": "", "name": job["title"][:60], "when": f"the user asks for something like: {goal[:160]}",
+                "body": body.strip() + " ", "apps": "", "ask_before": [], "every": ""}
 
     def open_folder(self, path: str) -> bool:
         """Open a job's folder in Explorer."""
@@ -1045,115 +1146,6 @@ class AppBridge(QObject):
     def stop_agents(self) -> None:
         if self.tray is not None:
             self.tray.on_stop_agents.emit()
-
-    # ── extensions (APP-18, APP-19) ──────────────────────────────────────────
-
-    def _packs(self):
-        return getattr(self.workforce(), "extensions", None)
-
-    def extensions(self) -> list[dict]:
-        """Every pack found: its manifest, and whether it is on."""
-        reg = self._packs()
-        if reg is None:
-            return []
-        try:
-            return list(reg.available())
-        except Exception:  # noqa: BLE001
-            _log.debug("could not list extensions", exc_info=True)
-            return []
-
-    def extension_on(self, ext_id: str) -> bool:
-        reg = self._packs()
-        try:
-            return bool(reg is not None and reg.is_enabled(ext_id))
-        except Exception:  # noqa: BLE001
-            return False
-
-    def set_extension(self, ext_id: str, on: bool) -> str:
-        """Turn a pack on or off, as the Extensions window does. Returns ""
-        when it worked, otherwise why not."""
-        reg = self._packs()
-        if reg is None:
-            return "The agents did not start, so no pack can run."
-        try:
-            reg.enable(ext_id) if on else reg.disable(ext_id)
-            return ""
-        except Exception as exc:  # noqa: BLE001 - said on the page, not raised
-            _log.exception("could not turn %s %s", ext_id, "on" if on else "off")
-            return str(exc) or type(exc).__name__
-        finally:
-            self.changed.emit("extensions")
-
-    def dashboard(self, ext_id: str, parent=None):
-        """The pack's own dashboard widget, built fresh - or None when the
-        pack is off or has none. A pack's dashboard failing to build raises:
-        the page says why."""
-        reg = self._packs()
-        if reg is None or not self.extension_on(ext_id):
-            return None
-        for module in reg.dashboard_modules():
-            if module.extension_id == ext_id:
-                return module.factory(self.workforce(), reg.get(ext_id), parent)
-        return None
-
-    # ── a pack's page (ui/packs_page.py, DESIGN.md §3G) ──────────────────────
-
-    def _pack(self, ext_id: str):
-        """(the pack, its store) when it is on, else (None, None)."""
-        reg = self._packs()
-        ext = reg.get(ext_id) if reg is not None else None
-        if ext is None:
-            return None, None
-        try:
-            store = ext.ensure_store(reg._context(ext_id)) if hasattr(ext, "ensure_store") else None
-        except Exception:  # noqa: BLE001 - a pack not set up yet has no store
-            store = None
-        return ext, store
-
-    def pack_view(self, ext_id: str) -> Optional[dict]:
-        """What a kit pack shows on its page - its own snapshot: a title, a
-        line, a few numbers, up to three lists - plus its action buttons, the
-        things to say, and its folder. None for a pack that draws its own
-        dashboard (Accounting), or one that is off."""
-        ext, store = self._pack(ext_id)
-        if ext is None or store is None or not hasattr(ext, "snapshot"):
-            return None
-        try:
-            snap = ext.snapshot(store) or {}
-        except Exception:  # noqa: BLE001 - the pack's code; the page says so
-            _log.debug("%s snapshot failed", ext_id, exc_info=True)
-            snap = {"error": True}
-        return {"title": snap.get("title") or ext.manifest.name, "meta": snap.get("meta") or "",
-                "numbers": list(snap.get("numbers") or []), "lists": list(snap.get("lists") or [])[:3],
-                "actions": [text for text, _w in getattr(ext, "ACTIONS", [])],
-                "say": [said for said, _w in getattr(ext, "EXAMPLES", [])][:4],
-                "folder": getattr(store, "root", "") or "", "error": bool(snap.get("error"))}
-
-    def pack_action(self, ext_id: str, text: str) -> bool:
-        """Run one of a pack's buttons - its workflow, as an ordinary agent
-        job, so anything it changes still asks first."""
-        ext, store = self._pack(ext_id)
-        wf = self.workforce()
-        if ext is None or store is None or wf is None:
-            return False
-        workflow = next((w for t, w in getattr(ext, "ACTIONS", []) if t == text), None)
-        if workflow is None:
-            return False
-        try:
-            task, spec = ext.task_for(workflow, store.root)
-            wf.submit_task(task, agent=spec)
-        except Exception:  # noqa: BLE001
-            _log.warning("could not run %s/%s", ext_id, workflow, exc_info=True)
-            return False
-        self.changed.emit("agents")
-        return True
-
-    def open_dashboard(self, ext_id: str) -> None:
-        """The floating dashboard, for a pack with no page of its own."""
-        wf = self.workforce()
-        if wf is not None:
-            from agents.ui import open_dashboard
-            open_dashboard(wf, f"{ext_id}.dashboard")
 
     # ── doing ────────────────────────────────────────────────────────────────
 

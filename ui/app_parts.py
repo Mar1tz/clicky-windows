@@ -874,8 +874,8 @@ def growing_text(text: str, placeholder: str, least: int = 84, most: int = 320):
 
 
 class Drawer(QWidget):
-    """A panel that slides in from the right over a page - a job's details,
-    a pack's - with the page dimmed but visible behind it. Escape or a click
+    """A panel that slides in from the right over a page - a job's details -
+    with the page dimmed but visible behind it. Escape or a click
     on the page closes it. A subclass fills `body` in refresh()."""
 
     W = 500

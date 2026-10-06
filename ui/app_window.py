@@ -7,10 +7,9 @@ is, laid out the way Wispr Flow lays out its app (DESIGN.md §3B):
     ┌─[≡][◯]─────────────────────────────── [●Listening] [🔔] ─ ▢ ✕ ┐
     │ heytora      ╭──────────────────────────────────────────────╮ │
     │ ⌂ Home       │  Hey Dylan, just hold [Ctrl + Win] and ask   │ │
-    │ ◇ Agents     │                                              │ │
-    │ ▢ Journal    │  …the page…                                  │ │
-    │ ▦ Packs      │                                              │ │
     │ ✦ Tora       │                                              │ │
+    │ ▥ Insights   │  …the page…                                  │ │
+    │ ◇ Agents     │                                              │ │
     │              │                                              │ │
     │ 🎁 Free month │                                              │ │
     │ ⚙ Settings   │                                              │ │
@@ -18,9 +17,8 @@ is, laid out the way Wispr Flow lays out its app (DESIGN.md §3B):
     └────────────────────────────────────────────────────────────────┘
 
 The title bar is the app's own (ui/window_frame.py keeps it a real Windows
-window). The sidebar closes to icons; a pack with a dashboard (Accounting)
-gets its own row while it is on. Profile, notifications, the free month and
-help open as cards (ui/app_popover.py).
+window). The sidebar closes to icons. Profile, notifications, the free
+month and help open as cards (ui/app_popover.py).
 
 Every page is live (APP-10 to APP-19): it reads the running companion
 through ui/app_bridge.py, and every control goes down the same path as the
@@ -216,7 +214,6 @@ class ToraApp(QWidget):
         bar.lay.addWidget(self._action_item("help", "Help", self.open_help, openness))
         bar.set_open(open_, animate=False)
         self._sidebar_button.setToolTip("Close sidebar" if open_ else "Open sidebar")
-        self._sync_pack_rows()
         return bar
 
     def _action_item(self, key: str, text: str, action, openness) -> NavItem:
@@ -249,31 +246,6 @@ class ToraApp(QWidget):
         want = self._want_open and self.width() >= self.AUTO_SHUT_W
         if want != self._sidebar.is_open():
             self._show_sidebar(want)
-
-    def _sync_pack_rows(self) -> None:
-        """Every pack you turn on gets a row of its own, under Packs - the
-        same for all of them (ui/packs_page.py); off, its row goes."""
-        from ui.packs_page import look, page_key
-        packs = self._call("extensions", []) or []
-        anchor = self._buttons.get("packs")
-        if anchor is None:
-            return
-        lay = self._sidebar.lay
-        at = lay.indexOf(anchor) + 1
-        for info in packs:
-            key = page_key(info["id"])
-            item = self._buttons.get(key)
-            if item is None:
-                _colours, glyph = look(info["id"])
-                item = NavItem(key, info.get("name") or info["id"],
-                               lambda: self._sidebar.openness, glyph=glyph)
-                item.clicked.connect(lambda _c=False, k=key: self.show_page(k))
-                self._nav_group.addButton(item)
-                self._buttons[key] = item
-                item.setToolTip("" if self._sidebar.is_open() else item.text())
-            lay.insertWidget(at, item)
-            at += 1
-            item.setVisible(bool(info.get("enabled")))
 
     # ── cards from the title bar and sidebar ─────────────────────────────────
 
@@ -323,15 +295,14 @@ class ToraApp(QWidget):
         if key == "setup" or key.startswith("settings"):
             self.open_settings("advanced" if key == "setup" else key.partition("/")[2] or "general")
             return
-        # Older names: the Extensions page is Packs; a pack's page is pack/<id>.
-        key = {"extensions": "packs", "accounting": "pack/accounting"}.get(key, key)
-        if key.startswith("pack/") and key not in self._pages:
-            from ui.packs_page import PackPage
-            widget = PackPage(self.bridge, key.partition("/")[2])
-            widget.navigate.connect(self.show_page)
-            self._pages[key] = widget
-            self._stack.addWidget(widget)
-            self.setStyleSheet(T.qss())
+        # Skills are a tab of the Tora page; the old Packs and Extensions
+        # pages, and a pack's page, went with the packs (docs/agents/SKILLS.md).
+        if key in ("skills", "packs", "extensions", "accounting") or key.startswith("pack/"):
+            self.show_page("tora")
+            page = self._pages.get("tora")
+            if page is not None and hasattr(page, "show_tab"):
+                page.show_tab("skills")
+            return
         if key not in self._pages:
             for k, _text, _place, cls in PAGES:
                 if k == key:
@@ -397,8 +368,6 @@ class ToraApp(QWidget):
     def _on_changed(self, topic: str) -> None:
         if topic == "state":
             self.set_state(self.bridge.state())
-        if topic == "extensions":
-            self._sync_pack_rows()
         self._pending_topics.add(topic)
         self._refresh_timer.start()          # restarts: one redraw per burst
 

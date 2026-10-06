@@ -167,6 +167,9 @@ class ProviderPlanner(Planner):
             parts.append("Available tools: " + ", ".join(sorted(names)))
         for line in (ctx.extras or {}).get("context_lines") or []:
             parts.append(line)
+        for skill in (ctx.extras or {}).get("skills") or []:
+            if skill:
+                parts.append(skill + "\nPlan the steps this skill describes.")
         if "open_app" in names:
             parts.append("If the goal names an application, the FIRST step is open_app(name); "
                          "never plan to search for it in windows or a browser.")
