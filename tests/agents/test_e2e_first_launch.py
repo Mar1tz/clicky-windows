@@ -134,7 +134,19 @@ def test_clicking_the_link_in_the_email_signs_the_wizard_in(qapp, service):
     assert not w.code_row.isVisibleTo(w)
 
 
-def test_no_account_sends_them_to_the_website(qapp, service):
+def test_a_new_email_signs_up_right_here(qapp, service):
+    """The website has no sign-up: a new email gets its account by asking
+    for a code, like anyone signing in (6 Oct 2026)."""
+    w = _wizard(service.account)
+    w._go("connect")
+    w.email_edit.setText("new@example.com")
+    w.send_btn.click()
+    _until(qapp, lambda: w.code_row.isVisibleTo(w))
+    assert "new@example.com" in service.fake.accounts
+
+
+def test_with_sign_ups_off_it_sends_them_to_the_website(qapp, service):
+    service.fake.signups = False
     w = _wizard(service.account)
     w._go("connect")
     w.email_edit.setText("nobody@example.com")
@@ -270,8 +282,10 @@ def test_the_account_card_shows_the_plan_and_this_months_use(qapp, monkeypatch):
         assert not any("calls" in t.lower() or "requests" in t.lower() or "$" in t for t in texts), \
             "the server's own numbers stay hidden"
         buttons = {b.text(): b for b in page.findChildren(QPushButton)}
-        buttons["Manage plan on heytora.com"].click()
-        assert "website" in bridge.done and "refresh" in bridge.done
+        seen = []
+        page.navigate.connect(seen.append)
+        buttons["Change plan"].click()
+        assert seen == ["settings/plans"] and "refresh" in bridge.done
     finally:
         page.close()
     from ui.settings_tabs import AccountTab

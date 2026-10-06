@@ -54,6 +54,9 @@ class FakeHeyTora:
         self.clock_offset = 0.0                 # the server's clock minus this PC's
         self.standby = 0                        # standby passes (0007): the voice waiting, uncounted
         self.paid = False                       # a paid plan still running: no deleting
+        self.signups = True                     # Supabase's "allow new users to sign up"
+        self.paying = ""                        # the plan a Paddle subscription is on, if any
+        self.billing_off = False                # no PADDLE_API_KEY on the server yet
         self.deleted = False
 
     def window(self, kind: str, new: bool) -> tuple[int, float, bool]:
@@ -86,7 +89,9 @@ class FakeHeyTora:
         self.calls.append((request.method, path, dict(request.headers), body))
         if path == "/auth/v1/otp":
             if body.get("email") not in self.accounts:
-                return httpx.Response(422, json={"msg": "Signups not allowed for otp"})
+                if not body.get("create_user") or not self.signups:
+                    return httpx.Response(422, json={"msg": "Signups not allowed for otp"})
+                self.accounts.add(body["email"])
             self.challenge = body.get("code_challenge")
             self.redirect_to = request.url.params.get("redirect_to")
             return httpx.Response(200, json={})
@@ -109,6 +114,24 @@ class FakeHeyTora:
         if self.ended and "/functions/v1/heytora" in path:
             return httpx.Response(401, json={"error": {"code": 401, "status": "HEYTORA_SIGNIN",
                                                        "message": "Sign in to HeyTora to keep talking."}})
+        if path.endswith("/heytora/checkout"):
+            if self.billing_off:
+                return httpx.Response(503, json={"error": {"code": 503, "status": "HEYTORA_BILLING",
+                                                           "message": "Paid plans aren't open yet."}})
+            plan = body.get("plan")
+            if plan not in ("pro", "max"):
+                return httpx.Response(400, json={"error": {"code": 400, "status": "HEYTORA_PLAN",
+                                                           "message": f"Not a plan you can buy: {plan}"}})
+            if self.paying:
+                same, self.paying = self.paying == plan, plan
+                return httpx.Response(200, json={"ok": True, "same": True} if same
+                                      else {"ok": True, "changed": True, "plan": plan})
+            return httpx.Response(200, json={"ok": True, "url": "https://heytora.example/pay?_ptxn=txn_1"})
+        if path.endswith("/heytora/billing"):
+            if not self.paying:
+                return httpx.Response(404, json={"error": {"code": 404, "status": "HEYTORA_BILLING",
+                    "message": "There's no billing for this account yet - choose a plan first."}})
+            return httpx.Response(200, json={"ok": True, "url": "https://customer-portal.paddle.com/cpl_1"})
         if path.endswith("/heytora/account") and request.method == "DELETE":
             if body.get("confirm", "").lower() != "amy@example.com":
                 return httpx.Response(400, json={"error": {"code": 400, "status": "HEYTORA_CONFIRM",
@@ -227,17 +250,61 @@ def test_no_business_key_ships_in_the_app():
 def test_signing_in_with_an_emailed_code(heytora):
     summary = _signed_in(heytora)
     otp = next(b for _m, p, _h, b in heytora.fake.calls if p == "/auth/v1/otp")
-    assert otp == {"email": "amy@example.com", "create_user": False}, "accounts are made on the website"
+    assert otp == {"email": "amy@example.com", "create_user": True}, "a new email signs up here"
     assert heytora.account.signed_in() and heytora.account.email == "amy@example.com"
     assert summary["plan"] == "free" and summary["limits"]["talk"] == 25
     headers = heytora.fake.calls[0][2]
     assert headers.get("apikey") == "anon-public-key"
 
 
-def test_an_email_with_no_account_is_sent_to_the_website(heytora):
+def test_a_new_email_signs_up_in_the_app(heytora):
+    """The website has no sign-up (6 Oct 2026): a new email gets its
+    account by signing in for the first time."""
+    heytora.account.send_code("new@example.com")
+    assert "new@example.com" in heytora.fake.accounts
+
+
+def test_with_sign_ups_off_on_the_server_it_says_where_to_go(heytora):
     from account.service import NoAccount
+    heytora.fake.signups = False
     with pytest.raises(NoAccount, match="heytora.example"):
         heytora.account.send_code("nobody@example.com")
+
+
+# -- paid plans (Paddle) ------------------------------------------------------------------------------------------
+
+def test_choosing_a_plan_opens_paddles_checkout_for_this_account(heytora):
+    _signed_in(heytora)
+    out = heytora.account.checkout("pro")
+    assert out["url"].startswith("https://heytora.example/pay?_ptxn=")
+    method, _path, headers, body = next(c for c in heytora.fake.calls if c[1].endswith("/heytora/checkout"))
+    assert method == "POST" and body == {"plan": "pro"}, "only the plan: who pays is the sign-in's"
+    assert headers["authorization"].startswith("Bearer ")
+
+
+def test_already_paying_the_plan_changes_in_place(heytora):
+    _signed_in(heytora)
+    heytora.fake.paying = "pro"
+    assert heytora.account.checkout("max") == {"ok": True, "changed": True, "plan": "max"}
+    assert heytora.account.checkout("max") == {"ok": True, "same": True}
+
+
+def test_billing_closed_or_a_bad_plan_says_so_in_words(heytora):
+    from account.service import AccountError
+    from ui.app_bridge import AppBridge
+    _signed_in(heytora)
+    with pytest.raises(AccountError, match="Not a plan you can buy"):
+        heytora.account.checkout("gold")
+    heytora.fake.billing_off = True
+    assert AppBridge().choose_plan("pro") == {"error": "Paid plans aren't open yet."}
+
+
+def test_manage_billing_is_paddles_portal_once_there_is_billing(heytora):
+    from ui.app_bridge import AppBridge
+    _signed_in(heytora)
+    assert "choose a plan first" in AppBridge().billing_page()["error"]
+    heytora.fake.paying = "pro"
+    assert AppBridge().billing_page() == {"url": "https://customer-portal.paddle.com/cpl_1"}
 
 
 def test_a_wrong_code_says_so(heytora):

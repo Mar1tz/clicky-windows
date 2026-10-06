@@ -396,8 +396,8 @@ class SetupWizard(QDialog):
         outer.addLayout(self._centre(card))
         if self._gated:
             body.addWidget(O.heading("Sign in to HeyTora."))
-            body.addWidget(O.line("With the account you made on heytora.com. We email you a "
-                                  "link: click it and you're in."))
+            body.addWidget(O.line("With your email - new here, and this makes your account. "
+                                  "We email you a link: click it and you're in."))
         else:
             body.addWidget(O.heading("Connect to Gemini."))
             body.addWidget(O.line("Tora thinks with Google's Gemini. Add your own Gemini key."))

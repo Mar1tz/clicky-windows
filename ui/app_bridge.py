@@ -449,6 +449,61 @@ class AppBridge(QObject):
                 "fresh": st["fresh"], "busy": st["busy"], "error": st["error"],
                 "own_key": bool(cfg.google_api_key)}
 
+    # ── paid plans (Paddle) ──────────────────────────────────────────────────
+
+    def choose_plan(self, plan: str) -> dict:
+        """Buy or change to a plan. A network call - run it off the UI thread.
+        {"url"} to open (Paddle's checkout), {"changed"} (already paying: the
+        plan changed in place), {"same"}, or {"error": why, in words}."""
+        from account.service import AccountError, account
+        try:
+            return account().checkout(plan)
+        except AccountError as e:
+            return {"error": str(e) or "That didn't work - try again."}
+        except Exception:  # noqa: BLE001
+            _log.exception("checkout failed")
+            return {"error": "That didn't work - try again."}
+
+    def billing_page(self) -> dict:
+        """Paddle's page for card, invoices and cancelling: {"url"} or {"error"}.
+        A network call - run it off the UI thread."""
+        from account.service import AccountError, account
+        try:
+            url = account().billing_portal()
+            return {"url": url} if url else {"error": "The billing page didn't open - try again."}
+        except AccountError as e:
+            return {"error": str(e) or "The billing page didn't open - try again."}
+        except Exception:  # noqa: BLE001
+            _log.exception("billing portal failed")
+            return {"error": "The billing page didn't open - try again."}
+
+    WATCH_EVERY_MS = 5000
+    WATCH_FOR_S = 20 * 60
+
+    def watch_for_plan(self, plan: str) -> None:
+        """While they pay in the browser: read the plan every few seconds
+        until it is `plan` (Paddle has told the server), or 20 minutes pass.
+        The pages hear it as the "account" topic."""
+        import time
+        from PyQt6.QtCore import QTimer
+        self._want_plan, self._want_until = plan, time.monotonic() + self.WATCH_FOR_S
+        timer = getattr(self, "_plan_timer", None)
+        if timer is None:
+            timer = self._plan_timer = QTimer(self)
+            timer.setInterval(self.WATCH_EVERY_MS)
+            timer.timeout.connect(self._check_plan)
+        timer.start()
+
+    def _check_plan(self) -> None:
+        import time
+        summary = (self.account_state().get("summary") or {})
+        if (summary.get("plan") == self._want_plan and summary.get("plan_status") in ("active", "trialing")) \
+                or time.monotonic() > self._want_until:
+            self._plan_timer.stop()
+            self.changed.emit("account")
+            return
+        self.refresh_account(force=True)
+
     def refresh_account(self, force: bool = False) -> None:
         """Read the plan and this month's use again, off the UI thread, unless
         it was read in the last minute (or `force`). The card hears the

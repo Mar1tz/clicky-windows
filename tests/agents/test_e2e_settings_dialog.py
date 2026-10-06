@@ -129,9 +129,7 @@ def test_plans_match_the_website_and_mark_yours(qapp):
     buttons = {b.text(): b for b in page.findChildren(QPushButton)}
     assert not buttons["Your plan"].isEnabled(), "yours is marked, not offered"
     assert "Choose Pro" not in buttons and {"Choose Free", "Choose Max"} <= set(buttons)
-    buttons["Choose Max"].click()
-    buttons["Open billing"].click()
-    assert bridge.done == ["/pricing", "/pricing"]
+    # What choosing does - Paddle's checkout - is tests/agents/test_e2e_billing.py.
 
 
 def test_the_agents_panels_lose_their_dark_sheet(qapp):

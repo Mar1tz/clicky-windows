@@ -230,7 +230,9 @@ class Account:
     # -- signing in --------------------------------------------------------------------------------------
 
     def send_code(self, email: str, redirect_to: str = "") -> None:
-        """Email a sign-in to an EXISTING account: a link, and a code if the email shows one.
+        """Email a sign-in: a link, and a code if the email shows one. A new
+        email gets its account here - signing up is signing in for the first
+        time (6 Oct 2026: the website has no sign-up, so the app does it).
 
         With `redirect_to` (account/loopback.py's address) the link brings the
         browser back to this PC with a one-time code for verify_link().
@@ -239,7 +241,7 @@ class Account:
         email = (email or "").strip().lower()
         if "@" not in email or "." not in email.split("@")[-1]:
             raise AccountError("That doesn't look like an email address.")
-        body: dict = {"email": email, "create_user": False}
+        body: dict = {"email": email, "create_user": True}
         path = "otp"
         if redirect_to:
             verifier = secrets.token_urlsafe(48)
@@ -298,6 +300,21 @@ class Account:
                                        "Authorization": f"Bearer {session.get('access_token', '')}"})
             except Exception:  # noqa: BLE001 - signed out here either way
                 pass
+
+    # -- paid plans (Paddle, through the heytora function) ------------------------------------------
+
+    def checkout(self, plan: str) -> dict:
+        """Buy `plan` ("pro" | "max"), or change to it when already paying.
+        {"url": Paddle's checkout to open} | {"changed": True} | {"same": True}.
+        The plan itself changes when Paddle tells the server (its webhook)."""
+        data = self._call("POST", "checkout", {"plan": plan})
+        if data.get("changed"):
+            self.refresh_soon(0)
+        return data
+
+    def billing_portal(self) -> str:
+        """Paddle's page for this account's card, invoices and cancelling."""
+        return str(self._call("POST", "billing").get("url") or "")
 
     def delete_account(self, confirm_email: str) -> None:
         """Close the account on HeyTora's server - its profile, usage and agent
