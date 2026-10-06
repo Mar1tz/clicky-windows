@@ -807,6 +807,14 @@ class PlansTab(Tab):
     HEADING = "Plans & billing"
     TOPICS = frozenset({"account"})
 
+    def showEvent(self, event) -> None:
+        """On screen: the plan is read again - it may have been changed on
+        Paddle's page since (a cancel, a new card)."""
+        super().showEvent(event)
+        refresh = getattr(self.bridge, "refresh_account", None)
+        if refresh is not None:
+            refresh(force=True)
+
     def build(self) -> None:
         from PyQt6.QtWidgets import QFrame
         br = self.bridge
@@ -828,9 +836,10 @@ class PlansTab(Tab):
                 line.setObjectName("vr")
                 line.setFixedWidth(1)
                 row.addWidget(line)
-            # A plan cancelled but not yet ended is offered again: choosing it keeps it.
-            current = plan["key"] == mine and not own_key and not summary.get("plan_cancel_at")
-            row.addWidget(self._column(plan, current=current), 1)
+            # A plan cancelled but not yet ended is offered again: Resume keeps it.
+            yours = plan["key"] == mine and not own_key
+            ending = yours and bool(summary.get("plan_cancel_at"))
+            row.addWidget(self._column(plan, current=yours and not ending, resume=ending), 1)
         self.body.add(box)
         self.body.add(label(PLANS_NOTE, "faint", wrap=True))
 
@@ -851,7 +860,7 @@ class PlansTab(Tab):
                             "Update your card in Manage billing to keep the plan.")
             elif mine != "free" and summary.get("plan_cancel_at"):
                 billing.row(f"{name} until {_day(summary['plan_cancel_at'])}",
-                            f"It won't renew. Choose {name} again to keep it.")
+                            f"It won't renew. Resume {name} above to keep it.")
             elif mine != "free" and summary.get("plan_renews_at"):
                 billing.row(f"{name}, renews on {_day(summary['plan_renews_at'])}",
                             "Change or cancel any time; a change is prorated.")
@@ -885,13 +894,15 @@ class PlansTab(Tab):
             return
         if self._busy is not None:
             return
+        resuming = plan["key"] == self._mine and bool(self._summary.get("plan_cancel_at"))
+        label = go.text()
         go.setEnabled(False)
-        go.setText("Opening checkout…" if self._mine == "free" else "Changing…")
+        go.setText("Resuming…" if resuming else "Opening checkout…" if self._mine == "free" else "Changing…")
 
         def done(answer: dict) -> None:
             self._busy = None
             go.setEnabled(True)
-            go.setText(f"Choose {plan['name']}")
+            go.setText(label)
             if answer.get("error"):
                 self._say(answer["error"])
             elif answer.get("url"):
@@ -900,6 +911,9 @@ class PlansTab(Tab):
                 QDesktopServices.openUrl(QUrl(answer["url"]))
                 self._say(f"Finish paying in your browser - you'll be on {plan['name']} here as "
                           "soon as Paddle confirms it.")
+                br.watch_for_plan(plan["key"])
+            elif answer.get("changed") and resuming:
+                self._say(f"Done - {plan['name']} carries on and renews as usual.")
                 br.watch_for_plan(plan["key"])
             elif answer.get("changed"):
                 self._say(f"Done - you're on {plan['name']}. Paddle prorates the difference.")
@@ -920,12 +934,12 @@ class PlansTab(Tab):
                 from PyQt6.QtCore import QUrl
                 from PyQt6.QtGui import QDesktopServices
                 QDesktopServices.openUrl(QUrl(answer["url"]))
-                br.refresh_account(force=True)
+                br.watch_billing()                    # a cancel there shows here
             else:
                 self._say(answer.get("error") or "The billing page didn't open - try again.")
         self._busy = _Background(self, br.billing_page, done)
 
-    def _column(self, plan: dict, current: bool) -> QWidget:
+    def _column(self, plan: dict, current: bool, resume: bool = False) -> QWidget:
         from PyQt6.QtWidgets import QLabel
         from ui.app_widgets import icon
         from PyQt6.QtWidgets import QSizePolicy
@@ -965,7 +979,8 @@ class PlansTab(Tab):
             go = button("Your plan")
             go.setEnabled(False)
         else:
-            go = button(f"Choose {plan['name']}", "primary" if plan.get("flag") else "ghost")
+            go = (button(f"Resume {plan['name']}", "primary") if resume else
+                  button(f"Choose {plan['name']}", "primary" if plan.get("flag") else "ghost"))
             go.clicked.connect(lambda _c=False, b=go: self._choose(plan, b))
         lay.addWidget(go)
         return col

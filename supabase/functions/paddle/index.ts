@@ -62,6 +62,7 @@ Deno.serve(async (req: Request): Promise<Response> => {
     p_renews_at: update.renewsAt,
     p_cancel_at: update.cancelAt,
     p_payload: event,
+    p_period_start: update.periodStart,
   });
   if (error) {
     // A 500 makes Paddle retry - right for a database hiccup.

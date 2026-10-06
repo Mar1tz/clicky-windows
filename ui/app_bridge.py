@@ -479,26 +479,43 @@ class AppBridge(QObject):
 
     WATCH_EVERY_MS = 5000
     WATCH_FOR_S = 20 * 60
+    WATCH_BILLING_S = 10 * 60
+    BILLING_FIELDS = ("plan", "plan_status", "plan_cancel_at", "plan_renews_at")
 
     def watch_for_plan(self, plan: str) -> None:
-        """While they pay in the browser: read the plan every few seconds
-        until it is `plan` (Paddle has told the server), or 20 minutes pass.
-        The pages hear it as the "account" topic."""
+        """While they pay (or resume) in the browser: read the plan every few
+        seconds until it is `plan`, paid up and renewing - Paddle has told
+        the server - or 20 minutes pass."""
+        self._watch(lambda s: s.get("plan") == plan and s.get("plan_status") in ("active", "trialing")
+                    and not s.get("plan_cancel_at"), self.WATCH_FOR_S)
+
+    def watch_billing(self) -> None:
+        """While Paddle's billing page is open: read the plan until anything
+        about it changes - cancelled, resumed, a new card that cleared a
+        failed payment - or 10 minutes pass."""
+        summary = self.account_state().get("summary") or {}
+        before = tuple(summary.get(k) for k in self.BILLING_FIELDS)
+        self._watch(lambda s: tuple(s.get(k) for k in self.BILLING_FIELDS) != before,
+                    self.WATCH_BILLING_S)
+
+    def _watch(self, done, for_s: float) -> None:
+        """Read the plan every few seconds until `done(summary)`, or `for_s`
+        pass. The pages hear it as the "account" topic."""
         import time
         from PyQt6.QtCore import QTimer
-        self._want_plan, self._want_until = plan, time.monotonic() + self.WATCH_FOR_S
+        self._watch_done, self._want_until = done, time.monotonic() + for_s
         timer = getattr(self, "_plan_timer", None)
         if timer is None:
             timer = self._plan_timer = QTimer(self)
             timer.setInterval(self.WATCH_EVERY_MS)
             timer.timeout.connect(self._check_plan)
         timer.start()
+        self.refresh_account(force=True)
 
     def _check_plan(self) -> None:
         import time
         summary = (self.account_state().get("summary") or {})
-        if (summary.get("plan") == self._want_plan and summary.get("plan_status") in ("active", "trialing")) \
-                or time.monotonic() > self._want_until:
+        if self._watch_done(summary) or time.monotonic() > self._want_until:
             self._plan_timer.stop()
             self.changed.emit("account")
             return

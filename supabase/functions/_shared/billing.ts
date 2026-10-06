@@ -88,6 +88,7 @@ export type PlanUpdate = {
   status: "active" | "trialing" | "past_due" | "canceled";
   renewsAt: string | null;      // when it next charges
   cancelAt: string | null;      // when a cancelled plan ends (or ended)
+  periodStart: string | null;   // when the current billing period began: the allowance counts from it
 };
 
 type Obj = Record<string, unknown>;
@@ -133,6 +134,7 @@ export function planUpdate(event: Obj, prices: Record<string, string>): PlanUpda
     renewsAt: status === "canceled" ? null
       : str(sub.next_billed_at) ?? str(obj(sub.current_billing_period).ends_at),
     cancelAt,
+    periodStart: status === "canceled" ? null : str(obj(sub.current_billing_period).starts_at),
   };
 }
 

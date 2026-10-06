@@ -56,6 +56,20 @@ def test_only_the_server_can_apply_a_payment():
     assert "p_occurred_at < v_last" in sql, "an older event changes nothing"
 
 
+def test_a_paid_allowance_runs_with_its_billing_period():
+    """Seen 6 Oct: "renews on 6 Nov" beside "starts again on 1 Nov" (0009)."""
+    sql = (ROOT / "supabase/migrations/0009_heytora_billing_period.sql").read_text(encoding="utf-8")
+    period = sql[sql.index("function public._heytora_period("):sql.index("$fn$;", sql.index("_heytora_period("))]
+    assert "plan_status in ('active', 'trialing')" in period and "v_end > now()" in period,         "only a live, current period - else the calendar month"
+    spend = sql[sql.index("function public._heytora_spend("):]
+    assert "_heytora_period(p_uid) ->> 'start'" in spend.split("$fn$;")[0], "the limits count from it"
+    shown = sql[sql.index("function public.get_usage_summary("):]
+    assert "'period_end',     (v_period ->> 'end')" in shown, "the app says when it starts again"
+    assert "date_trunc('month'" not in spend.split("$fn$;")[0] + shown.split("$fn$;")[0]
+    hook = (FN / "paddle/index.ts").read_text(encoding="utf-8")
+    assert "p_period_start: update.periodStart" in hook
+
+
 def test_deleting_a_paying_account_cancels_at_paddle_first():
     fn = (FN / "heytora/index.ts").read_text(encoding="utf-8")
     route = fn[fn.index('path === "account" && req.method === "DELETE"'):]
@@ -101,6 +115,9 @@ class _Bridge:
 
     def watch_for_plan(self, plan):
         self.done.append(("watch", plan))
+
+    def watch_billing(self):
+        self.done.append("watch billing")
 
     def refresh_account(self, force=False):
         self.done.append("refresh")
@@ -177,12 +194,39 @@ def test_going_back_to_free_is_cancelling_on_the_billing_page(qapp, opened):
     assert ("choose", "free") not in br.done
 
 
-def test_a_cancelled_plan_says_until_when_and_can_be_chosen_again(qapp):
+def test_a_cancelled_plan_says_until_when_and_can_be_resumed(qapp, opened):
+    """Seen 6 Oct: cancelled on Paddle's page, the tab still said "Pro,
+    renews on 6 Nov" - it now reads the plan again and offers Resume."""
     from ui.settings_tabs import PlansTab
-    tab = PlansTab(_Bridge(summary={"plan": "pro", "plan_name": "Pro", "plan_status": "active",
-                                    "billing": True, "plan_cancel_at": "2026-11-06T10:00:00Z"}))
+    br = _Bridge(summary={"plan": "pro", "plan_name": "Pro", "plan_status": "active",
+                          "billing": True, "plan_cancel_at": "2026-11-06T10:00:00Z"},
+                 answer={"changed": True, "plan": "pro"})
+    tab = PlansTab(br)
     assert "Pro until 6 Nov" in _texts(tab)
-    assert _button(tab, "Choose Pro").isEnabled(), "choosing it again keeps it"
+    assert not any(t.startswith("Pro, renews") for t in _texts(tab))
+    _button(tab, "Resume Pro").click()
+    _wait(qapp, lambda: ("watch", "pro") in br.done)
+    assert ("choose", "pro") in br.done and opened == [], "resumed in place - no checkout"
+    assert any("carries on and renews" in t for t in _texts(tab))
+
+
+def test_opening_the_tab_reads_the_plan_again(qapp):
+    from ui.settings_tabs import PlansTab
+    br = _Bridge()
+    tab = PlansTab(br)
+    tab.show()
+    qapp.processEvents()
+    tab.close()
+    assert "refresh" in br.done
+
+
+def test_after_the_billing_page_opens_a_change_there_is_watched_for(qapp, opened):
+    from ui.settings_tabs import PlansTab
+    br = _Bridge(summary={"plan": "pro", "plan_name": "Pro", "plan_status": "active", "billing": True},
+                 portal={"url": "https://customer-portal.paddle.com/cpl_1"})
+    tab = PlansTab(br)
+    _button(tab, "Manage billing").click()
+    _wait(qapp, lambda: "watch billing" in br.done)
 
 
 def test_a_failed_payment_says_to_update_the_card(qapp):
@@ -209,8 +253,22 @@ def test_the_plan_is_watched_until_paddle_has_told_the_server(qapp, monkeypatch)
     monkeypatch.setattr(br, "account_state", lambda: {"summary": next(states)})
     monkeypatch.setattr(br, "refresh_account", lambda force=False: refreshed.append(force))
     br.watch_for_plan("pro")
-    assert br._plan_timer.isActive()
+    assert br._plan_timer.isActive() and refreshed == [True], "read at once"
     br._check_plan()
-    assert refreshed == [True] and br._plan_timer.isActive(), "not yet: read again"
+    assert refreshed == [True, True] and br._plan_timer.isActive(), "not yet: read again"
     br._check_plan()
     assert not br._plan_timer.isActive(), "Pro: stop watching"
+
+
+def test_a_cancel_on_paddles_page_is_watched_for_until_it_shows(qapp, monkeypatch):
+    from ui.app_bridge import AppBridge
+    br = AppBridge()
+    pro = {"plan": "pro", "plan_status": "active", "plan_renews_at": "2026-11-06T10:00:00Z"}
+    states = iter([pro, pro, {**pro, "plan_cancel_at": "2026-11-06T10:00:00Z", "plan_renews_at": None}])
+    monkeypatch.setattr(br, "account_state", lambda: {"summary": next(states)})
+    monkeypatch.setattr(br, "refresh_account", lambda force=False: None)
+    br.watch_billing()
+    br._check_plan()
+    assert br._plan_timer.isActive(), "nothing changed yet"
+    br._check_plan()
+    assert not br._plan_timer.isActive(), "the cancel arrived: stop watching"

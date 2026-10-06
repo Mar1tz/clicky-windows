@@ -48,7 +48,7 @@ function subscription(over: Record<string, unknown> = {}, data: Record<string, u
       custom_data: { user_id: "u-1" },
       items: [{ price: { id: "pri_pro", custom_data: { plan: "pro" } } }],
       next_billed_at: "2026-11-06T10:00:00Z",
-      current_billing_period: { ends_at: "2026-11-06T10:00:00Z" },
+      current_billing_period: { starts_at: "2026-10-06T10:00:00Z", ends_at: "2026-11-06T10:00:00Z" },
       scheduled_change: null,
       ...data,
     },
@@ -59,7 +59,7 @@ function subscription(over: Record<string, unknown> = {}, data: Record<string, u
 test("a new subscription is the plan its price says, for the user who checked out", () => {
   assert.deepEqual(planUpdate(subscription(), PRICES), {
     user: "u-1", customer: "ctm_1", subscription: "sub_1", plan: "pro", status: "active",
-    renewsAt: "2026-11-06T10:00:00Z", cancelAt: null,
+    renewsAt: "2026-11-06T10:00:00Z", cancelAt: null, periodStart: "2026-10-06T10:00:00Z",
   });
 });
 
@@ -81,6 +81,7 @@ test("cancelling keeps the plan until the period ends, then it is cancelled", ()
   }), PRICES)!;
   assert.equal(ended.status, "canceled");
   assert.equal(ended.renewsAt, null);
+  assert.equal(ended.periodStart, null, "ended: back to the calendar month");
   assert.equal(ended.cancelAt, "2026-11-06T10:00:01Z");
 });
 
