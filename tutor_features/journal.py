@@ -208,6 +208,37 @@ def search(text: str, limit: int = 100) -> list[dict]:
     return [dict(zip(cols, r)) for r in rows]
 
 
+def export_all(path) -> int:
+    """Everything kept - every question, answer and walkthrough plan - as
+    one JSON file at `path` (Settings > Data & privacy). Returns how many
+    entries were written."""
+    import json
+    with _connect() as conn:
+        cols = [r[1] for r in conn.execute("PRAGMA table_info(entries)").fetchall()]
+        entries = [dict(zip(cols, r)) for r in
+                   conn.execute("SELECT * FROM entries ORDER BY created_at").fetchall()]
+        plans = dict(conn.execute("SELECT entry_id, plan_json FROM walkthroughs").fetchall())
+    for e in entries:
+        if e["id"] in plans:
+            try:
+                e["walkthrough_plan"] = json.loads(plans[e["id"]])
+            except ValueError:
+                pass
+    Path(path).write_text(json.dumps({"app": "HeyTora", "kind": "journal", "entries": entries},
+                                      indent=2, ensure_ascii=False), encoding="utf-8")
+    return len(entries)
+
+
+def clear_all() -> int:
+    """Delete everything kept, at the user's word (Settings > Data &
+    privacy). Returns how many entries went."""
+    with _connect() as conn:
+        n = conn.execute("SELECT COUNT(*) FROM entries").fetchone()[0]
+        conn.execute("DELETE FROM walkthroughs")
+        conn.execute("DELETE FROM entries")
+    return int(n)
+
+
 def insight_rows() -> list[tuple]:
     """(created_at, tags, app_key, streak) for every entry - the Insights
     page counts from these (ui/insights_data.py)."""
@@ -215,6 +246,15 @@ def insight_rows() -> list[tuple]:
         return conn.execute(
             "SELECT created_at, COALESCE(tags, ''), COALESCE(app_key, ''), "
             "COALESCE(streak, 0) FROM entries").fetchall()
+
+
+def walkthrough_times() -> list[tuple[float, float]]:
+    """(when, seconds) for every timed walkthrough - when it was kept and
+    how long Tora guided for (Insights' time, by day)."""
+    with _connect() as conn:
+        return conn.execute(
+            "SELECT e.created_at, w.seconds FROM walkthroughs w JOIN entries e ON e.id = w.entry_id "
+            "WHERE w.seconds > 0").fetchall()
 
 
 def walkthrough_seconds() -> float:

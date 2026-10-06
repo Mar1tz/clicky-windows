@@ -7,10 +7,9 @@ is, laid out the way Wispr Flow lays out its app (DESIGN.md §3B):
     ┌─[≡][◯]─────────────────────────────── [●Listening] [🔔] ─ ▢ ✕ ┐
     │ heytora      ╭──────────────────────────────────────────────╮ │
     │ ⌂ Home       │  Hey Dylan, just hold [Ctrl + Win] and ask   │ │
-    │ ◇ Agents     │                                              │ │
-    │ ▢ Journal    │  …the page…                                  │ │
-    │ ▦ Packs      │                                              │ │
     │ ✦ Tora       │                                              │ │
+    │ ▥ Insights   │  …the page…                                  │ │
+    │ ◇ Agents     │                                              │ │
     │              │                                              │ │
     │ 🎁 Free month │                                              │ │
     │ ⚙ Settings   │                                              │ │
@@ -18,9 +17,8 @@ is, laid out the way Wispr Flow lays out its app (DESIGN.md §3B):
     └────────────────────────────────────────────────────────────────┘
 
 The title bar is the app's own (ui/window_frame.py keeps it a real Windows
-window). The sidebar closes to icons; a pack with a dashboard (Accounting)
-gets its own row while it is on. Profile, notifications, the free month and
-help open as cards (ui/app_popover.py).
+window). The sidebar closes to icons. Profile, notifications, the free
+month and help open as cards (ui/app_popover.py).
 
 Every page is live (APP-10 to APP-19): it reads the running companion
 through ui/app_bridge.py, and every control goes down the same path as the
@@ -37,7 +35,7 @@ from PyQt6.QtWidgets import (
 
 from ui import app_popover
 from ui import app_theme as T
-from ui.app_pages import PACK_ROWS, PAGES
+from ui.app_pages import PAGES
 from ui.app_shell import BrandRow, IconButton, NavItem, Sidebar, WindowButton
 from ui.app_widgets import Dot, label
 from ui.window_frame import NativeFrame
@@ -75,6 +73,7 @@ class ToraApp(QWidget):
 
         self._pages: dict[str, QWidget] = {}
         self._buttons: dict[str, NavItem] = {}
+        self._settings = None                 # the Settings dialog, made when first opened
         self._stack = QStackedWidget()
         self._stack.setObjectName("stack")
 
@@ -88,6 +87,7 @@ class ToraApp(QWidget):
         body.addWidget(self._build_sidebar())
         panel = QFrame()
         panel.setObjectName("panel")
+        self._panel = panel
         inner = QVBoxLayout(panel)
         inner.setContentsMargins(1, 1, 1, 1)
         inner.addWidget(self._stack)
@@ -160,6 +160,23 @@ class ToraApp(QWidget):
     def _toggle_max(self) -> None:
         self.showNormal() if self.isMaximized() else self.showMaximized()
 
+    def paintEvent(self, event) -> None:
+        """A soft shadow under the panel the pages sit on (Wispr's), in
+        place of an outline. Painted here, under it, rather than as a
+        QGraphicsDropShadowEffect: an effect would re-render the whole page
+        into an image on every repaint. In dark the panel keeps a hairline
+        instead - a shadow on black does not show."""
+        super().paintEvent(event)
+        if T.is_dark() or not hasattr(self, "_panel"):
+            return
+        from PyQt6.QtCore import QRectF
+        from PyQt6.QtGui import QPainter
+        from ui import kit
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        kit.soft_shadow(p, QRectF(self._panel.geometry()), T.PANEL_RADIUS, "card", 0.55)
+        p.end()
+
     def changeEvent(self, event) -> None:
         super().changeEvent(event)
         if hasattr(self, "_max_button"):
@@ -179,24 +196,24 @@ class ToraApp(QWidget):
 
         group = QButtonGroup(self)
         group.setExclusive(True)
-        bottom_started = False
+        self._nav_group = group
         for key, text, place, _cls in PAGES:
             if place == "hidden":
                 continue
-            if place == "bottom" and not bottom_started:
-                bar.lay.addStretch(1)
-                bar.lay.addWidget(self._action_item("free_month", "Get a free month",
-                                                    self.open_free_month, openness))
-                bottom_started = True
             item = NavItem(key, text, openness)
             item.clicked.connect(lambda _c=False, k=key: self.show_page(k))
             group.addButton(item)
             bar.lay.addWidget(item)
             self._buttons[key] = item
+        # Under the list: the free month, Settings (a dialog, not a page) and Help.
+        bar.lay.addStretch(1)
+        bar.lay.addWidget(self._action_item("free_month", "Get a free month",
+                                            self.open_free_month, openness))
+        bar.lay.addWidget(self._action_item("settings", "Settings",
+                                            lambda: self.open_settings(), openness))
         bar.lay.addWidget(self._action_item("help", "Help", self.open_help, openness))
         bar.set_open(open_, animate=False)
         self._sidebar_button.setToolTip("Close sidebar" if open_ else "Open sidebar")
-        self._sync_pack_rows()
         return bar
 
     def _action_item(self, key: str, text: str, action, openness) -> NavItem:
@@ -230,13 +247,6 @@ class ToraApp(QWidget):
         if want != self._sidebar.is_open():
             self._show_sidebar(want)
 
-    def _sync_pack_rows(self) -> None:
-        """A pack's own page has a row only while the pack is on."""
-        for key, ext_id in PACK_ROWS.items():
-            item = self._buttons.get(key)
-            if item is not None:
-                item.setVisible(bool(self._call("extension_on", False, ext_id)))
-
     # ── cards from the title bar and sidebar ─────────────────────────────────
 
     def _below_top_right(self) -> QPoint:
@@ -268,12 +278,31 @@ class ToraApp(QWidget):
 
     # ── navigation ───────────────────────────────────────────────────────────
 
+    def open_settings(self, tab: str = "general") -> None:
+        """Settings is a dialog over the window (ui/settings_dialog.py)."""
+        if self._settings is None:
+            from ui.settings_dialog import SettingsDialog
+            self._settings = SettingsDialog(self, self.bridge)
+        self._settings.open(tab)
+
     def show_page(self, key: str) -> None:
         """Switch to a page, building it the first time it is asked for.
 
         Lazily, because a window of pages is a visible pause on a cold start
-        and most sessions open one of them.
+        and most sessions open one of them. "settings" (or "settings/agents"
+        for a tab) opens the Settings dialog; "setup" is its Advanced tab.
         """
+        if key == "setup" or key.startswith("settings"):
+            self.open_settings("advanced" if key == "setup" else key.partition("/")[2] or "general")
+            return
+        # Skills are a tab of the Tora page; the old Packs and Extensions
+        # pages, and a pack's page, went with the packs (docs/agents/SKILLS.md).
+        if key in ("skills", "packs", "extensions", "accounting") or key.startswith("pack/"):
+            self.show_page("tora")
+            page = self._pages.get("tora")
+            if page is not None and hasattr(page, "show_tab"):
+                page.show_tab("skills")
+            return
         if key not in self._pages:
             for k, _text, _place, cls in PAGES:
                 if k == key:
@@ -339,8 +368,6 @@ class ToraApp(QWidget):
     def _on_changed(self, topic: str) -> None:
         if topic == "state":
             self.set_state(self.bridge.state())
-        if topic == "extensions":
-            self._sync_pack_rows()
         self._pending_topics.add(topic)
         self._refresh_timer.start()          # restarts: one redraw per burst
 
@@ -350,25 +377,31 @@ class ToraApp(QWidget):
         if not self.isVisible():
             return          # kept: showEvent redraws when the window is back
         topics, self._pending_topics = self._pending_topics, set()
-        page = self._stack.currentWidget()
-        if (page is not None and getattr(page, "LIVE", False)
-                and set(getattr(page, "TOPICS", ())) & topics):
-            # A page that can redraw just what changed (Settings: the plan)
-            # does; anything else is rebuilt.
-            partial = getattr(page, "refresh_topics", None)
-            if partial is not None:
-                partial(topics)
-            else:
-                page.refresh()
+        shown = [self._stack.currentWidget()]
+        if self._settings is not None and self._settings.isVisible():
+            shown.append(self._settings.stack.currentWidget())     # the open Settings tab too
+        for page in shown:
+            if (page is not None and getattr(page, "LIVE", False)
+                    and set(getattr(page, "TOPICS", ())) & topics):
+                # A page that can redraw just what changed (the plan, an
+                # update) does; anything else is rebuilt.
+                partial = getattr(page, "refresh_topics", None)
+                if partial is not None:
+                    partial(topics)
+                else:
+                    page.refresh()
 
     def showEvent(self, event) -> None:
         """Back on screen after being closed: the page shows what is true now,
         including anything that changed while nobody could see it."""
         super().showEvent(event)
         self._pending_topics.clear()
-        page = self._stack.currentWidget()
-        if page is not None and getattr(page, "LIVE", False):
-            page.refresh()
+        shown = [self._stack.currentWidget()]
+        if self._settings is not None and not self._settings.isHidden():
+            shown.append(self._settings.stack.currentWidget())     # the open Settings tab too
+        for page in shown:
+            if page is not None and getattr(page, "LIVE", False):
+                page.refresh()
 
     def nativeEvent(self, kind, message):
         answer = self._frame.handle(message) if kind == b"windows_generic_MSG" else None
@@ -388,6 +421,9 @@ class ToraApp(QWidget):
 
     def keyPressEvent(self, event) -> None:
         if event.key() == Qt.Key.Key_Escape:
+            if self._settings is not None and self._settings.isVisible():
+                self._settings.close_dialog()     # Escape closes Settings first
+                return
             self.hide()
             return
         super().keyPressEvent(event)

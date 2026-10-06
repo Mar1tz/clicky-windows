@@ -24,8 +24,8 @@ from ui.app_widgets import icon, wordmark_pixmap
 
 ROW_H = 36
 PAD = 10            # the sidebar's side padding
-ICON = 18
-ICON_X = 13         # icon's left edge inside a row: centred on the shut sidebar
+ICON = 20
+ICON_X = 12         # icon's left edge inside a row: centred on the shut sidebar
 TEXT_X = ICON_X + ICON + 12
 
 
@@ -33,9 +33,10 @@ class NavItem(QAbstractButton):
     """One sidebar row: a page (checkable) or an action (not)."""
 
     def __init__(self, key: str, text: str, openness: Callable[[], float], *,
-                 page: bool = True):
+                 page: bool = True, glyph: str = ""):
         super().__init__()
         self.key = key
+        self.glyph = glyph or key            # the icon, when it isn't the key's
         self.setText(text)
         self._openness = openness
         self.setCheckable(page)
@@ -68,7 +69,7 @@ class NavItem(QAbstractButton):
             p.setBrush(QColor(T.NAV_PLATE if on else T.NAV_HOVER))
             p.drawRoundedRect(r, tokens.RADIUS_SM, tokens.RADIUS_SM)
         p.drawPixmap(ICON_X, (self.height() - ICON) // 2,
-                     icon(self.key, T.ACCENT if on else T.TEXT, ICON))
+                     icon(self.glyph, T.ACCENT if on else T.TEXT, ICON, self.devicePixelRatioF()))
         shown = self._openness()
         if shown > 0.02:
             p.setOpacity(shown)
@@ -97,13 +98,14 @@ class BrandRow(QWidget):
 
     def _pixmaps(self) -> tuple[QPixmap, QPixmap]:
         if self._mark is None:
-            self._mark = wordmark_pixmap(24)
+            self._mark = wordmark_pixmap(24, dpr=self.devicePixelRatioF())
         if self._icon is None:
             from PyQt6.QtCore import QByteArray
             from PyQt6.QtSvg import QSvgRenderer
             svg = (tokens.assets_dir() / "brand" / "heytora-icon.svg").read_bytes()
-            px = QPixmap(56, 56)
-            px.setDevicePixelRatio(2.0)
+            dpr = self.devicePixelRatioF() or 1.0
+            px = QPixmap(round(28 * dpr), round(28 * dpr))
+            px.setDevicePixelRatio(dpr)
             px.fill(QColor(0, 0, 0, 0))
             p = QPainter(px)
             p.setRenderHint(QPainter.RenderHint.Antialiasing)
@@ -205,7 +207,7 @@ class IconButton(QAbstractButton):
             p.setBrush(QColor(T.NAV_PLATE if self.isDown() else T.NAV_HOVER))
             p.drawRoundedRect(r, tokens.RADIUS_SM, tokens.RADIUS_SM)
         p.drawPixmap((self.width() - ICON) // 2, (self.height() - ICON) // 2,
-                     icon(self._name, T.TEXT, ICON))
+                     icon(self._name, T.TEXT, ICON, self.devicePixelRatioF()))
         if self._badge:
             p.setPen(QPen(QColor(T.FRAME), 2))
             p.setBrush(QColor(T.ACCENT))

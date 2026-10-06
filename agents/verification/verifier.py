@@ -86,8 +86,8 @@ class RuleVerifier(Verifier):
     def _is_soft(tool_name: str, ctx: AgentContext) -> bool:
         """A tool may declare `soft_fail`: its failure is information for the
         agent (bad input it will correct, a check that could not run and was
-        recorded as an exception), not proof the step failed. Extension tools
-        that prepare drafts use it; tools that change the books never do."""
+        recorded as an exception), not proof the step failed. Tools that
+        prepare drafts use it; tools that change records never do."""
         try:
             return bool(getattr(ctx.tools.get(tool_name), "soft_fail", False))
         except Exception:  # noqa: BLE001
@@ -134,8 +134,8 @@ class RuleVerifier(Verifier):
             return Check(name, False, res.error or "tool reported failure")
         rule = self.rules.get(res.tool_name)
         if rule is None:
-            # A tool that keeps its records in a database (the packs) says
-            # what it saved. Its own success is the proof - the write was
+            # A tool that keeps its records in a database says what it
+            # saved. Its own success is the proof - the write was
             # committed before it answered - and there is no file to look
             # at: asked instead, the model judge found "no files written"
             # and failed a step that had drafted all twelve posts.

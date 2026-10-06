@@ -41,22 +41,25 @@ def test_every_page_builds_and_is_reachable(window):
     for key, *_rest in PAGES:
         window.show_page(key)
         assert window._stack.currentWidget() is window._pages[key], key
-    assert len(window._pages) == len(PAGES) == 9
+    assert len(window._pages) == len(PAGES)
 
 
-def test_the_sidebar_is_the_page_map(window):
-    """Five pages in the list, then the free month, Settings and Help."""
-    rows = [b.text() for b in window._sidebar.findChildren(QAbstractButton)]
-    assert rows == ["Home", "Insights", "Agents", "Journal", "Packs", "Accounting", "Tora",
-                    "Get a free month", "Settings", "Help"]
-    assert window._buttons["accounting"].isHidden(), "a pack's page only while the pack is on"
-    assert not window._buttons["settings"].isHidden()
+def test_settings_free_month_and_help_are_always_there(window):
+    for key in ("settings", "free_month", "help"):
+        assert not window._buttons[key].isHidden(), key
 
 
-def test_a_page_without_a_row_lights_nothing(window):
-    """Setup is reached from Help; opening it must not leave Home lit."""
+def test_settings_is_a_dialog_not_a_page(window):
+    """Wispr's Settings: a dialog over the app with its own menu. Setup is
+    its Advanced tab; the page underneath stays where it was."""
+    window.show_page("journal")
     window.show_page("setup")
-    assert not any(b.isChecked() for b in window._buttons.values())
+    assert not window._settings.isHidden() and window._settings.current() == "advanced"
+    assert window._stack.currentWidget() is window._pages["journal"]
+    window.show_page("settings/privacy")
+    assert window._settings.current() == "privacy"
+    window._settings.close_dialog()
+    assert window._settings.isHidden()
 
 
 def test_the_sidebar_opens_and_shuts(window):
@@ -82,15 +85,15 @@ def test_pages_are_built_only_when_asked_for(qapp):
     w = ToraApp()
     try:
         assert len(w._pages) == 1, "only the landing page at startup"
-        w.show_page("accounting")
-        assert set(w._pages) == {"home", "accounting"}
+        w.show_page("journal")
+        assert set(w._pages) == {"home", "journal"}
     finally:
         w.deleteLater()
 
 
 def test_the_selected_page_is_the_lit_one_in_the_rail(window):
-    window.show_page("journal")
-    assert window._buttons["journal"].isChecked()
+    window.show_page("tora")
+    assert window._buttons["tora"].isChecked()
     assert not window._buttons["home"].isChecked(), "exactly one at a time"
 
 
@@ -142,7 +145,5 @@ def test_the_tray_offers_a_way_in():
 def test_the_old_windows_are_left_alone():
     """This is additive: every surface it mirrors still opens on its own."""
     from agents.ui.agents_panel import ActiveAgentsPanel
-    from agents.ui.extensions import ExtensionsDialog
     from agents.ui.settings import AgentSettingsDialog
-    assert all(cls is not None for cls in
-               (ActiveAgentsPanel, ExtensionsDialog, AgentSettingsDialog))
+    assert all(cls is not None for cls in (ActiveAgentsPanel, AgentSettingsDialog))

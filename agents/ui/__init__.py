@@ -15,7 +15,6 @@ from .accounts import ConnectedAccountsDialog, EndpointCard
 from .agents_panel import ActiveAgentsPanel, AgentCard, StatusDot
 from .approval import ApprovalController, ApprovalDialog
 from .bridge import AgentEventBridge
-from .extensions import ExtensionDashboard, ExtensionsDialog
 from .orbs import AgentOrbs
 from .plan_view import PlanStepRow, PlanView
 from .timeline import ActivityTimeline, TimelineRow
@@ -23,9 +22,8 @@ from .timeline import ActivityTimeline, TimelineRow
 __all__ = ["ActiveAgentsPanel", "ActivityTimeline", "AgentCard", "AgentEventBridge",
            "ApprovalController", "ApprovalDialog", "ConnectedAccountsDialog",
            "AgentOrbs", "EndpointCard", "PlanStepRow", "PlanView", "StatusDot", "TimelineRow",
-           "ExtensionDashboard", "ExtensionsDialog",
-           "attach_approvals", "open_accounts", "open_agents_window", "open_dashboard",
-           "open_extensions", "show_orbs", "open_plan", "open_timeline"]
+           "attach_approvals", "open_accounts", "open_agents_window",
+           "show_orbs", "open_plan", "open_timeline"]
 
 _window: Optional[ActiveAgentsPanel] = None
 _timelines: dict[str, ActivityTimeline] = {}
@@ -114,36 +112,3 @@ def show_orbs(manager, parent=None) -> AgentOrbs:
         _orbs = AgentOrbs(manager, parent=parent)
         _orbs.clicked.connect(lambda _agent_id: open_agents_window(manager))
     return _orbs
-
-
-_extensions_dialog: Optional[ExtensionsDialog] = None
-_dashboard: Optional[ExtensionDashboard] = None
-
-
-def open_extensions(manager, parent=None) -> ExtensionsDialog:
-    """The Extensions page: turn industry packs on and off."""
-    global _extensions_dialog
-    if _extensions_dialog is None or not _extensions_dialog.isVisible():
-        _extensions_dialog = ExtensionsDialog(manager, parent=parent)
-        _extensions_dialog.open_dashboard.connect(lambda _ext_id: open_dashboard(manager))
-    else:
-        _extensions_dialog.refresh()
-    _extensions_dialog.show()
-    _extensions_dialog.raise_()
-    _extensions_dialog.activateWindow()
-    return _extensions_dialog
-
-
-def open_dashboard(manager, module_id: str = "", parent=None) -> ExtensionDashboard:
-    """The dashboard: a tab per module of every enabled pack."""
-    global _dashboard
-    if _dashboard is None or not _dashboard.isVisible():
-        _dashboard = ExtensionDashboard(manager, parent=parent)
-    else:
-        _dashboard.refresh()
-    if module_id:
-        _dashboard.show_module(module_id)
-    _dashboard.show()
-    _dashboard.raise_()
-    _dashboard.activateWindow()
-    return _dashboard

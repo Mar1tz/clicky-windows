@@ -1,7 +1,7 @@
 """The one-window app's design language.
 
-Tora grew as a tray app: every surface — agents, extensions, the accounting
-dashboard, settings, API keys — is its own floating window, and the only way
+Tora grew as a tray app: every surface — agents, settings, API keys — is
+its own floating window, and the only way
 between them is the tray menu. This module is the stylesheet and the type
 scale for the single window that holds all of them instead.
 
@@ -139,7 +139,7 @@ def qss() -> str:
     QWidget#appRoot {{ background: {FRAME}; }}
     QWidget#topBar, QWidget#sidebar {{ background: transparent; }}
     QFrame#panel {{
-        background: {BG}; border: 1px solid {BORDER};
+        background: {BG}; border: 1px solid {BORDER if is_dark() else BG};
         border-radius: {PANEL_RADIUS}px;
     }}
     QStackedWidget#stack {{ background: transparent; }}
@@ -218,6 +218,69 @@ def qss() -> str:
     QLabel#statValue {{ font-size: 30px; font-weight: 700; letter-spacing: -0.6px; }}
     QLabel#statLabel {{ color: {TEXT_DIM}; font-size: 14px; }}
     QLabel#footTitle {{ font-size: 14px; font-weight: 700; }}
+    /* ── the Settings dialog (ui/settings_dialog.py) ───────────────────── */
+    QFrame#settingsCard {{ background: {SURFACE}; border: none; border-radius: {tokens.RADIUS_XL}px; }}
+    QFrame#settingsNav {{
+        background: {BG}; border: none; border-right: 1px solid {BORDER};
+        border-top-left-radius: {tokens.RADIUS_XL}px; border-bottom-left-radius: {tokens.RADIUS_XL}px;
+    }}
+    QStackedWidget#settingsStack {{ background: transparent; }}
+    /* The tab's scrollbar runs down the card's rounded right edge: kept clear
+       of the corners, and in from the edge. */
+    QFrame#settingsCard QScrollBar:vertical {{
+        margin: {tokens.RADIUS_XL}px 6px {tokens.RADIUS_XL}px 0px; width: 14px;
+    }}
+    /* A tab's groups (ui/settings_parts.py): a name above a soft block, rows of a
+       title and at most one short line, larger and darker than a page's rows. */
+    QLabel#setGroup {{ font-size: 15px; font-weight: 700; }}
+    QFrame#setBlock {{ background: {BG}; border: none; border-radius: {RADIUS + 0}px; }}
+    QFrame#setRow {{ background: transparent; border: none; border-top: 1px solid {BORDER}; }}
+    QFrame#setRowFirst {{ background: transparent; border: none; }}
+    QWidget#setRow {{ border-top: 1px solid {BORDER}; }}
+    QLabel#setTitle {{ font-size: 14px; font-weight: 600; background: transparent; }}
+    QLabel#setDesc  {{ color: {TEXT_DIM}; font-size: 13px; background: transparent; }}
+    QLabel#setNote  {{ color: {TEXT_FAINT}; font-size: 12px; }}
+    QLabel#keycapSmall {{
+        background: {SURFACE}; border: 1px solid {BORDER_STRONG}; border-radius: 6px;
+        padding: 3px 9px; font-size: 13px; font-weight: 600;
+    }}
+    QFrame#subDialog {{ background: {SURFACE}; border: none; border-radius: {tokens.RADIUS_XL}px; }}
+    QLabel#subTitle {{ font-size: 19px; font-weight: 700; letter-spacing: -0.3px; }}
+    QFrame#micCard {{ background: {BG}; border: 1px solid transparent; border-radius: {RADIUS_CARD}px; }}
+    QFrame#micCard:hover {{ border: 1px solid {BORDER_STRONG}; }}
+    QFrame#micCardOn {{ background: {ACCENT_SOFT}; border: 1px solid {ACCENT}; border-radius: {RADIUS_CARD}px; }}
+    /* On the dialog's white, a group is the page's soft grey (Wispr's blocks). */
+    QFrame#settingsCard QFrame#card {{ background: {BG}; border: none; border-radius: {RADIUS + 0}px; }}
+    QFrame#plansBox {{ background: transparent; border: 1px solid {BORDER}; border-radius: {RADIUS + 0}px; }}
+    QFrame#vr {{ background: {BORDER}; border: none; }}
+    QLabel#planName  {{ font-size: 18px; font-weight: 700; }}
+    QLabel#planPrice {{ font-size: 26px; font-weight: 700; letter-spacing: -0.5px; }}
+    QLabel#planFlag  {{
+        background: {ACCENT_SOFT}; color: {ACCENT}; border-radius: 9px;
+        font-size: 11px; font-weight: 700; padding: 2px 8px;
+    }}
+    QFrame#tabBar {{ background: transparent; border: none; border-bottom: 1px solid {BORDER}; }}
+    QPushButton#pageTab {{
+        background: transparent; border: none; border-bottom: 2px solid transparent;
+        border-radius: 0px; padding: 8px 0px 10px 0px;
+        color: {TEXT_DIM}; font-size: 14px; font-weight: 600;
+    }}
+    QPushButton#pageTab:hover {{ color: {TEXT}; }}
+    QPushButton#pageTab:checked {{ color: {TEXT}; border-bottom: 2px solid {TEXT}; }}
+    QFrame#drawer {{ background: {SURFACE}; border: none; border-radius: {tokens.RADIUS_XL}px; }}
+    QLabel#drawerTitle {{ font-size: 22px; font-weight: 700; letter-spacing: -0.4px; }}
+    QFrame#modeTile {{
+        background: {SURFACE}; border: 1px solid {BORDER}; border-radius: {RADIUS_CARD}px;
+    }}
+    QFrame#modeTile[on="true"] {{ background: {ACCENT_SOFT}; border: 1px solid {ACCENT_EDGE}; }}
+    QLabel#modeTitle {{ font-size: 14px; font-weight: 700; background: transparent; }}
+    QLabel#modeSub   {{ color: {TEXT_DIM}; font-size: 12px; background: transparent; }}
+    QPushButton#chip {{
+        background: {SURFACE}; border: 1px solid {BORDER_STRONG}; border-radius: 16px;
+        padding: 7px 16px; font-size: 13px; font-weight: 600; min-height: 18px;
+    }}
+    QPushButton#chip:hover {{ background: {SURFACE_HOVER}; }}
+    QPushButton#chip:checked {{ background: {ACCENT_SOFT}; border: 1px solid {ACCENT}; color: {ACCENT}; }}
     QFrame#infoCard {{ background: {SURFACE}; border: none; border-radius: {tokens.RADIUS_LG}px; }}
     QLabel#infoTitle {{ font-size: 15px; font-weight: 700; }}
     QLabel#infoBig   {{ font-size: 22px; font-weight: 700; letter-spacing: -0.4px; }}
@@ -225,6 +288,7 @@ def qss() -> str:
     QLabel#infoFaint {{ color: {TEXT_FAINT}; font-size: 12px; }}
     QLabel#tileValue {{ font-size: 30px; font-weight: 700; letter-spacing: -0.6px; }}
     QLabel#tileLine  {{ font-size: 13px; }}
+    QLabel#tileValueSmall {{ font-size: 15px; font-weight: 700; }}
     QLabel#tileLineValue {{ color: {TEXT_DIM}; font-size: 13px; }}
     QFrame#upNext {{ background: {SURFACE}; border: none; border-radius: {tokens.RADIUS_XL}px; }}
     QLabel#upTitle  {{ font-size: 22px; font-weight: 700; letter-spacing: -0.4px; }}
@@ -279,9 +343,9 @@ def qss() -> str:
     QPushButton#link:hover {{ color: {ACCENT_HOVER}; }}
 
     /* ── what the embedded windows bring ───────────────────────────────── */
-    /* A pack's dashboard is drawn by the pack, and its buttons and tabs
-       have no names here. These give them the same pills and tabs as the
-       rest. A named rule above still wins wherever it applies. */
+    /* An embedded window (the endpoint editor) draws its own buttons and
+       tabs, with no names here. These give them the same pills and tabs as
+       the rest. A named rule above still wins wherever it applies. */
     QPushButton {{
         background: {SURFACE}; border: 1px solid {BORDER_STRONG};
         border-radius: {tokens.pill(tokens.BUTTON_H['sm'])}px; color: {TEXT};
@@ -310,6 +374,32 @@ def qss() -> str:
     QLineEdit:focus, QComboBox:focus, QPlainTextEdit:focus, QTextEdit:focus {{
         border: 1px solid {ACCENT};
     }}
+    QSpinBox {{
+        background: {SURFACE}; border: 1px solid {BORDER_STRONG};
+        border-radius: {RADIUS_SMALL}px; padding: 6px 8px;
+        selection-background-color: {ACCENT}; selection-color: {ON_ACCENT};
+    }}
+    QSpinBox:focus {{ border: 1px solid {ACCENT}; }}
+    QSpinBox::up-button, QSpinBox::down-button {{ border: none; background: transparent; width: 16px; }}
+    QCheckBox {{ spacing: 8px; font-size: 13px; }}
+    QCheckBox::indicator {{
+        width: 16px; height: 16px; border-radius: 4px;
+        border: 1px solid {BORDER_STRONG}; background: {SURFACE};
+    }}
+    QCheckBox::indicator:checked {{ background: {ACCENT}; border: 1px solid {ACCENT}; }}
+
+    /* The agents' own panels, embedded in Settings (app_pages._tidy). */
+    QLabel#setLabel, QLabel#acctLabel {{ font-size: 13px; font-weight: 600; color: {TEXT}; }}
+    QLabel#setHint, QLabel#acctHint {{ font-size: 12px; color: {TEXT_FAINT}; }}
+    QPushButton#setSave, QPushButton#acctSave {{
+        background: {ACCENT}; border: none; border-radius: {BUTTON_PILL}px;
+        color: {ON_ACCENT}; font-size: 13px; font-weight: 700; padding: 8px 18px;
+    }}
+    QPushButton#setSave:hover, QPushButton#acctSave:hover {{ background: {ACCENT_HOVER}; }}
+    QFrame#acctCard {{
+        background: transparent; border: 1px solid {BORDER}; border-radius: {RADIUS_CARD}px;
+    }}
+    QWidget#embedded, QWidget#acctHolder {{ background: transparent; }}
     QComboBox::drop-down {{ border: none; width: 22px; }}
     /* The chevron is painted by ui.app_widgets.Select. Every CSS way of
        drawing one collapses to a dash inside Qt's down-arrow subcontrol, and

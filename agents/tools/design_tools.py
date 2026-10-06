@@ -268,7 +268,7 @@ class RenderDesign(Tool):
 async def render_design(html: str, target: str, width: int, height: int, *, scale: int = 1,
                         mm: Optional[tuple[float, float]] = None, inside=None) -> dict[str, Any]:
     """Save the design's HTML beside `target` and render it there. The one
-    entry point for anything that makes a picture (render_design, packs).
+    entry point for anything that makes a picture (render_design).
     `inside(path)` - when given - must accept every local file the page uses."""
     if not (html or "").strip():
         raise RenderError("the design is empty - give the HTML")

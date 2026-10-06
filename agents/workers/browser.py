@@ -15,7 +15,7 @@ class BrowserWorker(Worker):
     worker_type = "browser"
     default_tools = [
         "open_page", "extract_information", "click_element", "fill_field",
-        "screenshot_page", "close_browser",
+        "screenshot_page", "close_browser", "ask_to_sign_in",
     ]
 
     def system_prompt(self, ctx: AgentContext) -> str:

@@ -4,8 +4,8 @@
 process it." The manager runs tasks when told; this is what tells it.
 
 A job is a trigger plus a `make_task()` that returns (Task, AgentSpec).
-Jobs are registered in code (an extension registers its own on enable,
-from its settings), so nothing executable is ever read back from disk.
+Jobs are registered in code (agents/skills/schedule.py turns each
+scheduled skill into one), so nothing executable is read back from disk.
 What IS persisted is each job's memory: when it last fired and which
 files it has already seen. That is what makes a restart safe - a daily
 job does not fire twice in one day, and a folder watch does not
@@ -47,9 +47,9 @@ MAX_FILES_PER_FIRE = 50
 class ScheduledJob:
     id: str
     name: str
-    trigger: Any                                   # agents.extensions.hooks Schedule | FolderWatch
+    trigger: Any                                   # agents.skills.schedule Schedule | FolderWatch
     make_task: Callable[[dict[str, Any]], tuple[Task, Optional[AgentSpec]]]
-    owner: str = ""                                # extension id
+    owner: str = ""                                # who added it ("skills")
     enabled: bool = True
     folder: str = ""                               # resolved path for a FolderWatch
     fire_on_existing: bool = True                  # first scan of a folder: process what is there

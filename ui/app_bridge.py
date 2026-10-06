@@ -28,12 +28,40 @@ from PyQt6.QtCore import QObject, pyqtSignal
 _log = logging.getLogger("tora.app")
 
 
+# Set by main.py once the global hotkey is up: change it live (rebind ->
+# "" or why not), and hold it quiet while a new one is being pressed
+# (claim/release). Empty when the window runs on its own: a change is saved
+# for the next start instead.
+HOTKEY_HOOKS: dict = {}
+
+MODIFIERS = ("ctrl", "alt", "shift", "win")
+
+
+def check_shortcut(combo: str) -> str:
+    """Why a push-to-talk combo will not do, or "" when it will. It must
+    hold Ctrl, Alt or Win (Shift alone is typing), and be two keys or more:
+    either modifiers only ("ctrl+win") or modifiers then one key."""
+    parts = [p.strip().lower() for p in combo.split("+") if p.strip()]
+    if len(parts) < 2:
+        return "Use two keys or more - Ctrl + Win, or Ctrl + Alt + Space."
+    if not any(p in ("ctrl", "alt", "win") for p in parts):
+        return "Include Ctrl, Alt or Win - Shift and a key is just typing."
+    keys = [p for p in parts if p not in MODIFIERS]
+    if len(keys) > 1:
+        return "Hold modifiers and at most one other key."
+    if keys and parts[-1] != keys[0]:
+        return "Put the ordinary key last."
+    if keys and keys[0] in ("c", "v", "x", "z", "a", "s", "tab", "esc", "escape", "enter", "return"):
+        return f"{' + '.join(p.capitalize() for p in parts)} is taken by Windows and most apps."
+    return ""
+
+
 class AppBridge(QObject):
     """What the app window can read and do. Nothing else."""
 
     # Something the pages show has changed: "state", "account", "agents",
-    # "guide", "switches", "journal", "recording", "extensions". A page
-    # shown at the time refreshes itself.
+    # "guide", "switches", "journal", "recording", "skills". A page shown at
+    # the time refreshes itself.
     changed = pyqtSignal(str)
 
     def __init__(self, manager: Any = None, tray: Any = None, panel: Any = None):
@@ -63,11 +91,6 @@ class AppBridge(QObject):
 
     def _on_agent_event(self, ev) -> None:
         self.changed.emit("agents")
-        # A pack turned on or off is announced on the same bus - from the
-        # Extensions page, or by voice ("turn on the accounting tools").
-        data = getattr(ev, "data", None)
-        if isinstance(data, dict) and data.get("extension"):
-            self.changed.emit("extensions")
 
     # ── what is happening ────────────────────────────────────────────────────
 
@@ -95,6 +118,33 @@ class AppBridge(QObject):
     def hotkey(self) -> str:
         from config import cfg
         return " + ".join(p.strip().capitalize() for p in (cfg.hotkey or "").split("+") if p.strip())
+
+    def hotkey_keys(self) -> list[str]:
+        """The shortcut as keys: ["Ctrl", "Win"]."""
+        from config import cfg
+        return [p.strip().capitalize() for p in (cfg.hotkey or "").split("+") if p.strip()]
+
+    def set_hotkey(self, combo: str) -> str:
+        """A new push-to-talk shortcut - live when the app is running, else
+        from the next start. "" when it worked, otherwise why not."""
+        why = check_shortcut(combo)
+        if why:
+            return why
+        rebind = HOTKEY_HOOKS.get("rebind")
+        if rebind is not None:
+            why = rebind(combo)
+        else:
+            from config import cfg
+            cfg.set_hotkey(combo)
+        if not why:
+            self.changed.emit("switches")
+        return why
+
+    def hold_hotkey(self, on: bool) -> None:
+        """While a new shortcut is being pressed, the old one does nothing."""
+        hook = HOTKEY_HOOKS.get("claim" if on else "release")
+        if hook is not None:
+            hook()
 
     def mic_name(self) -> str:
         """The input device Tora is listening on, by name."""
@@ -185,14 +235,31 @@ class AppBridge(QObject):
         if self.tray is not None:
             self.tray.on_set_custom_instructions.emit((text or "").strip())
 
+    # Not microphones: Windows' routing entries and nameless endpoints.
+    _NOT_MICS = ("sound mapper", "primary sound capture", "input ()", "input (@")
+
     def mics(self) -> list[tuple[int, str, bool]]:
-        """Every input device: (index, name, is the system default)."""
+        """The microphones, once each: (index, name, is the system default).
+
+        Windows lists every input once per audio system (MME, DirectSound,
+        WASAPI, WDM-KS) - one headset came out as five rows, beside "Sound
+        Mapper" and "Input ()". Only the default microphone's own audio
+        system is listed, without its routing entries, each name once."""
         try:
             import sounddevice as sd
             default = sd.default.device[0]
-            return [(i, str(d.get("name", "")), i == default)
-                    for i, d in enumerate(sd.query_devices())
-                    if d.get("max_input_channels", 0) > 0]
+            devices = sd.query_devices()
+            api = devices[default]["hostapi"] if default is not None and default >= 0 else None
+            out, seen = [], set()
+            for i, d in enumerate(devices):
+                name = str(d.get("name", "")).strip()
+                if d.get("max_input_channels", 0) <= 0 or (api is not None and d["hostapi"] != api):
+                    continue
+                if not name or any(bad in name.lower() for bad in self._NOT_MICS) or name in seen:
+                    continue
+                seen.add(name)
+                out.append((i, name, i == default))
+            return out
         except Exception:  # noqa: BLE001
             return []
 
@@ -222,6 +289,22 @@ class AppBridge(QObject):
     def set_autostart(self, on: bool) -> bool:
         from ui import autostart
         return autostart.set_enabled(on)
+
+    def cursor_colour(self) -> str:
+        """The colour key Tora wears (ui/tokens.CURSOR_COLOURS)."""
+        from config import cfg
+        return cfg.cursor_colour()
+
+    def set_cursor_colour(self, key: str) -> None:
+        """Save it and repaint her at once - the overlay reads it per frame."""
+        from config import cfg
+        from ui import tokens
+        cfg.set_cursor_colour(key)
+        try:
+            from ui.overlay import set_cursor_colour
+            set_cursor_colour(tokens.cursor_hex(key))
+        except Exception:  # noqa: BLE001 - no overlay (a window on its own)
+            pass
 
     def listen_sound(self) -> str:
         from config import cfg
@@ -264,6 +347,68 @@ class AppBridge(QObject):
         from ui import app_theme
         cfg.set_theme(mode)
         app_theme.refresh(cfg.theme())
+
+    # ── the agents' rails (Settings > Agents) ────────────────────────────────
+
+    def agent_rails(self) -> dict:
+        """What the agents may do and how much: the same values the
+        workforce's own settings panel edits (agents/ui/settings.py)."""
+        from config import cfg
+        wf = self.workforce()
+        workspace = (getattr(cfg, "agent_workspace", "") or "").strip() or (
+            getattr(wf, "workspace_root", "") if wf is not None else "")
+        return {"workspace": workspace,
+                "risk": str(getattr(cfg, "agent_auto_risk", "medium") or "medium").lower(),
+                "plan": bool(getattr(cfg, "agent_plan_approval", False)),
+                "at_once": int(getattr(cfg, "agent_max_concurrent", 3) or 0),
+                "minutes": int(getattr(cfg, "agent_wall_clock_s", 1800) or 0) // 60,
+                "tokens": int(getattr(cfg, "agent_max_tokens", 300000) or 0)}
+
+    def set_agent_rail(self, name: str, value) -> None:
+        """Save one rail and put it on the running agents at once - through
+        the panel's own apply_to, so the two can never disagree."""
+        from config import cfg
+        setter = {"workspace": cfg.set_agent_workspace, "risk": cfg.set_agent_auto_risk,
+                  "plan": cfg.set_agent_plan_approval, "at_once": cfg.set_agent_max_concurrent,
+                  "minutes": lambda m: cfg.set_agent_wall_clock_s(int(m) * 60),
+                  "tokens": cfg.set_agent_max_tokens}[name]
+        setter(value)
+        r = self.agent_rails()
+        try:
+            from agents.ui.settings import AgentSettingsDialog
+            AgentSettingsDialog.apply_to(self.workforce(), workspace=r["workspace"], risk=r["risk"],
+                                         plan=r["plan"], limit=r["at_once"],
+                                         wall_clock_s=r["minutes"] * 60, max_tokens=r["tokens"])
+        except Exception:  # noqa: BLE001
+            _log.debug("could not apply the agents' rails", exc_info=True)
+        self.changed.emit("switches")
+
+    def endpoints(self) -> list[dict]:
+        """Where the agents' requests go: each connected endpoint."""
+        try:
+            from agents.providers import AccountStore
+            accounts = [a for a in AccountStore().list() if not a.kinds]
+        except Exception:  # noqa: BLE001
+            return []
+        out = [{"name": a.label or a.provider, "url": a.base_url or "", "on": bool(a.enabled)}
+               for a in accounts]
+        if not out:
+            # As the editor does: an endpoint set up in .env shows, saved or not.
+            import os
+            base = os.environ.get("TORA_OMNIROUTE_BASE_URL", "")
+            if base:
+                out = [{"name": "OmniRoute", "url": base, "on": True}]
+        return out
+
+    def clear_agent_history(self) -> int:
+        """Forget finished jobs (the files they made stay)."""
+        wf = self.workforce()
+        if wf is None:
+            return 0
+        from agents.ui.settings import AgentSettingsDialog
+        n = AgentSettingsDialog.clear_history(wf)
+        self.changed.emit("agents")
+        return n
 
     def auto_approve(self) -> bool:
         """Settings > Approvals: do agents and desktop actions go ahead
@@ -386,6 +531,26 @@ class AppBridge(QObject):
         sign-in window (main.py, ui/sign_in_gate.py)."""
         from account.service import account
         account().sign_out()
+        self._access_changed()
+        from ui import sign_in_gate
+        sign_in_gate.lost()
+
+    def delete_account(self, confirm_email: str) -> str:
+        """Close the account on HeyTora's server. A network call - run it off
+        the UI thread. "" when it is gone, else why not, in words."""
+        from account.service import AccountError, account
+        try:
+            account().delete_account(confirm_email)
+        except AccountError as e:
+            return str(e) or "HeyTora's server had a problem - try again."
+        except Exception:  # noqa: BLE001
+            _log.exception("could not delete the account")
+            return "Something went wrong - try again."
+        return ""
+
+    def account_deleted(self) -> None:
+        """After delete_account, on the UI thread: as after signing out, the
+        app goes back to the sign-in window."""
         self._access_changed()
         from ui import sign_in_gate
         sign_in_gate.lost()
@@ -607,7 +772,17 @@ class AppBridge(QObject):
             except Exception:  # noqa: BLE001
                 _log.debug("could not read the journal for insights", exc_info=True)
         out = data.summarise(rows, seconds, tag)
-        out["agents"] = data.agents_month(self.tasks(500))
+        tasks = self.tasks(500)
+        out["agents"] = data.agents_month(tasks)
+        walks = []
+        if journal is not None:
+            try:
+                walks = journal.walkthrough_times()
+            except Exception:  # noqa: BLE001
+                walks = []
+        out["time"] = data.time_worked(walks, tasks)
+        out["handled"] = data.handled(out, tasks)
+        out["knows"] = self._knows()
         try:
             st = self.account_state()
             summary = st.get("summary") if st.get("signed_in") and st.get("mode") == "account" else None
@@ -617,6 +792,20 @@ class AppBridge(QObject):
         out["plan_summary"] = summary
         out["due"] = self.due_count()
         return out
+
+    def _knows(self) -> dict:
+        """What Tora remembers about the user (ai/gemini_memory.py): the
+        facts the remember tool kept, the two newest, and attached documents."""
+        if self.manager is None:
+            return {"facts": 0, "documents": 0, "recent": []}
+        try:
+            from ai import gemini_memory
+            st = gemini_memory.stats()
+            return {"facts": st["facts"], "documents": st["documents"],
+                    "recent": gemini_memory.recent_facts(2)}
+        except Exception:  # noqa: BLE001
+            _log.debug("could not read Tora's memory", exc_info=True)
+            return {"facts": 0, "documents": 0, "recent": []}
 
     def search(self, text: str, limit: int = 100) -> list[dict]:
         """Everything asked that mentions `text`, newest first."""
@@ -631,6 +820,39 @@ class AppBridge(QObject):
             except Exception:  # noqa: BLE001
                 _log.warning("could not save a review", exc_info=True)
         self.changed.emit("journal")
+
+    def export_history(self, path: str) -> int:
+        """Everything the journal keeps, as one JSON file (Data & privacy)."""
+        journal = self._journal()
+        if journal is None:
+            from tutor_features import journal
+        return journal.export_all(path)
+
+    def delete_history(self) -> int:
+        """Delete everything the journal keeps. The caller has asked first."""
+        journal = self._journal()
+        if journal is None:
+            from tutor_features import journal
+        n = journal.clear_all()
+        self.changed.emit("journal")
+        return n
+
+    def open_web(self, path: str) -> None:
+        """A page of heytora.com - the privacy policy, the terms."""
+        from account import settings
+        from PyQt6.QtCore import QUrl
+        from PyQt6.QtGui import QDesktopServices
+        QDesktopServices.openUrl(QUrl(settings.website_url() + path))
+
+    def set_user_name(self, name: str) -> None:
+        """The name Tora greets you by, from first launch - changed in Account."""
+        from config import cfg
+        _old, uses = cfg.profile()
+        cfg.set_profile(name, uses)
+
+    def version(self) -> str:
+        from version import __version__
+        return __version__
 
     def open_journal_folder(self) -> None:
         if self.tray is not None:
@@ -685,6 +907,7 @@ class AppBridge(QObject):
                 "status": str(getattr(t.status, "value", t.status)),
                 "error": (t.error or "").strip().split("\n")[0][:160],
                 "when": float(t.updated_at or t.created_at or 0.0),
+                "created": float(t.created_at or 0.0),
             })
             if len(out) >= limit:
                 break
@@ -705,69 +928,224 @@ class AppBridge(QObject):
             out.append({"id": req.id, "tool": req.call.tool_name,
                         "reason": req.reason or req.call.tool_name,
                         "task": task.title if task else "",
-                        "sensitive": bool(req.sensitive)})
+                        "sensitive": bool(req.sensitive),
+                        "confirm_word": getattr(req, "confirm_word", "") or ""})
         return out
+
+    # ── the Agents page (DESIGN.md §3F) ──────────────────────────────────────
+
+    def running(self) -> list[dict]:
+        """Jobs on the go, top level only (a project's agents are its own),
+        with where each one is: the step it is on, what it is doing."""
+        wf = self.workforce()
+        if wf is None:
+            return []
+        try:
+            tasks = wf.list_tasks(active_only=True)
+        except Exception:  # noqa: BLE001
+            return []
+        out = []
+        for t in tasks:
+            if (t.metadata or {}).get("parent_id"):
+                continue
+            total = len(t.steps)
+            done = sum(1 for st in t.steps if str(getattr(st.status, "value", st.status)) == "done")
+            out.append({"id": t.id, "title": t.title or (t.goal or "")[:60] or "Job",
+                        "doing": t.current_action or "",
+                        "step": min(total, done + 1) if total else 0, "total": total,
+                        "progress": float(t.progress or 0.0),
+                        "status": str(getattr(t.status, "value", t.status)),
+                        "started": float(t.created_at or 0.0)})
+        return out
+
+    def give_job(self, text: str) -> tuple[str, str]:
+        """Hand the agents a job in the user's words. ("started", its title),
+        ("chat", "") when it reads as a question rather than a job, or
+        ("error", why)."""
+        wf = self.workforce()
+        if wf is None:
+            return "error", "The agents did not start - see tora.log for why."
+        try:
+            task = wf.submit(text.strip())
+        except Exception as e:  # noqa: BLE001
+            _log.warning("could not start a job", exc_info=True)
+            return "error", str(e) or type(e).__name__
+        if task is None:
+            return "chat", ""
+        self.changed.emit("agents")
+        return "started", task.title or text.strip()[:60]
+
+    def _task_call(self, name: str, task_id: str) -> bool:
+        wf = self.workforce()
+        if wf is None:
+            return False
+        try:
+            ok = bool(getattr(wf, name)(task_id))
+        except Exception:  # noqa: BLE001
+            _log.debug("could not %s %s", name, task_id, exc_info=True)
+            return False
+        self.changed.emit("agents")
+        return ok
+
+    def pause_job(self, task_id: str) -> bool:
+        return self._task_call("pause", task_id)
+
+    def resume_job(self, task_id: str) -> bool:
+        return self._task_call("resume", task_id)
+
+    def stop_job(self, task_id: str) -> bool:
+        return self._task_call("cancel", task_id)
+
+    def answer_approval(self, request_id: str, approved: bool, confirmation: str = "") -> bool:
+        """Approve or deny what an agent is waiting on - the same answer the
+        approval window gives; whichever comes first counts."""
+        wf = self.workforce()
+        if wf is None:
+            return False
+        try:
+            ok = bool(wf.approve(request_id, approved, confirmation=confirmation))
+        except Exception:  # noqa: BLE001
+            _log.debug("could not answer %s", request_id, exc_info=True)
+            return False
+        self.changed.emit("agents")
+        return ok
+
+    def job(self, task_id: str) -> Optional[dict]:
+        """One job, for its details: the goal, the plan step by step, how it
+        ended, and the folder it worked in."""
+        wf = self.workforce()
+        task = wf.get_task(task_id) if wf is not None else None
+        if task is None:
+            return None
+        steps = [{"title": st.title, "status": str(getattr(st.status, "value", st.status)),
+                  "summary": st.summary or "", "error": st.error or ""} for st in task.steps]
+        return {"id": task.id, "title": task.title or (task.goal or "")[:60], "goal": task.goal or "",
+                "status": str(getattr(task.status, "value", task.status)),
+                "doing": task.current_action or "", "steps": steps,
+                "result": task.result or "", "error": (task.error or "").strip(),
+                "folder": task.workspace or "", "started": float(task.created_at or 0.0),
+                "updated": float(task.updated_at or 0.0),
+                "skill": str((task.metadata or {}).get("skill") or "")}
+
+    # ── skills (docs/agents/SKILLS.md) ───────────────────────────────────────
+
+    def _skills(self):
+        """The workforce's skill library - or one of its own when the agents
+        did not start, so the page still shows and edits the files."""
+        wf = self.workforce()
+        lib = getattr(wf, "skills", None) if wf is not None else None
+        if lib is None:
+            from agents.skills import SkillLibrary
+            lib = getattr(self, "_own_skills", None) or SkillLibrary()
+            self._own_skills = lib
+        return lib
+
+    def skills(self) -> list[dict]:
+        """Every skill, with when it last ran (from the job history)."""
+        lib = self._skills()
+        last: dict[str, dict] = {}
+        wf = self.workforce()
+        if wf is not None:
+            try:
+                for t in wf.list_tasks():               # newest first
+                    sid = (t.metadata or {}).get("skill")
+                    if sid and sid not in last:
+                        last[sid] = {"at": float(t.updated_at or t.created_at or 0.0),
+                                     "status": str(getattr(t.status, "value", t.status)), "job": t.id}
+            except Exception:  # noqa: BLE001
+                _log.debug("could not read the skills' runs", exc_info=True)
+        return [{**s.to_dict(), "last": last.get(s.id)} for s in lib.all()]
+
+    def skill_problems(self) -> dict[str, str]:
+        """Skill files that were skipped, and why (read by skills())."""
+        return dict(self._skills().problems)
+
+    def skill(self, skill_id: str) -> Optional[dict]:
+        s = self._skills().get(skill_id)
+        return s.to_dict() if s is not None else None
+
+    def save_skill(self, data: dict) -> str:
+        """Save a skill from the editor. "" when saved, else why not."""
+        from agents.skills import Skill, SkillError
+        from agents.skills.schedule import ScheduleError, parse_every
+        asks = data.get("ask_before") or []
+        if isinstance(asks, str):
+            asks = [a.strip() for a in asks.replace(";", ",").split(",") if a.strip()]
+        skill = Skill(id=str(data.get("id") or ""), name=str(data.get("name") or "").strip(),
+                      when=str(data.get("when") or "").strip(), body=str(data.get("body") or ""),
+                      apps=str(data.get("apps") or "").strip(), ask_before=list(asks),
+                      every=str(data.get("every") or "").strip())
+        if skill.every:
+            try:
+                parse_every(skill.every)
+            except ScheduleError as e:
+                return f"“Runs by itself” - {e}"
+        try:
+            self._skills().save(skill)
+        except SkillError as e:
+            return str(e).capitalize()
+        except OSError as e:
+            return f"It could not be saved: {e.strerror or e}"
+        self._skills_changed()
+        return ""
+
+    def delete_skill(self, skill_id: str) -> bool:
+        ok = self._skills().delete(skill_id)
+        self._skills_changed()
+        return ok
+
+    def set_skill_enabled(self, skill_id: str, on: bool) -> None:
+        self._skills().set_enabled(skill_id, bool(on))
+        self._skills_changed()
+
+    def _skills_changed(self) -> None:
+        wf = self.workforce()
+        if wf is not None:
+            try:
+                from agents.skills.schedule import sync_jobs
+                sync_jobs(wf)
+            except Exception:  # noqa: BLE001
+                _log.warning("could not reschedule the skills", exc_info=True)
+        self.changed.emit("skills")
+
+    def browser_sites(self) -> list[dict]:
+        """The sites the agents' browser is signed in to (SK-06)."""
+        from agents.tools import browser_tools
+        return browser_tools.signed_in_sites()
+
+    def forget_browser_sites(self) -> str:
+        """Sign the agents' browser out everywhere. "" when done, else why not."""
+        from agents.tools import browser_tools
+        return browser_tools.forget_sign_ins()
+
+    def skill_from_job(self, task_id: str) -> Optional[dict]:
+        """A first draft of a skill from a job that went well: its request
+        as the 'when', its plan as the steps. The user reads and edits it
+        before anything is saved (SK-05)."""
+        job = self.job(task_id)
+        if job is None:
+            return None
+        steps = [s["title"] for s in job["steps"] if s.get("status") != "skipped" and s.get("title")]
+        body = "## Steps\n" + "\n".join(f"{i}. {t}" for i, t in enumerate(steps, 1)) if steps else ""
+        body += "\n\n## What to know\n- "
+        goal = " ".join((job["goal"] or "").split())
+        return {"id": "", "name": job["title"][:60], "when": f"the user asks for something like: {goal[:160]}",
+                "body": body.strip() + " ", "apps": "", "ask_before": [], "every": ""}
+
+    def open_folder(self, path: str) -> bool:
+        """Open a job's folder in Explorer."""
+        import os
+        if not path or not os.path.isdir(path):
+            return False
+        try:
+            os.startfile(path)        # noqa: S606 - the user's own folder, on their click
+            return True
+        except Exception:  # noqa: BLE001
+            return False
 
     def stop_agents(self) -> None:
         if self.tray is not None:
             self.tray.on_stop_agents.emit()
-
-    # ── extensions (APP-18, APP-19) ──────────────────────────────────────────
-
-    def _packs(self):
-        return getattr(self.workforce(), "extensions", None)
-
-    def extensions(self) -> list[dict]:
-        """Every pack found: its manifest, and whether it is on."""
-        reg = self._packs()
-        if reg is None:
-            return []
-        try:
-            return list(reg.available())
-        except Exception:  # noqa: BLE001
-            _log.debug("could not list extensions", exc_info=True)
-            return []
-
-    def extension_on(self, ext_id: str) -> bool:
-        reg = self._packs()
-        try:
-            return bool(reg is not None and reg.is_enabled(ext_id))
-        except Exception:  # noqa: BLE001
-            return False
-
-    def set_extension(self, ext_id: str, on: bool) -> str:
-        """Turn a pack on or off, as the Extensions window does. Returns ""
-        when it worked, otherwise why not."""
-        reg = self._packs()
-        if reg is None:
-            return "The agents did not start, so no pack can run."
-        try:
-            reg.enable(ext_id) if on else reg.disable(ext_id)
-            return ""
-        except Exception as exc:  # noqa: BLE001 - said on the page, not raised
-            _log.exception("could not turn %s %s", ext_id, "on" if on else "off")
-            return str(exc) or type(exc).__name__
-        finally:
-            self.changed.emit("extensions")
-
-    def dashboard(self, ext_id: str, parent=None):
-        """The pack's own dashboard widget, built fresh - or None when the
-        pack is off or has none. A pack's dashboard failing to build raises:
-        the page says why."""
-        reg = self._packs()
-        if reg is None or not self.extension_on(ext_id):
-            return None
-        for module in reg.dashboard_modules():
-            if module.extension_id == ext_id:
-                return module.factory(self.workforce(), reg.get(ext_id), parent)
-        return None
-
-    def open_dashboard(self, ext_id: str) -> None:
-        """The floating dashboard, for a pack with no page of its own."""
-        wf = self.workforce()
-        if wf is not None:
-            from agents.ui import open_dashboard
-            open_dashboard(wf, f"{ext_id}.dashboard")
 
     # ── doing ────────────────────────────────────────────────────────────────
 

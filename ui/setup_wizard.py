@@ -96,15 +96,63 @@ WORK = (
 )
 USES = tuple(w for w, _k in WORK)
 
-# The picture side of "work": the website's pack chips, with what you'd say.
-PACKS = (
-    ("ledger", "Accounting", "Reconcile March for me"),
-    ("briefcase", "Business", "Draft the quote for Contoso"),
-    ("cap", "Students", "Explain question three"),
-    ("code", "Developers", "Why is this test failing?"),
-    ("chart", "Sales", "Update the pipeline"),
-    ("video", "Creators", "Where's the export setting?"),
-)
+# The picture side of "work": the starter skills (skills/*.md) that suit
+# what you do, each with what you'd say to use it. Finishing the step turns
+# these on and the other starter skills off - fewer for Tora to choose from,
+# and Tora > Skills turns any of them back on (docs/agents/SKILLS.md).
+SKILLS_FOR = {
+    "Accounting": ("send-an-invoice", "file-receipts", "chase-an-unpaid-invoice",
+                   "month-end-checklist", "make-a-quote"),
+    "Business owner": ("send-an-invoice", "make-a-quote", "book-a-meeting",
+                       "draft-an-email-reply", "chase-an-unpaid-invoice", "inbox-summary"),
+    "Student": ("meeting-notes", "file-documents", "voice-note-to-email", "fill-a-form"),
+    "Teacher": ("draft-an-email-reply", "meeting-notes", "file-documents", "fill-a-form"),
+    "Developer": ("tidy-downloads", "file-documents", "inbox-summary"),
+    "Sales": ("draft-an-email-reply", "book-a-meeting", "make-a-quote", "inbox-summary",
+              "chase-an-unpaid-invoice"),
+    "Design & video": ("social-post", "send-an-invoice", "make-a-quote", "tidy-downloads"),
+    "Admin & office": ("inbox-summary", "book-a-meeting", "file-documents", "fill-a-form",
+                       "month-end-checklist"),
+    "Writing": ("voice-note-to-email", "draft-an-email-reply", "social-post"),
+}
+# Everyone gets these; "Something else" (or no answer) keeps every one on.
+SKILLS_FOR_EVERYONE = ("draft-an-email-reply", "tidy-downloads", "compare-prices")
+
+# Each starter skill's card: the tile of the work it suits, and what you'd say.
+SKILL_CARDS = {
+    "send-an-invoice": ("ledger", "Invoice Sarah for last week"),
+    "chase-an-unpaid-invoice": ("wallet", "Chase Bloom about invoice 12"),
+    "file-receipts": ("ledger", "File these receipts for me"),
+    "month-end-checklist": ("calendar", "Do my month-end"),
+    "make-a-quote": ("briefcase", "Quote Bloom for a new website"),
+    "book-a-meeting": ("calendar", "Book a call with Sam on Friday"),
+    "draft-an-email-reply": ("briefcase", "Reply to this email for me"),
+    "inbox-summary": ("briefcase", "What came in today?"),
+    "voice-note-to-email": ("mic", "Turn what I said into an email"),
+    "social-post": ("video", "Post this on LinkedIn"),
+    "meeting-notes": ("mic", "Write up today's meeting"),
+    "file-documents": ("cap", "File these documents"),
+    "tidy-downloads": ("code", "Tidy my Downloads folder"),
+    "compare-prices": ("chart", "Find the best price for a kettle"),
+    "fill-a-form": ("cap", "Fill in this form for me"),
+}
+SKILL_CARDS_SHOWN = 6
+
+
+def skills_for(uses) -> list[str]:
+    """The starter skills for what someone does, best first, each once.
+    Empty for "Something else" or no answer: then every one stays on."""
+    if not uses or "Something else" in uses:
+        return []
+    out: list[str] = []
+    for use in uses:
+        for sid in SKILLS_FOR.get(use, ()):
+            if sid not in out:
+                out.append(sid)
+    for sid in SKILLS_FOR_EVERYONE:
+        if sid not in out:
+            out.append(sid)
+    return out
 
 # Three things to try, by what the user does. Generic ones fill the rest.
 TRY = {
@@ -447,26 +495,48 @@ class SetupWizard(QDialog):
             self.use_chips.append(c)
         body.addLayout(grid)
 
-        self.pack_cards: list[O.PackCard] = []
-        stack = QVBoxLayout()
-        stack.setSpacing(12)
-        for i, (kind, name, phrase) in enumerate(PACKS):
-            card = O.PackCard(kind, name, phrase)
-            self.pack_cards.append(card)
+        self.skill_cards: list[O.SkillCard] = []
+        panel.body.addWidget(O.text("She'll start with these skills", 14, 700))
+        self.skill_stack = QVBoxLayout()
+        self.skill_stack.setSpacing(12)
+        panel.body.addLayout(self.skill_stack)
+        self._show_skills()
+        return page
+
+    def _picked_uses(self) -> list[str]:
+        return [c.property("use") for c in self.use_chips if c.isChecked()]
+
+    def _show_skills(self) -> None:
+        """The right side answers back: the skills for what was picked (the
+        everyday ones until something is)."""
+        from agents.skills import SkillLibrary
+        ids = skills_for(self._picked_uses()) or list(SKILLS_FOR_EVERYONE) + ["send-an-invoice",
+                                                                             "book-a-meeting",
+                                                                             "inbox-summary"]
+        names = {s.id: s.name for s in SkillLibrary().all()}
+        while self.skill_stack.count():
+            item = self.skill_stack.takeAt(0)
+            row = item.layout()
+            if row is not None:
+                while row.count():
+                    w = row.takeAt(0).widget()
+                    if w is not None:
+                        w.deleteLater()
+        self.skill_cards = []
+        for i, sid in enumerate([s for s in ids if s in SKILL_CARDS and s in names][:SKILL_CARDS_SHOWN]):
+            kind, phrase = SKILL_CARDS[sid]
+            card = O.SkillCard(kind, names[sid], phrase, sid)
+            self.skill_cards.append(card)
             row = QHBoxLayout()
             row.addSpacing(40 if i % 2 else 0)       # a little stagger, like the site's drift
             row.addWidget(card)
             row.addSpacing(0 if i % 2 else 40)
-            stack.addLayout(row)
-        panel.body.addLayout(stack)
-        return page
+            self.skill_stack.addLayout(row)
 
     def _work_changed(self, *_a) -> None:
-        kinds = {k for w, k in WORK for c in self.use_chips if c.isChecked() and c.property("use") == w}
-        for card in self.pack_cards:
-            card.set_on(not kinds or card.kind in kinds)
+        self._show_skills()
         if self.page() == "work":
-            self.next_btn.setEnabled(bool(kinds))
+            self.next_btn.setEnabled(bool(self._picked_uses()))
 
     def _page_privacy(self) -> QWidget:
         body, panel, page = self._question("privacy", O.STEP[2])
@@ -1024,8 +1094,24 @@ class SetupWizard(QDialog):
     # ── saving answers ────────────────────────────────────────────────────────
 
     def _save_profile(self) -> None:
-        uses = [c.property("use") for c in self.use_chips if c.isChecked()]
+        uses = self._picked_uses()
         cfg.set_profile(self.name_edit.text(), uses)
+        self._save_skills(uses)
+
+    @staticmethod
+    def _save_skills(uses) -> None:
+        """The starter skills for what they do on, the other starter skills
+        off; their own skills are never touched. "Something else": all on."""
+        try:
+            from agents.skills import SkillLibrary
+            lib = SkillLibrary()
+            wanted = set(skills_for(uses))
+            for skill in lib.all():
+                if skill.source != "yours":
+                    lib.set_enabled(skill.id, not wanted or skill.id in wanted)
+        except Exception:  # noqa: BLE001 - the skills are a nicety here, never a blocker
+            import logging
+            logging.getLogger("tora.setup").warning("could not set the starter skills", exc_info=True)
 
     def _save_voice(self) -> None:
         fn = getattr(self._live, "set_voice", None)

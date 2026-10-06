@@ -34,7 +34,7 @@ from ui import tokens
 
 # The website's gradient families, the paper greys and the stage live in
 # ui/tokens.py; they are re-exported here because the wizard reads O.STEP etc.
-from ui.tokens import CAPABILITY, PACK, PAPER as P, STAGE, STEP, VOICE_COLOURS  # noqa: E402,F401
+from ui.tokens import CAPABILITY, PAPER as P, STAGE, STEP, VOICE_COLOURS, WORK_TILES  # noqa: E402,F401
 from ui.kit import drop_shadow, mix, soft_shadow, tween  # noqa: E402,F401
 from ui import kit  # noqa: E402
 
@@ -430,12 +430,12 @@ class Keycap(QWidget):
 # ── panel content: the website's cards ────────────────────────────────────────
 
 class GradientTile(QWidget):
-    """A pack's app-style tile: its two-stop gradient and a white glyph."""
+    """A kind of work's app-style tile: its two-stop gradient and a white glyph."""
 
     def __init__(self, kind: str, size: int = 56):
         super().__init__()
         self._kind = kind
-        self._a, self._b = PACK.get(kind, PACK["ledger"])
+        self._a, self._b = WORK_TILES.get(kind, WORK_TILES["ledger"])
         self._dim = False
         self.setFixedSize(size, size)
 
@@ -589,14 +589,15 @@ class MicBars(QWidget):
 
 # ── panel content: the website's cards ────────────────────────────────────────
 
-class PackCard(QWidget):
-    """A pack's chip-card, after the website's "Made for your work": tile,
-    name, the phrase you'd say. It slides in and comes into colour when what
-    you do matches it; otherwise it sits back, grey."""
+class SkillCard(QWidget):
+    """A starter skill's card (after the website's "Made for your work"):
+    the tile of the work it suits, its name, what you'd say to use it. It
+    slides in and comes into colour when shown; set_on(False) greys it."""
 
-    def __init__(self, kind: str, name: str, phrase: str):
+    def __init__(self, kind: str, name: str, phrase: str, skill_id: str = ""):
         super().__init__()
         self.kind = kind
+        self.skill_id = skill_id
         self._name = name
         self._phrase = phrase
         self._on = 1.0
@@ -619,7 +620,7 @@ class PackCard(QWidget):
         p.drawRoundedRect(r, 14, 14)
         s = 42.0
         tile = QRectF(r.left() + 12, r.center().y() - s / 2, s, s)
-        a, b = PACK.get(self.kind, PACK["ledger"])
+        a, b = WORK_TILES.get(self.kind, WORK_TILES["ledger"])
         g = QLinearGradient(tile.topLeft(), tile.bottomRight())
         g.setColorAt(0, mix(P.off_a, a, t))
         g.setColorAt(1, mix(P.off_b, b, t))
@@ -1210,11 +1211,11 @@ class VoiceCarousel(QWidget):
         off = (1 - self._slide) * 40 * self._dir
         p.setOpacity(0.25 + 0.75 * self._slide)
         p.setFont(_font(12, 600, 1.5))
-        p.setPen(QColor(P.dim))
+        p.setPen(QColor(T.TEXT_DIM))
         p.drawText(QRectF(off, 4, w, 18), Qt.AlignmentFlag.AlignHCenter,
                    f"VOICE {self._index + 1} OF {len(self._voices)}")
         p.setFont(_font(46, 700, -1.0))
-        p.setPen(QColor(INK_ON_PALE))
+        p.setPen(QColor(T.TEXT))
         p.drawText(QRectF(off, 24, w, 60), Qt.AlignmentFlag.AlignHCenter, self.voice())
         p.setOpacity(1.0)
         # the waveform, in this voice's colour
@@ -1234,10 +1235,10 @@ class VoiceCarousel(QWidget):
             x += bw + gap
         # arrows
         for r, left in zip(self._arrows(), (True, False)):
-            p.setBrush(QColor(255, 255, 255, 235))
-            p.setPen(QPen(QColor(0, 0, 0, 22), 1))
+            p.setBrush(QColor(T.SURFACE))
+            p.setPen(QPen(QColor(T.BORDER_STRONG), 1))
             p.drawEllipse(r)
-            pen = QPen(QColor(INK_ON_PALE), 2.2)
+            pen = QPen(QColor(T.TEXT), 2.2)
             pen.setCapStyle(Qt.PenCapStyle.RoundCap)
             pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
             p.setPen(pen)
@@ -1250,10 +1251,10 @@ class VoiceCarousel(QWidget):
         for i in range(n):
             on = i == self._index
             p.setPen(Qt.PenStyle.NoPen)
-            p.setBrush(QColor(colour) if on else QColor(0, 0, 0, 40))
+            p.setBrush(QColor(colour) if on else QColor(T.BORDER_STRONG))
             p.drawEllipse(QPointF(dx + i * 14 + 7, 204), 4 if on else 3, 4 if on else 3)
         p.setFont(_font(12, 500))
-        p.setPen(QColor(P.faint))
+        p.setPen(QColor(T.TEXT_FAINT))
         p.drawText(QRectF(0, 216, w, 18), Qt.AlignmentFlag.AlignHCenter, "Click to hear her again")
         p.end()
 

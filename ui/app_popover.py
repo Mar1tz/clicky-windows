@@ -277,7 +277,7 @@ def help_card(bridge, show_page: Callable[[str], None]) -> Popover:
     pop.row("Contact support", icon_name="support", action=mail)
     if hasattr(bridge, "save_report"):
         pop.row("Save a problem report", icon_name="report", action=bridge.save_report)
-    pop.row("Keys and diagnostics", icon_name="setup", action=lambda: show_page("setup"))
+    pop.row("Keys and diagnostics", icon_name="key-round", action=lambda: show_page("setup"))
     return pop
 
 

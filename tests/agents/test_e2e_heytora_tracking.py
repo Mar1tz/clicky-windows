@@ -51,9 +51,9 @@ def test_settings_does_not_stick_on_reading_your_plan(qapp, heytora):
     w = ToraApp(AppBridge())
     try:
         w.show()
-        w.show_page("settings")                       # built for the first time
-        _until(qapp, lambda: any(t.startswith("Free plan") for t in _texts(w)))
-        assert "Talk:  3 of 25 messages this month · 22 left" in _texts(w)
+        w.show_page("settings/usage")                       # built for the first time
+        _until(qapp, lambda: "Free plan" in _texts(w))
+        assert "3 of 25 messages this month · 22 left" in _texts(w)
 
         # Closed; the plan moves while nobody looks; opened again.
         w.hide()
@@ -61,7 +61,7 @@ def test_settings_does_not_stick_on_reading_your_plan(qapp, heytora):
         acc.summary(force=True)
         qapp.processEvents()
         w.show()
-        _until(qapp, lambda: "Talk:  9 of 25 messages this month · 16 left" in _texts(w))
+        _until(qapp, lambda: "9 of 25 messages this month · 16 left" in _texts(w))
         assert "Reading your plan…" not in _texts(w)
     finally:
         w.close()
@@ -74,11 +74,11 @@ def test_the_card_moves_with_every_question(qapp, heytora):
     w = ToraApp(AppBridge())
     try:
         w.show()
-        w.show_page("settings")
-        _until(qapp, lambda: "Talk:  3 of 25 messages this month · 22 left" in _texts(w))
+        w.show_page("settings/usage")
+        _until(qapp, lambda: "3 of 25 messages this month · 22 left" in _texts(w))
         heytora.account.new_talk()
         heytora.account.voice_pass("talk", "gemini-3.8-live")   # the server says: talk 1 this month
-        _until(qapp, lambda: "Talk:  1 of 25 messages this month · 24 left · 1 today" in _texts(w))
+        _until(qapp, lambda: "1 of 25 messages this month · 24 left · 1 today" in _texts(w))
     finally:
         w.close()
 
@@ -251,11 +251,11 @@ def test_home_has_no_plan_card_on_an_own_key(qapp):
 
 def test_settings_says_todays_use(qapp):
     from tests.agents.test_e2e_first_launch import _Bridge, _state
-    from ui.app_pages import SettingsPage
+    from ui.settings_tabs import UsageTab as SettingsPage
     summary = _state()["summary"] | {"today": {"talk": 2}}
     page = SettingsPage(_Bridge(_state(summary=summary)))
     page.refresh()
-    assert "Talk:  7 of 25 messages this month · 18 left · 2 today" in _texts(page)
+    assert "7 of 25 messages this month · 18 left · 2 today" in _texts(page)
 
 
 def test_talking_moves_settings_in_place(qapp, heytora):
@@ -270,14 +270,14 @@ def test_talking_moves_settings_in_place(qapp, heytora):
     w = ToraApp(AppBridge())
     try:
         w.show()
-        w.show_page("settings")
-        _until(qapp, lambda: "Talk:  3 of 25 messages this month · 22 left" in _texts(w))
-        page = w._pages["settings"]
+        w.show_page("settings/usage")
+        _until(qapp, lambda: "3 of 25 messages this month · 22 left" in _texts(w))
+        page = w._settings.tab("usage")
         untouched = page.body.widget().findChildren(QWidget)[0]
         for n in (1, 2, 3):                           # three questions, one after another
             heytora.account.new_talk()
             heytora.account.ticket("talk")            # what _count_question does when Tora hears them
-            _until(qapp, lambda n=n: f"Talk:  {n} of 25 messages this month · {25 - n} left · {n} today"
+            _until(qapp, lambda n=n: f"{n} of 25 messages this month · {25 - n} left · {n} today"
                    in _texts(w))
         assert untouched in page.body.widget().findChildren(QWidget), "the page was not rebuilt"
         assert heytora.fake.opened["talk"] == 3

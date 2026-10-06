@@ -69,11 +69,9 @@ title bar buttons), `ui/app_popover.py` (the cards), `ui/window_frame.py`
 ┌─[▥][◯]──────────────────────────── [●Listening] [🔔] ─ ▢ ✕ ┐
 │ heytora      ╭───────────────────────────────────────────╮ │
 │ ⌂ Home       │ Hey Dylan, just hold [Ctrl + Win] and ask │ │
-│ ◇ Agents     │                                           │ │
-│ ▢ Journal    │ …the page…                                │ │
-│ ▦ Packs      │                                           │ │
-│   Accounting │   (only while the Accounting pack is on)  │ │
 │ ✦ Tora       │                                           │ │
+│ ▥ Insights   │ …the page…                                │ │
+│ ◇ Agents     │                                           │ │
 │ 🎁 Free month │                                           │ │
 │ ⚙ Settings   │                                           │ │
 │ ? Help       ╰───────────────────────────────────────────╯ │
@@ -81,7 +79,9 @@ title bar buttons), `ui/app_popover.py` (the cards), `ui/window_frame.py`
 ```
 
 - **One ground, one panel.** The title bar and the sidebar are `FRAME`; the
-  pages sit on a raised panel (`BG`, hairline, `RADIUS_LG`) inset from it.
+  pages sit on a raised panel (`BG`, `RADIUS_LG`) inset from it, lifted by
+  a soft shadow in light (painted by the window under it, not a graphics
+  effect) and a hairline in dark, where a shadow does not show.
 - **Our own title bar.** Top left: the sidebar button, then the profile.
   Top right: Tora's state (only while she is not idle), the bell, then
   minimise / maximise / close drawn as Windows 11 draws them. The window
@@ -110,8 +110,6 @@ with two settings on it.
 | Home | Greeting, measured stats, one hero card, recent activity by day | Home + Journal's history |
 | Agents | Background work: plans, progress, approvals | Agents |
 | Journal | What you learned, walkthroughs worth keeping | Journal |
-| Packs | Turn industry packs on and off | Extensions |
-| (pack) | A pack's own page, e.g. Accounting, while it is on | Accounting |
 | Tora | Make her yours: voice, colour, how she teaches and answers | Tutor + Voice |
 | Get a free month | Referral - coming soon | new |
 | Settings | Opens a dialog with its own menu: General, Privacy, Models, Account, Advanced | Settings + Setup + Models |
@@ -127,7 +125,7 @@ to Home, review and saved walkthroughs to **Learn**.
 | Page | Wispr | Top card | Under it |
 |---|---|---|---|
 | Home | Dictation | Up next (running · review · try asking) | side card (questions, walkthroughs, day streak; plan or review); everything asked, by day |
-| Insights | Insights | (none - the tiles are the top) | three tiles (questions + week on week; walkthroughs + minutes guided; remembered of all taught + due); where you ask (top apps, Tora's own window left out); streak calendar (20 weeks, current + longest); this month on the plan; agents this month. Only measured numbers: no words per minute, no percentiles, no time saved |
+| Insights | Insights | (none - the tiles are the top) | **Time Tora worked for you** (lead tile: walkthrough guiding time + finished agent jobs' run time, both recorded; a week of bars, this week on last) · **Things Tora handled** (Ask answered / Show walked through / Do agent jobs finished, one split bar) · **What Tora knows** (facts her remember tool kept, the two newest, documents attached) · where you use Tora · streak (current, longest, active days) · monthly usage (one overall bar, then each allowance) · agents (finished, didn't finish, running, how long they ran). Only what HeyTora records: no time saved, no words per minute, no percentiles; an estimate would have to say it is one |
 | Agents | Notetaker | "Tora works while you don't." | "give her a first job" card, running, approvals, past tasks |
 | Learn | Dictionary / Snippets | "Keep what she taught you." | review, saved walkthroughs, recorded lessons, captured workflows |
 | Packs | Transforms | "Tora, for your work." | a grid of pack cards; "more packs coming" |
@@ -180,6 +178,108 @@ real data, gone when all are.
   only when she can't answer, a "Happening now" list only while something is.
 - **Empty states are written**: what will be here and the one thing to do.
 
+## 3D. Settings (after Wispr Flow's)
+
+A dialog over the app, not a page: the app dims behind it, a rounded card
+with a menu down its left (the page's soft grey) and one tab at a time on
+white. Escape or a click on the dimmed app closes it. Built in
+`ui/settings_dialog.py`; the tabs are `ui/settings_tabs.py`.
+
+| Section | Tab | What is in it |
+|---|---|---|
+| Settings | General | Shortcut (Change), microphone (Change), always listening, how she answers (Live / Classic) · theme |
+| | System | Start with Windows, the floating panel · sounds (the listening pop) · updates |
+| | Agents | When they ask you (approve automatically - its limits in its one line -, show the plan first, run without asking up to) · Where they work (workspace: Open, Change) · Limits for each job (jobs at once, time, tokens - fixed choices) · Where their requests go (each endpoint; Manage opens the editor in a dialog) · History (clear). Every choice saves at once and reaches the running agents (`bridge.set_agent_rail`); no Save button, no embedded panel |
+| | Advanced | API keys · models in use (read-only, refresh) · diagnostics · report, setup again · Quit |
+| Account | Account | Profile (name, email, picture) · how Tora thinks (your plan or your own key) · Sign out · Delete account (type your email to confirm; the server deletes it and everything that cascades from it, refuses while a paid plan is active; then back to sign-in) |
+| | Usage | This month on the plan: each allowance with a bar (amber from 80%), today, overall use, when it starts again · Change plan · Manage on heytora.com |
+| | Plans & billing | Free, Pro, Max side by side - the website's words and prices (`settings_tabs.PLANS`, from heytora-web `site.ts`), yours marked · billing on heytora.com |
+| | Data & privacy | What she looks at · what she keeps (journal on/off, on this PC only, download, delete) · desktop actions allowed · Privacy policy, Terms |
+
+Account follows Wispr's order: who you are, what you pay, what is kept.
+
+**How a tab reads** (`ui/settings_parts.py`, after Wispr's System page): a
+group's name sits above a soft block (`Group`); each row is a title in
+14px semibold ink, **at most one short line** under it in 13px, and the
+control (`SettingRow`) - never a card title, a subtitle and then rows that
+each carry a heading and a sentence. Longer caveats go in one small note
+under the block. General's Shortcut shows the keys as keycaps and Change
+opens a small dialog where the new keys are pressed (checked, then live:
+`main.py` rebinds only its own hook); Microphone's Change lists each mic
+once as a card, the chosen one with a live level. A dropdown never changes
+when the page is scrolled over it (`Select.wheelEvent`).
+The footer is the version and a cloud: ticked when up to date, an arrow
+when an update is waiting. A group on a tab is a filled block in the
+page's soft grey on the dialog's white, rows split by hairlines.
+`show_page("settings/<tab>")` opens a tab; `"setup"` is Advanced. The
+Tora page keeps only what makes her yours: voice, teaching style,
+instructions.
+
+## 3E. The Tora page - make her yours
+
+Second in the sidebar (Home, **Tora**, Insights, Agents). The Journal
+has no row: Home shows everything asked and the next review, and the full
+review list is Home's "Review now".
+
+Four tabs of its own (Wispr's Style page: words on a hairline, the one
+you are on underlined): **Voice & look** (1-3), **How she works** (4-5),
+**Skills** (7), **Teach her** (6).
+
+1. **Her voice** - the first launch's carousel: her name, audio bars that
+   move with the clip, arrows; settling on one (0.7 s) saves it.
+2. **Her colour** - her cursor, breathing, in the chosen colour, and the
+   swatches; applied to the live cursor at once.
+3. **Her sound** - the listening pop as chips; picking one plays it (moved
+   here from Settings > System).
+4. **Her modes** - tiles, two by two: Slow mode, Advance by itself, Quiz
+   mode, Code mode. The tile is the switch and fills with a pale accent
+   while on.
+5. **Instructions for Tora** - only the user's own words, added after her
+   prompt on every answer (config._instructions_from_env).
+6. **Teach her how you work** - Record a lesson · Show her what you did.
+7. **Her skills** (`ui/skills_page.py`, docs/agents/SKILLS.md) - how you
+   like jobs done. A hairline list: the starter skills and yours ("Yours",
+   "Edited"), "Used when…", a schedule and when it last ran; a switch on
+   each; hover for Edit. New skill opens the editor over the window: Name,
+   Use it when…, one growing box for the steps and what to know, then Apps,
+   Always ask me before and Runs by itself (all optional). Files that could
+   not be read are listed with why. A finished job's details offer
+   "Save as a skill": a draft from its plan, in the same editor.
+
+## 3F. The Agents page
+
+`ui/agents_page.py`. The app's own components, drawn from the workforce
+through the bridge; the workforce's floating panels (agents/ui, worker 1)
+stay for the tray. Two columns, as Home:
+
+- **Give Tora a job** - a box that grows, three example jobs, Start. A job
+  that reads as a question is said so; one a skill describes runs as that
+  skill.
+- **Needs your OK** - only while an agent waits: what it wants, for which
+  job, Approve / Deny on the page (a sensitive one needs its typed word).
+  The approval window still opens; whichever answer comes first counts.
+- **Working now** - a card per running job: step n of m, what it is
+  doing, progress, how long it has run, Pause/Resume, Stop.
+- **History** - the hairline list by day: how each job ended and how long
+  it ran; hover for Open its folder; click for details.
+- **Aside** (sticky) - this month's jobs finished / didn't finish /
+  running, run time, approve-automatically state, Agent settings.
+- **Details** slide in from the right over the page: what you asked, the
+  plan as a checklist (done, on now, waiting, failed), the live activity
+  log (the workforce's own, restyled), the result or why it stopped,
+  Open folder, Run again or Stop - and, when it went well, Save as a skill.
+
+Later, if wanted: a map of a project's agents in the details (the data -
+a lead job, its agents and who waits on whom - is already recorded).
+
+## 3G. Packs - removed
+
+Packs were replaced by skills on 6 Oct 2026 (docs/agents/SKILLS.md): the
+Packs page, a pack's page and their sidebar rows are gone, and old links to
+them open the Tora page's Skills tab. The onboarding's "Made for your
+work" cards are skill cards now (`SkillCard`, colours `tokens.WORK_TILES`):
+the starter skills for the work you pick, which finishing turns on.
+
 ## 3A. Where the values live
 
 Every colour, radius, shadow and button size is a name in **`ui/tokens.py`**;
@@ -224,7 +324,7 @@ florist's site - wears that app's colours, and they live in one map,
 A pill's radius is `pill(h)` = one under half the height: Qt drops a
 radius above half and the button goes square.
 
-The families (`CAPABILITY`, `STEP`, `PACK`, `SCENE_LOOKS`, `VOICE_COLOURS`)
+The families (`CAPABILITY`, `STEP`, `WORK_TILES`, `SCENE_LOOKS`, `VOICE_COLOURS`)
 and the ribbon (`RIBBON`, `RIBBON_POOLS`, `RIBBON_FILLED`) are in tokens.py
 too, copied from heytora-web.
 
@@ -263,8 +363,7 @@ that capability is the subject (Home, walkthrough cards, Tutor):
 | Build it | `#FBF3DD` | `#9CE9DA` `#FFE08A` `#F6B96B` `#FFF0C4` `#B6EE7A` |
 
 **Packs** (`home/packs.tsx`): a two-stop 145° gradient icon tile with a
-white glyph. Used on Extensions, the pack's own page header, and any agent
-card working for that pack:
+white glyph. Used on the onboarding's "Made for your work" cards:
 
 | Pack icon | From → to |
 |---|---|
@@ -507,7 +606,7 @@ snap targets and the pop sound below.
 | 4A | Consolidation: every value into `ui/tokens.py`, one `ui/kit.py`, a test that keeps it (§3A) | Done |
 | A1 | App shell (§3B): own title bar, sidebar that opens and shuts, page map, no description lines, Home greeting, profile / notifications / free month / help cards | Done |
 | A1b | Page template (§3C): hero, side card, history list, centred column, no outlined cards; Home rebuilt | Done |
-| A2 | Settings as a dialog with its own menu (General, Privacy, Models, Account, Advanced); Setup and Models leave the sidebar | Next |
+| A2 | Settings as a dialog (§3D) - Done; was: Settings as a dialog with its own menu (General, Privacy, Models, Account, Advanced); Setup and Models leave the sidebar | Next |
 | A3 | Notifications feed: agent tasks, approvals, progress, usage, achievements | |
 | A3b | Insights page (§3C), `ui/insights_data.py` | Done |
 | A4 | Agents, Learn (Journal leaves the sidebar), Packs, Tora - each on the §3C template | |

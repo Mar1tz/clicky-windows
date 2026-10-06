@@ -189,7 +189,7 @@ def build_agent_manager(
         limits=limits,
         auto_approve=auto_approve,
     )
-    attach_extensions(mgr, in_memory=in_memory, base_dir=None if in_memory else os.path.dirname(task_db))
+    attach_skills(mgr, in_memory=in_memory, base_dir=None if in_memory else os.path.dirname(task_db))
     return mgr
 
 
@@ -222,29 +222,26 @@ def rewire_providers(mgr: AgentManager, accounts=None) -> bool:
     return live
 
 
-def attach_extensions(mgr: AgentManager, *, in_memory: bool = False,
-                      base_dir: Optional[str] = None) -> AgentManager:
-    """Give the manager its scheduler and industry-extension registry, and
-    re-enable the packs that were on last session - before start(), so a
-    recovered task from a pack finds its worker registered.
+def attach_skills(mgr: AgentManager, *, in_memory: bool = False,
+                  base_dir: Optional[str] = None) -> AgentManager:
+    """Give the manager the user's skills and its scheduler, and schedule
+    the skills that run on their own (docs/agents/SKILLS.md) - before
+    start(), so the scheduler starts with them.
 
-    In-memory (tests): no state files, and pack data under the workspace,
-    never the user profile.
+    In-memory (tests): no state files, and the user's skills under the
+    workspace, never the user profile.
     """
-    from agents.extensions import ExtensionRegistry
     from agents.manager.scheduler import Scheduler
-    base = os.path.join(mgr.workspace_root, ".extensions") if in_memory else (base_dir or data_dir())
+    from agents.skills import SkillLibrary
+    from agents.skills.schedule import sync_jobs
+    base = os.path.join(mgr.workspace_root, ".tora") if in_memory else (base_dir or str(data_dir()))
     mgr.scheduler = Scheduler(mgr, state_path=None if in_memory else os.path.join(base, "schedules.json"))
-    mgr.extensions = ExtensionRegistry(mgr, state_path=None if in_memory else os.path.join(base, "extensions.json"),
-                                       data_root=base)
+    mgr.skills = SkillLibrary(user=os.path.join(base, "skills") if in_memory else None)
     try:
-        mgr.extensions.discover()
-        if not in_memory:
-            restored = mgr.extensions.restore()
-            if restored:
-                log.info("extensions enabled: %s", ", ".join(restored))
-    except Exception:  # noqa: BLE001 - a broken pack must never stop the workforce
-        log.exception("extension discovery failed")
+        for skill_id, why in sync_jobs(mgr).items():
+            log.warning("skill %s is not scheduled: %s", skill_id, why)
+    except Exception:  # noqa: BLE001 - a bad skill must never stop the workforce
+        log.exception("could not schedule the skills")
     return mgr
 
 

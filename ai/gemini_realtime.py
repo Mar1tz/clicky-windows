@@ -282,10 +282,11 @@ def tool_declarations() -> list[dict]:
             "name": "delegate_task",
             "description": (
                 "Hand real work to a background agent - folders, projects, "
-                "apps, files, installs - when the user asks you to BUILD or "
-                "MAKE something on their machine. Never for a question or "
-                "the screen. It works while you talk: say briefly what it "
-                "will do and that it has started."
+                "apps, files, installs, or any job one of the user's skills "
+                "describes - when the user asks you to BUILD, MAKE or DO "
+                "something on their machine. Never for a question or the "
+                "screen. It works while you talk: say briefly what it will do "
+                "and that it has started."
             ),
             "parameters": {
                 "type": "object",
@@ -304,10 +305,30 @@ def tool_declarations() -> list[dict]:
                     },
                     "kind": {
                         "type": "string",
-                        "enum": ["coding", "file", "terminal", "research"],
+                        "enum": ["coding", "file", "terminal", "research", "computer"],
+                    },
+                    "skill": {
+                        "type": "string",
+                        "description": (
+                            "The id of the user's skill this job is, from the "
+                            "skills in your context. Omit when none fits."
+                        ),
                     },
                 },
                 "required": ["goal"],
+            },
+        },
+        {
+            "name": "read_skill",
+            "description": (
+                "Read one of the user's skills in full: the steps and what to "
+                "know. Use when they ask HOW to do a job a skill covers, to "
+                "guide them through it on screen."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {"id": {"type": "string"}},
+                "required": ["id"],
             },
         },
         {
@@ -349,33 +370,18 @@ def tool_declarations() -> list[dict]:
             "description": (
                 "Check on or control background agents: how a build is going, "
                 "stop / pause / resume / cancel, approve / deny when one waits "
-                "for permission. Also turns industry extensions on and off (id "
-                "'accounting' when they say they are an accountant and agree), "
-                "opens an extension's dashboard, and the wizard that creates a "
-                "specialist agent."
+                "for permission."
             ),
             "parameters": {
                 "type": "object",
                 "properties": {
                     "action": {
                         "type": "string",
-                        "enum": ["status", "pause", "resume", "cancel", "approve", "deny",
-                                 "list_extensions", "enable_extension", "disable_extension",
-                                 "open_dashboard", "create_agent"],
+                        "enum": ["status", "pause", "resume", "cancel", "approve", "deny"],
                     },
                     "task": {
                         "type": "string",
                         "description": "A few words of the task's title, if they named one.",
-                    },
-                    "id": {
-                        "type": "string",
-                        "description": "Extension id, e.g. 'accounting'.",
-                    },
-                    "template": {
-                        "type": "string",
-                        "description": "For create_agent: bookkeeper, accounts_payable, accounts_receivable, "
-                                       "month_end, tax_preparation, audit_assistant, payroll_review or "
-                                       "management_reporting.",
                     },
                 },
                 "required": ["action"],

@@ -17,6 +17,8 @@
 //                      The app then talks straight to Google.
 //   POST /agent-ticket the agent window's ticket (older apps).
 //   GET  /me           the plan, its allowances and this month's use.
+//   DELETE /account    {confirm: email}  close the account and delete its
+//                      data (refused while a paid plan is active).
 //   POST /omniroute/v1/chat/completions   the AGENTS' model call: OmniRoute
 //                      (Claude), the only models the agents use (the owner,
 //                      5 Oct 2026). Needs the agent message's ticket; only
@@ -204,6 +206,32 @@ Deno.serve(async (req: Request): Promise<Response> => {
   try {
     if (path === "me" && req.method === "GET") {
       return json(200, await rpc("get_usage_summary", {}));
+    }
+
+    if (path === "account" && req.method === "DELETE") {
+      // Closing the account, from the app. The email typed to confirm is
+      // checked here too, so nothing but a deliberate request deletes.
+      const body = await req.json().catch(() => ({}));
+      const typed = String(body?.confirm ?? "").trim().toLowerCase();
+      if (!typed || typed !== String(user.email ?? "").trim().toLowerCase()) {
+        return refuse(400, "HEYTORA_CONFIRM", "Type the email you sign in with to confirm.");
+      }
+      const admin = createClient(SUPABASE_URL, SERVICE_KEY, { auth: { persistSession: false } });
+      // A paid plan is cancelled first, on the website - never deleted out
+      // from under a subscription that would go on billing.
+      const { data: profile } = await admin.from("profiles").select("plan, plan_status")
+        .eq("id", user.id).maybeSingle();
+      if (profile && profile.plan !== "free" && ["active", "trialing", "past_due"].includes(profile.plan_status)) {
+        return refuse(409, "HEYTORA_PAID",
+          "Cancel your plan on the HeyTora website first, then delete the account.",
+          { reason: "paid", plan: profile.plan });
+      }
+      // Every table of theirs references auth.users on delete cascade
+      // (0001, 0002, 0004): the profile, usage, costs and agent history go too.
+      const { error } = await admin.auth.admin.deleteUser(user.id);
+      if (error) throw new Error(`delete account: ${error.message}`);
+      console.log("heytora: account deleted", user.id);
+      return json(200, { deleted: true });
     }
 
     if ((path === "ticket" || path === "agent-ticket") && req.method === "POST") {

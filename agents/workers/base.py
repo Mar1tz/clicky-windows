@@ -171,9 +171,8 @@ class Worker(BaseWorker):
 
     async def _run_react(self, step: Step, ctx: AgentContext) -> None:
         system = self.system_prompt(ctx)
-        # Domain knowledge an enabled extension contributed for this task
-        # (see agents/extensions). Appended, never substituted: the
-        # worker's own rules still come first.
+        # The user's skill for this task (agents/skills). Appended, never
+        # substituted: the worker's own rules still come first.
         skills = [s for s in (ctx.extras or {}).get("skills") or [] if s]
         if skills:
             system = system + "\n\n" + "\n\n".join(skills)

@@ -72,10 +72,6 @@ hidden = [
 #    failed to start" in tora.log with the app otherwise fine — which is
 #    the designed failure mode, but not one to ship.
 hidden += collect_submodules("agents")
-# Industry extensions are discovered at runtime (pkgutil over the
-# `extensions` package), so the same applies - plus each pack's
-# manifest.json, which is data, not code.
-hidden += collect_submodules("extensions")
 
 # ── Heavy packages that ship non-Python assets (DLLs, JSON, voices).
 #    collect_all grabs submodules + data files + binaries + metadata.
@@ -116,8 +112,8 @@ hiddenimports += hidden
 hiddenimports += collect_submodules("PyQt6")
 
 import glob as _glob
-for _manifest in _glob.glob(os.path.join("extensions", "*", "manifest.json")):
-    datas.append((_manifest, os.path.dirname(_manifest)))
+# The starter skills (agents/skills reads them from here): text, not code.
+datas.append(("skills", "skills"))
 
 # The site's typeface and the wordmark (ui/tokens.py reads them from here).
 datas.append((os.path.join("assets", "fonts"), os.path.join("assets", "fonts")))

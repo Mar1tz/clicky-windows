@@ -80,6 +80,11 @@ def _write_grants(keys: set[str]) -> None:
 log = logging.getLogger("agents.manager")
 
 
+def _title(text: str) -> str:
+    t = " ".join((text or "").split())
+    return (t[:57] + "...") if len(t) > 60 else t
+
+
 class WorkerLookup(Protocol):
     def get(self, worker_type: str) -> BaseWorker: ...
 
@@ -149,9 +154,9 @@ class AgentManager:
         self.auto_approve = bool(auto_approve)
         from .limits import TaskLimits
         self.limits = limits or TaskLimits()
-        # Plugged in by bootstrap (agents/extensions, agents/manager/scheduler).
-        # Both optional: the manager is complete without any industry pack.
-        self.extensions: Any = None
+        # Plugged in by bootstrap (agents/skills, agents/manager/scheduler).
+        # Both optional: the manager is complete without either.
+        self.skills: Any = None
         self.scheduler: Any = None
         self.orchestrator = Orchestrator(
             planner=planner, verifier=verifier, store=store, memory=memory,
@@ -345,16 +350,14 @@ class AgentManager:
         other failure falls back to "this is chat" — the safe answer,
         because it loses a delegation rather than inventing one.
         """
-        if self.extensions is not None:
-            # An enabled pack's own phrases win: "prepare month-end for ABC"
-            # is the month-end agent's job, not a guess for the classifier.
-            try:
-                hit = self.extensions.match_intent(text)
-            except Exception:  # noqa: BLE001
-                log.exception("extension intent matching failed")
-                hit = None
-            if hit is not None:
-                return hit
+        skill = self.pick_skill(text)
+        if skill is not None:
+            # The user wrote down how they want this done: it is a job, and
+            # that skill's job (docs/agents/SKILLS.md).
+            return Intent(is_task=True, confidence=0.9, title=_title(text) or skill.name,
+                          goal=text.strip(), kind=TaskKind.COMPUTER, worker_type="computer",
+                          reply=f"On it - using your {skill.name} skill.",
+                          metadata={"skill": skill.id})
         if self.classifier is None:
             return Intent(is_task=False, reply="")
         try:
@@ -363,6 +366,37 @@ class AgentManager:
         except Exception as exc:  # noqa: BLE001
             log.warning("classification failed (%s); treating as chat", type(exc).__name__)
             return Intent(is_task=False, reply="")
+
+    def pick_skill(self, text: str):
+        """The user's skill this request asks for, or None. Free unless the
+        words match one (agents/skills: a word check first, then a small
+        model call between the few that matched). Never raises."""
+        if self.skills is None or not (text or "").strip():
+            return None
+        try:
+            if not self.skills.match(text):
+                return None
+            provider = None
+            try:
+                provider = self.router.pick(TaskKind.FAST)
+            except Exception:  # noqa: BLE001 - no model: the library decides on words alone
+                pass
+            if getattr(provider, "name", "") == "mock":
+                provider = None           # offline: the scripted stand-in can't choose
+            return self.runtime.call(self.skills.pick(text, provider), timeout=self.classify_timeout)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("skill pick failed (%s)", type(exc).__name__)
+            return None
+
+    def skill_for(self, task: Task):
+        skill_id = (task.metadata or {}).get("skill")
+        if not skill_id or self.skills is None:
+            return None
+        try:
+            return self.skills.get(skill_id)
+        except Exception:  # noqa: BLE001
+            log.exception("could not read skill %s", skill_id)
+            return None
 
     def submit(
         self,
@@ -385,8 +419,8 @@ class AgentManager:
             task = self.task_from_intent(intent, request, workspace=workspace)
         if metadata:
             task.metadata.update(metadata)
-        # A pack's task already has its specialist and its checklist.
-        routed = bool((task.metadata or {}).get("extension"))
+        # A skill's task already has its steps: one agent follows them.
+        routed = bool((task.metadata or {}).get("skill"))
         graph = self.decompose(task) if agent is None and not routed else None
         if graph is not None:
             return self.submit_project(task, graph)
@@ -456,16 +490,11 @@ class AgentManager:
 
     def _extras_for(self, task: Task, worker: BaseWorker, spec: AgentSpec) -> dict[str, Any]:
         """What planner and worker are told beyond the goal: the tools
-        they really have, facts about this machine or client, and - for a
-        task an extension owns - that pack's domain knowledge."""
+        they really have, facts about this machine, and - for a skill's
+        task - how the user wrote down they want it done."""
         lines = self._context_lines_for(task)
-        skills: list[str] = []
-        if self.extensions is not None:
-            try:
-                lines = [*self.extensions.context_lines_for(task), *lines]
-                skills = self.extensions.skills_for(task)
-            except Exception:  # noqa: BLE001
-                log.exception("extension context failed")
+        skill = self.skill_for(task)
+        skills = [skill.prompt()] if skill is not None else []
         return {"tool_names": self._tool_names_for(worker, spec),
                 "context_lines": lines, "skills": skills}
 
@@ -892,8 +921,7 @@ class AgentManager:
         """Is this one of the yeses auto-approve gives?
 
         Every approval one click could give - an agent's file, command,
-        browser or mouse-and-keyboard step, a pack's change to its books -
-        but never:
+        browser or mouse-and-keyboard step - but never:
           * a SENSITIVE call: money leaving, a filing. It needs a word typed
             by a person, and a setting is not a person typing it;
           * a plan, while "Show me the plan before anything runs" is on -
@@ -1051,19 +1079,12 @@ class AgentManager:
     # -- internals -----------------------------------------------------------
 
     def _default_spec(self, task: Task) -> AgentSpec:
-        template_id = (task.metadata or {}).get("template")
-        if template_id and self.extensions is not None:
-            template = self.extensions.template(template_id)
-            if template is not None:
-                spec = template.spec(task.goal, workspace=task.workspace)
-                if self.default_policy.max_auto_risk.rank < spec.permissions.max_auto_risk.rank:
-                    # A template may be stricter than the user's setting, never looser.
-                    spec.permissions.max_auto_risk = self.default_policy.max_auto_risk
-                return spec
+        skill = self.skill_for(task)
         return AgentSpec(
-            name=AGENT_NAMES.get(task.kind, "Assistant Agent"),
+            name=skill.name if skill is not None else AGENT_NAMES.get(task.kind, "Assistant Agent"),
             goal=task.goal,
             worker_type=task.worker_type,
+            tools=self._skill_tools() if skill is not None else [],
             permissions=PermissionPolicy(
                 max_auto_risk=self.default_policy.max_auto_risk,
                 allowed_tools=self.default_policy.allowed_tools,
@@ -1071,6 +1092,28 @@ class AgentManager:
                 workspace_roots=[task.workspace],
             ),
         )
+
+    # A skill may need the desktop, the browser and files in one job - say,
+    # read a timesheet, then make the invoice in Xero - so its agent gets
+    # all three, quietest first (the computer worker's ladder), and the
+    # office tools the starter skills lean on: workbooks (receipts, quotes)
+    # and a designed page made into a picture or PDF (an invoice).
+    SKILL_TOOLS = (
+        "list_app_actions", "app_action", "open_link", "ui_control",
+        "open_app", "list_windows", "focus_window",
+        "open_page", "extract_information", "click_element", "fill_field", "screenshot_page",
+        "close_browser", "ask_to_sign_in",
+        "read_file", "list_dir", "write_file", "create_file", "create_folder",
+        "read_workbook", "write_workbook", "check_formulas", "render_design",
+        "find_on_screen", "screenshot", "move_cursor", "click", "type_text", "key_press",
+    )
+
+    def _skill_tools(self) -> list[str]:
+        try:
+            known = set(self.tools.names())
+        except Exception:  # noqa: BLE001 - a stub registry
+            return list(self.SKILL_TOOLS)
+        return [t for t in self.SKILL_TOOLS if t in known]
 
     def _pick_provider(self, task: Task, spec: AgentSpec) -> AgentProvider:
         needs_vision = task.kind is TaskKind.VISION

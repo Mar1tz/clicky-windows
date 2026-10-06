@@ -80,7 +80,9 @@ def test_the_page_builds_with_nothing_measured():
     bridge = Bare()
     page = InsightsPage(bridge)
     texts = [l.text() for l in page.findChildren(QLabel)]
-    assert "QUESTIONS ASKED" in texts and "0 day streak" in texts
+    assert "TIME TORA WORKED FOR YOU" in texts and "THINGS TORA HANDLED" in texts
+    assert "THINGS TORA KNOWS ABOUT YOU" in texts and "0 day streak" in texts
+    assert not any("saved" in t.lower() for t in texts), "measured time, never an estimate of time saved"
     assert not any("%" in t and "top" in t.lower() for t in texts), "no percentile claims"
     assert app is not None
 
@@ -89,7 +91,7 @@ def test_the_charts_grow_in_when_the_page_opens_not_on_a_redraw():
     pytest.importorskip("PyQt6")
     from PyQt6.QtWidgets import QApplication
     app = QApplication.instance() or QApplication([])   # kept: an unreferenced app is deleted at once
-    from ui.app_parts import DayBars, Gauge, Grows
+    from ui.app_parts import DayBars, Grows, SplitBar
     from ui.app_pages import InsightsPage
 
     class Bridge:
@@ -109,7 +111,7 @@ def test_the_charts_grow_in_when_the_page_opens_not_on_a_redraw():
     bridge = Bridge()
     page = InsightsPage(bridge)
     charts = page.findChildren(Grows)
-    assert any(isinstance(c, DayBars) for c in charts) and any(isinstance(c, Gauge) for c in charts)
+    assert any(isinstance(c, DayBars) for c in charts) and any(isinstance(c, SplitBar) for c in charts)
     assert all(c.t == 1.0 for c in charts), "built drawn: a live redraw does not replay"
     page.show()
     app.processEvents()
@@ -130,3 +132,35 @@ def test_the_charts_grow_in_when_the_page_opens_not_on_a_redraw():
 
 def test_a_day_series_ends_today():
     assert data.daily(Counter({TODAY: 3, TODAY - timedelta(days=2): 1}), days=4, today=TODAY) == [0, 1, 0, 3]
+
+
+
+# ── the second pass: time worked, things handled, what she knows ─────────────
+
+def test_time_worked_is_guided_time_plus_agent_run_time():
+    walks = [(_at(0), 90.0), (_at(1), 30.0), (_at(9), 600.0)]
+    tasks = [{"status": "completed", "created": _at(2) - 1800, "when": _at(2)},     # 30 min
+             {"status": "running", "created": _at(0) - 999, "when": _at(0)}]       # not finished: not counted
+    t = data.time_worked(walks, tasks, today=TODAY, now=NOW)
+    assert (t["guided_min"], t["agents_min"], t["total_min"]) == (12, 30, 42)
+    assert t["this_week_min"] == 32 and t["last_week_min"] == 10 and t["change"] == 220
+    assert len(t["daily"]) == 7 and t["daily"][-1] == 2, "today: 90 s of guiding"
+
+
+def test_things_handled_is_ask_show_do():
+    h = data.handled({"questions": 20, "walkthroughs": 3},
+                     [{"status": "completed"}, {"status": "failed"}, {"status": "completed"}])
+    assert h == {"ask": 20, "show": 3, "do": 2, "total": 25}
+
+
+def test_minutes_read_like_a_person_says_them():
+    assert [data.minutes(m) for m in (0, 45, 60, 72, 180)] == ["0 min", "45 min", "1h", "1h 12m", "3h"]
+
+
+def test_active_days_and_agent_run_time_this_month():
+    d = data.summarise([(_at(n), "", "", 0) for n in (0, 0, 3, 8)], today=TODAY, now=NOW)
+    assert d["active_days"] == 3
+    first = datetime(2026, 10, 1).timestamp()
+    a = data.agents_month([{"status": "completed", "created": first + 60, "when": first + 60 + 3600}],
+                          today=TODAY)
+    assert a["ran_min"] == 60

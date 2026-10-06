@@ -1,14 +1,11 @@
-"""APP-17, APP-18, APP-19: the Agents, Extensions and Accounting pages are live.
+"""APP-17: the Agents page is live.
 
-They were drawings (M29): an "Application Builder" stuck at 70%, a plan
-and a timeline typed in by hand, four packs of which three do not exist,
-and an accounting page of invented exceptions. Now:
-
-  * Agents embeds the workforce's own panel - built once, one listener for
-    the whole page - lists the real tasks and what waits for a yes, and
-    shows any task's plan and activity in the page instead of a new window.
-  * Extensions lists the packs that are really there and switches them.
-  * Accounting is the pack's own dashboard, or the way to turn it on.
+It was a drawing (M29): an "Application Builder" stuck at 70%, a plan and
+a timeline typed in by hand. Now (rebuilt 5 Oct, ui/agents_page.py) it
+takes a job typed on the page, answers approvals there, pauses and stops
+what runs, lists how each job went, and opens a job's plan in a drawer.
+(The packs this file also covered were replaced by skills, 6 Oct 2026 -
+tests/agents/test_e2e_skills.py.)
 """
 from __future__ import annotations
 
@@ -114,26 +111,55 @@ def _settle(qapp):
         qapp.processEvents()
 
 
-# ── Agents ───────────────────────────────────────────────────────────────────
+# ── Agents (ui/agents_page.py, DESIGN.md §3F) ─────────────────────────────────
 
-def test_the_real_agents_panel_is_embedded_once(qapp, wf):
-    from agents.ui import ActiveAgentsPanel
-    from ui.app_pages import AgentsPage
+class Doing(Listed):
+    """Listed, and it remembers what the page asked of the workforce."""
 
-    before = _subs(wf)
-    page = AgentsPage(_bridge(wf))
-    (panel,) = page.findChildren(ActiveAgentsPanel)
-    assert "Active Agents" not in _texts(page), "the card names it; its own title is hidden"
-    for _ in range(3):
-        page.refresh()
-    assert page.findChildren(ActiveAgentsPanel) == [panel], "kept - with what was typed in it"
-    assert _subs(wf) == before + 1, "one listener for the whole page"
+    def __init__(self, wf, tasks=(), waiting=(), running=()):
+        super().__init__(wf, tasks, waiting)
+        self.r = list(running)
+        self.asked: list[tuple] = []
+
+    def running(self):
+        return self.r
+
+    def give_job(self, text):
+        self.asked.append(("job", text))
+        return "started", text
+
+    def answer_approval(self, request_id, approved, confirmation=""):
+        self.asked.append(("answer", request_id, approved, confirmation))
+        return True
+
+    def pause_job(self, tid):
+        self.asked.append(("pause", tid))
+
+    def resume_job(self, tid):
+        self.asked.append(("resume", tid))
+
+    def stop_job(self, tid):
+        self.asked.append(("stop", tid))
+
+
+def _running(tid="r1", status="running"):
+    return {"id": tid, "title": "Florist website", "doing": "Writing the contact page",
+            "step": 5, "total": 8, "progress": 0.6, "status": status, "started": time.time() - 600}
+
+
+def _later(qapp):
+    """Let a click's after-the-click redraw run."""
+    from PyQt6.QtCore import QEventLoop
+    loop = QEventLoop()
+    QTimer.singleShot(20, loop.quit)
+    loop.exec()
 
 
 def test_stop_all_is_the_trays(qapp, wf):
     from ui.app_pages import AgentsPage
     bridge = _bridge(wf)
-    _buttons(AgentsPage(bridge), "Stop all")[0].click()
+    page = AgentsPage(bridge)
+    _buttons(page, "Stop all")[0].click()
     assert bridge.tray.stops == 1
 
 
@@ -142,99 +168,122 @@ def test_agent_settings_opens_the_settings_page(qapp, wf):
     w = ToraApp(_bridge(wf))
     w.show_page("agents")
     _buttons(w._pages["agents"], "Agent settings")[0].click()
-    assert w._stack.currentWidget() is w._pages["settings"]
+    assert not w._settings.isHidden() and w._settings.current() == "agents", "Settings opens on its Agents tab"
 
 
-def test_recent_tasks_say_what_happened(qapp, wf):
+def test_a_job_typed_on_the_page_goes_to_the_agents(qapp, wf):
     from ui.app_pages import AgentsPage
-    texts = _texts(AgentsPage(Listed(wf, [
+    bridge = Doing(wf)
+    page = AgentsPage(bridge)
+    page._job.setPlainText("Build a one-page website for my coffee shop")
+    _buttons(page, "Start")[0].click()
+    assert bridge.asked == [("job", "Build a one-page website for my coffee shop")]
+    assert page._job.toPlainText() == "", "started: the box is ready for the next one"
+
+
+def test_the_real_bridge_says_when_a_job_is_really_a_question(qapp):
+    bridge = AppBridge(FakeManager(SimpleNamespace(submit=lambda _text: None)))
+    assert bridge.give_job("what is a pivot table?") == ("chat", "")
+
+
+def test_approve_and_deny_are_on_the_page(qapp, wf):
+    from ui.app_pages import AgentsPage
+    waiting = [{"id": "r1", "tool": "delete_path", "reason": "Delete build/ and rebuild",
+                "task": "Build a landing page", "sensitive": False, "confirm_word": ""},
+               {"id": "r2", "tool": "release_payment", "reason": "Pay the invoice",
+                "task": "Month-end", "sensitive": True, "confirm_word": "PAY"}]
+    bridge = Doing(wf, waiting=waiting)
+    page = AgentsPage(bridge)
+    assert "Delete build/ and rebuild" in _texts(page)
+    approve = _buttons(page, "Approve")
+    approve[0].click()
+    _buttons(page, "Deny")[1].click()
+    assert bridge.asked[:2] == [("answer", "r1", True, ""), ("answer", "r2", False, "")]
+
+
+def test_a_sensitive_approval_sends_the_typed_word(qapp, wf):
+    from PyQt6.QtWidgets import QLineEdit
+    from ui.app_pages import AgentsPage
+    bridge = Doing(wf, waiting=[{"id": "r2", "tool": "release_payment", "reason": "Pay the invoice",
+                                 "task": "Month-end", "sensitive": True, "confirm_word": "PAY"}])
+    page = AgentsPage(bridge)
+    (word,) = [e for e in page.findChildren(QLineEdit) if "PAY" in e.placeholderText()]
+    word.setText("PAY")
+    _buttons(page, "Approve")[0].click()
+    assert bridge.asked == [("answer", "r2", True, "PAY")]
+
+
+def test_nothing_waiting_shows_no_waiting_section(qapp, wf):
+    from ui.app_pages import AgentsPage
+    assert "NEEDS YOUR OK" not in _texts(AgentsPage(Doing(wf)))
+
+
+def test_a_running_job_can_be_paused_resumed_and_stopped(qapp, wf):
+    from ui.app_pages import AgentsPage
+    bridge = Doing(wf, running=[_running()])
+    page = AgentsPage(bridge)
+    assert "Step 5 of 8 · Writing the contact page" in _texts(page)
+    _buttons(page, "Pause")[0].click()
+    _later(qapp)
+    bridge.r = [_running(status="paused")]
+    page.refresh()
+    _buttons(page, "Resume")[0].click()
+    _later(qapp)
+    _buttons(page, "Stop")[0].click()
+    assert bridge.asked == [("pause", "r1"), ("resume", "r1"), ("stop", "r1")]
+
+
+def test_history_says_how_each_job_went(qapp, wf):
+    from ui.app_pages import AgentsPage
+    texts = _texts(AgentsPage(Doing(wf, tasks=[
         _task("Build a landing page"),
         _task("Reconcile September", "failed", "No amounts column")])))
     assert "Build a landing page" in texts
-    assert any(t.startswith("Done · Today") for t in texts)
-    assert any(t.startswith("Failed · Today") and t.endswith("· No amounts column") for t in texts)
-    assert "Application Builder" not in texts, "no made-up agent"
-
-
-def test_waiting_for_you_shows_only_while_something_waits(qapp, wf):
-    from ui.app_pages import AgentsPage
-    bridge = Listed(wf)
-    page = AgentsPage(bridge)
-    card = _card(page, "Waiting for you")
-    assert not card.isVisibleTo(page)
-    bridge.w = [{"id": "r1", "tool": "delete_path", "reason": "Delete build/ and rebuild",
-                 "task": "Build a landing page", "sensitive": True}]
-    page.refresh()
-    assert card.isVisibleTo(page)
-    assert "Delete build/ and rebuild" in _texts(card)
-    assert "Build a landing page · delete_path · needs a typed confirm word" in _texts(card)
-
-
-def test_a_progress_tick_does_not_redraw_the_lists(qapp, wf):
-    from ui.app_pages import AgentsPage
-    from ui.app_widgets import Row
-    bridge = Listed(wf, [_task("Build a landing page", "running")])
-    page = AgentsPage(bridge)
-    rows = _card(page, "Recent tasks").findChildren(Row)
-    page.refresh()
-    assert _card(page, "Recent tasks").findChildren(Row) == rows
-    bridge.t = [_task("Build a landing page", "completed")]
-    page.refresh()
-    assert _card(page, "Recent tasks").findChildren(Row) != rows, "a new status is drawn"
+    assert any(t.startswith("Finished") for t in texts)
+    assert any(t.startswith("Didn't finish") and t.endswith("No amounts column") for t in texts)
 
 
 def _saved_task(wf, tmp_path):
-    """A task with a plan and some history, in the workforce's store."""
-    from agents.core import EventKind, Step, StepStatus, Task
-    t = Task(title="Build a landing page", goal="Build a landing page", workspace=str(tmp_path))
-    t.steps = [Step(title="Create project folder", status=StepStatus.DONE),
+    """A task with a plan, in the workforce's store."""
+    from agents.core import Step, StepStatus, Task
+    t = Task(title="Build a landing page", goal="Build a landing page for the shop",
+             workspace=str(tmp_path))
+    t.steps = [Step(title="Create project folder", status=StepStatus.DONE, summary="Made site/"),
                Step(title="Write package.json")]
     wf.store.save_task(t)
-    wf.events.emit(EventKind.STEP_DONE, "Create project folder", task_id=t.id,
-                   data={"index": 0, "title": "Create project folder"})
     return t
 
 
-def test_details_show_the_plan_and_activity_in_the_page(qapp, wf, tmp_path):
-    from agents.ui import ActivityTimeline, PlanView
+def test_a_jobs_details_show_its_plan_from_the_workforce(qapp, wf, tmp_path):
     from ui.app_pages import AgentsPage
-
     t = _saved_task(wf, tmp_path)
-    page = AgentsPage(Listed(wf, [_task(t.title, "running", tid=t.id)]))
-    listeners = _subs(wf)
-    _buttons(page, "Details")[0].click()
-    (plan,) = page.findChildren(PlanView)
-    (timeline,) = page.findChildren(ActivityTimeline)
-    assert len(plan.lines) == 2 and "Create project folder" in plan.lines[0]
-    assert timeline.lines, "what it did, read back from the store"
-    assert _card(page, "Plan and activity").isVisibleTo(page)
-    assert _subs(wf) == listeners, "they share the page's one listener"
-    _buttons(page, "Details")[0].click()
-    assert len(page.findChildren(PlanView)) == 1, "built once per task"
+    page = AgentsPage(_bridge(wf))
+    page.open_job(t.id)
+    drawer = page._drawer
+    texts = [l.text() for l in drawer.findChildren(QLabel)]
+    assert "Build a landing page" in texts and "Build a landing page for the shop" in texts
+    assert "1. Create project folder" in texts and "Made site/" in texts and "2. Write package.json" in texts
+    assert not drawer.isHidden()
+    drawer.close_drawer()
+    assert drawer.isHidden()
 
 
-def test_the_panels_logs_button_opens_the_details_here(qapp, wf, tmp_path):
-    import agents.ui as agents_ui
-    from agents.ui import ActiveAgentsPanel, ActivityTimeline
-    from ui.app_pages import AgentsPage
-
+def test_the_bridge_reads_one_job_with_its_folder(qapp, wf, tmp_path):
     t = _saved_task(wf, tmp_path)
-    page = AgentsPage(Listed(wf))
-    (panel,) = page.findChildren(ActiveAgentsPanel)
-    panel.view_logs.emit(t.id)
-    assert page.findChildren(ActivityTimeline)
-    assert t.id not in agents_ui._timelines, "in the page, not a new window"
+    job = _bridge(wf).job(t.id)
+    assert job["folder"] == str(tmp_path)
+    assert [st["status"] for st in job["steps"]] == ["done", "pending"]
+    assert _bridge(wf).job("no-such-job") is None
 
 
 def test_without_agents_the_page_says_why_then_fills_in(qapp, wf):
-    from agents.ui import ActiveAgentsPanel
     from ui.app_pages import AgentsPage
     mgr = FakeManager(None)
     page = AgentsPage(AppBridge(mgr, FakeTray()))
     assert "The agents did not start" in _texts(page)
     mgr.agents = wf                              # they started after all
     page.refresh()
-    assert page.findChildren(ActiveAgentsPanel)
+    assert page._parts is not None and "GIVE TORA A JOB" in _texts(page)
 
 
 def test_the_bridge_lists_top_level_tasks(qapp):
@@ -258,139 +307,7 @@ def test_the_bridge_lists_what_waits_for_a_yes(qapp):
                                 get_task=lambda _tid: SimpleNamespace(title="Build the shop"))
     assert AppBridge(FakeManager(workforce)).approvals() == [
         {"id": req.id, "tool": "delete_path", "reason": "Delete build/",
-         "task": "Build the shop", "sensitive": True}]
-
-
-# ── Extensions ───────────────────────────────────────────────────────────────
-
-def test_the_real_packs_are_listed_and_switch_on(qapp, wf):
-    from ui.app_pages import ExtensionsPage
-    from ui.app_widgets import Switch
-
-    page = ExtensionsPage(_bridge(wf))
-    texts = _texts(page)
-    assert "Accounting" in texts and "Freelancer" in texts and "Legal" not in texts, "only packs that exist"
-    assert any("QuickBooks" in t for t in texts), "integrations by name, not id"
-    packs = [p["id"] for p in wf.extensions.available()]                # listed by id, one card each
-    assert len(page.findChildren(Switch)) == len(packs)
-    for i, pack in enumerate(packs):
-        page.findChildren(Switch)[i].setChecked(True)
-        _settle(qapp)
-        assert [p for p in packs if wf.extensions.is_enabled(p)] == [pack]
-        assert "On" in _texts(page) and _buttons(page, "Open dashboard")
-        page.findChildren(Switch)[i].setChecked(False)
-        _settle(qapp)
-        assert not wf.extensions.is_enabled(pack)
-
-
-def test_open_dashboard_goes_to_the_accounting_page(qapp, wf):
-    from extensions.accounting.ui.dashboard import AccountingDashboard
-    from ui.app_window import ToraApp
-
-    wf.extensions.enable("accounting")
-    w = ToraApp(_bridge(wf))
-    w.show_page("extensions")
-    _buttons(w._pages["extensions"], "Open dashboard")[0].click()
-    assert w._stack.currentWidget() is w._pages["accounting"]
-    assert w._pages["accounting"].findChildren(AccountingDashboard)
-
-
-def test_a_pack_that_will_not_switch_says_why(qapp, wf):
-    from ui.app_pages import ExtensionsPage
-    from ui.app_widgets import Switch
-
-    class Refusing(AppBridge):
-        def set_extension(self, ext_id, on):
-            return "the ledger folder is read-only"
-
-    page = ExtensionsPage(Refusing(FakeManager(wf), FakeTray()))
-    page.findChildren(Switch)[0].setChecked(True)
-    _settle(qapp)
-    assert "That did not work: the ledger folder is read-only" in _texts(page)
-    assert not wf.extensions.is_enabled("accounting")
-
-
-def test_a_pack_turned_on_anywhere_redraws_the_pages(qapp, wf):
-    """By voice, from the tray's window, from here: the registry says so on
-    the workforce's bus, and the bridge passes it on."""
-    mgr = FakeManager(wf)
-    wf.events.subscribe(mgr.sig_agent_event.emit)      # what the manager does
-    bridge = AppBridge(mgr, FakeTray())
-    topics = []
-    bridge.changed.connect(topics.append)
-    wf.extensions.enable("accounting")
-    assert "extensions" in topics
-
-
-# ── Accounting ───────────────────────────────────────────────────────────────
-
-def test_accounting_off_offers_to_turn_it_on(qapp, wf):
-    from extensions.accounting.ui.dashboard import AccountingDashboard
-    from ui.app_pages import AccountingPage
-
-    page = AccountingPage(_bridge(wf))
-    assert "Accounting is off" in _texts(page)
-    assert not _buttons(page, "Run month-end"), "no drawn buttons"
-    _buttons(page, "Turn on Accounting")[0].click()
-    _settle(qapp)
-    assert wf.extensions.is_enabled("accounting")
-    (dash,) = page.findChildren(AccountingDashboard)
-    (own_title,) = [lbl for lbl in dash.findChildren(QLabel) if lbl.objectName() == "accTitle"]
-    assert not own_title.isVisibleTo(page), "the page is already called Accounting"
-
-
-def test_the_dashboard_is_kept_while_on_and_stopped_when_off(qapp, wf):
-    from extensions.accounting.ui.dashboard import AccountingDashboard
-    from ui.app_pages import AccountingPage
-
-    wf.extensions.enable("accounting")
-    page = AccountingPage(_bridge(wf))
-    (dash,) = page.findChildren(AccountingDashboard)
-    page.refresh()
-    page.refresh()
-    assert page.findChildren(AccountingDashboard) == [dash], "kept: it holds the chosen client"
-    clocks = dash.findChildren(QTimer, options=DIRECT)
-    wf.extensions.disable("accounting")
-    page.refresh()
-    assert not page.findChildren(AccountingDashboard)
-    assert clocks and not any(c.isActive() for c in clocks), "its clock stops before it goes"
-    assert "Accounting is off" in _texts(page)
-
-
-def test_the_dashboard_clock_runs_only_while_the_page_is_seen(qapp, wf):
-    from extensions.accounting.ui.dashboard import AccountingDashboard
-    from ui.app_pages import AccountingPage
-
-    wf.extensions.enable("accounting")
-    page = AccountingPage(_bridge(wf))
-    (dash,) = page.findChildren(AccountingDashboard)
-    clocks = dash.findChildren(QTimer, options=DIRECT)
-    try:
-        page.show()
-        _settle(qapp)
-        assert clocks and all(c.isActive() for c in clocks)
-        page.hide()
-        _settle(qapp)
-        assert not any(c.isActive() for c in clocks), "nobody is looking"
-        page.show()
-        _settle(qapp)
-        assert all(c.isActive() for c in clocks)
-    finally:
-        page.hide()
-
-
-def test_a_dashboard_that_will_not_build_says_why(qapp, wf):
-    from ui.app_pages import AccountingPage
-
-    class Broken(AppBridge):
-        def extension_on(self, ext_id):
-            return True
-
-        def dashboard(self, ext_id, parent=None):
-            raise RuntimeError("the books are locked")
-
-    texts = _texts(AccountingPage(Broken(FakeManager(wf), FakeTray())))
-    assert "The dashboard could not load" in texts and "the books are locked" in texts
+         "task": "Build the shop", "sensitive": True, "confirm_word": ""}]
 
 
 def test_embedded_tabs_keep_their_ampersands(qapp):

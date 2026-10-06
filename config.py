@@ -180,6 +180,22 @@ STYLE: warm, concise, teacher-y. 1-2 sentences per step. No markdown bullets
 unless genuinely listing options."""
 
 
+def _instructions_from_env() -> tuple[str, str]:
+    """(Tora's system prompt, the user's own instructions).
+
+    CUSTOM_INSTRUCTIONS used to BE the system prompt: unset, it defaulted to
+    DEFAULT_SYSTEM_PROMPT, and the "Instructions for Tora" box showed and
+    saved the whole thing - so typing "keep answers short" and saving
+    replaced her entire prompt with that one line. Now it holds only what
+    the user adds, appended to her prompt. A value that still contains the
+    prompt's {{CONTEXT}} slot is a whole prompt saved by an older build (or
+    by hand): it is kept as her prompt, and there are no extra instructions."""
+    raw = os.getenv("CUSTOM_INSTRUCTIONS", "").replace("\\n", "\n")
+    if "{{CONTEXT}}" in raw:
+        return raw, ""
+    return DEFAULT_SYSTEM_PROMPT, raw.strip()
+
+
 # Technical rules Tora needs to actually draw on screen and point at
 # elements correctly. Always appended after the user-editable prompt above
 # — kept separate because breaking this syntax breaks pointing/drawing, and
@@ -261,16 +277,8 @@ minimised. Every acting one shows the user a confirmation first - if
 they decline, say so and stop. Use delegate_task instead when the job is
 long or has several steps.
 
-EXTENSIONS: industry packs (Accounting first) give the agents a trade. If
-the user says what they do ("I'm an accountant", "I do the books"), call
-manage_agents list_extensions; if a matching one is off, offer it in one
-sentence with what it adds and enable it only when they agree
-(manage_agents enable_extension). When it is
-on, jobs in that trade ("prepare month-end for ABC", "chase overdue
-invoices", "process the invoices") are delegate_task, and "create an
-accounts payable agent" is manage_agents create_agent. Never approve a
-payment release or a tax submission by voice: those need the typed word
-in the dialog."""
+Never approve a payment or anything sensitive by voice: those need the
+typed word in the dialog."""
 
 
 # In the realtime conversation Tora does not write tags — it calls tools.
@@ -366,11 +374,10 @@ class Config:
     ))
     # Fixed reply language (ISO 639-1). Empty = match the user per message.
     response_language: str = field(default="en")   # English-only
-    # User-defined scope/rules appended to every system prompt (e.g. "only
-    # help with Excel, refuse anything else").
-    custom_instructions: str = field(default_factory=lambda: os.getenv(
-        "CUSTOM_INSTRUCTIONS", DEFAULT_SYSTEM_PROMPT
-    ).replace("\\n", "\n"))
+    # Tora's prompt, and the user's own standing instructions added to it on
+    # every answer ("only help with Excel"). See _instructions_from_env.
+    system_prompt: str = field(default_factory=lambda: _instructions_from_env()[0])
+    custom_instructions: str = field(default_factory=lambda: _instructions_from_env()[1])
 
     # ── Search ───────────────────────────────────────────────────────────
     tavily_api_key: Optional[str] = field(default_factory=lambda: os.getenv("TAVILY_API_KEY") or None)
@@ -592,6 +599,13 @@ class Config:
         key = (key or "blue").strip().lower()
         os.environ["TORA_CURSOR_COLOUR"] = key
         self._write_env("TORA_CURSOR_COLOUR", key)
+
+    def set_hotkey(self, combo: str) -> None:
+        """The push-to-talk shortcut ("ctrl+win", "ctrl+alt+space"), kept."""
+        combo = "+".join(p.strip().lower() for p in combo.split("+") if p.strip())
+        self.hotkey = combo
+        os.environ["TORA_HOTKEY"] = combo
+        self._write_env("TORA_HOTKEY", combo)
 
     def listen_sound(self) -> str:
         """The earcon when Tora starts listening (ui/sounds.SOUNDS), or "off"."""
