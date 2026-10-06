@@ -35,6 +35,7 @@ prompt - on the owner's own key (TORA_ACCESS=own_key), never the plan.
 import argparse
 import asyncio
 import json
+import logging
 import os
 import re
 import sys
@@ -154,6 +155,7 @@ CANNED = {
                                           "Install the packages"]},
     "desktop_action": lambda a: {"ok": True, "result": "Playing Blinding Lights by The Weeknd."
                                  if a.get("action") in ("play", "play_playlist") else "Skipped to the next track."},
+    "read_skill": lambda a: {"error": "no such skill", "skills": []},
     "manage_agents": lambda a: {"tasks": [{"title": "Create React app MyShop", "state": "running",
                                            "step": "Install the packages (3 of 3)"}]},
 }
@@ -241,11 +243,35 @@ def trace_the_wire() -> None:
     gemini_live.LiveSession.events = traced
 
 
+# What config._REALTIME_RULES says about speaking before a slow tool, and the
+# variants SP-17 measured against it (--filler). Only the bench's prompt is
+# changed. "b" is what shipped; "speak" is the rule before it.
+FILLER_RULE = ("Call a slow tool straight away. If you speak before it, two words at\n"
+               'most - "one sec" - never a sentence.')
+FILLERS = {
+    "speak": ('Say something IMMEDIATELY. If a tool will take a moment, speak first - "let\n'
+              'me look", "one second" - then call it. Silence reads as broken.'),
+    "a": ("CALL A SLOW TOOL FIRST. When a question needs look_at_screen or another\n"
+          "tool, call it before you say anything - Tora shows them she is on it -\n"
+          "then answer from what it returns."),
+}
+LOOK_SECONDS = 0.0        # --look-seconds: how long the recorded look takes
+
+
 async def ask(case: Case, system_prompt: str, *, timeout: float = 30.0) -> dict:
     """One question in a fresh session, as the first question of a conversation."""
     from ai.gemini_realtime import RealtimeConversation
 
     TRACE.clear()
+    # A cut hides the leak from the transcript, so it is counted from the log.
+    cuts: list[str] = []
+
+    class Cuts(logging.Handler):
+        def emit(self, record):
+            if record.getMessage().startswith("the voice began to speak its own planning"):
+                cuts.append(record.getMessage())
+    cut_log = Cuts()
+    logging.getLogger("tora.realtime").addHandler(cut_log)
     events: list[tuple[float, str, object]] = []          # (t, kind, what)
     calls: list[dict] = []
     usage: list[dict] = []
@@ -255,6 +281,7 @@ async def ask(case: Case, system_prompt: str, *, timeout: float = 30.0) -> dict:
             calls.append({"name": name, "args": args})
             events.append((time.monotonic(), "tool", name))
             if name == "look_at_screen":
+                await asyncio.sleep(LOOK_SECONDS)
                 return dict(case.look) or {"say": "I can't make that out.", "drawn": [], "highlights": []}
             return CANNED[name](args)
         return run
@@ -283,6 +310,7 @@ async def ask(case: Case, system_prompt: str, *, timeout: float = 30.0) -> dict:
             if ended and time.monotonic() - max(t for t, _, _ in events) > 0.8:
                 break
     finally:
+        logging.getLogger("tora.realtime").removeHandler(cut_log)
         # Usage the server sent after the last turn ended, or for a turn that
         # never did, is still the answer's.
         usage += [conv._gen_usage, conv._turn.usage]
@@ -297,10 +325,16 @@ async def ask(case: Case, system_prompt: str, *, timeout: float = 30.0) -> dict:
     answer_s = round(after[0] - t0, 2) if after else None
     tools = [c["name"] for c in calls]
     checks = check(case, said, answer, tools, [c["args"] for c in calls])
+    # When the first tool ran - what decides when a look's drawing appears -
+    # and whether anything was said before it (SP-17).
+    first_tool = min((t for t, k, _ in events if k == "tool"), default=None)
+    tool_s = round(first_tool - t0, 2) if first_tool is not None else None
+    filler = bool(first_tool is not None and said_parts and said_parts[0][0] < first_tool)
     return {"name": case.name, "question": case.question, "ok": all(checks.values()),
             "failed": [k for k, v in checks.items() if not v], "tools": tools,
             "args": [c["args"] for c in calls], "said": said, "answer": answer,
-            "first_word_s": first_word, "answer_s": answer_s, "usage": [u for u in usage if u],
+            "first_word_s": first_word, "tool_s": tool_s, "filler": filler,
+            "answer_s": answer_s, "usage": [u for u in usage if u], "planning_cut": len(cuts),
             "trace": [(round(t - t0, 2), k, w) for t, k, w in TRACE]}
 
 
@@ -329,6 +363,10 @@ async def main():
     ap.add_argument("--only", default="", help="comma-separated case names")
     ap.add_argument("--max-dollars", type=float, default=0.25)
     ap.add_argument("--against", default="", help="an earlier report.json to compare with")
+    ap.add_argument("--look-seconds", type=float, default=0.0,
+                    help="the recorded look takes this long, as a real one does (SP-06: 2.2)")
+    ap.add_argument("--filler", default="", choices=["", *FILLERS],
+                    help="try a variant of the speak-before-a-tool rule (SP-17)")
     args = ap.parse_args()
 
     cases = CASES
@@ -348,6 +386,11 @@ async def main():
     # so a run on any PC is compared with the same words.
     config.cfg.profile = lambda: ("", [])
     system_prompt = _build_system_prompt(language_code="en", realtime=True)
+    global LOOK_SECONDS
+    LOOK_SECONDS = args.look_seconds
+    if args.filler:
+        assert FILLER_RULE in system_prompt, "the rule's words changed - update FILLER_RULE"
+        system_prompt = system_prompt.replace(FILLER_RULE, FILLERS[args.filler])
     trace_the_wire()
     OUT.mkdir(exist_ok=True)
     rows, spent = [], 0.0
@@ -363,13 +406,16 @@ async def main():
             print(f"{c.name:15} ERROR {r['error']}")
             continue
         print(f"{c.name:15} {'PASS' if r['ok'] else 'FAIL'} {','.join(r['tools']) or 'no tool':28} "
-              f"first {r['first_word_s']}s answer {r['answer_s']}s ${r['cost']:.4f} | {r['said'][:80]!r}"
+              f"first {r['first_word_s']}s tool {r['tool_s']}s answer {r['answer_s']}s "
+              f"{'filler ' if r['filler'] else ''}{'CUT ' if r['planning_cut'] else ''}"
+              f"${r['cost']:.4f} | {r['said'][:80]!r}"
               + (f"  failed: {r['failed']}" if r["failed"] else ""))
     done = [r for r in rows if not r.get("error")]
     if not done:
         return
     times = sorted(r["answer_s"] for r in done if r["answer_s"] is not None) or [0]
     summary = {"passed": f"{sum(r['ok'] for r in done)}/{len(rows)}", "p50_answer_s": times[len(times) // 2],
+               "planning_cut": sum(r["planning_cut"] for r in done),
                "avg_cost": round(spent / len(done), 5), "total_cost": round(spent, 4)}
     print(f"\npassed {summary['passed']}, answer p50 {summary['p50_answer_s']}s, "
           f"avg ${summary['avg_cost']:.4f}, total ${spent:.3f}")

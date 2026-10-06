@@ -279,3 +279,19 @@ def test_the_bench_catches_spoken_planning(bench):
               "bullet lists? No.\n\n7.  **Finalize Output.**To get started, click File.")
     assert not bench.check(how, leaked, leaked, ["show_me_how"])["no_planning"]
     assert bench.check(how, "Sure, let me walk you through it.", "", ["show_me_how"])["no_planning"]
+
+
+def test_the_bench_counts_a_cut_for_spoken_planning(bench, scripted, monkeypatch):
+    """A cut hides the leak from the transcript, so the bench counts it from the log."""
+    chess = next(c for c in bench.CASES if c.name == "chess")
+
+    async def leaky(self, results):
+        for ev in [LiveEvent("output_transcript", text="Knight to f7.    *   Check: one line? Yes."),
+                   LiveEvent("turn_complete", produced_output=True),
+                   LiveEvent("output_transcript", text="Knight to f7."),
+                   LiveEvent("turn_complete", produced_output=True)]:
+            self.q.put_nowait(ev)
+    monkeypatch.setattr(Scripted, "send_tool_response", leaky)
+    row = asyncio.run(bench.ask(chess, "PROMPT", timeout=5.0))
+    assert row["planning_cut"] == 1
+    assert "*" not in row["said"]

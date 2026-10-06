@@ -469,7 +469,30 @@ next?" on Spotify goes to the deep model.
 $0.0015 an answer, 15%).
 *Cost:* about $0.25 (two runs).
 
-### SP-17 · "Let me look", or straight to the look — S — **found by SP-02**
+### SP-17 · "Let me look", or straight to the look — S — **done (6 Oct)**
+
+**Shipped:** the rule "Say something IMMEDIATELY … speak first" is now
+"Call a slow tool straight away. If you speak before it, two words at most
+- "one sec" - never a sentence." Tora already shows she is looking: the
+look sets the island's "screen" activity the moment it starts.
+
+**SP-02, measured with a real look's time** (`--look-seconds 2.2`, SP-06's
+p50). The 6 look questions plus "play Blinding Lights", two runs per
+version, $0.36:
+
+| rule | filler first | look called (p50) | look answer (p50 / mean) | song playing | cost |
+|---|---|---|---|---|---|
+| speak first (before) | 8 of 14 | 1.22 s | 4.44 s / 4.63 s | 4.5 s, 3.7 s | $0.0087 |
+| (a) the tool first, then talk | 0 of 14 | 0.86 s | 4.10 s / 4.20 s | 1.7 s, 2.0 s | $0.0083 |
+| **(b) two words at most (shipped)** | **0 of 14** | **0.78 s** | **4.00 s / 3.97 s** | **2.6 s, 1.6 s** | **$0.0082** |
+
+* **The drawing comes sooner:** the look is called about 0.45 s sooner.
+* **The answer comes sooner:** 0.66 s sooner on average for a look, about
+  2 s sooner for an app.
+* **It costs 6% less:** no filler audio.
+* **The price:** the first word comes when the answer does (p50 3.9 s,
+  not 1.6 s). The island shows the look meanwhile.
+* All 42 answers passed. `--filler speak|a` re-runs the other two rules.
 
 **Why:**
 * The rules say to speak first, then call a slow tool. On SP-02's run,
@@ -490,7 +513,24 @@ $0.0015 an answer, 15%).
 *Prove:* SP-02 answer p50 on the look questions down; 12/12 kept.
 *Cost:* about $0.25.
 
-### SP-18 · Never speak its own planning — S — **found by SP-16**
+### SP-18 · Never speak its own planning — S — **done (6 Oct)**
+
+**Done:**
+* **The cut.** `RealtimeConversation`'s pump treats markdown in the
+  output transcription as the model's planning: bold, a bullet, a heading,
+  a code fence. A lone "#" or "*" is not enough, so "C#" and "item #3" are
+  still speech.
+* **What happens then.** It clears the player, plays and shows nothing
+  more of that generation, and logs "the voice began to speak its own
+  planning - cut".
+* **The next generation speaks normally,** for example the answer after a
+  tool.
+* **The bench counts cuts** (`planning_cut`), because a cut hides the
+  leak from the transcript.
+* **Tested** with scripted turns: the 6 Oct checklist is cut before it is
+  heard, and plain speech, prices, shortcuts and "C#" are never cut.
+* **Not seen live yet with the cut on.** The leak was 1 in about 35
+  answers before; the 42 answers of SP-17 had none.
 
 **Why:**
 * On 6 Oct the live voice once said its own checklist out loud:
@@ -693,8 +733,8 @@ answered the mate-in-one correctly.
 | SP-07 | Typed path, same rule — done | B | S | free | – |
 | SP-08 | Sharper routing words — done | B | S | free | SP-01 screen |
 | SP-16 | A lighter live prompt — done | B | S | ~$0.30 | SP-02 |
-| SP-17 | "Let me look" or not | B | S | ~$0.25 | SP-02 |
-| SP-18 | Never speak its own planning | B | S | ~$0.40 | SP-02 |
+| SP-17 | "Let me look" or not — done | B | S | ~$0.36 | SP-02 |
+| SP-18 | Never speak its own planning — done | B | S | free (tests) | – |
 | SP-09 | Snap to the real control | C | M | free | – |
 | SP-10 | The monitor they point at | C | S | free | – |
 | SP-11 | Arrowhead visible, card glides | C | S | free | live demo |
@@ -709,7 +749,8 @@ SP-12.
 **The biggest levers:**
 * **Cost:** the voice is three quarters of a looked answer (SP-03).
   SP-16 took 13% off it.
-* **The answer's speed:** SP-17.
+* **The answer's speed:** SP-17 took 0.66 s off a look's answer and
+  about 2 s off an app's.
 * **Done:**
   * SP-04 took the deep look from $0.054 to $0.020 and from 5.3 s to
     3.9 s;

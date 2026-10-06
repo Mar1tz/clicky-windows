@@ -40,6 +40,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import time
 from dataclasses import dataclass, field
 from typing import Awaitable, Callable, Optional
@@ -63,6 +64,12 @@ MAX_TOOL_ROUNDS = 6
 # Past this many it is not asking any more, it is looping - the session is
 # closed, and the conversation resumes in a fresh one (LG-03).
 HARD_TOOL_ROUNDS = 10
+
+# SP-18: speech is plain words. Markdown in what the voice is saying - a
+# bullet, bold, a heading - is the model's own planning on its way out
+# loud: on 6 Oct, "Does it use markdown? No. ... 7.  **Finalize Output.**"
+# Not a lone "#" or "*": "C#" and "item #3" are speech.
+_PLANNING_RE = re.compile(r"\*\*|(^|\s)\*\s|(^|\n)\s*#{1,6}\s|```")
 
 # Context compression. 16k is roughly forty spoken turns of history, far more
 # than any conversation refers back to, and it caps what every later turn
@@ -456,6 +463,9 @@ class RealtimeConversation:
         # The latest usageMetadata of the generation under way, folded into
         # the turn when that generation completes (SP-03).
         self._gen_usage: dict = {}
+        # A generation that began speaking its own planning (SP-18): the
+        # rest of it is neither played nor shown.
+        self._planning_cut = False
         # True once a turn has ended, until the user speaks again. The user
         # speaking across that boundary is what "a new request" means, and a
         # new request is the only thing that refills the tool budget. Using
@@ -801,12 +811,25 @@ class RealtimeConversation:
                     self._on_heard(ev.text)
 
                 elif ev.kind == "output_transcript":
+                    if self._planning_cut:
+                        continue                    # the rest of a generation that was cut
+                    if _PLANNING_RE.search(ev.text):
+                        # SP-18: its own planning, about to be spoken. The
+                        # words come with the audio, a little ahead of it,
+                        # so what is queued is dropped before it is heard
+                        # and nothing more of this generation is played.
+                        self._planning_cut = True
+                        self._player.clear()
+                        _log.warning("the voice began to speak its own planning - cut: %r", ev.text[:120])
+                        continue
                     if not self._turn.said:
                         self._on_speaking()
                     self._turn.said += ev.text
                     self._on_said(ev.text)
 
                 elif ev.kind == "audio":
+                    if self._planning_cut:
+                        continue
                     if not self._speaking:
                         if self._player.queued_seconds <= 0.05:
                             self._voice_bytes = 0       # a new answer, not more of the last
@@ -850,6 +873,7 @@ class RealtimeConversation:
                     self._gen_usage = ev.raw
 
                 elif ev.kind == "turn_complete":
+                    self._planning_cut = False
                     # A turn that produced only tool calls is not the answer;
                     # the answer is the turn that follows the tool results.
                     #
