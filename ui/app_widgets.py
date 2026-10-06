@@ -594,16 +594,32 @@ ICONS = {
 _svg_cache: dict[str, str] = {}
 
 
-def icon(name: str, colour: str, size: int = 18, dpr: float = 2.0) -> QPixmap:
-    """A Lucide icon (`name` is its file, or a key of ICONS) in `colour`."""
+LINE_PX = 1.5        # every icon's lines, on screen, whatever its size
+
+
+def icon(name: str, colour: str, size: int = 18, dpr: float = 0.0) -> QPixmap:
+    """A Lucide icon (`name` is its file, or a key of ICONS) in `colour`.
+
+    Drawn at the screen's own scale (`dpr`; the primary screen's when not
+    given), never drawn big and shrunk: shrinking a 1.5px line without
+    smoothing drops some rows and doubles others - which is why the bottom
+    lines of the house and the chart came out thicker than the rest. The
+    stroke is set so the lines are LINE_PX on screen at any size."""
     from PyQt6.QtCore import QByteArray
+    from PyQt6.QtGui import QGuiApplication
     from PyQt6.QtSvg import QSvgRenderer
+    if not dpr:
+        screen = QGuiApplication.primaryScreen()
+        dpr = screen.devicePixelRatio() if screen is not None else 1.0
     name = ICONS.get(name, name)
     if name not in _svg_cache:
         _svg_cache[name] = (tokens.assets_dir() / "icons" / f"{name}.svg").read_text(encoding="utf-8")
-    svg = _svg_cache[name].replace("currentColor", QColor(colour).name())
-    px = QPixmap(int(size * dpr), int(size * dpr))
-    px.setDevicePixelRatio(dpr)
+    stroke = f'stroke-width="{LINE_PX * 24 / size:.3g}"'
+    svg = (_svg_cache[name].replace("currentColor", QColor(colour).name())
+           .replace('stroke-width="2"', stroke))
+    side = max(1, round(size * dpr))
+    px = QPixmap(side, side)
+    px.setDevicePixelRatio(side / size)
     px.fill(QColor(0, 0, 0, 0))
     p = QPainter(px)
     p.setRenderHint(QPainter.RenderHint.Antialiasing)
@@ -612,7 +628,7 @@ def icon(name: str, colour: str, size: int = 18, dpr: float = 2.0) -> QPixmap:
     return px
 
 
-def nav_icon(kind: str, colour: str, size: int = 18, dpr: float = 2.0) -> QPixmap:
+def nav_icon(kind: str, colour: str, size: int = 20, dpr: float = 0.0) -> QPixmap:
     """A page's icon. `kind` keys are the page ids in app_pages."""
     return icon(kind, colour, size, dpr)
 
@@ -620,7 +636,7 @@ def nav_icon(kind: str, colour: str, size: int = 18, dpr: float = 2.0) -> QPixma
 # ── wordmark ──────────────────────────────────────────────────────────────────
 
 def wordmark_pixmap(height: int = 24, ink: str = "", swoosh: str = "",
-                    dpr: float = 2.0) -> QPixmap:
+                    dpr: float = 0.0) -> QPixmap:
     """The site's lockup - lowercase `heytora` with the swoosh through it -
     at `height` px. The letters take the page's ink, so it reads on either
     ground; the swoosh keeps the logo's blue."""
@@ -630,6 +646,10 @@ def wordmark_pixmap(height: int = 24, ink: str = "", swoosh: str = "",
     svg = (tokens.assets_dir() / "brand" / "wordmark.svg").read_text(encoding="utf-8")
     svg = svg.replace("{INK}", ink or T.TEXT).replace("{SWOOSH}", swoosh or tokens.LOGO_BLUE)
     renderer = QSvgRenderer(QByteArray(svg.encode("utf-8")))
+    if not dpr:                     # the screen's own scale, as icon() - never shrunk
+        from PyQt6.QtGui import QGuiApplication
+        screen = QGuiApplication.primaryScreen()
+        dpr = screen.devicePixelRatio() if screen is not None else 1.0
     vb = renderer.viewBoxF()
     width = round(height * vb.width() / vb.height())
     px = QPixmap(int(width * dpr), int(height * dpr))
