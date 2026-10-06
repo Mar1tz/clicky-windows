@@ -276,8 +276,9 @@ a lead job, its agents and who waits on whom - is already recorded).
 
 Packs were replaced by skills on 6 Oct 2026 (docs/agents/SKILLS.md): the
 Packs page, a pack's page and their sidebar rows are gone, and old links to
-them open the Tora page's Skills tab. The pack tiles' colours
-(`tokens.PACK`) stay for the onboarding's "Made for your work" cards.
+them open the Tora page's Skills tab. The onboarding's "Made for your
+work" cards are skill cards now (`SkillCard`, colours `tokens.WORK_TILES`):
+the starter skills for the work you pick, which finishing turns on.
 
 ## 3A. Where the values live
 
@@ -323,7 +324,7 @@ florist's site - wears that app's colours, and they live in one map,
 A pill's radius is `pill(h)` = one under half the height: Qt drops a
 radius above half and the button goes square.
 
-The families (`CAPABILITY`, `STEP`, `PACK`, `SCENE_LOOKS`, `VOICE_COLOURS`)
+The families (`CAPABILITY`, `STEP`, `WORK_TILES`, `SCENE_LOOKS`, `VOICE_COLOURS`)
 and the ribbon (`RIBBON`, `RIBBON_POOLS`, `RIBBON_FILLED`) are in tokens.py
 too, copied from heytora-web.
 

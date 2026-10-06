@@ -89,11 +89,18 @@ def test_the_name_and_what_the_pc_is_for_are_kept(qapp, service):
         chip.setChecked(chip.property("use") in ("Accounting", "Design & video"))
     assert any(c.text() == "Design && video" for c in w.use_chips), "& shown, not a shortcut"
     assert w.next_btn.isEnabled()
-    lit = [c.kind for c in w.pack_cards if not c.tile._dim]
-    assert set(lit) == {"ledger", "video"}, "the picture answers back"
+    shown = [c.skill_id for c in w.skill_cards]
+    assert shown[:2] == ["send-an-invoice", "file-receipts"], "the picture answers back"
+    assert "social-post" in shown or len(shown) == 6
     w.next_btn.click()
     assert cfg.profile() == ("Amy", ["Accounting", "Design & video"])
     assert w.page() == "privacy"
+    # Finishing the step turns on the skills for what they do, and the
+    # other starter skills off (Tora > Skills turns them back on).
+    from agents.skills import SkillLibrary
+    on = {s.id for s in SkillLibrary().enabled()}
+    assert {"send-an-invoice", "file-receipts", "social-post", "tidy-downloads"} <= on
+    assert "meeting-notes" not in on and "fill-a-form" not in on
 
 
 def test_signing_in_to_heytora_from_the_first_launch(qapp, service):

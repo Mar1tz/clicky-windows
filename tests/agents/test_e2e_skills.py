@@ -450,3 +450,26 @@ def test_the_build_ships_the_starter_skills_and_no_packs():
     spec = (ROOT / "heytora.spec").read_text(encoding="utf-8")
     assert 'datas.append(("skills", "skills"))' in spec
     assert 'collect_submodules("extensions")' not in spec
+
+
+def test_the_first_launch_only_names_skills_that_exist():
+    from agents.skills import SkillLibrary
+    from ui.setup_wizard import SKILL_CARDS, SKILLS_FOR, SKILLS_FOR_EVERYONE, WORK, skills_for
+    starters = {s.id for s in SkillLibrary(user=Path("no-such-folder")).all()}
+    named = {sid for ids in SKILLS_FOR.values() for sid in ids} | set(SKILLS_FOR_EVERYONE) | set(SKILL_CARDS)
+    assert named <= starters, named - starters
+    assert set(SKILL_CARDS) == starters, "every starter skill has a card"
+    assert {w for w, _k in WORK} - {"Something else"} == set(SKILLS_FOR)
+    assert skills_for(["Something else"]) == [] and skills_for([]) == [], "then every one stays on"
+
+
+def test_finishing_the_first_launch_never_turns_off_your_own_skills(tmp_path, monkeypatch):
+    monkeypatch.setenv("TORA_SKILLS_DIR", str(tmp_path / "mine"))
+    from agents.skills import SkillLibrary
+    from ui.setup_wizard import SetupWizard
+    _write(tmp_path / "mine", "water-the-plants", PLANTS)
+    SetupWizard._save_skills(["Developer"])
+    on = {s.id for s in SkillLibrary().enabled()}
+    assert "water-the-plants" in on and "tidy-downloads" in on and "send-an-invoice" not in on
+    SetupWizard._save_skills(["Something else"])
+    assert len(SkillLibrary().enabled()) == len(SkillLibrary().all())

@@ -145,8 +145,9 @@ STEP = (
     ("#D6F7EE", ("#2FD0C0", "#B6EE7A", "#7CC8FF", "#D6F7EE")),
 )
 
-# packs.tsx: two-stop pack tiles, white glyph.
-PACK = {
+# A two-stop tile per kind of work, white glyph (the website's packs.tsx):
+# the onboarding's skill cards.
+WORK_TILES = {
     "ledger":    ("#00B6FD", "#3D7BFF"),
     "briefcase": ("#FFA24C", "#FF6B6B"),
     "cap":       ("#7CC4FF", "#00A3E8"),
