@@ -376,3 +376,61 @@ def test_both_ends_of_a_move_are_snapped(monkeypatch):
     assert snapped == 2
     assert move.box == look_region.rect_to_box((100.0, 110.0, 200.0, 126.0), monitor)
     assert move.to_box == look_region.rect_to_box((600.0, 500.0, 700.0, 540.0), monitor)
+
+
+# -- SP-10: the monitor they point at -------------------------------------------------------------------------
+
+def _two_monitors(monkeypatch, question):
+    """The window in front on the left monitor; the mouse on the right one."""
+    mgr = cm.CompanionManager.__new__(cm.CompanionManager)
+    mgr.sig_draw = SimpleNamespace(emit=lambda sh: None)
+    mgr.sig_clear_drawings = SimpleNamespace(emit=lambda: None)
+    mgr._privacy_guard = False
+    mgr._activity = lambda what: None
+    mgr._screens_ctx = []
+    left = SimpleNamespace(base64_jpeg="left", index=1, physical_left=0, physical_top=0, physical_width=1920,
+                           physical_height=1080, logical_left=0, logical_top=0, dpi_scale=1.0, width=1024, height=576)
+    right = SimpleNamespace(base64_jpeg="right", index=2, physical_left=1920, physical_top=0, physical_width=1920,
+                            physical_height=1080, logical_left=1920, logical_top=0, dpi_scale=1.0, width=1024,
+                            height=576)
+
+    async def capture(**_kw):
+        return [left, right]
+    mgr._capture_shots = capture
+    mgr._active_shot = lambda screens=None: left
+    import tutor
+    monkeypatch.setattr(tutor, "foreground_window_rect", lambda: (100, 100, 1500, 900))
+    monkeypatch.setattr(look_region, "cursor_position", lambda: (2500.0, 400.0))
+    monkeypatch.setattr(look_region, "window_at", lambda x, y: (2000.0, 50.0, 3400.0, 950.0))
+    monkeypatch.setattr(look_region, "control_chain_at", lambda x, y, limit=None: [])
+    grabbed = []
+    monkeypatch.setattr(cm, "capture_region", lambda *a: grabbed.append(a[:4]) or ("crop", 1, 1))
+    monkeypatch.setattr(cm, "active_window_title", lambda: "Photos")
+
+    async def fake_look(q, image, **kw):
+        return gemini_vision.Look(answer="That is a heron.", sure=True, path="fast", model="flash",
+                                  actions=[gemini_vision.Action("heron", (400, 400, 600, 600), "circle")])
+    monkeypatch.setattr(gemini_vision, "look", fake_look)
+    asyncio.run(mgr._tool_look_at_screen({"question": question}))
+    return mgr, grabbed, left, right
+
+
+def test_what_is_this_looks_at_the_monitor_under_the_mouse(monkeypatch):
+    mgr, grabbed, left, right = _two_monitors(monkeypatch, "what's this?")
+    assert grabbed == [(2000, 50, 1400, 900)], "the window under the mouse, on the right monitor"
+    assert mgr._shot() is right, "its drawings land on the right monitor too"
+    x, _ = mgr._denorm(500, 500)
+    assert x > 1920
+
+
+def test_which_one_should_i_pick_stays_with_the_window_in_front(monkeypatch):
+    mgr, grabbed, left, right = _two_monitors(monkeypatch, "which one should I pick?")
+    assert grabbed == [(100, 100, 1400, 800)], "the window in front"
+    assert mgr._shot() is left
+
+
+def test_pointing_words_are_narrower_than_the_hint_words():
+    assert look_region.points_at_mouse("what's this?") and look_region.points_at_mouse("does that go here")
+    assert not look_region.points_at_mouse("which one should I pick?")
+    assert look_region.frame_under((2500, 400), [(0, 0, 1920, 1080), (1920, 0, 1920, 1080)]) == 1
+    assert look_region.frame_under(None, [(0, 0, 1920, 1080)]) is None

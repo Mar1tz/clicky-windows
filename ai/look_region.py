@@ -188,6 +188,57 @@ def same_screen(a: Optional[int], b: Optional[int], tolerance: int = 6) -> bool:
     return a is not None and b is not None and bin(a ^ b).count("1") <= tolerance
 
 
+# SP-10: words that point at a place. Narrower than _DEICTIC on purpose -
+# "which one should I pick?" is about the window they are working in, not
+# about where the mouse happens to rest; "what's this?" is about the mouse.
+_POINTING = re.compile(r"\b(this|that|these|those|here)\b", re.IGNORECASE)
+
+
+def points_at_mouse(question: str) -> bool:
+    """True when the question points at a place - "what's this?", "is
+    that right?", "what goes here?" - so the mouse says where."""
+    return bool(_POINTING.search(question or ""))
+
+
+def frame_under(cursor: Optional[tuple[float, float]], frames: list) -> Optional[int]:
+    """The index of the frame (left, top, width, height) holding the mouse."""
+    if not cursor:
+        return None
+    cx, cy = cursor
+    for i, (fl, ft, fw, fh) in enumerate(frames):
+        if fl <= cx < fl + fw and ft <= cy < ft + fh:
+            return i
+    return None
+
+
+def window_at(x: float, y: float) -> Optional[Rect]:
+    """The top-level window under a physical point, as its rectangle; None
+    for HeyTora's own windows - the overlay lies over every monitor - and
+    when there is none."""
+    try:
+        import ctypes
+        import os
+        from ctypes import wintypes
+        u = ctypes.windll.user32
+        u.WindowFromPoint.restype = ctypes.c_void_p
+        u.WindowFromPoint.argtypes = [wintypes.POINT]
+        u.GetAncestor.restype = ctypes.c_void_p
+        u.GetAncestor.argtypes = [ctypes.c_void_p, ctypes.c_uint]
+        hwnd = u.GetAncestor(u.WindowFromPoint(wintypes.POINT(int(x), int(y))), 2)    # GA_ROOT
+        if not hwnd:
+            return None
+        pid = wintypes.DWORD()
+        u.GetWindowThreadProcessId(ctypes.c_void_p(hwnd), ctypes.byref(pid))
+        if pid.value == os.getpid():
+            return None
+        r = wintypes.RECT()
+        if not u.GetWindowRect(ctypes.c_void_p(hwnd), ctypes.byref(r)):
+            return None
+        return float(r.left), float(r.top), float(r.right), float(r.bottom)
+    except Exception:  # noqa: BLE001 - no window: the whole monitor is looked at
+        return None
+
+
 def cursor_position() -> Optional[tuple[float, float]]:
     """Where the mouse is, in physical px (the process is per-monitor DPI aware)."""
     try:

@@ -2858,21 +2858,36 @@ class CompanionManager(QObject):
         self.sig_clear_drawings.emit()
 
         shot = self._active_shot(screens) or screens[0]
+        cursor = look_region.cursor_position()
+        # SP-10: "what's this?" with the mouse on another monitor means that
+        # monitor - and the window under the mouse, not the one in front.
+        by_mouse = False
+        if look_region.points_at_mouse(question):
+            try:
+                i = look_region.frame_under(cursor, [(s.physical_left, s.physical_top, s.physical_width,
+                                                      s.physical_height) for s in screens])
+            except AttributeError:      # a shot without monitor numbers (tests)
+                i = None
+            if i is not None and screens[i] is not shot:
+                shot, by_mouse = screens[i], True
         # UD-02: the window in front, sharper, and the mouse as a hint. A
         # shot without monitor numbers (tests) looks at what it was given.
         image, monitor, region, window = shot.base64_jpeg, None, None, None
         try:
             monitor = (shot.physical_left, shot.physical_top, shot.physical_width, shot.physical_height)
             from tutor import foreground_window_rect
-            window = foreground_window_rect()
+            window = look_region.window_at(*cursor) if by_mouse else foreground_window_rect()
             region = look_region.window_region(window, monitor)
             if region:
                 grabbed = await asyncio.to_thread(capture_region, *region, 1280 if careful else 1024)
                 image, region = (grabbed[0], region) if grabbed else (image, None)
         except Exception:  # noqa: BLE001 - the whole monitor is always a fine fallback
             region = None
-        hint = look_region.pointer_hint(question, look_region.cursor_position(), region or monitor) \
-            if monitor else ""
+        hint = look_region.pointer_hint(question, cursor, region or monitor) if monitor else ""
+        self._mouse_shot = (shot, time.monotonic()) if by_mouse else None
+        if by_mouse:
+            _log.info("look: the monitor under the mouse (%s), not the window in front's",
+                      getattr(shot, "index", "?"))
 
         # UD-05: asked again about a screen that has not changed - the last
         # look's answer and drawing again, and no call.
@@ -4767,10 +4782,19 @@ class CompanionManager(QObject):
     # it saw. The overlay draws in LOGICAL screen pixels. These helpers convert
     # between the two using the ScreenShot metadata captured this turn.
 
+    # SP-10: a look on the mouse's monitor, not the one in front. Its
+    # drawings - and the voice's own draws from its highlights - are on that
+    # monitor's 0-1000, so they map back through it for a while.
+    _mouse_shot: Optional[tuple] = None          # (the shot, when)
+    MOUSE_SHOT_S = 90.0
+
     def _shot(self, screen_idx: int = 1):
         # Only the active monitor is sent to the model now, so the normalized
         # coordinates it returns are relative to that image regardless of the
         # "screenN" it names — always map them back through the active shot.
+        pinned = self._mouse_shot
+        if pinned is not None and time.monotonic() - pinned[1] < self.MOUSE_SHOT_S:
+            return pinned[0]
         active = self._active_shot()
         if active is not None:
             return active

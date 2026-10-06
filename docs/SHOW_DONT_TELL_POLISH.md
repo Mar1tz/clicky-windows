@@ -603,7 +603,28 @@ at that fragment, and the caption never shows it. SP-02 has no
 * a live check, no model: a box round a browser button's label snaps to
   the button.
 
-### SP-10 · Look at the monitor they point at — S — free
+### SP-10 · Look at the monitor they point at — S — free — **done (6 Oct)**
+
+**Done:**
+* **Which questions switch.** A question with a pointing word ("this",
+  "that", "these", "those", "here") looks at the monitor under the mouse
+  when it is not the one in front.
+* **What it looks at:** the window under the mouse there
+  (`look_region.window_at`, skipping HeyTora's own overlay), cropped as
+  usual.
+* **"which one should I pick?" does not switch.** It is about the window
+  they are working in, not where the mouse rests, so the hint keeps its
+  wider word list and the monitor switch has its own narrower one.
+* **Found while building it: the drawings would have landed on the wrong
+  monitor.** `_shot()` mapped every 0-1000 drawing onto the monitor in
+  front. After a look on the mouse's monitor, the drawings, and the
+  voice's own draws from its highlights, map onto that monitor for 90 s.
+* **The log** says "look: the monitor under the mouse (N)".
+* **Tested** with two fake monitors:
+  * "what's this?" crops the right monitor's window, and its drawing
+    lands past x 1920;
+  * "which one should I pick?" stays on the window in front.
+* `window_at` was also checked live, read-only.
 
 **Why:**
 * With several monitors, the look takes the monitor of the window in
@@ -760,7 +781,7 @@ answered the mate-in-one correctly.
 | SP-17 | "Let me look" or not — done | B | S | ~$0.36 | SP-02 |
 | SP-18 | Never speak its own planning — done | B | S | free (tests) | – |
 | SP-09 | Snap to the real control — done | C | M | free | – |
-| SP-10 | The monitor they point at | C | S | free | – |
+| SP-10 | The monitor they point at — done | C | S | free | – |
 | SP-11 | Arrowhead visible, card glides | C | S | free | live demo |
 | SP-12 | Card follows the real drawings | C | S | free | – |
 | SP-13 | Look before asked | D | S | measured | SP-02/03 or SP-14 |
