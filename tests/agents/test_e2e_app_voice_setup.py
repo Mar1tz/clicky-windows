@@ -119,10 +119,10 @@ def test_the_voice_in_use_is_selected_and_can_be_changed(qapp):
 
 
 def test_the_route_can_be_changed(qapp):
-    from ui.settings_tabs import ModelsTab
+    from ui.settings_tabs import GeneralTab
 
     bridge = FakeBridge(route="cascade")
-    page = ModelsTab(bridge)
+    page = GeneralTab(bridge)                    # how she answers: with talking to her
     route = next(s for s in page.findChildren(Select) if s.count() == 2)
     assert route.currentText().startswith("Classic")
     route.setCurrentIndex(0)
@@ -130,14 +130,14 @@ def test_the_route_can_be_changed(qapp):
 
 
 def test_the_real_models_are_shown_and_the_list_refreshes(qapp):
-    from ui.settings_tabs import ModelsTab
+    from ui.settings_tabs import AdvancedTab
 
     bridge = FakeBridge()
-    page = ModelsTab(bridge)
+    page = AdvancedTab(bridge)                   # read-only, so with the diagnostics
     texts = _texts(page)
     assert {"gemini-live-x", "gemini-flash-x", "tts-x"} <= set(texts)
     assert "claude-sonnet-4.6" not in texts, "no model typed in by hand"
-    _button(page, "Refresh model list").click()
+    _button(page, "Refresh list").click()
     assert bridge.done == [("refresh",)]
 
 
@@ -150,6 +150,8 @@ def test_the_real_endpoint_editor_is_embedded(qapp, tmp_path):
                              offline=True).start()
     try:
         page = AgentsTab(FakeBridge(workforce=wf))
+        assert not page.findChildren(ConnectedAccountsDialog), "not on the tab - behind Manage"
+        page._manage_endpoints()
         (embedded,) = page.findChildren(ConnectedAccountsDialog)
         visible = {b.text() for b in embedded.findChildren(QPushButton)
                    if b.isVisibleTo(embedded)}
@@ -160,7 +162,7 @@ def test_the_real_endpoint_editor_is_embedded(qapp, tmp_path):
 
 def test_without_agents_the_endpoints_say_why(qapp):
     from ui.settings_tabs import AgentsTab
-    assert "The agents did not start" in _texts(AgentsTab(FakeBridge()))
+    assert any(t.startswith("The agents did not start") for t in _texts(AgentsTab(FakeBridge())))
 
 
 # ── Setup ────────────────────────────────────────────────────────────────────

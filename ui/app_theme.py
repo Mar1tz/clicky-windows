@@ -225,6 +225,25 @@ def qss() -> str:
         border-top-left-radius: {tokens.RADIUS_XL}px; border-bottom-left-radius: {tokens.RADIUS_XL}px;
     }}
     QStackedWidget#settingsStack {{ background: transparent; }}
+    /* A tab's groups (ui/settings_parts.py): a name above a soft block, rows of a
+       title and at most one short line, larger and darker than a page's rows. */
+    QLabel#setGroup {{ font-size: 15px; font-weight: 700; }}
+    QFrame#setBlock {{ background: {BG}; border: none; border-radius: {RADIUS + 0}px; }}
+    QFrame#setRow {{ background: transparent; border: none; border-top: 1px solid {BORDER}; }}
+    QFrame#setRowFirst {{ background: transparent; border: none; }}
+    QWidget#setRow {{ border-top: 1px solid {BORDER}; }}
+    QLabel#setTitle {{ font-size: 14px; font-weight: 600; background: transparent; }}
+    QLabel#setDesc  {{ color: {TEXT_DIM}; font-size: 13px; background: transparent; }}
+    QLabel#setNote  {{ color: {TEXT_FAINT}; font-size: 12px; }}
+    QLabel#keycapSmall {{
+        background: {SURFACE}; border: 1px solid {BORDER_STRONG}; border-radius: 6px;
+        padding: 3px 9px; font-size: 13px; font-weight: 600;
+    }}
+    QFrame#subDialog {{ background: {SURFACE}; border: none; border-radius: {tokens.RADIUS_XL}px; }}
+    QLabel#subTitle {{ font-size: 19px; font-weight: 700; letter-spacing: -0.3px; }}
+    QFrame#micCard {{ background: {BG}; border: 1px solid transparent; border-radius: {RADIUS_CARD}px; }}
+    QFrame#micCard:hover {{ border: 1px solid {BORDER_STRONG}; }}
+    QFrame#micCardOn {{ background: {ACCENT_SOFT}; border: 1px solid {ACCENT}; border-radius: {RADIUS_CARD}px; }}
     /* On the dialog's white, a group is the page's soft grey (Wispr's blocks). */
     QFrame#settingsCard QFrame#card {{ background: {BG}; border: none; border-radius: {RADIUS + 0}px; }}
     QFrame#plansBox {{ background: transparent; border: 1px solid {BORDER}; border-radius: {RADIUS + 0}px; }}

@@ -275,17 +275,17 @@ def _bridge(wf):
 def test_settings_opens_with_approvals_and_the_switch_works(qapp, wf):
     from PyQt6.QtWidgets import QLabel
     from config import cfg
+    from ui.settings_parts import Group, SettingRow as ToggleRow
     from ui.settings_tabs import AgentsTab as SettingsPage
-    from ui.app_widgets import Card, ToggleRow
 
     page = SettingsPage(_bridge(wf))
     first = page.body.column.itemAt(0).widget()
-    assert isinstance(first, Card)
+    assert isinstance(first, Group), "approvals first"
     texts = [lbl.text() for lbl in first.findChildren(QLabel)]
-    assert "Approvals" in texts and "Approve automatically" in texts
+    assert "When they ask you" in texts and "Approve automatically" in texts
     assert any(t.startswith("Still asks, every time: anything that pays, files a return, "
                             "sends, posts or deletes") for t in texts), "its edges are on the page"
-    (row,) = first.findChildren(ToggleRow)
+    row = next(r for r in first.findChildren(ToggleRow) if r.title.text() == "Approve automatically")
     assert not row.switch.isChecked()
     row.switch.setChecked(True)
     assert wf.auto_approve is True and cfg.switch("auto_approve") is True
@@ -294,10 +294,10 @@ def test_settings_opens_with_approvals_and_the_switch_works(qapp, wf):
 
 
 def test_settings_shows_what_the_running_agents_do(qapp, wf):
+    from ui.settings_parts import SettingRow
     from ui.settings_tabs import AgentsTab as SettingsPage
-    from ui.app_widgets import Card, ToggleRow
 
     wf.set_auto_approve(True)                 # e.g. from the last launch
     page = SettingsPage(_bridge(wf))
     first = page.body.column.itemAt(0).widget()
-    assert isinstance(first, Card) and first.findChildren(ToggleRow)[0].switch.isChecked()
+    assert first.findChildren(SettingRow)[0].switch.isChecked()

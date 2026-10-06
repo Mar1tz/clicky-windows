@@ -34,12 +34,12 @@ def window(qapp):
 def test_the_menu_is_the_agreed_tabs(window):
     from ui.settings_tabs import TABS
     assert [(sec, [k for k, *_r in rows]) for sec, rows in TABS] == [
-        ("Settings", ["general", "system", "agents", "models", "advanced"]),
-        ("Account", ["account", "plans", "privacy"])]
+        ("Settings", ["general", "system", "agents", "advanced"]),
+        ("Account", ["account", "usage", "plans", "privacy"])]
     window.open_settings()
     words = [r.text() for r in window._settings._rows.values()]
-    assert words == ["General", "System", "Agents", "Models", "Advanced",
-                     "Account", "Plans & billing", "Data & privacy"]
+    assert words == ["General", "System", "Agents", "Advanced",
+                     "Account", "Usage", "Plans & billing", "Data & privacy"]
 
 
 def test_every_tab_builds(window):
@@ -143,3 +143,40 @@ def test_the_agents_panels_lose_their_dark_sheet(qapp):
     w.setObjectName("panel")
     _tidy(w)
     assert w.styleSheet() == "" and w.objectName() == "embedded"
+
+
+
+# ── General: the shortcut and the microphone list ─────────────────────────────
+
+@pytest.mark.parametrize("combo, ok", [
+    ("ctrl+win", True), ("ctrl+alt+space", True), ("alt+q", True),
+    ("ctrl", False), ("shift+a", False), ("ctrl+c", False), ("ctrl+a+b", False)])
+def test_a_shortcut_must_be_one_you_cannot_type_by_accident(combo, ok):
+    from ui.app_bridge import check_shortcut
+    assert (check_shortcut(combo) == "") is ok, combo
+
+
+def test_a_new_shortcut_goes_live_through_the_running_app(monkeypatch):
+    from ui import app_bridge
+    seen = []
+    monkeypatch.setitem(app_bridge.HOTKEY_HOOKS, "rebind", lambda combo: seen.append(combo) or "")
+    assert app_bridge.AppBridge().set_hotkey("ctrl+alt+space") == ""
+    assert seen == ["ctrl+alt+space"]
+    assert app_bridge.AppBridge().set_hotkey("shift+a") != "" and seen == ["ctrl+alt+space"], \
+        "a bad one is refused before it reaches the hotkey"
+
+
+def test_the_microphone_list_is_each_mic_once(monkeypatch):
+    """Windows lists one headset once per audio system, beside its routing
+    entries; the list keeps the default's audio system, each name once."""
+    import sounddevice as sd
+    from ui.app_bridge import AppBridge
+    devices = [{"name": "Microsoft Sound Mapper - Input", "hostapi": 0, "max_input_channels": 2},
+               {"name": "Microphone (Realtek(R) Audio)", "hostapi": 0, "max_input_channels": 2},
+               {"name": "Headset (Jabra)", "hostapi": 0, "max_input_channels": 1},
+               {"name": "Speakers", "hostapi": 0, "max_input_channels": 0},
+               {"name": "Microphone (Realtek(R) Audio)", "hostapi": 1, "max_input_channels": 2},
+               {"name": "Input ()", "hostapi": 3, "max_input_channels": 2}]
+    monkeypatch.setattr(sd, "query_devices", lambda: devices)
+    monkeypatch.setattr(sd.default, "device", (1, 3))
+    assert AppBridge().mics() == [(1, "Microphone (Realtek(R) Audio)", True), (2, "Headset (Jabra)", False)]

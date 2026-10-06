@@ -87,6 +87,7 @@ class GlobalHotkeyMonitor:
         # a missed first evaluation would never be retried.
         self._need = {_norm_token(p) for p in self._parts}
         self._down: set = set()
+        self._key_hooks: list = []         # classic mode's press/release hooks
 
     def start(self):
         if self._modifier_only:
@@ -94,8 +95,8 @@ class GlobalHotkeyMonitor:
             self._hook_handle = keyboard.hook(self._on_any_event)
         else:
             terminal = self._parts[-1]
-            keyboard.on_press_key(terminal, self._handle_press)
-            keyboard.on_release_key(terminal, self._handle_release)
+            self._key_hooks = [keyboard.on_press_key(terminal, self._handle_press),
+                               keyboard.on_release_key(terminal, self._handle_release)]
 
     # ── Modifier-only mode ────────────────────────────────────────────────────
 
@@ -148,6 +149,29 @@ class GlobalHotkeyMonitor:
         if self._held:
             self._held = False
             self._on_release()
+
+    def detach(self):
+        """Remove only this monitor's own hooks - for changing the shortcut
+        while the app runs. stop() also clears every other keyboard hook
+        (Esc to stop Tora among them), which is right on the way out only."""
+        if self._held:
+            self._held = False
+            try:
+                self._on_release()
+            except Exception:
+                pass
+        if self._hook_handle is not None:
+            try:
+                keyboard.unhook(self._hook_handle)
+            except Exception:
+                pass
+            self._hook_handle = None
+        for h in self._key_hooks:
+            try:
+                keyboard.unhook(h)
+            except Exception:
+                pass
+        self._key_hooks = []
 
     def stop(self):
         if self._hook_handle is not None:

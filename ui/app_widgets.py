@@ -389,6 +389,11 @@ class Select(QComboBox):
         if width:
             self.setFixedWidth(width)
 
+    def wheelEvent(self, event) -> None:
+        """Scrolling the page over a dropdown scrolls the page - it never
+        quietly changes a setting under the pointer."""
+        event.ignore()
+
     def paintEvent(self, event) -> None:
         super().paintEvent(event)
         p = QPainter(self)

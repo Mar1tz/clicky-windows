@@ -18,6 +18,7 @@ import pytest
 
 pytest.importorskip("PyQt6")
 
+from PyQt6.QtCore import Qt                       # noqa: E402
 from PyQt6.QtWidgets import QApplication, QLabel, QPlainTextEdit, QPushButton  # noqa: E402
 
 from ui.app_bridge import AppBridge                  # noqa: E402
@@ -95,7 +96,11 @@ def _toggle_row(page, heading):
     """The switch row - or, on the Tora page, the mode tile - called `heading`.
     Both have a `.switch`."""
     from ui.app_parts import ModeTile
-    for row in page.findChildren(ToggleRow) + page.findChildren(ModeTile):
+    from ui.settings_parts import SettingRow
+    rows = page.findChildren(ToggleRow) + page.findChildren(ModeTile) + page.findChildren(SettingRow)
+    for row in rows:
+        if getattr(row, "switch", None) is None:
+            continue
         if heading in [lbl.text() for lbl in row.findChildren(QLabel)]:
             return row
     raise AssertionError(f"no switch called {heading!r}")
@@ -167,16 +172,25 @@ def test_with_nothing_allowed_it_says_so(qapp):
     assert "Nothing is allowed without asking" in _texts(PrivacyTab(FakeBridge()))
 
 
-def test_the_real_microphones_are_offered_and_one_can_be_picked(qapp):
+def test_the_real_microphones_are_offered_and_one_can_be_picked(qapp, monkeypatch):
+    """General says which mic is in use; Change lists them as cards, the
+    one in use marked, and a click picks another."""
+    from PyQt6.QtWidgets import QWidget
+    from ui import settings_parts
     from ui.settings_tabs import GeneralTab
 
+    monkeypatch.setattr(settings_parts.MicDialog, "_listen", lambda self, device: None)  # no real audio
     bridge = FakeBridge(mics=[(1, "Microphone Array", True), (4, "Headset", False)], mic=4)
     page = GeneralTab(bridge)
-    select = next(s for s in page.findChildren(Select) if s.count() == 2)
-    assert select.currentText() == "Headset", "the one in use"
-    assert "Realme" not in " ".join(select.itemText(i) for i in range(select.count()))
-    select.setCurrentIndex(0)
+    assert "Headset" in _texts(page), "the one in use"
+    host = QWidget()
+    dialog = settings_parts.MicDialog(host, bridge, lambda: None)
+    cards = dialog.findChildren(settings_parts._MicCard)
+    assert [c.objectName() for c in cards] == ["micCard", "micCardOn"]
+    assert "Realme" not in " ".join(_texts(dialog))
+    dialog._pick(1)
     assert bridge.done == [("mic", 1)]
+    dialog.close_dialog()
 
 
 @pytest.mark.parametrize("heading, action", [
@@ -195,25 +209,48 @@ def test_the_settings_switches_are_real(qapp, heading, action):
 
 def test_the_page_says_so_when_the_agents_did_not_start(qapp):
     from ui.settings_tabs import AgentsTab
-    assert "The agents did not start" in _texts(AgentsTab(FakeBridge()))
+    assert any(t.startswith("The agents did not start") for t in _texts(AgentsTab(FakeBridge())))
 
 
-def test_the_real_agent_settings_are_embedded(qapp, tmp_path):
+def test_the_agents_rails_save_and_reach_the_running_agents(qapp, tmp_path, monkeypatch):
+    """Each choice on Settings > Agents is saved and put on the running
+    workforce at once - no Save button to forget."""
     from agents.bootstrap import build_agent_manager
-    from agents.ui.settings import AgentSettingsDialog
-    from ui.settings_tabs import AgentsTab
+    from config import cfg
+    from ui.app_bridge import AppBridge
 
-    wf = build_agent_manager(workspace_root=str(tmp_path), in_memory=True,
-                             offline=True).start()
+    # cfg is the app's one config: put back what this changes, or every
+    # later workforce waits for a plan approval nobody gives.
+    for name in ("agent_max_concurrent", "agent_wall_clock_s", "agent_plan_approval"):
+        monkeypatch.setattr(cfg, name, getattr(cfg, name))
+    wf = build_agent_manager(workspace_root=str(tmp_path), in_memory=True, offline=True).start()
     try:
-        page = AgentsTab(FakeBridge(workforce=wf))
-        (embedded,) = page.findChildren(AgentSettingsDialog)
-        buttons = {b.text() for b in embedded.findChildren(QPushButton)
-                   if b.isVisibleTo(embedded)}
-        assert "Save" in buttons and "Close" not in buttons, \
-            "a Close inside a page would leave an empty card"
+        class Live(AppBridge):
+            def workforce(self):
+                return wf
+
+        bridge = Live()
+        bridge.set_agent_rail("at_once", 5)
+        bridge.set_agent_rail("minutes", 60)
+        bridge.set_agent_rail("plan", True)
+        assert wf.max_concurrent == 5 and wf.limits.wall_clock_s == 3600
+        assert wf.orchestrator.require_plan_approval is True
+        assert cfg.agent_max_concurrent == 5 and bridge.agent_rails()["minutes"] == 60
     finally:
         wf.stop()
+
+
+def test_a_dropdown_does_not_change_when_scrolled_over(qapp):
+    """Scrolling Settings over a dropdown used to change the setting."""
+    from PyQt6.QtCore import QPoint, QPointF
+    from PyQt6.QtGui import QWheelEvent
+    select = Select("One", "Two", "Three")
+    select.setCurrentIndex(0)
+    wheel = QWheelEvent(QPointF(5, 5), QPointF(5, 5), QPoint(0, 0), QPoint(0, -120),
+                        Qt.MouseButton.NoButton, Qt.KeyboardModifier.NoModifier,
+                        Qt.ScrollPhase.NoScrollPhase, False)
+    QApplication.sendEvent(select, wheel)
+    assert select.currentIndex() == 0
 
 
 # ── the pieces behind them ───────────────────────────────────────────────────

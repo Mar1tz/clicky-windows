@@ -28,6 +28,34 @@ from PyQt6.QtCore import QObject, pyqtSignal
 _log = logging.getLogger("tora.app")
 
 
+# Set by main.py once the global hotkey is up: change it live (rebind ->
+# "" or why not), and hold it quiet while a new one is being pressed
+# (claim/release). Empty when the window runs on its own: a change is saved
+# for the next start instead.
+HOTKEY_HOOKS: dict = {}
+
+MODIFIERS = ("ctrl", "alt", "shift", "win")
+
+
+def check_shortcut(combo: str) -> str:
+    """Why a push-to-talk combo will not do, or "" when it will. It must
+    hold Ctrl, Alt or Win (Shift alone is typing), and be two keys or more:
+    either modifiers only ("ctrl+win") or modifiers then one key."""
+    parts = [p.strip().lower() for p in combo.split("+") if p.strip()]
+    if len(parts) < 2:
+        return "Use two keys or more - Ctrl + Win, or Ctrl + Alt + Space."
+    if not any(p in ("ctrl", "alt", "win") for p in parts):
+        return "Include Ctrl, Alt or Win - Shift and a key is just typing."
+    keys = [p for p in parts if p not in MODIFIERS]
+    if len(keys) > 1:
+        return "Hold modifiers and at most one other key."
+    if keys and parts[-1] != keys[0]:
+        return "Put the ordinary key last."
+    if keys and keys[0] in ("c", "v", "x", "z", "a", "s", "tab", "esc", "escape", "enter", "return"):
+        return f"{' + '.join(p.capitalize() for p in parts)} is taken by Windows and most apps."
+    return ""
+
+
 class AppBridge(QObject):
     """What the app window can read and do. Nothing else."""
 
@@ -95,6 +123,33 @@ class AppBridge(QObject):
     def hotkey(self) -> str:
         from config import cfg
         return " + ".join(p.strip().capitalize() for p in (cfg.hotkey or "").split("+") if p.strip())
+
+    def hotkey_keys(self) -> list[str]:
+        """The shortcut as keys: ["Ctrl", "Win"]."""
+        from config import cfg
+        return [p.strip().capitalize() for p in (cfg.hotkey or "").split("+") if p.strip()]
+
+    def set_hotkey(self, combo: str) -> str:
+        """A new push-to-talk shortcut - live when the app is running, else
+        from the next start. "" when it worked, otherwise why not."""
+        why = check_shortcut(combo)
+        if why:
+            return why
+        rebind = HOTKEY_HOOKS.get("rebind")
+        if rebind is not None:
+            why = rebind(combo)
+        else:
+            from config import cfg
+            cfg.set_hotkey(combo)
+        if not why:
+            self.changed.emit("switches")
+        return why
+
+    def hold_hotkey(self, on: bool) -> None:
+        """While a new shortcut is being pressed, the old one does nothing."""
+        hook = HOTKEY_HOOKS.get("claim" if on else "release")
+        if hook is not None:
+            hook()
 
     def mic_name(self) -> str:
         """The input device Tora is listening on, by name."""
@@ -185,14 +240,31 @@ class AppBridge(QObject):
         if self.tray is not None:
             self.tray.on_set_custom_instructions.emit((text or "").strip())
 
+    # Not microphones: Windows' routing entries and nameless endpoints.
+    _NOT_MICS = ("sound mapper", "primary sound capture", "input ()", "input (@")
+
     def mics(self) -> list[tuple[int, str, bool]]:
-        """Every input device: (index, name, is the system default)."""
+        """The microphones, once each: (index, name, is the system default).
+
+        Windows lists every input once per audio system (MME, DirectSound,
+        WASAPI, WDM-KS) - one headset came out as five rows, beside "Sound
+        Mapper" and "Input ()". Only the default microphone's own audio
+        system is listed, without its routing entries, each name once."""
         try:
             import sounddevice as sd
             default = sd.default.device[0]
-            return [(i, str(d.get("name", "")), i == default)
-                    for i, d in enumerate(sd.query_devices())
-                    if d.get("max_input_channels", 0) > 0]
+            devices = sd.query_devices()
+            api = devices[default]["hostapi"] if default is not None and default >= 0 else None
+            out, seen = [], set()
+            for i, d in enumerate(devices):
+                name = str(d.get("name", "")).strip()
+                if d.get("max_input_channels", 0) <= 0 or (api is not None and d["hostapi"] != api):
+                    continue
+                if not name or any(bad in name.lower() for bad in self._NOT_MICS) or name in seen:
+                    continue
+                seen.add(name)
+                out.append((i, name, i == default))
+            return out
         except Exception:  # noqa: BLE001
             return []
 
@@ -280,6 +352,68 @@ class AppBridge(QObject):
         from ui import app_theme
         cfg.set_theme(mode)
         app_theme.refresh(cfg.theme())
+
+    # ── the agents' rails (Settings > Agents) ────────────────────────────────
+
+    def agent_rails(self) -> dict:
+        """What the agents may do and how much: the same values the
+        workforce's own settings panel edits (agents/ui/settings.py)."""
+        from config import cfg
+        wf = self.workforce()
+        workspace = (getattr(cfg, "agent_workspace", "") or "").strip() or (
+            getattr(wf, "workspace_root", "") if wf is not None else "")
+        return {"workspace": workspace,
+                "risk": str(getattr(cfg, "agent_auto_risk", "medium") or "medium").lower(),
+                "plan": bool(getattr(cfg, "agent_plan_approval", False)),
+                "at_once": int(getattr(cfg, "agent_max_concurrent", 3) or 0),
+                "minutes": int(getattr(cfg, "agent_wall_clock_s", 1800) or 0) // 60,
+                "tokens": int(getattr(cfg, "agent_max_tokens", 300000) or 0)}
+
+    def set_agent_rail(self, name: str, value) -> None:
+        """Save one rail and put it on the running agents at once - through
+        the panel's own apply_to, so the two can never disagree."""
+        from config import cfg
+        setter = {"workspace": cfg.set_agent_workspace, "risk": cfg.set_agent_auto_risk,
+                  "plan": cfg.set_agent_plan_approval, "at_once": cfg.set_agent_max_concurrent,
+                  "minutes": lambda m: cfg.set_agent_wall_clock_s(int(m) * 60),
+                  "tokens": cfg.set_agent_max_tokens}[name]
+        setter(value)
+        r = self.agent_rails()
+        try:
+            from agents.ui.settings import AgentSettingsDialog
+            AgentSettingsDialog.apply_to(self.workforce(), workspace=r["workspace"], risk=r["risk"],
+                                         plan=r["plan"], limit=r["at_once"],
+                                         wall_clock_s=r["minutes"] * 60, max_tokens=r["tokens"])
+        except Exception:  # noqa: BLE001
+            _log.debug("could not apply the agents' rails", exc_info=True)
+        self.changed.emit("switches")
+
+    def endpoints(self) -> list[dict]:
+        """Where the agents' requests go: each connected endpoint."""
+        try:
+            from agents.providers import AccountStore
+            accounts = [a for a in AccountStore().list() if not a.kinds]
+        except Exception:  # noqa: BLE001
+            return []
+        out = [{"name": a.label or a.provider, "url": a.base_url or "", "on": bool(a.enabled)}
+               for a in accounts]
+        if not out:
+            # As the editor does: an endpoint set up in .env shows, saved or not.
+            import os
+            base = os.environ.get("TORA_OMNIROUTE_BASE_URL", "")
+            if base:
+                out = [{"name": "OmniRoute", "url": base, "on": True}]
+        return out
+
+    def clear_agent_history(self) -> int:
+        """Forget finished jobs (the files they made stay)."""
+        wf = self.workforce()
+        if wf is None:
+            return 0
+        from agents.ui.settings import AgentSettingsDialog
+        n = AgentSettingsDialog.clear_history(wf)
+        self.changed.emit("agents")
+        return n
 
     def auto_approve(self) -> bool:
         """Settings > Approvals: do agents and desktop actions go ahead

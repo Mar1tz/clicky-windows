@@ -640,6 +640,13 @@ class Config:
         os.environ["TORA_CURSOR_COLOUR"] = key
         self._write_env("TORA_CURSOR_COLOUR", key)
 
+    def set_hotkey(self, combo: str) -> None:
+        """The push-to-talk shortcut ("ctrl+win", "ctrl+alt+space"), kept."""
+        combo = "+".join(p.strip().lower() for p in combo.split("+") if p.strip())
+        self.hotkey = combo
+        os.environ["TORA_HOTKEY"] = combo
+        self._write_env("TORA_HOTKEY", combo)
+
     def listen_sound(self) -> str:
         """The earcon when Tora starts listening (ui/sounds.SOUNDS), or "off"."""
         return os.environ.get("TORA_LISTEN_SOUND", "").strip().lower() or "bloop"

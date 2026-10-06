@@ -811,6 +811,31 @@ def main():
 
     hotkey = GlobalHotkeyMonitor(on_press=_hotkey_press, on_release=_hotkey_release)
     hotkey.start()
+    hotkeys = {"monitor": hotkey}
+
+    def _rebind_hotkey(combo: str) -> str:
+        """Settings > General > Shortcut: the new combo, live. Its own hooks
+        only are swapped (detach, not stop - stop clears Esc and the rest);
+        if the new one will not hook, the old one comes back. "" = done."""
+        old_combo = cfg.hotkey
+        hotkeys["monitor"].detach()
+        try:
+            new = GlobalHotkeyMonitor(on_press=_hotkey_press, on_release=_hotkey_release, hotkey=combo)
+            new.start()
+        except Exception as e:  # noqa: BLE001
+            back = GlobalHotkeyMonitor(on_press=_hotkey_press, on_release=_hotkey_release, hotkey=old_combo)
+            back.start()
+            hotkeys["monitor"] = back
+            return f"That shortcut could not be set: {e}"
+        hotkeys["monitor"] = new
+        cfg.set_hotkey(combo)
+        return ""
+
+    from ui import app_bridge as _app_bridge
+    _app_bridge.HOTKEY_HOOKS.update(
+        rebind=_rebind_hotkey,
+        claim=lambda: _hotkey_claim.__setitem__(slice(None), [(lambda: None, lambda: None)]),
+        release=_hotkey_claim.clear)
 
     # What the first launch's second half needs from the running app.
     def _claim_hotkey(down, up):

@@ -191,16 +191,27 @@ white. Escape or a click on the dimmed app closes it. Built in
 
 | Section | Tab | What is in it |
 |---|---|---|
-| Settings | General | Microphone, hold to talk, always listening · appearance |
+| Settings | General | Shortcut (Change), microphone (Change), always listening, how she answers (Live / Classic) · theme |
 | | System | Start with Windows, the floating panel · sounds (the listening pop) · updates |
-| | Agents | Approvals · agent rails · agent endpoints (the agents' own panels, with their dark sheet removed so they take the app's look - `app_pages._tidy`) |
-| | Models | Live or Classic · which model does each job · refresh |
-| | Advanced | API keys · diagnostics · report, setup again · Quit |
-| Account | Account | Your name · the HeyTora account: plan, this month's use, own key, sign out |
+| | Agents | When they ask you (approve automatically - its limits in its one line -, show the plan first, run without asking up to) · Where they work (workspace: Open, Change) · Limits for each job (jobs at once, time, tokens - fixed choices) · Where their requests go (each endpoint; Manage opens the editor in a dialog) · History (clear). Every choice saves at once and reaches the running agents (`bridge.set_agent_rail`); no Save button, no embedded panel |
+| | Advanced | API keys · models in use (read-only, refresh) · diagnostics · report, setup again · Quit |
+| Account | Account | Profile (name, email, picture) · how Tora thinks (your plan or your own key) · Sign out · Delete account (an email to support: closing is done by HeyTora, as the privacy policy says) |
+| | Usage | This month on the plan: each allowance with a bar (amber from 80%), today, overall use, when it starts again · Change plan · Manage on heytora.com |
 | | Plans & billing | Free, Pro, Max side by side - the website's words and prices (`settings_tabs.PLANS`, from heytora-web `site.ts`), yours marked · billing on heytora.com |
 | | Data & privacy | What she looks at · what she keeps (journal on/off, on this PC only, download, delete) · desktop actions allowed · Privacy policy, Terms |
 
 Account follows Wispr's order: who you are, what you pay, what is kept.
+
+**How a tab reads** (`ui/settings_parts.py`, after Wispr's System page): a
+group's name sits above a soft block (`Group`); each row is a title in
+14px semibold ink, **at most one short line** under it in 13px, and the
+control (`SettingRow`) - never a card title, a subtitle and then rows that
+each carry a heading and a sentence. Longer caveats go in one small note
+under the block. General's Shortcut shows the keys as keycaps and Change
+opens a small dialog where the new keys are pressed (checked, then live:
+`main.py` rebinds only its own hook); Microphone's Change lists each mic
+once as a card, the chosen one with a live level. A dropdown never changes
+when the page is scrolled over it (`Select.wheelEvent`).
 The footer is the version and a cloud: ticked when up to date, an arrow
 when an update is waiting. A group on a tab is a filled block in the
 page's soft grey on the dialog's white, rows split by hairlines.
