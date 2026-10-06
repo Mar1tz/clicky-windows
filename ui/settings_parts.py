@@ -161,13 +161,27 @@ class SubDialog(QWidget):
         x.clicked.connect(self.close_dialog)
         head.addWidget(x, 0, Qt.AlignmentFlag.AlignTop)
         lay.addLayout(head)
-        self.body = QVBoxLayout()
+        self._head = head
+        # The body scrolls when the window is too short for it - the title
+        # and the buttons stay put. Squeezed instead, its fields were drawn
+        # over each other (the skill editor in a small window, 6 Oct 2026).
+        from PyQt6.QtWidgets import QScrollArea
+        self._scroll = QScrollArea()
+        self._scroll.setWidgetResizable(True)
+        self._scroll.setFrameShape(QFrame.Shape.NoFrame)
+        self._scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self._inner = QWidget()
+        self.body = QVBoxLayout(self._inner)
+        self.body.setContentsMargins(0, 0, 4, 0)
         self.body.setSpacing(10)
-        lay.addLayout(self.body, 1)
+        self._scroll.setWidget(self._inner)
+        lay.addWidget(self._scroll, 1)
         self.foot = QHBoxLayout()
         self.foot.setSpacing(8)
         lay.addLayout(self.foot)
+        self._placing = False
         over.installEventFilter(self)
+        self._inner.installEventFilter(self)
 
     def open(self) -> None:
         self._place()
@@ -176,11 +190,28 @@ class SubDialog(QWidget):
         self.setFocus()
 
     def _place(self) -> None:
-        self.setGeometry(self.parentWidget().rect())
-        self.card.adjustSize()
-        w = min(self.W, self.width() - 60)
-        h = min(self.card.sizeHint().height(), self.height() - 60)
-        self.card.setGeometry(QRect((self.width() - w) // 2, (self.height() - h) // 2, w, h))
+        """Centred; as tall as what it holds, or as the window allows (then
+        the body scrolls)."""
+        if self._placing:
+            return
+        self._placing = True
+        try:
+            self.setGeometry(self.parentWidget().rect())
+            w = min(self.W, self.width() - 60)
+            inside = w - 52                                  # the card's side margins
+
+            def tall(layout) -> int:
+                if layout.hasHeightForWidth():
+                    return layout.totalHeightForWidth(inside)
+                return layout.totalSizeHint().height()
+
+            lay = self.card.layout()
+            want = (44 + tall(self._head) + tall(self.body) + tall(self.foot)
+                    + 2 * lay.spacing() + 2)
+            h = min(want, self.height() - 60)
+            self.card.setGeometry(QRect((self.width() - w) // 2, (self.height() - h) // 2, w, h))
+        finally:
+            self._placing = False
 
     def close_dialog(self) -> None:
         self.hide()
@@ -191,6 +222,9 @@ class SubDialog(QWidget):
         from PyQt6.QtCore import QEvent
         if obj is self.parentWidget() and event.type() == QEvent.Type.Resize:
             self._place()
+        elif obj is getattr(self, "_inner", None) and event.type() == QEvent.Type.LayoutRequest \
+                and self.isVisible():
+            self._place()                     # it grew (a growing text box, a note shown)
         return False
 
     def paintEvent(self, _e) -> None:
