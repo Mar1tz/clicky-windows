@@ -264,11 +264,13 @@ def test_a_new_email_signs_up_in_the_app(heytora):
     assert "new@example.com" in heytora.fake.accounts
 
 
-def test_with_sign_ups_off_on_the_server_it_says_where_to_go(heytora):
+def test_with_sign_ups_off_on_the_server_it_says_so(heytora):
+    """Never "create one on the website": the website has no sign-up."""
     from account.service import NoAccount
     heytora.fake.signups = False
-    with pytest.raises(NoAccount, match="heytora.example"):
+    with pytest.raises(NoAccount, match="can't be made right now") as e:
         heytora.account.send_code("nobody@example.com")
+    assert "website" not in str(e.value) and "heytora.example" not in str(e.value)
 
 
 # -- paid plans (Paddle) ------------------------------------------------------------------------------------------
@@ -338,7 +340,8 @@ def test_the_emails_link_signs_in_on_this_pc(heytora):
         assert heytora.fake.redirect_to == back_to and not heytora.account.signed_in()
 
         page = httpx.get(back_to, params={"code": "link-code-1"}, trust_env=False, timeout=10)
-        assert "signed in to HeyTora" in page.text and seen == ["link-code-1"]
+        assert page.status_code == 302 and seen == ["link-code-1"]
+        assert page.headers["location"] == "https://heytora.example/signed-in", "the website says it"
         assert heytora.account.signed_in() and heytora.account.email == "amy@example.com"
         end = time.monotonic() + 5
         while catcher.url and time.monotonic() < end:
@@ -346,6 +349,34 @@ def test_the_emails_link_signs_in_on_this_pc(heytora):
         assert catcher.url == "", "one link, one sign-in: the catcher stops"
     finally:
         catcher.stop()
+
+
+def test_signing_in_via_the_browser(heytora):
+    """Wispr's way (6 Oct 2026): the app opens the website's sign-in page with
+    a PKCE challenge and its own return address. The website starts Google,
+    Microsoft or email with them; the browser comes back here with a code
+    only this app can redeem - the verifier never left it."""
+    import base64
+    import hashlib
+    from urllib.parse import parse_qs, urlsplit
+    url = heytora.account.browser_sign_in("http://127.0.0.1:5123/heytora/signed-in")
+    parts = urlsplit(url)
+    assert f"{parts.scheme}://{parts.netloc}{parts.path}" == "https://heytora.example/login"
+    query = {k: v[0] for k, v in parse_qs(parts.query).items()}
+    assert query["redirect_to"] == "http://127.0.0.1:5123/heytora/signed-in"
+    verifier = heytora.account._verifier
+    expected = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).decode().rstrip("=")
+    assert query["challenge"] == expected and len(expected) == 43
+    assert verifier not in url, "the secret half stays in the app"
+    heytora.fake.challenge = query["challenge"]          # what the website handed to Supabase
+    heytora.account.verify_link("link-code-1")
+    assert heytora.account.signed_in() and heytora.account.email == "amy@example.com"
+
+
+def test_the_browser_sign_in_needs_a_way_back(heytora):
+    from account.service import AccountError
+    with pytest.raises(AccountError, match="couldn't wait for your browser"):
+        heytora.account.browser_sign_in("")
 
 
 def test_a_link_only_works_for_the_app_that_asked(heytora):
@@ -359,12 +390,18 @@ def test_a_link_only_works_for_the_app_that_asked(heytora):
     assert not heytora.account.signed_in()
 
 
-def test_a_used_or_expired_link_says_so_in_the_browser():
+def test_a_used_or_expired_link_says_so_in_the_browser(monkeypatch):
     from account.loopback import LinkCatcher
+    monkeypatch.setenv("TORA_WEBSITE_URL", "https://heytora.example")
     calls = []
     catcher = LinkCatcher(lambda code: (calls.append(code), (True, ""))[1])
     url = catcher.start()
     try:
+        r = httpx.get(url, params={"error": "access_denied",
+                                   "error_description": "Email link is invalid or has expired"},
+                      trust_env=False, timeout=10)
+        assert r.status_code == 302 and r.headers["location"].endswith("/signed-in?error=1")
+        monkeypatch.delenv("TORA_WEBSITE_URL")                         # a build with no website
         r = httpx.get(url, params={"error": "access_denied",
                                    "error_description": "Email link is invalid or has expired"},
                       trust_env=False, timeout=10)

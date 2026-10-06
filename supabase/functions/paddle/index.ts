@@ -11,6 +11,7 @@
 //
 // Secrets: PADDLE_WEBHOOK_SECRET; optional PADDLE_ENV ("production" for the
 // live account, else sandbox) and PADDLE_PRICES ("pro=pri_..,max=pri_..").
+
 //
 // Deploy:  supabase functions deploy paddle --no-verify-jwt
 //          (Paddle has no Supabase sign-in; the signature is the check)

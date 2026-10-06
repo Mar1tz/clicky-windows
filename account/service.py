@@ -3,11 +3,11 @@
 
 What goes where, and why:
 
-  * Sign-in is Supabase Auth by email - the same account the user created on
-    the website. "create_user" is off: an account and its plan are made on
-    the website, the app only signs in to one. The email has a link (caught
-    on this PC by account/loopback.py and swapped for a session with PKCE)
-    and, once the project has its own email sender, a code to type.
+  * Sign-in is Supabase Auth by email, and it is also how an account is
+    made: a new email gets one the first time it signs in ("create_user" is
+    on; the website has no sign-up). The email has a link (caught on this PC
+    by account/loopback.py and swapped for a session with PKCE) and, once the
+    project has its own email sender, a code to type.
   * Live voice (talk) and dictation connect STRAIGHT to Google with a voice
     pass: a short-lived token the server mints with the business key, good
     for one session (voice_pass). As fast as a key, and nothing to steal: it
@@ -66,9 +66,13 @@ class SignInNeeded(AccountError):
 
 
 class NoAccount(AccountError):
+    """The server refused to make an account for a new email: sign-ups are
+    switched off in Supabase (Authentication > Email > Allow new users to
+    sign up). Normally a new email just gets its account."""
+
     def __init__(self, website: str = ""):
-        where = f" Create one at {website}" if website else " Create one on the HeyTora website"
-        super().__init__(f"There's no HeyTora account with that email.{where}, then sign in here.")
+        super().__init__("New HeyTora accounts can't be made right now - try again later, "
+                         "or sign in with an email that already has one.")
 
 
 class LimitReached(AccountError):
@@ -256,6 +260,25 @@ class Account:
             if "signup" in text or "not found" in text or "not allowed" in text:
                 raise NoAccount(settings.website_url())
             raise AccountError(_auth_message(r, "Could not send the code - try again in a minute."))
+
+    def browser_sign_in(self, redirect_to: str) -> str:
+        """The website's sign-in page (Google, Microsoft or email), set up to
+        send the browser back to `redirect_to` (account/loopback.py) with a
+        one-time code only this app can redeem (verify_link): the PKCE
+        challenge goes to the page, its secret half stays here. The website
+        never holds the session - it only starts the sign-in."""
+        self._need_config()
+        website = settings.website_url()
+        if not website:
+            raise AccountError("This build doesn't know HeyTora's website - use your own Gemini key.")
+        if not redirect_to:
+            raise AccountError("HeyTora couldn't wait for your browser on this PC - restart it and try again.")
+        verifier = secrets.token_urlsafe(48)
+        challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest())
+        with self._lock:
+            self._verifier = verifier
+        return f"{website}/login?" + urlencode({"redirect_to": redirect_to,
+                                                 "challenge": challenge.decode().rstrip("=")})
 
     def verify(self, email: str, code: str) -> dict:
         """Check the code and stay signed in. Returns the plan summary."""

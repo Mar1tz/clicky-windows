@@ -293,13 +293,10 @@ class PrivacyTab(Tab):
         self._note.show()
 
     def _sign_out_sites(self) -> None:
-        from PyQt6.QtWidgets import QMessageBox
-        sure = QMessageBox.question(self, "Sign out everywhere",
-                                    "Sign the agents' browser out of every site? Jobs will ask "
-                                    "you to sign in again when they need to.",
-                                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
-                                    QMessageBox.StandardButton.Cancel)
-        if sure != QMessageBox.StandardButton.Yes:
+        from ui.settings_parts import confirm
+        if not confirm(self, "Sign the agents out everywhere?",
+                       "Their browser forgets every site you signed in to. Jobs will ask you to "
+                       "sign in again when they need to.", "Sign out everywhere"):
             return
         why = self.bridge.forget_browser_sites()
         if why:
@@ -320,14 +317,10 @@ class PrivacyTab(Tab):
             self._say(f"Couldn't save that: {e}")
 
     def _delete(self) -> None:
-        from PyQt6.QtWidgets import QMessageBox
-        sure = QMessageBox.question(
-            self, "Delete your history?",
-            "Every question, answer and walkthrough Tora has kept will be deleted. "
-            "This can't be undone.",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
-            QMessageBox.StandardButton.Cancel)
-        if sure != QMessageBox.StandardButton.Yes:
+        from ui.settings_parts import confirm
+        if not confirm(self, "Delete your history?",
+                       "Every question, answer and walkthrough Tora has kept is deleted. "
+                       "This can't be undone.", "Delete everything"):
             return
         n = self.bridge.delete_history()
         self._say(f"Deleted {n} entries.")
@@ -462,12 +455,9 @@ class AgentsTab(Tab):
         dlg.open()
 
     def _clear_history(self) -> None:
-        from PyQt6.QtWidgets import QMessageBox
-        sure = QMessageBox.question(self, "Clear agent history",
-                                    "Forget every finished job? The files they made are kept.",
-                                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
-                                    QMessageBox.StandardButton.Cancel)
-        if sure == QMessageBox.StandardButton.Yes:
+        from ui.settings_parts import confirm
+        if confirm(self, "Clear agent history?", "Every finished job is forgotten. The files "
+                   "they made are kept.", "Clear history"):
             self.bridge.clear_agent_history()
 
 

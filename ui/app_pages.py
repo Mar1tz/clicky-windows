@@ -1173,14 +1173,10 @@ def _checked_ago(when: float) -> str:
 def confirm_sign_out(parent) -> bool:
     """HeyTora needs an account: signing out closes it and opens the sign-in
     window (ui/sign_in_gate.py) - so say that before doing it."""
-    from PyQt6.QtWidgets import QMessageBox
-    answer = QMessageBox.question(
-        parent, "Sign out of HeyTora?",
-        "HeyTora needs your account to work. Signing out closes it and opens the "
-        "sign-in window.",
-        QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
-        QMessageBox.StandardButton.Cancel)
-    return answer == QMessageBox.StandardButton.Yes
+    from ui.settings_parts import confirm
+    return confirm(parent, "Are you sure you want to sign out?",
+                   "HeyTora closes and opens the sign-in window. Your history and settings "
+                   "stay on this PC.", "Sign out", "Back to account")
 
 
 # The Agents page lives in its own module; it builds on Page and the helpers

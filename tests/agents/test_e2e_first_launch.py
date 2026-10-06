@@ -103,56 +103,63 @@ def test_the_name_and_what_the_pc_is_for_are_kept(qapp, service):
     assert "meeting-notes" not in on and "fill-a-form" not in on
 
 
-def test_signing_in_to_heytora_from_the_first_launch(qapp, service):
+def _opened(monkeypatch):
+    from PyQt6.QtGui import QDesktopServices
+    urls = []
+    monkeypatch.setattr(QDesktopServices, "openUrl", lambda url: urls.append(url.toString()) or True)
+    return urls
+
+
+def test_signing_in_via_the_browser_from_the_first_launch(qapp, service, monkeypatch):
+    """One button opens the website's sign-in page; the browser comes back
+    to this PC and the window signs itself in."""
+    from urllib.parse import parse_qs, urlsplit
     from config import cfg
+    urls = _opened(monkeypatch)
     w = _wizard(service.account)
     w._go("connect")
-    w.email_edit.setText("amy@example.com")
-    w.send_btn.click()
-    _until(qapp, lambda: w.code_row.isVisibleTo(w))
-    w.code_edit.setText("123456")
-    w.signin_btn.click()
-    _until(qapp, lambda: "Signed in" in w.connect_status.text())
-    assert "Free plan - 25 talk messages and 25 agent messages a month." in w.connect_status.text()
+    w.browser_btn.click()
+    assert len(urls) == 1 and urls[0].startswith("https://heytora.example/login?")
+    assert "Finish signing in in your browser" in w.connect_status.text()
+    assert w.reopen_btn.isVisibleTo(w)
+    query = {k: v[0] for k, v in parse_qs(urlsplit(urls[0]).query).items()}
+    service.fake.challenge = query["challenge"]            # the website started the sign-in
+    back = httpx.get(query["redirect_to"], params={"code": "link-code-1"}, trust_env=False, timeout=10)
+    assert back.status_code == 302 and back.headers["location"] == "https://heytora.example/signed-in"
+    _until(qapp, lambda: w.signed_in_box.isVisibleTo(w))
     assert cfg.access_mode() == "account" and service.account.signed_in()
+    # Signed in, the way in falls away: who you are, and the plan (seen 6 Oct:
+    # the button and the own key stayed, with "Signed in" in small print).
+    assert w.signed_in_as.text() == "✓  You're signed in as amy@example.com"
+    assert "Free plan" in w.signed_in_plan.text()
+    assert not w.browser_btn.isVisibleTo(w) and not w.reopen_btn.isVisibleTo(w)
+    assert not w.key_card.isVisibleTo(w)
+    assert w._continue["connect"].isEnabled()
 
 
-def test_clicking_the_link_in_the_email_signs_the_wizard_in(qapp, service):
-    from config import cfg
+def test_back_on_the_sign_in_screen_it_says_who_and_can_switch(qapp, service, monkeypatch):
+    _opened(monkeypatch)
+    from PyQt6.QtWidgets import QPushButton
+    _sign_in(service)
     w = _wizard(service.account)
     w._go("connect")
-    w.email_edit.setText("amy@example.com")
-    w.send_btn.click()
-    _until(qapp, lambda: w.code_row.isVisibleTo(w))
-    assert "click the sign-in link" in w.connect_status.text()
-    back_to = service.fake.redirect_to
-    assert back_to and back_to.startswith("http://127.0.0.1:")
-    page = httpx.get(back_to, params={"code": "link-code-1"}, trust_env=False, timeout=10)
-    assert "signed in to HeyTora" in page.text
-    _until(qapp, lambda: "Signed in" in w.connect_status.text())
-    assert cfg.access_mode() == "account" and service.account.signed_in()
-    assert not w.code_row.isVisibleTo(w)
+    assert w.signed_in_box.isVisibleTo(w) and not w.browser_btn.isVisibleTo(w)
+    next(b for b in w.findChildren(QPushButton) if b.text() == "Use a different account").click()
+    assert not service.account.signed_in()
+    assert w.browser_btn.isVisibleTo(w) and not w.signed_in_box.isVisibleTo(w)
+    assert not w._continue["connect"].isEnabled(), "signed out: sign in again first"
 
 
-def test_a_new_email_signs_up_right_here(qapp, service):
-    """The website has no sign-up: a new email gets its account by asking
-    for a code, like anyone signing in (6 Oct 2026)."""
+def test_there_is_no_create_an_account_link(qapp, service):
+    """Seen 6 Oct: "No account yet? Create one" opened the website, which has
+    no sign-up. Typing a new email is how an account is made."""
+    from PyQt6.QtWidgets import QPushButton
     w = _wizard(service.account)
     w._go("connect")
-    w.email_edit.setText("new@example.com")
-    w.send_btn.click()
-    _until(qapp, lambda: w.code_row.isVisibleTo(w))
-    assert "new@example.com" in service.fake.accounts
-
-
-def test_with_sign_ups_off_it_sends_them_to_the_website(qapp, service):
-    service.fake.signups = False
-    w = _wizard(service.account)
-    w._go("connect")
-    w.email_edit.setText("nobody@example.com")
-    w.send_btn.click()
-    _until(qapp, lambda: "heytora.example" in w.connect_status.text())
-    assert not w.code_row.isVisibleTo(w)
+    assert not any("create" in b.text().lower() for b in w.findChildren(QPushButton))
+    from PyQt6.QtWidgets import QLineEdit
+    assert not any(e.placeholderText() == "you@example.com" for e in w.findChildren(QLineEdit)), \
+        "no email box: the browser signs in"
 
 
 def test_or_their_own_gemini_key(qapp, service):
@@ -188,7 +195,7 @@ def test_a_build_without_heytora_offers_only_the_key(qapp, monkeypatch):
     monkeypatch.delenv("TORA_SUPABASE_URL", raising=False)
     svc.reset(svc.Account(transport=httpx.MockTransport(FakeHeyTora())))
     w = _wizard(svc.account())
-    assert w.email_edit is None and w.key_edit is not None
+    assert w.browser_btn is None and w.key_edit is not None
     svc.reset(None)
 
 

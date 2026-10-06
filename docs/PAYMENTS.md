@@ -30,6 +30,9 @@ changes this code later.
   4. The app watches for the new plan for 20 minutes after opening the
      checkout. Limits change at once, because the server already enforces
      `plans.limits`.
+- **A failed renewal** ("past due") drops the account to Free at once. The
+  app says the payment didn't go through and offers Manage billing. When
+  Paddle collects, the plan comes back by itself.
 - **Already paying:** choosing another plan changes the same subscription
   straight away (`PATCH /subscriptions`). Paddle prorates it. Choosing again
   a plan that was cancelled but hasn't ended undoes the cancellation.

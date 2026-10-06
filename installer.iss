@@ -98,6 +98,14 @@ Name: "{autodesktop}\{#MyAppName}";              Filename: "{app}\{#MyAppExeName
 ; switched it off in Settings since, and the task remembered from the first
 ; install would switch it back on (found 2 Oct 2026).
 Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: string; ValueName: "{#MyAppName}"; ValueData: """{app}\{#MyAppExeName}"""; Tasks: startupicon; Check: NotUpdate
+; heytora:// - how the browser hands back to the app once sign-in finishes
+; (heytora-web /signed-in opens heytora://signed-in). Windows starts
+; HeyTora.exe with the link; the copy already running hears it through
+; ui/single_instance.py and comes to the front, and the new copy goes.
+Root: HKCU; Subkey: "Software\Classes\heytora"; ValueType: string; ValueName: ""; ValueData: "URL:HeyTora"; Flags: uninsdeletekey
+Root: HKCU; Subkey: "Software\Classes\heytora"; ValueType: string; ValueName: "URL Protocol"; ValueData: ""
+Root: HKCU; Subkey: "Software\Classes\heytora\DefaultIcon"; ValueType: string; ValueName: ""; ValueData: """{app}\{#MyAppExeName}"",0"
+Root: HKCU; Subkey: "Software\Classes\heytora\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{app}\{#MyAppExeName}"" ""%1"""
 
 [UninstallDelete]
 ; Uninstalling signs out and forgets the first-launch answers, so a

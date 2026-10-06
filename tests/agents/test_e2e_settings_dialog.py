@@ -221,3 +221,36 @@ def test_delete_account_needs_the_email_typed_and_goes_back_to_sign_in(qapp):
     dlg.delete.click()
     wait(lambda: gone == [1])
     assert dlg.isHidden()
+
+
+
+# ── Confirmations: the app's own card, never Windows' message box ─────────────
+
+def test_confirm_is_the_apps_card_and_only_yes_is_yes(qapp):
+    """Seen 6 Oct: signing out asked in a grey Windows box with Yes/Cancel.
+    Now Wispr's card: a title, one line, Back to account and a red Sign out."""
+    from PyQt6.QtCore import QTimer
+    from PyQt6.QtWidgets import QPushButton, QWidget
+    from ui.settings_parts import SubDialog, confirm
+    host = QWidget()
+    host.resize(800, 600)
+
+    def answer(text):
+        def press():
+            card = host.findChildren(SubDialog)[-1]
+            next(b for b in card.findChildren(QPushButton) if b.text() == text).click()
+        QTimer.singleShot(30, press)
+
+    answer("Sign out")
+    assert confirm(host, "Are you sure you want to sign out?", "Body", "Sign out", "Back to account")
+    answer("Back to account")
+    assert not confirm(host, "Are you sure you want to sign out?", "Body", "Sign out", "Back to account")
+    QTimer.singleShot(30, lambda: host.findChildren(SubDialog)[-1].close_dialog())
+    assert not confirm(host, "Sure?", "Body", "Yes"), "closed is no"
+
+
+def test_no_settings_confirmation_uses_windows_message_box():
+    from pathlib import Path
+    root = Path(__file__).resolve().parents[2]
+    for name in ("ui/settings_tabs.py", "ui/app_pages.py"):
+        assert "QMessageBox" not in (root / name).read_text(encoding="utf-8"), name
