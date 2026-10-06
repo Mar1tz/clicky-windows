@@ -187,7 +187,8 @@ def test_a_look_at_a_window_maps_back_snaps_and_hints(monkeypatch):
     monkeypatch.setattr(cm, "active_window_title", lambda: "Shop")
     monkeypatch.setattr(look_region, "cursor_position", lambda: (960.0, 540.0))
     # The real "Buy" button, as Windows has it: the model's box is a little off.
-    monkeypatch.setattr(look_region, "control_rect_at", lambda x, y: (900.0, 500.0, 1020.0, 580.0))
+    monkeypatch.setattr(look_region, "control_chain_at",
+                        lambda x, y, limit=None: [((900.0, 500.0, 1020.0, 580.0), "ButtonControl")])
     seen = {}
 
     async def fake_look(question, image, **kw):
@@ -335,3 +336,43 @@ def test_the_look_is_given_the_window_in_front(monkeypatch):
     sent.clear()
     asyncio.run(gemini_vision.look("what should I play next?", "img", title="lichess.org"))
     assert sent["models"] == [Models.VISION_DEEP]
+
+
+# -- SP-09: the control they mean, not the text inside it -----------------------------------------------------
+
+BOX = (100.0, 100.0, 200.0, 136.0)                    # the model's box, drawn tight round "Sign in"
+LABEL = ((115.0, 108.0, 185.0, 128.0), "TextControl")
+BUTTON = ((95.0, 96.0, 215.0, 136.0), "ButtonControl")
+PANE = ((0.0, 0.0, 1900.0, 1000.0), "PaneControl")
+
+
+def test_the_label_inside_a_button_snaps_to_the_button():
+    assert look_region.snap_rect(BOX, LABEL[0]), "the label alone would have been taken (UD-03)"
+    assert look_region.best_control(BOX, [LABEL, BUTTON, PANE], (0, 0, 1920, 1040)) == BUTTON[0]
+
+
+def test_with_nothing_clickable_the_innermost_that_fits():
+    image = ((105.0, 100.0, 195.0, 136.0), "ImageControl")
+    group = ((90.0, 90.0, 230.0, 150.0), "GroupControl")
+    assert look_region.best_control(BOX, [image, group, PANE]) == image[0]
+    assert look_region.best_control(BOX, [PANE], (0, 0, 1920, 1040)) is None, "a pane is never it"
+    assert look_region.best_control(BOX, []) is None, "no tree: keep the box"
+
+
+def test_of_two_clickable_ones_the_nearest_in_size():
+    row = ((60.0, 90.0, 300.0, 150.0), "ListItemControl")      # 2.9x the box
+    assert look_region.best_control(BOX, [LABEL, BUTTON, row]) == BUTTON[0]
+
+
+def test_both_ends_of_a_move_are_snapped(monkeypatch):
+    """A file dragged to a folder: the file's row and the folder, each exact."""
+    mgr = cm.CompanionManager.__new__(cm.CompanionManager)
+    monitor = (0, 0, 1000, 1000)                       # 0-1000 boxes are pixels here
+    chains = {(150, 118): [((100.0, 110.0, 200.0, 126.0), "ListItemControl")],
+              (650, 518): [((600.0, 500.0, 700.0, 540.0), "TreeItemControl")]}
+    monkeypatch.setattr(look_region, "control_chain_at", lambda x, y, limit=None: chains.get((int(x), int(y)), []))
+    move = gemini_vision.Action("report.pdf", (108, 104, 128, 196), "move", to_box=(498, 604, 538, 696))
+    snapped = asyncio.run(mgr._snap_to_controls([move], monitor, None))
+    assert snapped == 2
+    assert move.box == look_region.rect_to_box((100.0, 110.0, 200.0, 126.0), monitor)
+    assert move.to_box == look_region.rect_to_box((600.0, 500.0, 700.0, 540.0), monitor)

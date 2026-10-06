@@ -2973,23 +2973,34 @@ class CompanionManager(QObject):
         """UD-03: a ring drawn round a button is put on the button itself.
         Windows knows the control's exact rectangle at the box's centre in a
         few ms; it replaces the model's box only when it is plainly the same
-        thing (see look_region.snap_rect). Moves - pieces on a board, a file
-        to a folder - and pictures are left as drawn."""
+        thing (see look_region.snap_rect). SP-09: the button, not the label
+        inside it (look_region.best_control), and a move's two ends - a file
+        to a folder - each snapped the same way. Pictures and board squares
+        with no control of their size are left as drawn."""
+        async def snap(box):
+            rect = look_region.box_to_rect(box, monitor)
+            cx, cy = (rect[0] + rect[2]) / 2, (rect[1] + rect[3]) / 2
+            # Past three times the box's size nothing can be snapped to.
+            limit = 3 * max(1.0, (rect[2] - rect[0]) * (rect[3] - rect[1]))
+            try:
+                chain = await asyncio.wait_for(
+                    asyncio.to_thread(look_region.control_chain_at, cx, cy, limit), 0.3)
+            except Exception:  # noqa: BLE001 - a slow or missing tree: keep the model's box
+                chain = []
+            exact = look_region.best_control(rect, chain, window)
+            return look_region.rect_to_box(exact, monitor) if exact else None
+
         snapped = 0
         for a in actions:
-            if getattr(a, "is_move", False):
-                continue
-            rect = look_region.box_to_rect(a.box, monitor)
-            cx, cy = (rect[0] + rect[2]) / 2, (rect[1] + rect[3]) / 2
-            try:
-                element = await asyncio.wait_for(
-                    asyncio.to_thread(look_region.control_rect_at, cx, cy), 0.3)
-            except Exception:  # noqa: BLE001 - a slow or missing tree: keep the model's box
-                element = None
-            exact = look_region.snap_rect(rect, element, window)
+            exact = await snap(a.box)
             if exact:
-                a.box = look_region.rect_to_box(exact, monitor)
+                a.box = exact
                 snapped += 1
+            if getattr(a, "to_box", None):
+                there = await snap(a.to_box)
+                if there:
+                    a.to_box = there
+                    snapped += 1
         return snapped
 
     async def _tool_draw(self, args: dict) -> dict:

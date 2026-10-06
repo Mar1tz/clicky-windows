@@ -559,7 +559,31 @@ at that fragment, and the caption never shows it. SP-02 has no
 
 ## Wave C — draw exactly, where they mean
 
-### SP-09 · Snap to the control they mean, not the text inside it — M — free
+### SP-09 · Snap to the control they mean, not the text inside it — M — free — **done (6 Oct)**
+
+**Done:**
+* **`look_region.control_chain_at`** reads the element at the point and
+  its ancestors, up to six. It stops at the first one past three times the
+  box's size, because nothing bigger can be snapped to.
+* **`best_control` picks,** among those `snap_rect` accepts, the clickable
+  one nearest the box's size: Button, Hyperlink, Edit, CheckBox,
+  RadioButton, MenuItem, ListItem, TabItem, ComboBox, SplitButton or
+  TreeItem. With none clickable, it takes the innermost.
+* **A move's two ends** (a file to a folder) are snapped the same way.
+* **Tested:**
+  * the label inside a button gives the button;
+  * with nothing clickable, the innermost;
+  * the nearest-sized of two clickable;
+  * a pane never;
+  * no tree: the box as drawn;
+  * both ends of a move.
+* **The live check found nothing either way.** It read the accessibility
+  tree of what was already open, without opening or moving any window. On
+  the taskbar the label is never the deepest element. Most browser
+  windows were behind others, and a hit-test only sees what is on top. So
+  the label case still waits for a real look.
+* **The cost:** walking the ancestors takes 9–25 ms, against about 5 ms
+  for the one element before. It stops early, under the same 0.3 s cap.
 
 **Why:**
 * UD-03 snaps to the element `ControlFromPoint` returns. That is the
@@ -735,7 +759,7 @@ answered the mate-in-one correctly.
 | SP-16 | A lighter live prompt — done | B | S | ~$0.30 | SP-02 |
 | SP-17 | "Let me look" or not — done | B | S | ~$0.36 | SP-02 |
 | SP-18 | Never speak its own planning — done | B | S | free (tests) | – |
-| SP-09 | Snap to the real control | C | M | free | – |
+| SP-09 | Snap to the real control — done | C | M | free | – |
 | SP-10 | The monitor they point at | C | S | free | – |
 | SP-11 | Arrowhead visible, card glides | C | S | free | live demo |
 | SP-12 | Card follows the real drawings | C | S | free | – |

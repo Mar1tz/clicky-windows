@@ -18,6 +18,7 @@ model saw). Rects are (left, top, right, bottom); frames are
 """
 from __future__ import annotations
 
+import math
 import re
 from typing import Optional
 
@@ -113,20 +114,55 @@ def snap_rect(box: Rect, element: Optional[Rect], window: Optional[Rect] = None)
     return element
 
 
-def control_rect_at(x: float, y: float) -> Optional[Rect]:
-    """The accessibility tree's element at a physical point, as its
-    rectangle; None when there is none (or no UI Automation)."""
+# SP-09: ControlFromPoint answers with the DEEPEST element at a point - in a
+# browser, often the label inside a button, not the button - and the ring
+# then sat on the word. The element and a few of its ancestors are read, and
+# the clickable one the box was drawn round is chosen.
+CLICKABLE = frozenset({
+    "ButtonControl", "SplitButtonControl", "HyperlinkControl", "EditControl", "CheckBoxControl",
+    "RadioButtonControl", "MenuItemControl", "ListItemControl", "TabItemControl", "ComboBoxControl",
+    "TreeItemControl",
+})
+_CHAIN_DEPTH = 6
+
+
+def control_chain_at(x: float, y: float, max_area: Optional[float] = None) -> list[tuple[Rect, str]]:
+    """The accessibility tree's element at a physical point and its
+    ancestors, innermost first, as (rectangle, control type). Empty when
+    there is none (or no UI Automation). Ancestors only get bigger, so the
+    walk stops at the first one over max_area: each step is a cross-process
+    call, and six took up to 25 ms on 6 Oct."""
+    out: list[tuple[Rect, str]] = []
     try:
         import uiautomation as auto
         c = auto.ControlFromPoint(int(x), int(y))
-        if c is None:
-            return None
-        r = c.BoundingRectangle
-        if r.width() <= 0 or r.height() <= 0:
-            return None
-        return float(r.left), float(r.top), float(r.right), float(r.bottom)
+        for _ in range(_CHAIN_DEPTH):
+            if c is None:
+                break
+            r = c.BoundingRectangle
+            if r.width() > 0 and r.height() > 0:
+                out.append(((float(r.left), float(r.top), float(r.right), float(r.bottom)), c.ControlTypeName))
+                if max_area is not None and r.width() * r.height() > max_area:
+                    break
+            c = c.GetParentControl()
     except Exception:  # noqa: BLE001 - a missing tree is a reason not to snap, never an error
+        pass
+    return out
+
+
+def best_control(box: Rect, chain: list[tuple[Rect, str]], window: Optional[Rect] = None) -> Optional[Rect]:
+    """The control the box was drawn round: among the element and its
+    ancestors that snap_rect accepts, the clickable one nearest the box's
+    size; with none clickable, the innermost one accepted. None: leave the
+    box as drawn."""
+    fits = [(rect, kind) for rect, kind in chain if snap_rect(box, rect, window)]
+    if not fits:
         return None
+    clickable = [f for f in fits if f[1] in CLICKABLE]
+    if not clickable:
+        return fits[0][0]
+    area = max(1.0, (box[2] - box[0]) * (box[3] - box[1]))
+    return min(clickable, key=lambda f: abs(math.log(max(1.0, (f[0][2] - f[0][0]) * (f[0][3] - f[0][1])) / area)))[0]
 
 
 def fingerprint(image_b64: str) -> Optional[int]:
