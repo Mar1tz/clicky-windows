@@ -33,6 +33,7 @@ CONSOLIDATED = (
     "ui/settings_tabs.py",
     "ui/agents_page.py",
     "ui/skills_page.py",
+    "ui/referral_window.py",
 )
 
 

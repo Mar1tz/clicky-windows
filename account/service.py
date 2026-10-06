@@ -304,6 +304,9 @@ class Account:
                                "Send a new one from HeyTora.")
         with self._lock:
             self._verifier = None
+            # Kept for one thing: claiming the referral the website noted for
+            # this sign-in (referral_claim) - it proves this app started it.
+            self._claim_verifier = verifier
         self._keep(r.json())
         return self.summary(force=True)
 
@@ -338,6 +341,40 @@ class Account:
     def billing_portal(self) -> str:
         """Paddle's page for this account's card, invoices and cancelling."""
         return str(self._call("POST", "billing").get("url") or "")
+
+    # -- referrals (migration 0010, docs/REFERRALS.md) ---------------------------------------------
+
+    def referrals(self, name: str = "") -> dict:
+        """Your code, your friends and your free months. Also tells the
+        server which PC this is, and the first name the website may show."""
+        from account.device import device_id
+        return self._call("GET", "referrals?" + urlencode({"device": device_id(), "name": (name or "")[:40]}))
+
+    def referral_refresh(self) -> str:
+        """A new code; the old one stops working for new sign-ups."""
+        return str(self._call("POST", "referrals/refresh").get("code") or "")
+
+    def referral_apply(self, code: str) -> dict:
+        """Use a friend's code: {"ok": True, "referrer_name", "trial_until"}
+        or {"ok": False, "message": why, in words}."""
+        from account.device import device_id
+        result = self._call("POST", "referrals/apply", {"code": code, "device": device_id()})
+        if result.get("ok"):
+            self.refresh_soon(0)                     # the 14 days show as the plan
+        return result
+
+    def referral_claim(self) -> dict:
+        """Right after a browser sign-in: the code the website noted for it,
+        if any. {"ok": False, "reason": "none"} when there was none."""
+        from account.device import device_id
+        with self._lock:
+            verifier, self._claim_verifier = getattr(self, "_claim_verifier", None), None
+        if not verifier:
+            return {"ok": False, "reason": "none"}
+        result = self._call("POST", "referrals/claim", {"verifier": verifier, "device": device_id()})
+        if result.get("ok"):
+            self.refresh_soon(0)
+        return result
 
     def delete_account(self, confirm_email: str) -> None:
         """Close the account on HeyTora's server - its profile, usage and agent

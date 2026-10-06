@@ -24,6 +24,14 @@
 //                      place ({changed: true}), prorated by Paddle.
 //   POST /billing      the Paddle customer portal for this account ({url}):
 //                      card, invoices, cancel.
+//   Referrals (migration 0010, docs/REFERRALS.md):
+//   GET  /referrals?device=&name=   your code, your friends, months waiting
+//   POST /referrals/refresh         a new code (the old one retires)
+//   POST /referrals/apply   {code, device}       use a friend's code
+//   POST /referrals/claim   {verifier, device}   the code the website noted
+//                                    for this sign-in, proved by the verifier
+//   GET  /referrals/lookup?code=     (no sign-in; the website) first name only
+//   POST /referrals/intent  {challenge, code}    (no sign-in; /login's note)
 //   POST /omniroute/v1/chat/completions   the AGENTS' model call: OmniRoute
 //                      (Claude), the only models the agents use (the owner,
 //                      5 Oct 2026). Needs the agent message's ticket; only
@@ -49,6 +57,7 @@ import {
   omnirouteModels, prices, readTicket, UsageReader,
 } from "./rules.ts";
 import { apiBase, hasLivePlan, paddleEnv, priceMap } from "../_shared/billing.ts";
+import { CHALLENGE, challengeOf, cleanCode, CODE, corsHeaders } from "../_shared/referrals.ts";
 
 const GOOGLE = "https://generativelanguage.googleapis.com";
 const KEY = Deno.env.get("GEMINI_API_KEY") ?? "";
@@ -73,6 +82,9 @@ const OMNIROUTE_MODELS = omnirouteModels(Deno.env.get("HEYTORA_OMNIROUTE_MODELS"
 const PADDLE_KEY = Deno.env.get("PADDLE_API_KEY") ?? "";
 const PADDLE_ENV = paddleEnv(Deno.env.get("PADDLE_ENV"));
 const PADDLE_PRICES = priceMap(Deno.env.get("PADDLE_PRICES"), PADDLE_ENV);
+// The website, for its two referral calls without a sign-in (CORS).
+const SITE_ORIGINS = (Deno.env.get("HEYTORA_SITE_ORIGINS") ?? "https://app.agentora.co.za,http://localhost:3500")
+  .split(",").map((o) => o.trim()).filter(Boolean);
 
 /** One call to Paddle's API. Throws with Paddle's own words on a refusal. */
 async function paddle(method: string, path: string, body?: unknown): Promise<Record<string, unknown>> {
@@ -208,6 +220,37 @@ Deno.serve(async (req: Request): Promise<Response> => {
   const auth = req.headers.get("Authorization") ?? "";
   const jwt = auth.replace(/^Bearer\s+/i, "");
 
+  // The website's referral calls: no sign-in, so before the check for one.
+  if (path === "referrals/lookup" || path === "referrals/intent") {
+    const cors = corsHeaders(req.headers.get("origin"), SITE_ORIGINS);
+    const answer = (status: number, body: unknown) =>
+      new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json", ...cors } });
+    if (req.method === "OPTIONS") return new Response(null, { status: 204, headers: cors });
+    const admin = createClient(SUPABASE_URL, SERVICE_KEY, { auth: { persistSession: false } });
+    try {
+      if (path === "referrals/lookup" && req.method === "GET") {
+        const code = cleanCode(url.searchParams.get("code"));
+        if (!CODE.test(code)) return answer(200, { ok: false });
+        const { data, error } = await admin.rpc("heytora_referral_lookup", { p_code: code });
+        if (error) throw new Error(error.message);
+        return answer(200, data);
+      }
+      if (path === "referrals/intent" && req.method === "POST") {
+        const body = await req.json().catch(() => ({}));
+        const code = cleanCode(body?.code);
+        const challenge = String(body?.challenge ?? "");
+        if (!CODE.test(code) || !CHALLENGE.test(challenge)) return answer(400, { ok: false });
+        const { data, error } = await admin.rpc("heytora_referral_intent", { p_challenge: challenge, p_code: code });
+        if (error) throw new Error(error.message);
+        return answer(200, data);
+      }
+    } catch (e) {
+      console.error("heytora: referral (public)", e);
+      return answer(502, { ok: false });
+    }
+    return answer(404, { ok: false });
+  }
+
   // Who is asking - with their own token, so the database's rules apply.
   const db = createClient(SUPABASE_URL, ANON_KEY, { global: { headers: { Authorization: auth } } });
   const { data: who } = await db.auth.getUser(jwt);
@@ -273,6 +316,40 @@ Deno.serve(async (req: Request): Promise<Response> => {
       if (error) throw new Error(`delete account: ${error.message}`);
       console.log("heytora: account deleted", user.id);
       return json(200, { deleted: true });
+    }
+
+    if (path === "referrals" && req.method === "GET") {
+      // The Refer window. It also says which PC, and the user's first name.
+      const { data, error } = await db.rpc("heytora_referral_status", {
+        p_device: url.searchParams.get("device") ?? null,
+        p_name: (url.searchParams.get("name") ?? "").slice(0, 40) || null,
+      });
+      if (error) throw new Error(`heytora_referral_status: ${error.message}`);
+      return json(200, data);
+    }
+
+    if (path === "referrals/refresh" && req.method === "POST") {
+      const { data, error } = await db.rpc("heytora_referral_refresh", {});
+      if (error) throw new Error(`heytora_referral_refresh: ${error.message}`);
+      return json(200, { ok: true, code: data });
+    }
+
+    if ((path === "referrals/apply" || path === "referrals/claim") && req.method === "POST") {
+      const body = await req.json().catch(() => ({}));
+      const device = String(body?.device ?? "").slice(0, 128) || null;
+      let args: Record<string, unknown>;
+      if (path === "referrals/claim") {
+        // The website noted this sign-in's challenge with a code; only the
+        // app that started it holds the verifier that answers it.
+        const verifier = String(body?.verifier ?? "");
+        if (verifier.length < 43) return json(200, { ok: false, reason: "none" });
+        args = { p_code: "", p_device: device, p_challenge: await challengeOf(verifier) };
+      } else {
+        args = { p_code: cleanCode(body?.code), p_device: device, p_challenge: null };
+      }
+      const { data, error } = await db.rpc("heytora_referral_apply", args);
+      if (error) throw new Error(`heytora_referral_apply: ${error.message}`);
+      return json(200, data);
     }
 
     if (path === "checkout" && req.method === "POST") {

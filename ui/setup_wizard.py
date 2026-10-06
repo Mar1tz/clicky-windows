@@ -1242,8 +1242,29 @@ class SetupWizard(QDialog):
             self._result.emit("signin", False, str(e))
             return False, str(e)
         cfg.set_access_mode("account")
-        self._result.emit("signin", True, plan_line(summary))
+        welcome = self._claim_referral()
+        if welcome:
+            try:
+                summary = self._account.summary(force=True)     # the 14 days are the plan now
+            except Exception:  # noqa: BLE001 - the plan line can wait
+                pass
+        self._result.emit("signin", True, " ".join(w for w in (welcome, plan_line(summary)) if w))
         return True, "You can close this tab - HeyTora is ready."
+
+    def _claim_referral(self) -> str:
+        """A friend's invite, noted by the website for this sign-in (docs/
+        REFERRALS.md): the 14 days start, and this says who they came from.
+        "" when there was none - or it couldn't be used (the Refer window's
+        Apply tab says why, if they try a code by hand)."""
+        try:
+            result = self._account.referral_claim()
+        except Exception:  # noqa: BLE001 - an invite never stands in the way of signing in
+            return ""
+        if not result.get("ok"):
+            return ""
+        who = result.get("referrer_name") or "A friend"
+        return (f"{who} gave you 14 days of Pro. Ask Tora 15 questions and "
+                f"{'they get' if who == 'A friend' else who + ' gets'} a free month too.")
 
     def _stop_catcher(self) -> None:
         if self._catcher is not None:

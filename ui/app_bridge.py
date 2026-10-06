@@ -477,6 +477,41 @@ class AppBridge(QObject):
             _log.exception("billing portal failed")
             return {"error": "The billing page didn't open - try again."}
 
+    # ── referrals (docs/REFERRALS.md) ────────────────────────────────────────
+    # Network calls: run them off the UI thread. Each answers the server's
+    # dict, or {"error": why, in words}.
+
+    def _referral_call(self, work) -> dict:
+        from account.service import AccountError
+        try:
+            return work()
+        except AccountError as e:
+            return {"error": str(e) or "That didn't work - try again."}
+        except Exception:  # noqa: BLE001
+            _log.exception("referral call failed")
+            return {"error": "That didn't work - try again."}
+
+    def referral_status(self) -> dict:
+        """Your code, link, friends and free months, for the Refer window."""
+        from account import settings
+        from account.service import account
+        from config import cfg
+        out = self._referral_call(lambda: account().referrals(cfg.profile()[0]))
+        if out.get("code") and settings.website_url():
+            out["link"] = f"{settings.website_url()}/r/{out['code']}"
+        return out
+
+    def refresh_referral_code(self) -> dict:
+        from account.service import account
+        return self._referral_call(lambda: {"code": account().referral_refresh()})
+
+    def apply_referral(self, code: str) -> dict:
+        from account.service import account
+        out = self._referral_call(lambda: account().referral_apply(code))
+        if out.get("ok"):
+            self.changed.emit("account")
+        return out
+
     WATCH_EVERY_MS = 5000
     WATCH_FOR_S = 20 * 60
     WATCH_BILLING_S = 10 * 60

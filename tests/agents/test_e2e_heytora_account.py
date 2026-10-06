@@ -57,6 +57,11 @@ class FakeHeyTora:
         self.signups = True                     # Supabase's "allow new users to sign up"
         self.paying = ""                        # the plan a Paddle subscription is on, if any
         self.billing_off = False                # no PADDLE_API_KEY on the server yet
+        # Referrals (migration 0010): the website's notes, and what was asked
+        self.noted: dict[str, str] = {}         # PKCE challenge -> code
+        self.applied: list[dict] = []           # {code, device} the server was asked to use
+        self.referral = {"code": "AMY1234", "friends": [], "months_waiting": 0, "months_used": 0,
+                         "new_account": True, "referred_by": None, "trial_until": None}
         self.deleted = False
 
     def window(self, kind: str, new: bool) -> tuple[int, float, bool]:
@@ -114,6 +119,25 @@ class FakeHeyTora:
         if self.ended and "/functions/v1/heytora" in path:
             return httpx.Response(401, json={"error": {"code": 401, "status": "HEYTORA_SIGNIN",
                                                        "message": "Sign in to HeyTora to keep talking."}})
+        if path.endswith("/heytora/referrals") and request.method == "GET":
+            self.referral_query = dict(request.url.params)
+            return httpx.Response(200, json=self.referral)
+        if path.endswith("/heytora/referrals/refresh"):
+            self.referral["code"] = "AMY9876"
+            return httpx.Response(200, json={"ok": True, "code": "AMY9876"})
+        if path.endswith("/heytora/referrals/apply") or path.endswith("/heytora/referrals/claim"):
+            code = body.get("code", "")
+            if path.endswith("/claim"):
+                digest = hashlib.sha256(body.get("verifier", "").encode()).digest()
+                code = self.noted.pop(base64.urlsafe_b64encode(digest).decode().rstrip("="), "")
+                if not code:
+                    return httpx.Response(200, json={"ok": False, "reason": "none"})
+            self.applied.append({"code": code, "device": body.get("device")})
+            if code != "DYLANH4821":
+                return httpx.Response(200, json={"ok": False, "reason": "unknown",
+                                                 "message": "That code isn't valid - check it and try again."})
+            return httpx.Response(200, json={"ok": True, "referrer_name": "Dylan",
+                                             "trial_until": "2026-10-21T10:00:00Z"})
         if path.endswith("/heytora/checkout"):
             if self.billing_off:
                 return httpx.Response(503, json={"error": {"code": 503, "status": "HEYTORA_BILLING",

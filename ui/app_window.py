@@ -269,8 +269,9 @@ class ToraApp(QWidget):
         return item.mapToGlobal(QPoint(item.width() + 10, -8))
 
     def open_free_month(self) -> None:
-        self._popover = app_popover.free_month_card()
-        self._popover.open_at(self._beside("free_month"), "left")
+        """Refer and earn (ui/referral_window.py, docs/REFERRALS.md)."""
+        from ui.referral_window import open_referrals
+        self._referrals = open_referrals(self, self.bridge)
 
     def open_help(self) -> None:
         self._popover = app_popover.help_card(self.bridge, self.show_page)

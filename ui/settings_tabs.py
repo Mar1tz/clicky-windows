@@ -845,7 +845,10 @@ class PlansTab(Tab):
         else:
             status = summary.get("plan_status") or ""
             name = summary.get("plan_name") or mine.capitalize()
-            if mine != "free" and status == "past_due":
+            if mine == "pro_trial" and summary.get("trial_until"):
+                billing.row(f"Pro trial until {_day(summary['trial_until'])}",
+                            "A friend's gift. Choose Pro to keep it going after that.")
+            elif mine != "free" and status == "past_due":
                 billing.row(f"{name}: your last payment didn't go through",
                             "Update your card in Manage billing to keep the plan.")
             elif mine != "free" and summary.get("plan_cancel_at"):
