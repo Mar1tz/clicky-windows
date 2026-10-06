@@ -23,9 +23,9 @@ Each question is checked for:
 with the time to the first word and to the answer, and - once SP-03 reads the
 live server's usage - the tokens and cost of the whole answer.
 
-PAID: about $0.12 a run (measured 6 Oct) - each tool round re-bills the ~3,900-token
+PAID: about $0.15 a run (15 questions; 12 cost $0.116 on 6 Oct) - each tool round re-bills the ~3,900-token
 prompt - on the owner's own key (TORA_ACCESS=own_key), never the plan.
---max-dollars stops it (default $0.15).
+--max-dollars stops it (default $0.25).
 
     python tools/voice_eval.py --dry                   # the questions and checks, free
     python tools/voice_eval.py                         # all of them
@@ -63,6 +63,7 @@ class Case:
     readings: list[str] = field(default_factory=list)   # in the look, not in `say`: never said
     must: list[str] = field(default_factory=list)  # any one of these is said
     forbid: set[str] = field(default_factory=lambda: {"search_web", "delegate_task"})
+    args: dict = field(default_factory=dict)       # some call carries these (SP-16)
 
 
 def _look(say: str, *drawn: tuple[str, str, str]) -> dict:
@@ -124,6 +125,15 @@ CASES = [
          forbid={"search_web", "delegate_task", "look_at_screen", "point_at", "draw", "show_me_how"}),
     Case("skip_song", "skip this song", "Spotify Premium", "opaque", [], {"desktop_action"},
          forbid={"search_web", "delegate_task", "look_at_screen"}),
+    # SP-16: the long tool descriptions hold field fixes - a song is Spotify,
+    # never a web page; building is an agent's job; "how's it going" asks one.
+    Case("play_song", "play Blinding Lights", "Report.docx - Word", "named", WORD, {"desktop_action"},
+         forbid={"search_web", "delegate_task", "look_at_screen"}, args={"app": "spotify"}),
+    Case("build_app", "build me a React app called MyShop", "Report.docx - Word", "named", WORD,
+         {"delegate_task"}, forbid={"search_web", "look_at_screen", "desktop_action"}),
+    Case("agent_status", "how's my build going?", "Report.docx - Word", "named", WORD, {"manage_agents"},
+         forbid={"search_web", "delegate_task", "look_at_screen"}, args={"action": "status"},
+         must=["install", "running", "working", "going"]),
 ]
 
 # What every other tool answers - shaped as the app's handlers answer.
@@ -139,9 +149,13 @@ CANNED = {
     "guide_step": lambda a: {"ok": True},
     "search_web": lambda a: {"results": "Nothing useful found."},
     "recall": lambda a: {"memories": []},
-    "delegate_task": lambda a: {"started": False, "note": "not in the test bench"},
-    "desktop_action": lambda a: {"ok": True, "result": "Skipped to the next track."},
-    "manage_agents": lambda a: {"tasks": []},
+    "delegate_task": lambda a: {"started": True, "title": a.get("title") or "Create React app MyShop",
+                                "steps": ["Create the MyShop folder", "Scaffold a React app with Vite",
+                                          "Install the packages"]},
+    "desktop_action": lambda a: {"ok": True, "result": "Playing Blinding Lights by The Weeknd."
+                                 if a.get("action") in ("play", "play_playlist") else "Skipped to the next track."},
+    "manage_agents": lambda a: {"tasks": [{"title": "Create React app MyShop", "state": "running",
+                                           "step": "Install the packages (3 of 3)"}]},
 }
 
 # Going back for another go once the answer is in ("let me recount"). Not
@@ -168,7 +182,7 @@ def context_line(case: Case) -> str:
     return f"[context] Today is {datetime.now():%A, %B %d, %Y}. {line}"
 
 
-def check(case: Case, said: str, answer: str, tools: list[str]) -> dict:
+def check(case: Case, said: str, answer: str, tools: list[str], args: list[dict] = ()) -> dict:
     """Every check, by name: True passed."""
     first = tools[0] if tools else "none"
     low = said.lower()
@@ -181,6 +195,11 @@ def check(case: Case, said: str, answer: str, tools: list[str]) -> dict:
         "no_counting": not _COUNT.search(said),
         "no_readings": not [w for w in case.readings if w in low and w not in look],
         "the_line": not case.must or any(m in low for m in case.must),
+        "args": not case.args or any(all(str(a.get(k, "")).lower() == v for k, v in case.args.items())
+                                     for a in args),
+        # Its own planning, spoken (6 Oct: "Does it use markdown? No. ...
+        # **Finalize Output.**"). SP-18.
+        "no_planning": not re.search(r"\*\*|(^|\n)\s*\*\s", said),
     }
     if "look_at_screen" in case.expect:
         # What the look drew IS the answer: no rings or labels on top of it.
@@ -277,7 +296,7 @@ async def ask(case: Case, system_prompt: str, *, timeout: float = 30.0) -> dict:
     after = [t for t, _ in said_parts if t > last_tool]
     answer_s = round(after[0] - t0, 2) if after else None
     tools = [c["name"] for c in calls]
-    checks = check(case, said, answer, tools)
+    checks = check(case, said, answer, tools, [c["args"] for c in calls])
     return {"name": case.name, "question": case.question, "ok": all(checks.values()),
             "failed": [k for k, v in checks.items() if not v], "tools": tools,
             "args": [c["args"] for c in calls], "said": said, "answer": answer,
@@ -308,7 +327,7 @@ async def main():
     ap = argparse.ArgumentParser(description="The voice test bench (SP-02).")
     ap.add_argument("--dry", action="store_true", help="print the questions and checks, free")
     ap.add_argument("--only", default="", help="comma-separated case names")
-    ap.add_argument("--max-dollars", type=float, default=0.15)
+    ap.add_argument("--max-dollars", type=float, default=0.25)
     ap.add_argument("--against", default="", help="an earlier report.json to compare with")
     args = ap.parse_args()
 

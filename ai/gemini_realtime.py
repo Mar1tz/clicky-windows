@@ -117,10 +117,11 @@ def tool_declarations() -> list[dict]:
         {
             "name": "point_at",
             "description": (
-                "Put Tora's pointer on a control, by name. Use the exact "
-                "name from the list of controls you were given. Call this "
-                "BEFORE describing where something is — the arrow flies over "
-                "while you speak. Instant: no screenshot needed."
+                "Put Tora's pointer on a control, by name: the exact name "
+                "from the controls list, or your best short name for it if "
+                "it is not listed - Tora finds it. Instant, no screenshot. "
+                "Call it BEFORE describing where something is: the arrow "
+                "flies over while you speak."
             ),
             "parameters": {
                 "type": "object",
@@ -139,13 +140,11 @@ def tool_declarations() -> list[dict]:
         {
             "name": "look_at_screen",
             "description": (
-                "Actually LOOK at the screen and answer a question about what "
-                "it shows. Use ONLY when the answer needs the pixels: a game, "
-                "a photo, a chart, a chessboard, a diagram, handwriting, an "
-                "error with no name, or any 'what is the best…' question. "
-                "Do NOT use it to find a named button — point_at is instant "
-                "and this takes a second or two. It draws the answer on "
-                "screen (a what-to-do question: one arrow) and returns "
+                "LOOK at the screen, for what names cannot answer: a game, a "
+                "photo, a chart, a diagram, handwriting, an error with no "
+                "name, any 'what is the best...'. Not for a named button - "
+                "point_at is instant, this takes a second or two. It draws "
+                "the answer (a what-to-do question: one arrow) and returns "
                 "`say`: say that one line and stop. Never read out what it "
                 "saw."
             ),
@@ -158,12 +157,7 @@ def tool_declarations() -> list[dict]:
                     },
                     "careful": {
                         "type": "boolean",
-                        "description": (
-                            "True only for dense reading - code, small "
-                            "print, a full sheet: a sharper image. The look "
-                            "takes a closer look on its own when it is not "
-                            "sure, so leave this off for judgement calls."
-                        ),
+                        "description": "Dense reading only: a sharper image.",
                     },
                 },
                 "required": ["question"],
@@ -172,13 +166,12 @@ def tool_declarations() -> list[dict]:
         {
             "name": "draw",
             "description": (
-                "Draw on the user's screen — arrows, circles, boxes, labels. "
-                "Draw ON what you are explaining. Coordinates are normalized "
-                "0-1000, and you cannot see the screen yourself: take every "
-                "position from look_at_screen's `highlights` (each tag holds "
-                "its coordinates) and draw relative to those. Never invent "
-                "coordinates, and don't redraw what look_at_screen has "
-                "already highlighted."
+                "Draw ON what you are explaining: arrows, circles, boxes, "
+                "labels. Coordinates are 0-1000, x from the left, y from the "
+                "top. You cannot see the screen: take every position from "
+                "look_at_screen's `highlights` (each tag holds its "
+                "coordinates). Never invent coordinates, and don't redraw "
+                "what look_at_screen has already highlighted."
             ),
             "parameters": {
                 "type": "object",
@@ -288,23 +281,18 @@ def tool_declarations() -> list[dict]:
         {
             "name": "delegate_task",
             "description": (
-                "Hand real work to a background agent: creating folders and "
-                "projects, scaffolding apps, writing files, running installs. "
-                "Use when the user asks you to BUILD or MAKE something on "
-                "their machine — never for questions, explanations, or "
-                "anything about what is on their screen. The agent works "
-                "while you keep talking: read the returned steps back "
-                "briefly, say it has started, and that they can carry on."
+                "Hand real work to a background agent - folders, projects, "
+                "apps, files, installs - when the user asks you to BUILD or "
+                "MAKE something on their machine. Never for a question or "
+                "the screen. It works while you talk: say briefly what it "
+                "will do and that it has started."
             ),
             "parameters": {
                 "type": "object",
                 "properties": {
                     "goal": {
                         "type": "string",
-                        "description": (
-                            "What to build, in one or two sentences, keeping "
-                            "every detail the user gave."
-                        ),
+                        "description": "What to build, with every detail the user gave.",
                     },
                     "title": {
                         "type": "string",
@@ -312,10 +300,7 @@ def tool_declarations() -> list[dict]:
                     },
                     "workspace_hint": {
                         "type": "string",
-                        "description": (
-                            "The folder name the user asked for, e.g. 'MyApp', "
-                            "exactly as they said it. Omit if they gave none."
-                        ),
+                        "description": "The folder name they gave, exactly; omit if none.",
                     },
                     "kind": {
                         "type": "string",
@@ -328,41 +313,32 @@ def tool_declarations() -> list[dict]:
         {
             "name": "desktop_action",
             "description": (
-                "Do one thing in a REAL APP on this PC, straight away, in the background. "
-                "Spotify (play, play_playlist, next, previous, play_pause, volume, "
-                "now_playing), VS Code / Cursor / Windsurf (open_project, open_file, chat, "
-                "recent_projects, install_extension), Windows (open_app, media, volume, "
-                "window, clipboard_copy, open_folder, open_settings), websites (app "
-                "'browser': open_url, search - the browser the user already has open, "
-                "as a new tab; name chrome, edge, firefox, brave or opera ONLY if the "
-                "user named it). Uses the app's own API, deep link or media key - nothing on "
-                "screen moves and the window does not even have to be visible. "
-                "ALWAYS prefer the real app over a browser. Playing a song means "
-                "app='spotify', action='play' - NOT opening open.spotify.com in a browser, "
-                "which shows a web page instead of playing anything. Only use a browser "
-                "for things that genuinely live on the web. "
-                "If you are not sure an app can do something, call action='list' FIRST "
-                "and read what it offers; do not assume it cannot and fall back to a "
-                "browser. Anything that acts may first need the user's yes - the "
-                "result says when it does."
+                "Do one thing in a REAL APP on this PC, in the background, through "
+                "its own API: Spotify (play, play_playlist, next, previous, play_pause, "
+                "volume, now_playing), VS Code / Cursor / Windsurf (open_project, "
+                "open_file, chat, recent_projects, install_extension), Windows "
+                "(open_app, media, volume, window, clipboard_copy, open_folder, "
+                "open_settings), websites (app 'browser': open_url, search - a new tab "
+                "in the browser they have open). ALWAYS prefer the real app: a song is "
+                "app='spotify', action='play', never open.spotify.com. Not sure an app "
+                "can do it? action='list' first, never a browser instead. The result "
+                "says when the user's yes is needed."
             ),
             "parameters": {
                 "type": "object",
                 "properties": {
                     "app": {"type": "string",
-                            "description": "browser (websites, in the browser the user "
-                                           "has open), spotify, vscode, cursor, windsurf, "
-                                           "antigravity, windows, chrome, edge, firefox, brave, "
-                                           "opera. 'windows' covers the "
-                                           "OS itself: opening any installed app, volume, "
-                                           "windows, clipboard, folders, settings pages."},
+                            "description": "browser, spotify, vscode, cursor, windsurf, "
+                                           "antigravity, windows (the OS: any installed app, "
+                                           "volume, windows, clipboard, folders, settings); "
+                                           "chrome, edge, firefox, brave, opera ONLY if the "
+                                           "user named it."},
                     "action": {"type": "string",
                                "description": "The action name, or 'list' to see what exists."},
                     "arguments_json": {
                         "type": "string",
                         "description": "The action's arguments as JSON, e.g. "
-                                       "{\"project\": \"clicky-windows-main\"} or "
-                                       "{\"prompt\": \"explain this repo\"}.",
+                                       "{\"project\": \"clicky-windows-main\"}.",
                     },
                 },
                 "required": ["app", "action"],
@@ -371,13 +347,12 @@ def tool_declarations() -> list[dict]:
         {
             "name": "manage_agents",
             "description": (
-                "Check on or control background agents. Use when the user "
-                "asks how a build is going, whether something is ready, or "
-                "says stop / pause / resume / cancel that, or approve / deny "
-                "when an agent is waiting for permission. Also turns industry "
-                "extensions on and off (e.g. id 'accounting' when the user says "
-                "they are an accountant and agrees), opens an extension's "
-                "dashboard, and opens the wizard to create a specialist agent."
+                "Check on or control background agents: how a build is going, "
+                "stop / pause / resume / cancel, approve / deny when one waits "
+                "for permission. Also turns industry extensions on and off (id "
+                "'accounting' when they say they are an accountant and agree), "
+                "opens an extension's dashboard, and the wizard that creates a "
+                "specialist agent."
             ),
             "parameters": {
                 "type": "object",
@@ -390,11 +365,11 @@ def tool_declarations() -> list[dict]:
                     },
                     "task": {
                         "type": "string",
-                        "description": "A few words from the task's title, if they named one.",
+                        "description": "A few words of the task's title, if they named one.",
                     },
                     "id": {
                         "type": "string",
-                        "description": "Extension id for the extension actions, e.g. 'accounting'.",
+                        "description": "Extension id, e.g. 'accounting'.",
                     },
                     "template": {
                         "type": "string",

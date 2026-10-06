@@ -411,7 +411,43 @@ next?" on Spotify goes to the deep model.
 
 *Prove:* unit tests both ways, and SP-01's music screen stays fast.
 
-### SP-16 · A lighter live prompt — S — **found by SP-03**
+### SP-16 · A lighter live prompt — S — **done (6 Oct)**
+
+**What changed:**
+* **The live rules say each thing once:** 5,038 → 2,268 characters. Their
+  copy of the tool list is gone: when to use a tool is in its description.
+* **Shorter tool descriptions:** `desktop_action`, `delegate_task`,
+  `manage_agents`, `look_at_screen` and `draw`. Every rule a test or a field
+  fix holds is kept: a song is Spotify, "list" before giving up, a browser
+  only if named, `say`, never invent coordinates, the user's colour.
+* **The voice bench has 15 questions.** Three were added for the trimmed
+  tools: "play Blinding Lights" must go to Spotify, "build me a React
+  app", and "how's my build going?".
+
+**SP-02, before → after** ($0.146 + $0.128, plus $0.033 of repeats):
+
+| | before | after |
+|---|---|---|
+| prompt per generation | 4,519 tokens | **3,667 (−852)** |
+| voice cost per answer | $0.0098 | **$0.0085 (−13%)** |
+| passed | 15/15 | 14/15 |
+
+* **The one miss:** "how do I export this as a PDF?" spoke its own
+  planning ("Does it use markdown? No. … **Finalize Output.**") and then
+  the walkthrough's first step. Four repeats on the same prompt were
+  clean, and it is about 1 in 35 bench answers so far. It is SP-18, and the
+  bench now checks for it (`no_planning`).
+* **Fillers vary a lot from run to run.**
+  * The same old prompt opened 2 of 6 look questions with "let me look…"
+    on one run, and 5 of 6 on the next.
+  * After the trim, three non-look tools (the app, the build, the status)
+    opened with one too, and their tool call came at 1.2–1.6 s instead of
+    about 0.5 s.
+  * SP-17 settles the filler over repeated runs.
+* **Not touched:** the base prompt (`DEFAULT_SYSTEM_PROMPT`). It still
+  tells the cascade "Say 'next' when ready", which the live walkthrough
+  rules forbid. A user can override that prompt, so it needs its own
+  change.
 
 **Why:**
 * The voice is three quarters of a looked answer's cost (SP-03).
@@ -453,6 +489,31 @@ $0.0015 an answer, 15%).
 
 *Prove:* SP-02 answer p50 on the look questions down; 12/12 kept.
 *Cost:* about $0.25.
+
+### SP-18 · Never speak its own planning — S — **found by SP-16**
+
+**Why:**
+* On 6 Oct the live voice once said its own checklist out loud:
+  "Does it use markdown? No. Does it have bullet lists? No. … 7.
+  **Finalize Output.**" It then said the walkthrough's first step, which
+  `show_me_how` forbids.
+* It was about 6 seconds of audio, 1 answer in about 35. Rare, but the
+  user hears it, and it sounds broken.
+
+**Do:**
+* **Spot it in the transcript.** The output transcription arrives with
+  the audio, slightly ahead of it. A fragment with markdown is the
+  model's planning, never speech: bullets ("*   "), bold ("**…**"), or a
+  numbered heading ("7.  **").
+* **Stop it.** Clear the player (as a barge-in does), drop the rest of
+  that turn's speech, keep it off the caption and the flow bar, and log
+  it.
+* **Measure.** The bench's `no_planning` check counts it per run.
+
+*Prove:* a scripted turn whose transcript turns into a checklist is cut
+at that fragment, and the caption never shows it. SP-02 has no
+`no_planning` failures over three runs.
+*Cost:* about $0.40 (three runs).
 
 ---
 
@@ -631,8 +692,9 @@ answered the mate-in-one correctly.
 | SP-06 | Right image size — done | B | S | ~$0.13 | SP-01 |
 | SP-07 | Typed path, same rule — done | B | S | free | – |
 | SP-08 | Sharper routing words — done | B | S | free | SP-01 screen |
-| SP-16 | A lighter live prompt | B | S | ~$0.25 | SP-02 |
+| SP-16 | A lighter live prompt — done | B | S | ~$0.30 | SP-02 |
 | SP-17 | "Let me look" or not | B | S | ~$0.25 | SP-02 |
+| SP-18 | Never speak its own planning | B | S | ~$0.40 | SP-02 |
 | SP-09 | Snap to the real control | C | M | free | – |
 | SP-10 | The monitor they point at | C | S | free | – |
 | SP-11 | Arrowhead visible, card glides | C | S | free | live demo |
@@ -645,8 +707,8 @@ answered the mate-in-one correctly.
 SP-12.
 
 **The biggest levers:**
-* **Cost:** SP-16. The voice is three quarters of a looked answer
-  (SP-03).
+* **Cost:** the voice is three quarters of a looked answer (SP-03).
+  SP-16 took 13% off it.
 * **The answer's speed:** SP-17.
 * **Done:**
   * SP-04 took the deep look from $0.054 to $0.020 and from 5.3 s to

@@ -162,9 +162,9 @@ def bench():
     return mod
 
 
-def test_the_bench_asks_twelve_questions_and_sends_no_screen(bench):
-    assert len(bench.CASES) == 12
-    assert len({c.name for c in bench.CASES}) == 12
+def test_the_bench_asks_fifteen_questions_and_sends_no_screen(bench):
+    assert len(bench.CASES) == 15
+    assert len({c.name for c in bench.CASES}) == 15
     for c in bench.CASES:
         line = bench.context_line(c)
         assert line.startswith("[context] Today is") and c.title in line
@@ -263,3 +263,19 @@ def test_the_scorecard_prices_the_whole_message(caplog):
     with caplog.at_level(logging.INFO, logger="tora.manager"):
         mgr._log_answer("Click Checkout.")
     assert "voice cost avg $0.0008, answer cost avg $0.0018" in caplog.text
+
+
+def test_the_bench_checks_what_a_tool_was_asked_to_do(bench):
+    song = next(c for c in bench.CASES if c.name == "play_song")
+    said = "Playing Blinding Lights by The Weeknd."
+    assert bench.check(song, said, said, ["desktop_action"], [{"app": "spotify", "action": "play"}])["args"]
+    assert not bench.check(song, said, said, ["desktop_action"], [{"app": "browser", "action": "open_url"}])["args"],         "a song is Spotify, never a web page"
+
+
+def test_the_bench_catches_spoken_planning(bench):
+    """6 Oct: the voice once spoke its own checklist before the walkthrough."""
+    how = next(c for c in bench.CASES if c.name == "how_to")
+    leaked = ("Sure, let me walk you through it.    *   Does it use markdown? No.\n    *   Does it have "
+              "bullet lists? No.\n\n7.  **Finalize Output.**To get started, click File.")
+    assert not bench.check(how, leaked, leaked, ["show_me_how"])["no_planning"]
+    assert bench.check(how, "Sure, let me walk you through it.", "", ["show_me_how"])["no_planning"]
