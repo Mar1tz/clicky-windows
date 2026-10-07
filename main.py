@@ -316,10 +316,12 @@ def main():
     app_theme.apply(tokens.resolve(cfg.theme()))
     from ui.overlay import set_cursor_colour
     set_cursor_colour(tokens.cursor_hex(cfg.cursor_colour()))   # Make Tora yours
-    from PyQt6.QtGui import QIcon
-    _icon = tokens.assets_dir() / "brand" / "heytora-icon.svg"
-    if _icon.exists():
-        app.setWindowIcon(QIcon(str(_icon)))    # every window's title bar and taskbar button
+    from ui import app_icon
+    try:
+        app.setWindowIcon(app_icon.qicon())    # every window's title bar and taskbar button
+    except Exception:  # noqa: BLE001 - an icon must never stop HeyTora starting
+        import logging
+        logging.getLogger("tora").warning("could not set the window icon", exc_info=True)
     # A "start with Windows" set before the rename lives under the old name.
     from ui import autostart
     autostart.migrate_legacy()
