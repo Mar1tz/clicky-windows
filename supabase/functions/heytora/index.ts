@@ -18,7 +18,20 @@
 //   POST /agent-ticket the agent window's ticket (older apps).
 //   GET  /me           the plan, its allowances and this month's use.
 //   DELETE /account    {confirm: email}  close the account and delete its
-//                      data (refused while a paid plan is active).
+//                      data; a paid plan is cancelled at Paddle first.
+//   POST /checkout     {plan: "pro"|"max"}  a Paddle checkout for this account
+//                      ({url}), or - already paying - the plan changed in
+//                      place ({changed: true}), prorated by Paddle.
+//   POST /billing      the Paddle customer portal for this account ({url}):
+//                      card, invoices, cancel.
+//   Referrals (migration 0010, docs/REFERRALS.md):
+//   GET  /referrals?device=&name=   your code, your friends, months waiting
+//   POST /referrals/refresh         a new code (the old one retires)
+//   POST /referrals/apply   {code, device}       use a friend's code
+//   POST /referrals/claim   {verifier, device}   the code the website noted
+//                                    for this sign-in, proved by the verifier
+//   GET  /referrals/lookup?code=     (no sign-in; the website) first name only
+//   POST /referrals/intent  {challenge, code}    (no sign-in; /login's note)
 //   POST /omniroute/v1/chat/completions   the AGENTS' model call: OmniRoute
 //                      (Claude), the only models the agents use (the owner,
 //                      5 Oct 2026). Needs the agent message's ticket; only
@@ -33,7 +46,8 @@
 // The rules are in migration 0004 (heytora_window / heytora_pass /
 // heytora_consume) and rules.ts. Secrets: GEMINI_API_KEY,
 // HEYTORA_TICKET_SECRET. Optional: HEYTORA_TALK_MODELS,
-// HEYTORA_DICTATION_MODELS, HEYTORA_PRICES.
+// HEYTORA_DICTATION_MODELS, HEYTORA_PRICES. Paid plans: PADDLE_API_KEY, and
+// PADDLE_ENV / PADDLE_PRICES (supabase/functions/_shared/billing.ts).
 //
 // Deploy:  supabase functions deploy heytora --use-api   (JWT verification on)
 
@@ -42,6 +56,8 @@ import {
   checkGenerate, costMicro, estimateTokens, family, makeTicket, MAX_BODY_BYTES, MAX_OUTPUT_TOKENS,
   omnirouteModels, prices, readTicket, UsageReader,
 } from "./rules.ts";
+import { apiBase, hasLivePlan, paddleEnv, priceMap } from "../_shared/billing.ts";
+import { CHALLENGE, challengeOf, cleanCode, CODE, corsHeaders } from "../_shared/referrals.ts";
 
 const GOOGLE = "https://generativelanguage.googleapis.com";
 const KEY = Deno.env.get("GEMINI_API_KEY") ?? "";
@@ -62,6 +78,28 @@ const PRICES = prices(Deno.env.get("HEYTORA_PRICES"));
 const OMNIROUTE_KEY = Deno.env.get("OMNIROUTE_API_KEY") ?? "";
 const OMNIROUTE_URL = (Deno.env.get("OMNIROUTE_BASE_URL") ?? "").replace(/\/+$/, "");
 const OMNIROUTE_MODELS = omnirouteModels(Deno.env.get("HEYTORA_OMNIROUTE_MODELS"));
+// Paid plans (Paddle): the API key, which account, and which price is which plan.
+const PADDLE_KEY = Deno.env.get("PADDLE_API_KEY") ?? "";
+const PADDLE_ENV = paddleEnv(Deno.env.get("PADDLE_ENV"));
+const PADDLE_PRICES = priceMap(Deno.env.get("PADDLE_PRICES"), PADDLE_ENV);
+// The website, for its two referral calls without a sign-in (CORS).
+const SITE_ORIGINS = (Deno.env.get("HEYTORA_SITE_ORIGINS") ?? "https://app.agentora.co.za,http://localhost:3500")
+  .split(",").map((o) => o.trim()).filter(Boolean);
+
+/** One call to Paddle's API. Throws with Paddle's own words on a refusal. */
+async function paddle(method: string, path: string, body?: unknown): Promise<Record<string, unknown>> {
+  const r = await fetch(`${apiBase(PADDLE_ENV)}${path}`, {
+    method,
+    headers: { authorization: `Bearer ${PADDLE_KEY}`, "content-type": "application/json", "Paddle-Version": "1" },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+  const data = await r.json().catch(() => ({}));
+  if (!r.ok) {
+    const detail = (data as { error?: { detail?: string; code?: string } }).error;
+    throw new Error(`paddle ${method} ${path}: ${r.status} ${detail?.code ?? ""} ${detail?.detail ?? ""}`);
+  }
+  return ((data as { data?: Record<string, unknown> }).data) ?? {};
+}
 
 // Only these Gemini REST paths: model calls and the model list. No files,
 // no tuning, no caches - nothing that stores anything on the business account.
@@ -182,6 +220,37 @@ Deno.serve(async (req: Request): Promise<Response> => {
   const auth = req.headers.get("Authorization") ?? "";
   const jwt = auth.replace(/^Bearer\s+/i, "");
 
+  // The website's referral calls: no sign-in, so before the check for one.
+  if (path === "referrals/lookup" || path === "referrals/intent") {
+    const cors = corsHeaders(req.headers.get("origin"), SITE_ORIGINS);
+    const answer = (status: number, body: unknown) =>
+      new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json", ...cors } });
+    if (req.method === "OPTIONS") return new Response(null, { status: 204, headers: cors });
+    const admin = createClient(SUPABASE_URL, SERVICE_KEY, { auth: { persistSession: false } });
+    try {
+      if (path === "referrals/lookup" && req.method === "GET") {
+        const code = cleanCode(url.searchParams.get("code"));
+        if (!CODE.test(code)) return answer(200, { ok: false });
+        const { data, error } = await admin.rpc("heytora_referral_lookup", { p_code: code });
+        if (error) throw new Error(error.message);
+        return answer(200, data);
+      }
+      if (path === "referrals/intent" && req.method === "POST") {
+        const body = await req.json().catch(() => ({}));
+        const code = cleanCode(body?.code);
+        const challenge = String(body?.challenge ?? "");
+        if (!CODE.test(code) || !CHALLENGE.test(challenge)) return answer(400, { ok: false });
+        const { data, error } = await admin.rpc("heytora_referral_intent", { p_challenge: challenge, p_code: code });
+        if (error) throw new Error(error.message);
+        return answer(200, data);
+      }
+    } catch (e) {
+      console.error("heytora: referral (public)", e);
+      return answer(502, { ok: false });
+    }
+    return answer(404, { ok: false });
+  }
+
   // Who is asking - with their own token, so the database's rules apply.
   const db = createClient(SUPABASE_URL, ANON_KEY, { global: { headers: { Authorization: auth } } });
   const { data: who } = await db.auth.getUser(jwt);
@@ -217,13 +286,28 @@ Deno.serve(async (req: Request): Promise<Response> => {
         return refuse(400, "HEYTORA_CONFIRM", "Type the email you sign in with to confirm.");
       }
       const admin = createClient(SUPABASE_URL, SERVICE_KEY, { auth: { persistSession: false } });
-      // A paid plan is cancelled first, on the website - never deleted out
-      // from under a subscription that would go on billing.
-      const { data: profile } = await admin.from("profiles").select("plan, plan_status")
-        .eq("id", user.id).maybeSingle();
-      if (profile && profile.plan !== "free" && ["active", "trialing", "past_due"].includes(profile.plan_status)) {
+      // A paid plan is cancelled at Paddle first - never deleted out from
+      // under a subscription that would go on billing. If Paddle can't be
+      // reached, nothing is deleted: the user is told to try again.
+      const { data: profile } = await admin.from("profiles")
+        .select("plan, plan_status, paddle_subscription_id").eq("id", user.id).maybeSingle();
+      if (profile && hasLivePlan(profile)) {
+        if (!PADDLE_KEY) {
+          return refuse(409, "HEYTORA_PAID", "Your plan can't be cancelled from here right now - "
+            + "write to support and we'll close the account.", { reason: "paid", plan: profile.plan });
+        }
+        try {
+          await paddle("POST", `/subscriptions/${profile.paddle_subscription_id}/cancel`,
+            { effective_from: "immediately" });
+        } catch (e) {
+          console.error("heytora: cancel before delete", e);
+          return refuse(502, "HEYTORA_BILLING", "Your plan couldn't be cancelled just now - try again.");
+        }
+      } else if (profile && profile.plan !== "free"
+                 && ["active", "trialing", "past_due"].includes(profile.plan_status)) {
+        // A paid plan with no Paddle subscription (set by hand): not ours to cancel.
         return refuse(409, "HEYTORA_PAID",
-          "Cancel your plan on the HeyTora website first, then delete the account.",
+          "Your plan is managed by HeyTora - write to support and we'll close the account.",
           { reason: "paid", plan: profile.plan });
       }
       // Every table of theirs references auth.users on delete cascade
@@ -232,6 +316,95 @@ Deno.serve(async (req: Request): Promise<Response> => {
       if (error) throw new Error(`delete account: ${error.message}`);
       console.log("heytora: account deleted", user.id);
       return json(200, { deleted: true });
+    }
+
+    if (path === "referrals" && req.method === "GET") {
+      // The Refer window. It also says which PC, and the user's first name.
+      const { data, error } = await db.rpc("heytora_referral_status", {
+        p_device: url.searchParams.get("device") ?? null,
+        p_name: (url.searchParams.get("name") ?? "").slice(0, 40) || null,
+      });
+      if (error) throw new Error(`heytora_referral_status: ${error.message}`);
+      return json(200, data);
+    }
+
+    if (path === "referrals/refresh" && req.method === "POST") {
+      const { data, error } = await db.rpc("heytora_referral_refresh", {});
+      if (error) throw new Error(`heytora_referral_refresh: ${error.message}`);
+      return json(200, { ok: true, code: data });
+    }
+
+    if ((path === "referrals/apply" || path === "referrals/claim") && req.method === "POST") {
+      const body = await req.json().catch(() => ({}));
+      const device = String(body?.device ?? "").slice(0, 128) || null;
+      let args: Record<string, unknown>;
+      if (path === "referrals/claim") {
+        // The website noted this sign-in's challenge with a code; only the
+        // app that started it holds the verifier that answers it.
+        const verifier = String(body?.verifier ?? "");
+        if (verifier.length < 43) return json(200, { ok: false, reason: "none" });
+        args = { p_code: "", p_device: device, p_challenge: await challengeOf(verifier) };
+      } else {
+        args = { p_code: cleanCode(body?.code), p_device: device, p_challenge: null };
+      }
+      const { data, error } = await db.rpc("heytora_referral_apply", args);
+      if (error) throw new Error(`heytora_referral_apply: ${error.message}`);
+      return json(200, data);
+    }
+
+    if (path === "checkout" && req.method === "POST") {
+      // Buying a plan, or changing it. Which account pays is ours to say (the
+      // sign-in), never the app's: it rides on the transaction's custom_data
+      // and comes back on every webhook (supabase/functions/paddle).
+      if (!PADDLE_KEY) return refuse(503, "HEYTORA_BILLING", "Paid plans aren't open yet.");
+      const body = await req.json().catch(() => ({}));
+      const plan = String(body?.plan ?? "").toLowerCase();
+      const price = PADDLE_PRICES[plan];
+      if (!price) return refuse(400, "HEYTORA_PLAN", `Not a plan you can buy: ${plan || "(none)"}`);
+      const admin = createClient(SUPABASE_URL, SERVICE_KEY, { auth: { persistSession: false } });
+      const { data: profile } = await admin.from("profiles")
+        .select("plan, plan_status, paddle_customer_id, paddle_subscription_id, plan_cancel_at")
+        .eq("id", user.id).maybeSingle();
+      if (profile && hasLivePlan(profile)) {
+        if (profile.plan === plan && !profile.plan_cancel_at) {
+          return json(200, { ok: true, same: true, plan });
+        }
+        // Already paying: the same subscription, the new plan, prorated now -
+        // and a cancellation they had scheduled is undone by choosing again.
+        await paddle("PATCH", `/subscriptions/${profile.paddle_subscription_id}`, {
+          items: [{ price_id: price, quantity: 1 }],
+          proration_billing_mode: "prorated_immediately",
+          scheduled_change: null,
+        });
+        return json(200, { ok: true, changed: true, plan });
+      }
+      const txn = await paddle("POST", "/transactions", {
+        items: [{ price_id: price, quantity: 1 }],
+        custom_data: { user_id: user.id },
+        ...(profile?.paddle_customer_id ? { customer_id: profile.paddle_customer_id } : {}),
+      });
+      const url = (txn.checkout as { url?: string } | undefined)?.url;
+      if (!url) {
+        console.error("heytora: checkout has no url - set Paddle's default payment link");
+        return refuse(503, "HEYTORA_BILLING", "The checkout isn't set up yet - try again later.");
+      }
+      return json(200, { ok: true, url });
+    }
+
+    if (path === "billing" && req.method === "POST") {
+      // Card, invoices and cancelling are Paddle's pages, signed in for them.
+      if (!PADDLE_KEY) return refuse(503, "HEYTORA_BILLING", "Paid plans aren't open yet.");
+      const admin = createClient(SUPABASE_URL, SERVICE_KEY, { auth: { persistSession: false } });
+      const { data: profile } = await admin.from("profiles")
+        .select("paddle_customer_id, paddle_subscription_id").eq("id", user.id).maybeSingle();
+      if (!profile?.paddle_customer_id) {
+        return refuse(404, "HEYTORA_BILLING", "There's no billing for this account yet - choose a plan first.");
+      }
+      const session = await paddle("POST", `/customers/${profile.paddle_customer_id}/portal-sessions`,
+        profile.paddle_subscription_id ? { subscription_ids: [profile.paddle_subscription_id] } : {});
+      const url = (session.urls as { general?: { overview?: string } } | undefined)?.general?.overview;
+      if (!url) return refuse(502, "HEYTORA_BILLING", "The billing page didn't open - try again.");
+      return json(200, { ok: true, url });
     }
 
     if ((path === "ticket" || path === "agent-ticket") && req.method === "POST") {

@@ -537,7 +537,7 @@ class DeleteAccountDialog(SubDialog):
         cancel = button("Cancel")
         cancel.clicked.connect(self.close_dialog)
         self.foot.addWidget(cancel)
-        self.delete = button("Delete account", "danger")
+        self.delete = button("Delete account", "dangerFill")
         self.delete.setEnabled(False)
         self.delete.clicked.connect(self._go)
         self.foot.addWidget(self.delete)
@@ -586,3 +586,37 @@ class DeleteAccountDialog(SubDialog):
         self.typed.setEnabled(True)
         self._check()
         self._place()
+
+
+def confirm(widget: QWidget, title: str, body: str, yes: str, no: str = "Cancel",
+            danger: bool = True) -> bool:
+    """Ask one question in the app's own card (Wispr's "Are you sure you want
+    to sign out?"), over Settings when it is open, else over the window -
+    never Windows' grey message box. Waits for the answer, so it reads like
+    QMessageBox.question: True only for `yes`; the X, Escape or a click
+    outside are no."""
+    from PyQt6.QtCore import QEventLoop
+    window = widget.window()
+    over = getattr(window, "_settings", None)
+    over = over if over is not None and over.isVisible() else window
+    dlg = SubDialog(over, title)
+    dlg.W = 460
+    dlg.body.addWidget(label(body, "setDesc", wrap=True))
+    answer = [False]
+    dlg.foot.addStretch(1)
+    back = button(no)
+    back.clicked.connect(dlg.close_dialog)
+    dlg.foot.addWidget(back)
+    go = button(yes, "dangerFill" if danger else "primary")
+
+    def _yes() -> None:
+        answer[0] = True
+        dlg.close_dialog()
+    go.clicked.connect(_yes)
+    dlg.foot.addWidget(go)
+    loop = QEventLoop()
+    dlg.closed.connect(loop.quit)
+    dlg.open()
+    go.setFocus()
+    loop.exec()
+    return answer[0]

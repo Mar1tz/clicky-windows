@@ -114,8 +114,38 @@ def bring_forward(windows: Callable[[], list]) -> None:
     for w in windows():
         try:
             if w.isVisible():
-                w.showNormal() if w.isMinimized() else None
-                w.raise_()
-                w.activateWindow()
+                to_front(w)
         except RuntimeError:              # a window already deleted
             continue
+
+
+def to_front(w) -> None:
+    """Really in front - over the browser the user is looking at.
+
+    Windows lets only the program in front take the focus; any other's
+    activateWindow just flashes its taskbar button. The sign-in finishing in
+    the browser is exactly that case. A key event tells Windows this program
+    has the user's input, after which it may come forward - the documented
+    exception (SetForegroundWindow: "the process received the last input
+    event"), the same one a click would give."""
+    if w.isMinimized():
+        w.showNormal()
+    w.raise_()
+    w.activateWindow()
+    if sys.platform != "win32":
+        return
+    from PyQt6.QtGui import QGuiApplication
+    if QGuiApplication.platformName() == "offscreen":
+        return                                        # no screen to be in front of (tests)
+    try:
+        import ctypes
+        user32 = ctypes.windll.user32
+        hwnd = int(w.winId())
+        if user32.GetForegroundWindow() == hwnd:
+            return
+        VK_MENU, KEYUP = 0x12, 0x0002
+        user32.keybd_event(VK_MENU, 0, 0, 0)          # a bare Alt: no menu, no shortcut
+        user32.SetForegroundWindow(hwnd)
+        user32.keybd_event(VK_MENU, 0, KEYUP, 0)
+    except Exception:  # noqa: BLE001 - in front or not, never an error
+        pass

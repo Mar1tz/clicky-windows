@@ -44,10 +44,15 @@ def test_find_app_prefers_exact_then_prefix_then_substring(tmp_path, monkeypatch
 
 @pytest.mark.skipif(not WINDOWS, reason="needs a real Start Menu")
 def test_find_app_resolves_a_real_shortcut_and_a_system_exe():
-    devin = app_tools.find_app("Devin")
-    assert devin is not None and devin[1].lower().endswith(".lnk")
+    # Whatever this PC has - it used to look for Devin, which only one
+    # developer's PC had (and no CI runner has).
     notepad = app_tools.find_app("notepad")
     assert notepad is not None and notepad[1].lower().endswith("notepad.exe")
+    apps = app_tools.installed_apps()
+    if not apps:
+        pytest.skip("no Start Menu shortcuts on this PC")
+    found = app_tools.find_app(apps[0])
+    assert found is not None and found[1].lower().endswith((".lnk", ".exe", ".url", ".appref-ms"))
 
 
 # -- the tools ---------------------------------------------------------------

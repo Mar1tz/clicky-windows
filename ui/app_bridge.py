@@ -449,6 +449,113 @@ class AppBridge(QObject):
                 "fresh": st["fresh"], "busy": st["busy"], "error": st["error"],
                 "own_key": bool(cfg.google_api_key)}
 
+    # ── paid plans (Paddle) ──────────────────────────────────────────────────
+
+    def choose_plan(self, plan: str) -> dict:
+        """Buy or change to a plan. A network call - run it off the UI thread.
+        {"url"} to open (Paddle's checkout), {"changed"} (already paying: the
+        plan changed in place), {"same"}, or {"error": why, in words}."""
+        from account.service import AccountError, account
+        try:
+            return account().checkout(plan)
+        except AccountError as e:
+            return {"error": str(e) or "That didn't work - try again."}
+        except Exception:  # noqa: BLE001
+            _log.exception("checkout failed")
+            return {"error": "That didn't work - try again."}
+
+    def billing_page(self) -> dict:
+        """Paddle's page for card, invoices and cancelling: {"url"} or {"error"}.
+        A network call - run it off the UI thread."""
+        from account.service import AccountError, account
+        try:
+            url = account().billing_portal()
+            return {"url": url} if url else {"error": "The billing page didn't open - try again."}
+        except AccountError as e:
+            return {"error": str(e) or "The billing page didn't open - try again."}
+        except Exception:  # noqa: BLE001
+            _log.exception("billing portal failed")
+            return {"error": "The billing page didn't open - try again."}
+
+    # ── referrals (docs/REFERRALS.md) ────────────────────────────────────────
+    # Network calls: run them off the UI thread. Each answers the server's
+    # dict, or {"error": why, in words}.
+
+    def _referral_call(self, work) -> dict:
+        from account.service import AccountError
+        try:
+            return work()
+        except AccountError as e:
+            return {"error": str(e) or "That didn't work - try again."}
+        except Exception:  # noqa: BLE001
+            _log.exception("referral call failed")
+            return {"error": "That didn't work - try again."}
+
+    def referral_status(self) -> dict:
+        """Your code, link, friends and free months, for the Refer window."""
+        from account import settings
+        from account.service import account
+        from config import cfg
+        out = self._referral_call(lambda: account().referrals(cfg.profile()[0]))
+        if out.get("code") and settings.website_url():
+            out["link"] = f"{settings.website_url()}/r/{out['code']}"
+        return out
+
+    def refresh_referral_code(self) -> dict:
+        from account.service import account
+        return self._referral_call(lambda: {"code": account().referral_refresh()})
+
+    def apply_referral(self, code: str) -> dict:
+        from account.service import account
+        out = self._referral_call(lambda: account().referral_apply(code))
+        if out.get("ok"):
+            self.changed.emit("account")
+        return out
+
+    WATCH_EVERY_MS = 5000
+    WATCH_FOR_S = 20 * 60
+    WATCH_BILLING_S = 10 * 60
+    BILLING_FIELDS = ("plan", "plan_status", "plan_cancel_at", "plan_renews_at")
+
+    def watch_for_plan(self, plan: str) -> None:
+        """While they pay (or resume) in the browser: read the plan every few
+        seconds until it is `plan`, paid up and renewing - Paddle has told
+        the server - or 20 minutes pass."""
+        self._watch(lambda s: s.get("plan") == plan and s.get("plan_status") in ("active", "trialing")
+                    and not s.get("plan_cancel_at"), self.WATCH_FOR_S)
+
+    def watch_billing(self) -> None:
+        """While Paddle's billing page is open: read the plan until anything
+        about it changes - cancelled, resumed, a new card that cleared a
+        failed payment - or 10 minutes pass."""
+        summary = self.account_state().get("summary") or {}
+        before = tuple(summary.get(k) for k in self.BILLING_FIELDS)
+        self._watch(lambda s: tuple(s.get(k) for k in self.BILLING_FIELDS) != before,
+                    self.WATCH_BILLING_S)
+
+    def _watch(self, done, for_s: float) -> None:
+        """Read the plan every few seconds until `done(summary)`, or `for_s`
+        pass. The pages hear it as the "account" topic."""
+        import time
+        from PyQt6.QtCore import QTimer
+        self._watch_done, self._want_until = done, time.monotonic() + for_s
+        timer = getattr(self, "_plan_timer", None)
+        if timer is None:
+            timer = self._plan_timer = QTimer(self)
+            timer.setInterval(self.WATCH_EVERY_MS)
+            timer.timeout.connect(self._check_plan)
+        timer.start()
+        self.refresh_account(force=True)
+
+    def _check_plan(self) -> None:
+        import time
+        summary = (self.account_state().get("summary") or {})
+        if self._watch_done(summary) or time.monotonic() > self._want_until:
+            self._plan_timer.stop()
+            self.changed.emit("account")
+            return
+        self.refresh_account(force=True)
+
     def refresh_account(self, force: bool = False) -> None:
         """Read the plan and this month's use again, off the UI thread, unless
         it was read in the last minute (or `force`). The card hears the

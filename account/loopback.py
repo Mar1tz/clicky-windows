@@ -126,6 +126,18 @@ class LinkCatcher:
                     words += " Send a new one from HeyTora."
                 if ok:
                     words = words or "You can close this tab and go back to HeyTora."
+                from account import settings
+                if settings.website_url():
+                    # The website's own page says it, in HeyTora's look; the
+                    # app's window says the same (and why, if it failed).
+                    self.send_response(302)
+                    self.send_header("Location", settings.website_url() + "/signed-in"
+                                     + ("" if ok else "?error=1"))
+                    self.send_header("Cache-Control", "no-store")
+                    self.end_headers()
+                    if ok:
+                        catcher.stop()
+                    return
                 body = page(ok, words)
                 self.send_response(200)
                 self.send_header("Content-Type", "text/html; charset=utf-8")

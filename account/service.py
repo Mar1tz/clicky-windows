@@ -3,11 +3,11 @@
 
 What goes where, and why:
 
-  * Sign-in is Supabase Auth by email - the same account the user created on
-    the website. "create_user" is off: an account and its plan are made on
-    the website, the app only signs in to one. The email has a link (caught
-    on this PC by account/loopback.py and swapped for a session with PKCE)
-    and, once the project has its own email sender, a code to type.
+  * Sign-in is Supabase Auth by email, and it is also how an account is
+    made: a new email gets one the first time it signs in ("create_user" is
+    on; the website has no sign-up). The email has a link (caught on this PC
+    by account/loopback.py and swapped for a session with PKCE) and, once the
+    project has its own email sender, a code to type.
   * Live voice (talk) and dictation connect STRAIGHT to Google with a voice
     pass: a short-lived token the server mints with the business key, good
     for one session (voice_pass). As fast as a key, and nothing to steal: it
@@ -66,9 +66,13 @@ class SignInNeeded(AccountError):
 
 
 class NoAccount(AccountError):
+    """The server refused to make an account for a new email: sign-ups are
+    switched off in Supabase (Authentication > Email > Allow new users to
+    sign up). Normally a new email just gets its account."""
+
     def __init__(self, website: str = ""):
-        where = f" Create one at {website}" if website else " Create one on the HeyTora website"
-        super().__init__(f"There's no HeyTora account with that email.{where}, then sign in here.")
+        super().__init__("New HeyTora accounts can't be made right now - try again later, "
+                         "or sign in with an email that already has one.")
 
 
 class LimitReached(AccountError):
@@ -230,7 +234,9 @@ class Account:
     # -- signing in --------------------------------------------------------------------------------------
 
     def send_code(self, email: str, redirect_to: str = "") -> None:
-        """Email a sign-in to an EXISTING account: a link, and a code if the email shows one.
+        """Email a sign-in: a link, and a code if the email shows one. A new
+        email gets its account here - signing up is signing in for the first
+        time (6 Oct 2026: the website has no sign-up, so the app does it).
 
         With `redirect_to` (account/loopback.py's address) the link brings the
         browser back to this PC with a one-time code for verify_link().
@@ -239,7 +245,7 @@ class Account:
         email = (email or "").strip().lower()
         if "@" not in email or "." not in email.split("@")[-1]:
             raise AccountError("That doesn't look like an email address.")
-        body: dict = {"email": email, "create_user": False}
+        body: dict = {"email": email, "create_user": True}
         path = "otp"
         if redirect_to:
             verifier = secrets.token_urlsafe(48)
@@ -254,6 +260,25 @@ class Account:
             if "signup" in text or "not found" in text or "not allowed" in text:
                 raise NoAccount(settings.website_url())
             raise AccountError(_auth_message(r, "Could not send the code - try again in a minute."))
+
+    def browser_sign_in(self, redirect_to: str) -> str:
+        """The website's sign-in page (Google, Microsoft or email), set up to
+        send the browser back to `redirect_to` (account/loopback.py) with a
+        one-time code only this app can redeem (verify_link): the PKCE
+        challenge goes to the page, its secret half stays here. The website
+        never holds the session - it only starts the sign-in."""
+        self._need_config()
+        website = settings.website_url()
+        if not website:
+            raise AccountError("This build doesn't know HeyTora's website - use your own Gemini key.")
+        if not redirect_to:
+            raise AccountError("HeyTora couldn't wait for your browser on this PC - restart it and try again.")
+        verifier = secrets.token_urlsafe(48)
+        challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest())
+        with self._lock:
+            self._verifier = verifier
+        return f"{website}/login?" + urlencode({"redirect_to": redirect_to,
+                                                 "challenge": challenge.decode().rstrip("=")})
 
     def verify(self, email: str, code: str) -> dict:
         """Check the code and stay signed in. Returns the plan summary."""
@@ -279,6 +304,9 @@ class Account:
                                "Send a new one from HeyTora.")
         with self._lock:
             self._verifier = None
+            # Kept for one thing: claiming the referral the website noted for
+            # this sign-in (referral_claim) - it proves this app started it.
+            self._claim_verifier = verifier
         self._keep(r.json())
         return self.summary(force=True)
 
@@ -298,6 +326,55 @@ class Account:
                                        "Authorization": f"Bearer {session.get('access_token', '')}"})
             except Exception:  # noqa: BLE001 - signed out here either way
                 pass
+
+    # -- paid plans (Paddle, through the heytora function) ------------------------------------------
+
+    def checkout(self, plan: str) -> dict:
+        """Buy `plan` ("pro" | "max"), or change to it when already paying.
+        {"url": Paddle's checkout to open} | {"changed": True} | {"same": True}.
+        The plan itself changes when Paddle tells the server (its webhook)."""
+        data = self._call("POST", "checkout", {"plan": plan})
+        if data.get("changed"):
+            self.refresh_soon(0)
+        return data
+
+    def billing_portal(self) -> str:
+        """Paddle's page for this account's card, invoices and cancelling."""
+        return str(self._call("POST", "billing").get("url") or "")
+
+    # -- referrals (migration 0010, docs/REFERRALS.md) ---------------------------------------------
+
+    def referrals(self, name: str = "") -> dict:
+        """Your code, your friends and your free months. Also tells the
+        server which PC this is, and the first name the website may show."""
+        from account.device import device_id
+        return self._call("GET", "referrals?" + urlencode({"device": device_id(), "name": (name or "")[:40]}))
+
+    def referral_refresh(self) -> str:
+        """A new code; the old one stops working for new sign-ups."""
+        return str(self._call("POST", "referrals/refresh").get("code") or "")
+
+    def referral_apply(self, code: str) -> dict:
+        """Use a friend's code: {"ok": True, "referrer_name", "trial_until"}
+        or {"ok": False, "message": why, in words}."""
+        from account.device import device_id
+        result = self._call("POST", "referrals/apply", {"code": code, "device": device_id()})
+        if result.get("ok"):
+            self.refresh_soon(0)                     # the 14 days show as the plan
+        return result
+
+    def referral_claim(self) -> dict:
+        """Right after a browser sign-in: the code the website noted for it,
+        if any. {"ok": False, "reason": "none"} when there was none."""
+        from account.device import device_id
+        with self._lock:
+            verifier, self._claim_verifier = getattr(self, "_claim_verifier", None), None
+        if not verifier:
+            return {"ok": False, "reason": "none"}
+        result = self._call("POST", "referrals/claim", {"verifier": verifier, "device": device_id()})
+        if result.get("ok"):
+            self.refresh_soon(0)
+        return result
 
     def delete_account(self, confirm_email: str) -> None:
         """Close the account on HeyTora's server - its profile, usage and agent

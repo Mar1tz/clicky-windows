@@ -216,7 +216,6 @@ class SetupWizard(QDialog):
         self._gated = settings.configured()        # HeyTora accounts: signing in is a must
         self._signin_only = start == "connect" and setup_already_ran()
         self._check_key = check_key
-        self._email = ""
         self._connected = cfg.has_key()
         self._level = 0.0
         self._stream = None
@@ -396,8 +395,8 @@ class SetupWizard(QDialog):
         outer.addLayout(self._centre(card))
         if self._gated:
             body.addWidget(O.heading("Sign in to HeyTora."))
-            body.addWidget(O.line("With the account you made on heytora.com. We email you a "
-                                  "link: click it and you're in."))
+            body.addWidget(O.line("In your browser: continue with Google, Microsoft or your email. "
+                                  "New here? That makes your account."))
         else:
             body.addWidget(O.heading("Connect to Gemini."))
             body.addWidget(O.line("Tora thinks with Google's Gemini. Add your own Gemini key."))
@@ -405,38 +404,41 @@ class SetupWizard(QDialog):
         self.connect_status = label("", "faint", wrap=True)
 
         if settings.configured():
-            self.email_edit = QLineEdit(self._account.email)
-            self.email_edit.setPlaceholderText("you@example.com")
-            self.send_btn = QPushButton("Send link")
-            self.send_btn.setObjectName("ghost")
-            self.send_btn.clicked.connect(self._send_code)
-            row = QHBoxLayout()
-            row.setSpacing(8)
-            row.addWidget(self.email_edit, 1)
-            row.addWidget(self.send_btn)
-            body.addLayout(row)
-            self.code_row = QWidget()
-            code_lay = QHBoxLayout(self.code_row)
-            code_lay.setContentsMargins(0, 0, 0, 0)
-            code_lay.setSpacing(8)
-            self.code_edit = QLineEdit()
-            self.code_edit.setPlaceholderText("Or type the code from the email")
-            self.code_edit.setMaxLength(12)          # 6-10 digits, maybe pasted with spaces
-            self.signin_btn = QPushButton("Sign in")
-            self.signin_btn.setObjectName("ghost")
-            self.signin_btn.clicked.connect(self._sign_in)
-            code_lay.addWidget(self.code_edit, 1)
-            code_lay.addWidget(self.signin_btn)
-            self.code_row.hide()
-            body.addWidget(self.code_row)
-            if settings.website_url():
-                make = QPushButton("No account yet? Create one")
-                make.setObjectName("link")
-                make.setCursor(Qt.CursorShape.PointingHandCursor)
-                make.clicked.connect(lambda: QDesktopServices.openUrl(QUrl(settings.website_url())))
-                body.addWidget(make, 0, Qt.AlignmentFlag.AlignLeft)
+            # Sign-in happens on the website (Wispr's way): Google and
+            # Microsoft only work properly in a real browser, the page can
+            # stop bots, and the browser hands the sign-in back to this PC
+            # (account/loopback.py). A new account is made the same way.
+            self.browser_btn = QPushButton("Sign in via browser  ↗")
+            self.browser_btn.setObjectName("primary")
+            self.browser_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            self.browser_btn.clicked.connect(self._browser_sign_in)
+            body.addWidget(self.browser_btn)
+            self.reopen_btn = QPushButton("Open the sign-in page again")
+            self.reopen_btn.setObjectName("link")
+            self.reopen_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            self.reopen_btn.clicked.connect(self._open_sign_in_page)
+            self.reopen_btn.hide()
+            body.addWidget(self.reopen_btn, 0, Qt.AlignmentFlag.AlignLeft)
+            # Signed in, all of that falls away: who you are, and Finish.
+            self.signed_in_box = QFrame()
+            sl = QVBoxLayout(self.signed_in_box)
+            sl.setContentsMargins(0, 4, 0, 0)
+            sl.setSpacing(6)
+            self.signed_in_as = O.text("", 15, 700)
+            sl.addWidget(self.signed_in_as)
+            self.signed_in_plan = O.text("", 13, 400, T.TEXT_DIM)
+            self.signed_in_plan.setWordWrap(True)
+            sl.addWidget(self.signed_in_plan)
+            switch = QPushButton("Use a different account")
+            switch.setObjectName("link")
+            switch.setCursor(Qt.CursorShape.PointingHandCursor)
+            switch.clicked.connect(self._different_account)
+            sl.addWidget(switch, 0, Qt.AlignmentFlag.AlignLeft)
+            self.signed_in_box.hide()
+            body.addWidget(self.signed_in_box)
         else:
-            self.email_edit = self.code_edit = None
+            self.browser_btn = None
+            self.signed_in_box = None
 
         # The own key: after the account, never instead of it.
         self.key_card = QFrame()
@@ -468,6 +470,8 @@ class SetupWizard(QDialog):
         go.clicked.connect(self._next)
         body.addWidget(go)
         self._continue["connect"] = go
+        if self._gated and self._account.signed_in():
+            self._show_signed_in(True, "")       # back on this screen, already signed in
         return page
 
     def _page_work(self) -> QWidget:
@@ -1187,15 +1191,48 @@ class SetupWizard(QDialog):
                 self._result.emit(job, False, str(e))
         threading.Thread(target=go, daemon=True).start()
 
-    def _send_code(self) -> None:
-        self._email = self.email_edit.text().strip()
-        self.send_btn.setEnabled(False)
-        self.connect_status.setText("Sending the email…")
+    def _browser_sign_in(self) -> None:
+        """Wait on this PC for the browser, then open the website's sign-in
+        page - it comes back here with a code only this app can redeem."""
+        from account.service import AccountError
         if self._catcher is None:
             from account.loopback import LinkCatcher
             self._catcher = LinkCatcher(self._link_arrived)
-        back_to = self._catcher.start()            # "" if it can't listen: the code still works
-        self._run("code", lambda: self._account.send_code(self._email, redirect_to=back_to))
+        try:
+            self._sign_in_url = self._account.browser_sign_in(self._catcher.start())
+        except AccountError as e:
+            self.connect_status.setText(str(e))
+            return
+        self._open_sign_in_page()
+        self.reopen_btn.show()
+        self.connect_status.setText("Finish signing in in your browser - this window signs you in "
+                                    "by itself.")
+
+    def _show_signed_in(self, on: bool, plan: str) -> None:
+        """Signed in: who, and the plan - the button, the "open again" link and
+        the own key (Settings > Advanced has it) fall away. Off: back again."""
+        if self.signed_in_box is None:
+            return
+        self.signed_in_as.setText(f"✓  You're signed in as {self._account.email}" if on else "")
+        self.signed_in_plan.setText(plan)
+        self.signed_in_box.setVisible(on)
+        self.browser_btn.setVisible(not on)
+        self.reopen_btn.hide()
+        self.key_card.setVisible(not on)
+        if on:
+            self.connect_status.setText("")
+
+    def _different_account(self) -> None:
+        """Sign out here, and sign in again with another."""
+        self._account.sign_out()
+        self._connected = cfg.has_key()
+        self._show_signed_in(False, "")
+        self._connect_locks()
+
+    def _open_sign_in_page(self) -> None:
+        url = getattr(self, "_sign_in_url", "")
+        if url:
+            QDesktopServices.openUrl(QUrl(url))
 
     def _link_arrived(self, code: str) -> tuple[bool, str]:
         """The email's link, clicked: runs on the catcher's thread; the browser shows the words."""
@@ -1205,23 +1242,33 @@ class SetupWizard(QDialog):
             self._result.emit("signin", False, str(e))
             return False, str(e)
         cfg.set_access_mode("account")
-        self._result.emit("signin", True, plan_line(summary))
+        welcome = self._claim_referral()
+        if welcome:
+            try:
+                summary = self._account.summary(force=True)     # the 14 days are the plan now
+            except Exception:  # noqa: BLE001 - the plan line can wait
+                pass
+        self._result.emit("signin", True, " ".join(w for w in (welcome, plan_line(summary)) if w))
         return True, "You can close this tab - HeyTora is ready."
+
+    def _claim_referral(self) -> str:
+        """A friend's invite, noted by the website for this sign-in (docs/
+        REFERRALS.md): the 14 days start, and this says who they came from.
+        "" when there was none - or it couldn't be used (the Refer window's
+        Apply tab says why, if they try a code by hand)."""
+        try:
+            result = self._account.referral_claim()
+        except Exception:  # noqa: BLE001 - an invite never stands in the way of signing in
+            return ""
+        if not result.get("ok"):
+            return ""
+        who = result.get("referrer_name") or "A friend"
+        return (f"{who} gave you 14 days of Pro. Ask Tora 15 questions and "
+                f"{'they get' if who == 'A friend' else who + ' gets'} a free month too.")
 
     def _stop_catcher(self) -> None:
         if self._catcher is not None:
             self._catcher.stop()
-
-    def _sign_in(self) -> None:
-        code = self.code_edit.text().strip()
-        self.signin_btn.setEnabled(False)
-        self.connect_status.setText("Signing in…")
-
-        def work() -> str:
-            summary = self._account.verify(self._email, code)
-            cfg.set_access_mode("account")
-            return plan_line(summary)
-        self._run("signin", work)
 
     def _use_key(self) -> None:
         key = self.key_edit.text().strip()
@@ -1241,26 +1288,14 @@ class SetupWizard(QDialog):
         self._run("key", work)
 
     def _on_result(self, job: str, ok: bool, message: str) -> None:
-        if job == "code":
-            self.send_btn.setEnabled(True)
-            if ok:
-                self.code_row.show()
-                self.code_edit.setFocus()
-                self.connect_status.setText(f"Email sent to {self._email}. Open it and click the sign-in "
-                                            "link: this window signs you in. It can take a minute.")
-            else:
-                self._stop_catcher()
-                self.connect_status.setText(message)
-        elif job == "signin":
-            self.signin_btn.setEnabled(True)
+        if job == "signin":
             if ok:
                 self._connected = True
                 self._stop_catcher()
-                self.code_row.hide()
-                self.connect_status.setText(f"✓  Signed in. {message}")
+                self._show_signed_in(True, message)
                 self._connect_locks()
-                self.raise_()                       # the link was clicked in a browser
-                self.activateWindow()
+                from ui.single_instance import to_front
+                to_front(self)                      # over the browser it was finished in
             else:
                 self.connect_status.setText(message)
         elif job == "key":

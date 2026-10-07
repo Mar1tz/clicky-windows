@@ -293,13 +293,10 @@ class PrivacyTab(Tab):
         self._note.show()
 
     def _sign_out_sites(self) -> None:
-        from PyQt6.QtWidgets import QMessageBox
-        sure = QMessageBox.question(self, "Sign out everywhere",
-                                    "Sign the agents' browser out of every site? Jobs will ask "
-                                    "you to sign in again when they need to.",
-                                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
-                                    QMessageBox.StandardButton.Cancel)
-        if sure != QMessageBox.StandardButton.Yes:
+        from ui.settings_parts import confirm
+        if not confirm(self, "Sign the agents out everywhere?",
+                       "Their browser forgets every site you signed in to. Jobs will ask you to "
+                       "sign in again when they need to.", "Sign out everywhere"):
             return
         why = self.bridge.forget_browser_sites()
         if why:
@@ -320,14 +317,10 @@ class PrivacyTab(Tab):
             self._say(f"Couldn't save that: {e}")
 
     def _delete(self) -> None:
-        from PyQt6.QtWidgets import QMessageBox
-        sure = QMessageBox.question(
-            self, "Delete your history?",
-            "Every question, answer and walkthrough Tora has kept will be deleted. "
-            "This can't be undone.",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
-            QMessageBox.StandardButton.Cancel)
-        if sure != QMessageBox.StandardButton.Yes:
+        from ui.settings_parts import confirm
+        if not confirm(self, "Delete your history?",
+                       "Every question, answer and walkthrough Tora has kept is deleted. "
+                       "This can't be undone.", "Delete everything"):
             return
         n = self.bridge.delete_history()
         self._say(f"Deleted {n} entries.")
@@ -462,12 +455,9 @@ class AgentsTab(Tab):
         dlg.open()
 
     def _clear_history(self) -> None:
-        from PyQt6.QtWidgets import QMessageBox
-        sure = QMessageBox.question(self, "Clear agent history",
-                                    "Forget every finished job? The files they made are kept.",
-                                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
-                                    QMessageBox.StandardButton.Cancel)
-        if sure == QMessageBox.StandardButton.Yes:
+        from ui.settings_parts import confirm
+        if confirm(self, "Clear agent history?", "Every finished job is forgotten. The files "
+                   "they made are kept.", "Clear history"):
             self.bridge.clear_agent_history()
 
 
@@ -743,10 +733,6 @@ class UsageTab(Tab):
         g.note(f"Starts again on {when}. Everything Tora does for you - looking at your screen, "
                "planning, agents thinking - counts a little towards overall use.")
         col.addWidget(g)
-        if st["website"]:
-            manage = button("Manage plan on heytora.com")
-            manage.clicked.connect(br.open_website)
-            col.addWidget(manage, 0, Qt.AlignmentFlag.AlignLeft)
         return host
 
 
@@ -765,22 +751,69 @@ PLANS = (
      "detail": "Hand over the work.",
      "features": ("Up to 600 asks a day", "Voice, with live captions", "1,000 tasks a month, up to 200 a day")},
 )
-PLANS_NOTE = "Prices in US dollars. Paid plans open soon - nothing is charged until they do."
+PLANS_NOTE = ("Prices in US dollars, plus tax where it applies. Paddle, our reseller, handles "
+              "the payment - your card never reaches us.")
+
+
+def _day(iso) -> str:
+    """"6 Nov" from the server's ISO time; "" when there is none."""
+    from datetime import datetime
+    try:
+        d = datetime.fromisoformat(str(iso).replace("Z", "+00:00"))
+    except (TypeError, ValueError):
+        return ""
+    return f"{d.day} {d:%b}"
+
+
+class _Background:
+    """Run one network call off the UI thread and hand its answer back on
+    it. Kept by the tab while it runs; a tab closed meanwhile is not told."""
+
+    def __init__(self, owner: QWidget, work, done):
+        import threading
+        from PyQt6.QtCore import QObject, pyqtSignal
+
+        class _Relay(QObject):
+            heard = pyqtSignal(object)
+
+        self.relay = _Relay(owner)
+        self.relay.heard.connect(done)
+
+        def run() -> None:
+            answer = work()
+            try:
+                self.relay.heard.emit(answer)
+            except RuntimeError:
+                pass                                   # the tab is gone
+        threading.Thread(target=run, name="heytora-billing", daemon=True).start()
 
 
 class PlansTab(Tab):
     """Wispr's Plans and Billing: the plans side by side, yours marked, and
-    billing - which lives on heytora.com, where you pay."""
+    billing. Choosing a paid plan opens Paddle's checkout in the browser (or,
+    already paying, changes the plan at once); the plan here changes when
+    Paddle tells HeyTora's server, and this tab watches for it."""
 
     HEADING = "Plans & billing"
     TOPICS = frozenset({"account"})
+
+    def showEvent(self, event) -> None:
+        """On screen: the plan is read again - it may have been changed on
+        Paddle's page since (a cancel, a new card)."""
+        super().showEvent(event)
+        refresh = getattr(self.bridge, "refresh_account", None)
+        if refresh is not None:
+            refresh(force=True)
 
     def build(self) -> None:
         from PyQt6.QtWidgets import QFrame
         br = self.bridge
         st = _ask(br, "account_state", {}) or {}
-        mine = ((st.get("summary") or {}).get("plan") or "").lower() if st.get("signed_in") else ""
+        summary = (st.get("summary") or {}) if st.get("signed_in") else {}
+        mine = (summary.get("plan") or "").lower()
         own_key = st.get("mode") == "own_key"
+        self._st, self._summary, self._mine = st, summary, mine
+        self._busy: Optional[_Background] = None
 
         box = QFrame()
         box.setObjectName("plansBox")
@@ -793,22 +826,113 @@ class PlansTab(Tab):
                 line.setObjectName("vr")
                 line.setFixedWidth(1)
                 row.addWidget(line)
-            row.addWidget(self._column(plan, current=(plan["key"] == mine and not own_key)), 1)
+            # A plan cancelled but not yet ended is offered again: Resume keeps it.
+            yours = plan["key"] == mine and not own_key
+            ending = yours and bool(summary.get("plan_cancel_at"))
+            row.addWidget(self._column(plan, current=yours and not ending, resume=ending), 1)
         self.body.add(box)
         self.body.add(label(PLANS_NOTE, "faint", wrap=True))
 
         from ui.settings_parts import Group
         billing = Group("Billing")
-        manage = button("Open billing")
-        manage.clicked.connect(lambda: br.open_web("/pricing"))
         if own_key:
-            words = "You're using your own Gemini key - Google bills you for it directly."
+            billing.row("Payment and invoices",
+                        "You're using your own Gemini key - Google bills you for it directly.")
+        elif not st.get("signed_in"):
+            sign_in = button("Sign in…", "primary")
+            sign_in.clicked.connect(br.run_setup)
+            billing.row("Not signed in", "Sign in to choose a plan.", sign_in)
         else:
-            words = "Payment details and invoices live on heytora.com, with your plan."
-        billing.row("Payment and invoices", words, manage)
+            status = summary.get("plan_status") or ""
+            name = summary.get("plan_name") or mine.capitalize()
+            if mine == "pro_trial" and summary.get("trial_until"):
+                billing.row(f"Pro trial until {_day(summary['trial_until'])}",
+                            "A friend's gift. Choose Pro to keep it going after that.")
+            elif mine != "free" and status == "past_due":
+                billing.row(f"{name}: your last payment didn't go through",
+                            "Update your card in Manage billing to keep the plan.")
+            elif mine != "free" and summary.get("plan_cancel_at"):
+                billing.row(f"{name} until {_day(summary['plan_cancel_at'])}",
+                            f"It won't renew. Resume {name} above to keep it.")
+            elif mine != "free" and summary.get("plan_renews_at"):
+                billing.row(f"{name}, renews on {_day(summary['plan_renews_at'])}",
+                            "Change or cancel any time; a change is prorated.")
+            if summary.get("billing"):
+                manage = button("Manage billing")
+                manage.clicked.connect(self._manage)
+                billing.row("Payment and invoices",
+                            "Your card, invoices and cancelling, on Paddle's secure page.", manage)
+            else:
+                billing.row("No billing yet", "You're on Free. Choose a plan above - you pay on "
+                            "Paddle's secure checkout, in your browser.")
+        self._note = billing.note("")
+        self._note.hide()
         self.body.add(billing)
 
-    def _column(self, plan: dict, current: bool) -> QWidget:
+    def _say(self, words: str) -> None:
+        self._note.setText(words)
+        self._note.setVisible(bool(words))
+
+    def _choose(self, plan: dict, go) -> None:
+        """A paid plan: Paddle's checkout, or the change made at once. Free,
+        while paying: cancelling is on the billing page."""
+        br = self.bridge
+        if not self._st.get("signed_in"):
+            br.run_setup()
+            return
+        if plan["key"] == "free":
+            self._say("To go back to Free, cancel in Manage billing - your plan stays until "
+                      "the end of what you've paid for.")
+            self._manage()
+            return
+        if self._busy is not None:
+            return
+        resuming = plan["key"] == self._mine and bool(self._summary.get("plan_cancel_at"))
+        label = go.text()
+        go.setEnabled(False)
+        go.setText("Resuming…" if resuming else "Opening checkout…" if self._mine == "free" else "Changing…")
+
+        def done(answer: dict) -> None:
+            self._busy = None
+            go.setEnabled(True)
+            go.setText(label)
+            if answer.get("error"):
+                self._say(answer["error"])
+            elif answer.get("url"):
+                from PyQt6.QtCore import QUrl
+                from PyQt6.QtGui import QDesktopServices
+                QDesktopServices.openUrl(QUrl(answer["url"]))
+                self._say(f"Finish paying in your browser - you'll be on {plan['name']} here as "
+                          "soon as Paddle confirms it.")
+                br.watch_for_plan(plan["key"])
+            elif answer.get("changed") and resuming:
+                self._say(f"Done - {plan['name']} carries on and renews as usual.")
+                br.watch_for_plan(plan["key"])
+            elif answer.get("changed"):
+                self._say(f"Done - you're on {plan['name']}. Paddle prorates the difference.")
+                br.watch_for_plan(plan["key"])
+            elif answer.get("same"):
+                self._say(f"You're already on {plan['name']}.")
+        self._busy = _Background(self, lambda: br.choose_plan(plan["key"]), done)
+
+    def _manage(self) -> None:
+        """Paddle's customer portal: card, invoices, cancel."""
+        if self._busy is not None:
+            return
+        br = self.bridge
+
+        def done(answer: dict) -> None:
+            self._busy = None
+            if answer.get("url"):
+                from PyQt6.QtCore import QUrl
+                from PyQt6.QtGui import QDesktopServices
+                QDesktopServices.openUrl(QUrl(answer["url"]))
+                br.watch_billing()                    # a cancel there shows here
+            else:
+                self._say(answer.get("error") or "The billing page didn't open - try again.")
+        self._busy = _Background(self, br.billing_page, done)
+
+    def _column(self, plan: dict, current: bool, resume: bool = False) -> QWidget:
         from PyQt6.QtWidgets import QLabel
         from ui.app_widgets import icon
         from PyQt6.QtWidgets import QSizePolicy
@@ -848,8 +972,9 @@ class PlansTab(Tab):
             go = button("Your plan")
             go.setEnabled(False)
         else:
-            go = button(f"Choose {plan['name']}", "primary" if plan.get("flag") else "ghost")
-            go.clicked.connect(lambda: self.bridge.open_web("/pricing"))
+            go = (button(f"Resume {plan['name']}", "primary") if resume else
+                  button(f"Choose {plan['name']}", "primary" if plan.get("flag") else "ghost"))
+            go.clicked.connect(lambda _c=False, b=go: self._choose(plan, b))
         lay.addWidget(go)
         return col
 

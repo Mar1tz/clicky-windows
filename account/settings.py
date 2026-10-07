@@ -22,8 +22,9 @@ _SUPABASE_ANON_KEY = (
     "tva3lya3ZqemtyIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODk5NzUwODAsImV4cCI6MjEwNTU1MTA4MH0."
     "w3ySeG3DTJMf6wzBpFflA5diDY7hzvbMYm3_q96aDfE"
 )
-# the website where people create an account and choose a plan
-_WEBSITE_URL = ""
+# the website: the privacy policy and terms, and Paddle's checkout page (/pay).
+# Accounts are made in the app itself (account/service.send_code).
+_WEBSITE_URL = "https://app.agentora.co.za"
 
 FUNCTION = "heytora"
 

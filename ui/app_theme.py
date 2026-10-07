@@ -336,6 +336,13 @@ def qss() -> str:
         font-size: 13px; font-weight: 600; padding: 7px 16px; min-height: 18px;
     }}
     QPushButton#danger:hover {{ background: {SURFACE_HOVER}; }}
+    /* The one irreversible yes in a confirm card (settings_parts.confirm). */
+    QPushButton#dangerFill {{
+        background: {DANGER}; border: 1px solid {DANGER};
+        border-radius: {BUTTON_PILL}px; color: {ON_ACCENT};
+        font-size: 13px; font-weight: 600; padding: 7px 18px; min-height: 18px;
+    }}
+    QPushButton#dangerFill:hover {{ border: 1px solid {TEXT}; }}
     QPushButton#link {{
         background: transparent; border: none; color: {ACCENT};
         font-size: 12px; font-weight: 600; padding: 2px;
