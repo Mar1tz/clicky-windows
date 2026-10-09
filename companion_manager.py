@@ -560,6 +560,7 @@ class CompanionManager(QObject):
         self._submit(self._warm_up())
         self._submit(self._account_warm_up())
         self._submit(self._realtime_connect())
+        self._submit(self._keep_session_fresh())
         # Refresh a stale model cache in the background (weekly at most).
         self._submit(self._refresh_stale_models())
 
@@ -1393,6 +1394,35 @@ class CompanionManager(QObject):
             _log.info("not reopened while idle - it opens when they next talk")
             return
         self._submit(self._realtime_reconnect())
+
+    # FS-12: while they are talking, a session is renewed before the server's
+    # ten-minute close, at a quiet moment - so a question almost never finds
+    # one about to close (and, when it does, _begin_capture replaces it).
+    RENEW_AT_S = 7.5 * 60
+    RENEW_CHECK_S = 20.0
+
+    async def _keep_session_fresh(self) -> None:
+        while True:
+            await asyncio.sleep(self.RENEW_CHECK_S)
+            try:
+                if self._renew_due():
+                    conv = self._realtime
+                    _log.info("live session renewed at %.1f min, before the server closes it",
+                              conv.age_s / 60)
+                    conv.retire()
+                    await self._realtime_connect()
+            except Exception:  # noqa: BLE001 - a renewal must never stop the loop
+                _log.debug("session renewal failed", exc_info=True)
+
+    def _renew_due(self) -> bool:
+        conv = self._realtime
+        if conv is None or not conv.ready or conv.age_s < self.RENEW_AT_S:
+            return False
+        if self._idle_s() > self.IDLE_FRESH_S:
+            return False                  # nobody is talking: let it close (FS-02)
+        busy = (self._state != AppState.IDLE or getattr(self, "_rt_streaming", False)
+                or conv.speaking or getattr(self, "_tools_in_flight", 0) > 0)
+        return not busy
 
     async def _realtime_reconnect(self) -> None:
         await asyncio.sleep(1.0)
@@ -3516,6 +3546,11 @@ class CompanionManager(QObject):
         # The session is already open, so there is nothing to wait for —
         # audio starts flowing to the model on the next 30 ms block.
         conv = self._realtime
+        if conv is not None and conv.ready and getattr(conv, "aging", False):
+            # FS-12: about to be closed by the server - this question gets a
+            # fresh session, which picks the conversation up where it was.
+            _log.info("live session %.1f min old - a fresh one for this question", conv.age_s / 60)
+            conv.retire()
         ready = bool(conv is not None and conv.ready)
         # Hotkey pressed while the socket is still opening (the first
         # seconds after launch): the mic is already buffering, so give the

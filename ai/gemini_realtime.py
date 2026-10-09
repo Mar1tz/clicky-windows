@@ -482,10 +482,35 @@ class RealtimeConversation:
     # ── Session ──────────────────────────────────────────────────────────────
 
     _forget = False
+    _retiring = False
 
     @property
     def ready(self) -> bool:
-        return self._session is not None and self._session.is_open and not self._forget
+        return (self._session is not None and self._session.is_open
+                and not self._forget and not self._retiring)
+
+    @property
+    def age_s(self) -> float:
+        """How long the open session has been open; 0 when there is none."""
+        return time.monotonic() - self._opened_at if self._session is not None and self._opened_at else 0.0
+
+    @property
+    def aging(self) -> bool:
+        """FS-12: the server closes a live session at about ten minutes. On
+        4-9 Oct 7 of 110 questions went into one over 8 minutes old and 4 of
+        those lost their answer to the close. Past MAX_SESSION_AGE_S - or
+        once the server has said goodbye (go_away zeroes _opened_at) - a
+        session is too old to start a question in."""
+        return self._session is not None and (not self._opened_at
+                                              or time.monotonic() - self._opened_at > MAX_SESSION_AGE_S)
+
+    def retire(self) -> None:
+        """FS-12: stop using this session; the next connect replaces it and
+        CONTINUES the conversation (the resumption handle is kept - unlike
+        forget, which ends it)."""
+        if self._session is not None and self._session.resume_handle:
+            self._resume_handle = self._session.resume_handle
+        self._retiring = True
 
     def forget(self) -> None:
         """FS-02: the conversation is over. On 9 Oct "Hello." was answered
@@ -634,6 +659,7 @@ class RealtimeConversation:
         await self.close()
         resume = self._resume_handle if system_prompt == self._system and not self._forget else None
         self._forget = False
+        self._retiring = False
         session = LiveSession(Models.REALTIME, self._setup(system_prompt), resume_handle=resume)
         try:
             await session.connect()

@@ -440,6 +440,89 @@ PC's.
 
 ---
 
+## Wave D — the rest of "stuck" (found 9 Oct, after 1.7.4)
+
+**Counted:** 13 of 118 questions on 4–9 Oct got no answer at all (the
+journal against the log). Three causes cover them.
+
+### FS-12 · Never ask into a session about to close — S — free — **done (9 Oct)**
+
+**Done:**
+* **The session knows its age** (`RealtimeConversation.aging`): over 8
+  minutes, or the server has said goodbye.
+* **`retire()`** stops using a session but keeps its resumption handle, so
+  the next session continues the same conversation (`forget` ends it).
+* **At the question:** an aging session is retired, and the question opens
+  a fresh one, which it waits for (FS-02's path).
+* **In the background** (`_keep_session_fresh`): while they are talking, a
+  session is renewed at 7½ minutes, only at a quiet moment (idle, not
+  speaking, no tool running).
+* **Tested** (`test_e2e_session_never_expires_mid_answer.py`):
+  * an old session is retired and the conversation resumes;
+  * goodbye makes it old at once;
+  * a question on a 9-minute-old session gets a fresh one;
+  * the renewal happens only when due and quiet, and not after 30 minutes
+    idle.
+
+**Why:**
+* **The numbers.** 7 of 110 questions on an open session went into one
+  over 8 minutes old. The server closes a live session at about 10
+  minutes, and **4 of those 7 lost their answer**. No question on a
+  younger session lost one.
+* **An example:** on 8 Oct, 07:50, "register my business" waited through
+  two web searches, then the session closed one second before the answer.
+* **Why it happens:** an open session counts as ready however old it is.
+
+**Do** (`ai/gemini_realtime.py`, `_begin_capture`):
+* **At the question.** A session over 8 minutes old, or one the server has
+  said goodbye on, is retired: a new one opens for this question and
+  resumes the conversation (the FS-02 path).
+* **In the background.** While they are talking (FS-02's 30 minutes), a
+  session is renewed at about 7½ minutes when nothing is in progress, so
+  the question rarely pays for it.
+
+*Prove:* tests:
+* an 8½-minute-old session is not used for a question;
+* the renewal happens at 7½ minutes, waits while she speaks, and not
+  after 30 minutes idle.
+
+### FS-13 · "I didn't catch that" in seconds, not 22 — S — free
+
+**Why:**
+* **5 Oct, 11:07:** a 1.1 s question got nothing back. Tora sat on
+  "Thinking…" for 22 s before saying so.
+* **Then seven presses in ten seconds,** each cancel restarting the
+  session, and none of them was answered.
+
+**Do** (`_realtime_turn_watchdog`):
+* **No words heard at all 5 s after the question ended:** the server never
+  registered the speech, so say so now.
+* **Words heard, but no answer and no tool running for 12 s:** the same.
+* **A tool still gets up to 75 s,** as before.
+
+*Prove:* tests on both timings, and that a running tool still waits.
+
+### FS-14 · When HeyTora's own credits run out — S — free
+
+**Why:**
+* **9 Oct, 13:45 to about 14:20:** Google refused HeyTora's business
+  account ("Your prepayment credits are depleted"). Every plan user got no
+  answers for about 35 minutes.
+* **Plan users were told the wrong thing:** to top up Gemini credits in AI
+  Studio, credits they do not have.
+* **Nothing told the owner.**
+
+**Do:**
+* **On a HeyTora plan,** a billing, key or quota refusal is worded as
+  HeyTora's side: "not you, nothing to top up, back soon". Own-key users
+  keep the AI Studio wording.
+* **The owner** (a setting, not code): turn on auto-reload and a budget
+  alert in the business account's Google AI Studio billing.
+
+*Prove:* tests on the plan's words against the own key's.
+
+---
+
 ## The order, at a glance
 
 | # | milestone | wave | size | cost | needs |
@@ -455,6 +538,9 @@ PC's.
 | FS-09 | A slow PC says why in its log — done | B | S | free | – |
 | FS-10 | No keys in the log — done | C | S | free | – |
 | FS-11 | Ship 1.7.4, check on a slow PC | C | S | – | all above |
+| FS-12 | Never ask into a session about to close — done | D | S | free | – |
+| FS-13 | "I didn't catch that" in seconds | D | S | free | – |
+| FS-14 | When HeyTora's own credits run out | D | S | free | – |
 
 **The user's two complaints:**
 * **"Still stuck":** FS-01 fixes it, and FS-02 stops the stale answers.
