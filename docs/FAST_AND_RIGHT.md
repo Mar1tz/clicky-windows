@@ -190,7 +190,20 @@ names what happened.
 
 ## Wave B — fast on every PC
 
-### FS-04 · The question goes out at once — S — free
+### FS-04 · The question goes out at once — S — free — **done (9 Oct)**
+
+**Done:**
+* **The audio streams from the first block.** The screen line is built
+  alongside and sent the moment it is ready.
+* **When the question ends,** the stream waits at most 1 s more for the
+  screen line (`CONTEXT_WAIT_S`), then answers without it. With the names
+  missing, she can still look, or point by name.
+* **The log says when it was slow:** "screen line took N s - sent while
+  they spoke", or "not ready … answered without it". It was already
+  cached for 4 s per window.
+* **Tested** (`test_e2e_question_goes_out_at_once.py`): the first words go
+  out within 0.1 s while the line is still being built, and the line
+  arrives before the question closes. A line 5 s late is not waited for.
 
 **Why:** finding 5.
 
@@ -304,7 +317,7 @@ PC's.
 | FS-01 | "I've done that" means a new screen — done | A | S | free | – |
 | FS-02 | Yesterday's conversation is over — done | A | S | free | – |
 | FS-03 | Say what it did; ask only when it matters | A | S | free | **your decision** |
-| FS-04 | The question goes out at once | B | S | free | – |
+| FS-04 | The question goes out at once — done | B | S | free | – |
 | FS-05 | Capture once | B | S | free | – |
 | FS-06 | Measure the server hop | B | S | ~$0.001 | function deploy |
 | FS-07 | A faster server hop | B | M | – | FS-06, deploy |

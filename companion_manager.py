@@ -1480,9 +1480,9 @@ class CompanionManager(QObject):
     async def _realtime_stream(self) -> None:
         """Forward mic audio for one question, then stop.
 
-        The screen summary goes first, while the user is still drawing
-        breath. It is one line of text — no screenshot, no upload — so it
-        costs nothing on the way to the answer.
+        The screen summary rides along: one line of text - no screenshot, no
+        upload - sent as soon as it is built, while the audio already flows
+        (FS-04).
         """
         conv = self._realtime
         if conv is None:
@@ -1498,12 +1498,31 @@ class CompanionManager(QObject):
                 _log.info("live session not ready in time — cascade takes this one")
                 self._rt_streaming = False
                 return
-        try:
-            await conv.send_context(await self._screen_context())
-        except Exception:
-            _log.debug("screen context failed", exc_info=True)
+        # FS-04: the question goes out at once. The screen line is an
+        # accessibility walk - 0.2-0.5 s on the owner's PC (9 Oct), seconds
+        # on a slow one with a busy browser - and the audio used to wait for
+        # it, so Google heard every question that much late. It is built
+        # alongside now and sent the moment it is ready.
+        started = time.monotonic()
+        context = asyncio.ensure_future(self._screen_context())
+        sent = False
+
+        async def send_context() -> None:
+            nonlocal sent
+            sent = True
+            took = time.monotonic() - started
+            try:
+                line = context.result()
+            except Exception:  # noqa: BLE001 - no screen line: she can still look or point by name
+                _log.debug("screen context failed", exc_info=True)
+                return
+            if took > 0.5:
+                _log.info("screen line took %.1fs - sent while they spoke", took)
+            await conv.send_context(line)
 
         while self._rt_streaming:
+            if not sent and context.done():
+                await send_context()
             if self._rt_audio:
                 chunk = b"".join(self._rt_audio)
                 self._rt_audio.clear()
@@ -1514,11 +1533,26 @@ class CompanionManager(QObject):
             chunk = b"".join(self._rt_audio)
             self._rt_audio.clear()
             await conv.push_audio(chunk)
+        if not sent:
+            # The question is over: the screen line has a moment more, then
+            # the answer goes ahead without it rather than waiting.
+            try:
+                await asyncio.wait_for(asyncio.shield(context), self.CONTEXT_WAIT_S)
+            except Exception:  # noqa: BLE001 - late or failed: go without it
+                pass
+            if context.done():
+                await send_context()
+            else:
+                context.cancel()
+                _log.info("screen line not ready %.1fs after the question - answered without it",
+                          time.monotonic() - started)
 
         # Let the server hear the question end. See end_user_audio — this is
         # what makes the first word arrive immediately rather than a second
         # and a half later.
         await conv.end_user_audio()
+
+    CONTEXT_WAIT_S = 1.0        # FS-04: how long a finished question waits for the screen line
 
     LESSON_STALE_S = 600.0
     _lesson_key = None                    # (the lesson, its step) as last seen
