@@ -215,6 +215,14 @@ Deno.serve(async (req: Request): Promise<Response> => {
     return refuse(500, "HEYTORA_SETUP", "The server is missing its secrets.");
   }
 
+  // FS-06 (docs/FAST_AND_RIGHT.md): where a forwarded answer's time goes.
+  // A look through here took a median 4.7 s on 7-9 Oct against 2.2 s
+  // straight to Google; the app logs this header beside each look.
+  const started = performance.now();
+  const timing: string[] = [];
+  const timed = (name: string, since: number) => timing.push(`${name};dur=${Math.round(performance.now() - since)}`);
+  const serverTiming = () => [...timing, `total;dur=${Math.round(performance.now() - started)}`].join(", ");
+
   const url = new URL(req.url);
   const path = url.pathname.replace(/^.*?\/heytora\/?/, "");
   const auth = req.headers.get("Authorization") ?? "";
@@ -253,7 +261,9 @@ Deno.serve(async (req: Request): Promise<Response> => {
 
   // Who is asking - with their own token, so the database's rules apply.
   const db = createClient(SUPABASE_URL, ANON_KEY, { global: { headers: { Authorization: auth } } });
+  const authStarted = performance.now();
   const { data: who } = await db.auth.getUser(jwt);
+  timed("auth", authStarted);
   const user = who?.user;
   if (!user) return refuse(401, "HEYTORA_SIGNIN", "Sign in to HeyTora to keep talking.");
 
@@ -567,9 +577,11 @@ Deno.serve(async (req: Request): Promise<Response> => {
       }
     }
 
+    const consumeStarted = performance.now();
     const usage = await rpc("heytora_consume", {
       p_kind: "calls", p_quantity: 1, p_meta: { kind, model, method, window: ticketId || undefined },
     });
+    timed("consume", consumeStarted);
     // The request count and the cost ceiling are the server's own: either
     // one running out reads as the month's allowance being used.
     if (!usage.ok) {
@@ -579,6 +591,7 @@ Deno.serve(async (req: Request): Promise<Response> => {
     const query = new URLSearchParams(url.search);
     query.delete("key"); // never a key from the client
     const qs = query.toString();
+    const googleStarted = performance.now();
     const upstream = await fetch(`${GOOGLE}/${path}${qs ? `?${qs}` : ""}`, {
       method: req.method,
       headers: { "content-type": req.headers.get("content-type") ?? "application/json", "x-goog-api-key": KEY },
@@ -628,13 +641,17 @@ Deno.serve(async (req: Request): Promise<Response> => {
     }
     // A plain answer (generateContent, countTokens): read whole, counted, passed on.
     const text = await upstream.text();
+    timed("google", googleStarted);
     if (answers) {
       const reader = new UsageReader();
       reader.push(text);
       const used = reader.used();
       if (used) later(record(used.input, used.output));
     }
-    return new Response(text, { status: upstream.status, headers: { "content-type": type } });
+    return new Response(text, {
+      status: upstream.status,
+      headers: { "content-type": type, "server-timing": serverTiming() },
+    });
   } catch (e) {
     console.error("heytora:", e);
     return refuse(502, "HEYTORA_SERVER", "HeyTora's server had a problem - try again.");

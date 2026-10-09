@@ -295,3 +295,34 @@ def test_the_bench_counts_a_cut_for_spoken_planning(bench, scripted, monkeypatch
     row = asyncio.run(bench.ask(chess, "PROMPT", timeout=5.0))
     assert row["planning_cut"] == 1
     assert "*" not in row["said"]
+
+
+# -- FS-06: where a look's time goes on HeyTora's server ------------------------------------------------------------
+
+def test_the_servers_timing_header_is_read():
+    from ai import gemini
+    assert gemini.server_timing("auth;dur=120, consume;dur=80, google;dur=2100, total;dur=2400") == \
+        {"auth": 120.0, "consume": 80.0, "google": 2100.0, "total": 2400.0}
+    assert gemini.server_timing("") == {} and gemini.server_timing("junk, x;desc=y") == {}
+
+
+def test_a_forwarded_look_carries_the_split_into_its_usage(monkeypatch):
+    from ai import gemini
+
+    class Reply:
+        status_code = 200
+        headers = {"server-timing": "auth;dur=310, consume;dur=95, google;dur=1900, total;dur=2350"}
+
+        @staticmethod
+        def json():
+            return {"candidates": [{"content": {"parts": [{"text": '{"answer": "Click Buy.", "actions": [], '
+                                                                   '"sure": true}'}]}}],
+                    "usageMetadata": {"promptTokenCount": 830}}
+
+    async def post(path, body, timeout):
+        return Reply()
+    monkeypatch.setattr(gemini, "_post", post)
+    usage = {}
+    data = asyncio.run(gemini.generate_json("gemini-3.8-flash", [], {}, usage=usage))
+    assert data["answer"] == "Click Buy."
+    assert usage["server_total_ms"] == 2350 and usage["server_auth_ms"] == 310 and usage["promptTokenCount"] == 830

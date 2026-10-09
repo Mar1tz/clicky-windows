@@ -241,7 +241,22 @@ built; the timeline shows it.
 
 *Prove:* a test counting the captures; "capture N ms" in the timeline.
 
-### FS-06 · Measure the server hop — S — free (needs a function deploy)
+### FS-06 · Measure the server hop — S — free (needs a function deploy) — **built; deploy pending**
+
+**Built:**
+* **The server** (`supabase/functions/heytora/index.ts`) times its steps
+  for a forwarded answer: `auth` (the sign-in check), `consume` (the usage
+  write), `google` (the forward, read whole) and `total`. It sends them in
+  a `Server-Timing` header. The change is additive: nothing else in the
+  function moved.
+* **The app** (`gemini.server_timing`, `generate_json`) keeps them as
+  `server_*_ms` in the look's usage; a fast→deep look adds both. The look
+  line in `tora.log` gets "server N ms (sign-in N, usage N, Google N)".
+* **Tested:** the header is parsed; a forwarded look carries the split.
+* **Waiting:**
+  * `supabase functions deploy heytora` (the owner's yes, or Dylan's);
+  * a type check with Deno, which is not on the owner's PC;
+  * then one real look to read the split (about $0.001).
 
 **Why:** finding 3. Before the hop is changed, it must say where its time
 goes.

@@ -2991,6 +2991,11 @@ class CompanionManager(QObject):
         detail = "capture %d ms, %s %s, %s in / %s out / %s thinking, $%.4f" % (
             shot_ms, path, getattr(look, "model", "") or "?", usage.get("promptTokenCount", "?"),
             usage.get("candidatesTokenCount", "?"), usage.get("thoughtsTokenCount", 0), cost)
+        if usage.get("server_total_ms"):
+            # FS-06: through HeyTora's server - its own share, step by step.
+            detail += ", server %d ms (sign-in %d, usage %d, Google %d)" % (
+                usage["server_total_ms"], usage.get("server_auth_ms", 0),
+                usage.get("server_consume_ms", 0), usage.get("server_google_ms", 0))
         if region:
             detail += ", window only"
         if hint:

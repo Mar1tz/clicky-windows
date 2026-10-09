@@ -505,7 +505,26 @@ async def generate(
     r = await _post(_url(model, "generateContent"), body, timeout)
     if r.status_code != 200:
         raise GeminiError(r.status_code, r.text, model)
-    return r.json()
+    out = r.json()
+    timing = server_timing(r.headers.get("server-timing", ""))
+    if timing and isinstance(out, dict):
+        out["_server_timing"] = timing
+    return out
+
+
+def server_timing(header: str) -> dict:
+    """FS-06: HeyTora's server says where a forwarded answer's time went -
+    "auth;dur=120, consume;dur=80, google;dur=2100, total;dur=2400" - as
+    {"auth": 120, ...} in ms. Empty for Google itself, or a bad header."""
+    out = {}
+    for part in (header or "").split(","):
+        name, _, rest = part.strip().partition(";")
+        if rest.startswith("dur="):
+            try:
+                out[name.strip()] = float(rest[4:])
+            except ValueError:
+                pass
+    return out
 
 
 async def generate_json(
@@ -531,6 +550,9 @@ async def generate_json(
     )
     if usage is not None:
         usage.update(resp.get("usageMetadata") or {})
+        # As numbers, so a look that took two calls adds them up (_summed).
+        for name, ms in (resp.get("_server_timing") or {}).items():
+            usage[f"server_{name}_ms"] = ms
     text = first_text(resp)
     if not text:
         return None
