@@ -33,7 +33,9 @@ SECRET_PATTERNS: list[tuple[re.Pattern[str], str]] = [
     (re.compile(r"\b(gho|ghp|github_pat)_[A-Za-z0-9_]{16,}\b"), r"\1_…REDACTED"),
 ]
 
-NOISY_HTTP_LOGGERS = ("httpx", "httpcore", "websockets.client", "urllib3")
+# primp / ddgs: the web search logs every engine's URL - the user's words
+# in it - about fifteen lines a search (FS-10).
+NOISY_HTTP_LOGGERS = ("httpx", "httpcore", "websockets.client", "urllib3", "primp", "ddgs.ddgs")
 
 
 def redact(text: str) -> str:
@@ -89,10 +91,22 @@ def scrub_file(path: Path) -> int:
         if clean != line:
             changed += 1
         out_lines.append(clean)
+    tmp = path.with_suffix(path.suffix + ".tmp")
     if changed:
-        tmp = path.with_suffix(path.suffix + ".tmp")
         tmp.write_text("".join(out_lines), encoding="utf-8")
-        tmp.replace(path)
+        try:
+            tmp.replace(path)
+        except OSError:
+            # FS-10: Windows will not replace a file another handle has open -
+            # a second HeyTora (one run from source), or this one's own log
+            # handler. That failure used to escape into _setup_logging's
+            # catch-all and skip the redacting filter too: the key stayed in
+            # the old lines AND new request lines were logged unfiltered.
+            # Rewriting in place works with the file open.
+            with open(path, "r+", encoding="utf-8") as f:
+                f.write("".join(out_lines))
+                f.truncate()
+    tmp.unlink(missing_ok=True)       # and any half-finished scrub from before
     return changed
 
 

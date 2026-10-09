@@ -84,3 +84,52 @@ def test_main_installs_logsafe():
     import main
     src = inspect.getsource(main._setup_logging)
     assert "logsafe.install" in src and "logsafe.scrub_logs" in src
+
+
+# -- FS-10: it never ran -----------------------------------------------------------------------------------------
+
+def test_scrub_works_while_the_log_is_open(tmp_path):
+    """Windows will not replace a file another handle has open. The scrub ran
+    after HeyTora's own handler opened tora.log, failed, and the failure
+    skipped the filter too: 256 key lines stayed, and new ones went in."""
+    import logging
+    p = tmp_path / "tora.log"
+    p.write_text(f"INFO httpx: GET https://g/api?key={KEY} 200\nINFO tora: fine\n", encoding="utf-8")
+    (tmp_path / "tora.log.tmp").write_text("a half-finished scrub", encoding="utf-8")
+    holder = logging.FileHandler(p, encoding="utf-8")           # held open, as the app's handler is
+    try:
+        assert logsafe.scrub_file(p) == 1
+    finally:
+        holder.close()
+    text = p.read_text(encoding="utf-8")
+    assert KEY not in text and "fine" in text
+    assert not (tmp_path / "tora.log.tmp").exists(), "no leftover"
+
+
+def test_startup_scrubs_then_filters(tmp_path, monkeypatch):
+    import logging
+
+    import config
+    import main
+    (tmp_path / "tora.log").write_text(f"INFO httpx: GET https://g/api?key={KEY} 200\n", encoding="utf-8")
+    monkeypatch.setattr(config, "data_dir", lambda: tmp_path)
+    root = logging.getLogger()
+    before = list(root.handlers)
+    levels = {n: logging.getLogger(n).level for n in logsafe.NOISY_HTTP_LOGGERS}
+    try:
+        main._setup_logging()
+        added = [h for h in root.handlers if h not in before]
+        assert added and all(any(isinstance(f, logsafe.RedactingFilter) for f in h.filters) for h in added)
+        assert logging.getLogger("httpx").level >= logging.WARNING
+        assert logging.getLogger("primp").level >= logging.WARNING, "the search's URLs are not logged"
+        logging.getLogger("tora").warning("leak? %s", f"https://g/api?key={KEY}")
+        for h in added:
+            h.flush()
+        text = (tmp_path / "tora.log").read_text(encoding="utf-8")
+        assert KEY not in text and "HeyTora starting" in text
+    finally:
+        for h in [h for h in root.handlers if h not in before]:
+            root.removeHandler(h)
+            h.close()
+        for n, lvl in levels.items():
+            logging.getLogger(n).setLevel(lvl)

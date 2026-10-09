@@ -70,8 +70,19 @@ def _setup_logging():
 
     from config import data_dir
     log_dir = data_dir()
+    # Secrets stay out of this file: see logsafe.py. The existing logs are
+    # scrubbed BEFORE the file is opened here, and the filter is installed
+    # whatever the scrub does. FS-10: scrubbing after opening failed on
+    # Windows (an open file cannot be replaced), and that failure skipped
+    # the filter too - for every release since it shipped.
+    import logsafe
+    scrubbed = 0
     try:
         log_dir.mkdir(parents=True, exist_ok=True)
+        scrubbed = logsafe.scrub_logs(log_dir)
+    except Exception:
+        pass
+    try:
         handler = RotatingFileHandler(
             log_dir / "tora.log", maxBytes=1_000_000, backupCount=2,
             encoding="utf-8",
@@ -82,10 +93,6 @@ def _setup_logging():
         root = logging.getLogger()
         root.setLevel(logging.INFO)
         root.addHandler(handler)
-        # Secrets stay out of this file: see logsafe.py. Scrubbing the
-        # existing logs first closes the leak that already happened.
-        import logsafe
-        scrubbed = logsafe.scrub_logs(log_dir)
         logsafe.install(root)
         logging.getLogger("tora").info(
             "=== HeyTora starting (python %s) ===", sys.version.split()[0]

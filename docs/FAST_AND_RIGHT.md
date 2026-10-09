@@ -313,7 +313,34 @@ itself.
 
 ## Wave C — safe, and shipped
 
-### FS-10 · No keys in the log — S — free
+### FS-10 · No keys in the log — S — free — **done (9 Oct)**
+
+**What was really wrong:**
+* `logsafe.py` already had the fix: quiet the HTTP loggers, redact on
+  every handler, scrub old logs. **It never ran.**
+* `_setup_logging` scrubbed `tora.log` after opening it. Windows refuses
+  to replace an open file, and the error fell into a silent `except:
+  pass` that skipped everything after it:
+  * the redacting filter;
+  * the quiet HTTP loggers;
+  * even the "HeyTora starting" line.
+* So the 256 old key lines stayed, request URLs went on being logged at
+  INFO, and a half-finished `tora.log.tmp` was left behind.
+
+**Done:**
+* **The order.** The logs are scrubbed before the file is opened, and the
+  filter is installed whatever the scrub does.
+* **A file another handle holds** (a second HeyTora run from source, or
+  this one's handler) is rewritten in place when it cannot be replaced.
+  Any leftover `.tmp` is removed.
+* **The web search's logger** (`primp`, `ddgs`) is quieted too. It logged
+  about 15 URLs a search, with the user's words in them.
+* **Tested:**
+  * a scrub with the log held open;
+  * the real start-up order: the old key is gone, a new one logged after
+    start is redacted, HTTP loggers are at WARNING, and "HeyTora starting"
+    is written.
+* **The owner's own `tora.log`** is cleaned the first time 1.7.4 starts.
 
 **Why:** finding 8.
 
@@ -352,7 +379,7 @@ PC's.
 | FS-07 | A faster server hop | B | M | – | FS-06, deploy |
 | FS-08 | A lighter voice context | B | S | ~$0.30 | – |
 | FS-09 | A slow PC says why in its log | B | S | free | – |
-| FS-10 | No keys in the log | C | S | free | – |
+| FS-10 | No keys in the log — done | C | S | free | – |
 | FS-11 | Ship 1.7.4, check on a slow PC | C | S | – | all above |
 
 **The user's two complaints:**
