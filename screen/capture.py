@@ -78,6 +78,36 @@ def _placement(left: int, top: int, mons) -> tuple[float, int, int]:
     return dpi, int(round(left / dpi)), int(round(top / dpi))
 
 
+def monitor_frames() -> List[ScreenShot]:
+    """Every monitor's numbers - where it is, its size and scaling - with no
+    picture (base64_jpeg ""). FS-05: a look needs ONE picture; grabbing and
+    encoding every monitor to use one of them took 331 ms with three
+    monitors on 9 Oct, before the window was grabbed again anyway."""
+    from screen import monitors
+    mons = monitors.monitors()
+    out = []
+    with mss.mss() as sct:
+        for i, m in enumerate(sct.monitors[1:], start=1):
+            left, top = int(m.get("left", 0)), int(m.get("top", 0))
+            dpi, log_left, log_top = _placement(left, top, mons)
+            out.append(ScreenShot(index=i, width=int(m["width"]), height=int(m["height"]), base64_jpeg="",
+                                  physical_width=int(m["width"]), physical_height=int(m["height"]),
+                                  physical_left=left, physical_top=top, dpi_scale=dpi,
+                                  logical_left=log_left, logical_top=log_top))
+    return out
+
+
+def grab_frame(frame: ScreenShot, max_width: int = 1280):
+    """The same monitor with its picture: one grab, one JPEG. None on failure."""
+    got = capture_region(frame.physical_left, frame.physical_top, frame.physical_width,
+                         frame.physical_height, max_width)
+    if got is None:
+        return None
+    b64, w, h = got
+    from dataclasses import replace
+    return replace(frame, base64_jpeg=b64, width=w, height=h)
+
+
 def capture_all_screens(max_width: int = 1280) -> List[ScreenShot]:
     """Capture all monitors. Each ScreenShot carries everything needed
     to convert detection coords back into logical screen space."""

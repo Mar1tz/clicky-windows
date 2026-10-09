@@ -39,7 +39,7 @@ from ai import gemini, gemini_memory, gemini_planner, gemini_vision
 from ai.gemini import Models
 from audio.ambient_listener import AmbientListener
 from screen import monitors
-from screen.capture import capture_all_screens, capture_region
+from screen.capture import capture_all_screens, capture_region, grab_frame, monitor_frames
 from ai import look_region
 from ui.panel import AppState
 from tutor import (
@@ -2447,16 +2447,21 @@ class CompanionManager(QObject):
     # dimensions; only the JPEG that is uploaded is downscaled.
     _SHOT_CACHE_S = 1.5
 
-    async def _capture_shots(self, *, max_width: int = 1152, reuse: bool = True):
+    async def _capture_shots(self, *, max_width: int = 1152, reuse: bool = True, pixels: bool = True):
         """Capture the screen, reusing a very recent grab when allowed.
 
         max_width is the width of the JPEG sent to the model — smaller uploads
         and infers faster. The fast glance uses a lighter image than the
         careful look, which wants every pixel it can get for reading.
+        pixels=False: every monitor's numbers only, no picture - the caller
+        grabs the one it needs (FS-05). Never cached: a cache hit must have
+        its pictures.
         """
         if (reuse and self._screens_ctx
                 and (time.monotonic() - self._screens_at) < self._SHOT_CACHE_S):
             return self._screens_ctx
+        if not pixels:
+            return await asyncio.to_thread(monitor_frames)
         screens = await asyncio.to_thread(capture_all_screens, max_width)
         if screens:
             self._screens_ctx = screens
@@ -2915,9 +2920,9 @@ class CompanionManager(QObject):
         # unchanged one hard to tell apart.
         self.sig_clear_drawings.emit()
         await asyncio.sleep(self.CLEAR_BEFORE_SHOT_S)
-        screens = await self._capture_shots(
-            max_width=1280 if careful else 1024, reuse=not careful,
-        )
+        width = 1280 if careful else 1024
+        shot_t0 = time.monotonic()
+        screens = await self._capture_shots(max_width=width, reuse=not careful, pixels=False)
         if not screens:
             return {"error": "could not capture the screen"}
 
@@ -2936,6 +2941,8 @@ class CompanionManager(QObject):
                 shot, by_mouse = screens[i], True
         # UD-02: the window in front, sharper, and the mouse as a hint. A
         # shot without monitor numbers (tests) looks at what it was given.
+        # FS-05: one picture - the window, or else that monitor - not every
+        # monitor encoded and then the window grabbed again.
         image, monitor, region, window = shot.base64_jpeg, None, None, None
         try:
             monitor = (shot.physical_left, shot.physical_top, shot.physical_width, shot.physical_height)
@@ -2943,10 +2950,16 @@ class CompanionManager(QObject):
             window = look_region.window_at(*cursor) if by_mouse else foreground_window_rect()
             region = look_region.window_region(window, monitor)
             if region:
-                grabbed = await asyncio.to_thread(capture_region, *region, 1280 if careful else 1024)
+                grabbed = await asyncio.to_thread(capture_region, *region, width)
                 image, region = (grabbed[0], region) if grabbed else (image, None)
         except Exception:  # noqa: BLE001 - the whole monitor is always a fine fallback
             region = None
+        if not image:
+            whole = await asyncio.to_thread(grab_frame, shot, width)
+            if whole is None:
+                return {"error": "could not capture the screen"}
+            image = whole.base64_jpeg
+        shot_ms = (time.monotonic() - shot_t0) * 1000
         hint = look_region.pointer_hint(question, cursor, region or monitor) if monitor else ""
         self._mouse_shot = (shot, time.monotonic()) if by_mouse else None
         if by_mouse:
@@ -2975,8 +2988,8 @@ class CompanionManager(QObject):
         cost = float(getattr(look, "cost", 0.0) or 0.0)
         path = getattr(look, "path", "") or ("deep" if getattr(look, "deep", False) else "fast")
         self._note_answer(path=path, cost=cost)
-        detail = "%s %s, %s in / %s out / %s thinking, $%.4f" % (
-            path, getattr(look, "model", "") or "?", usage.get("promptTokenCount", "?"),
+        detail = "capture %d ms, %s %s, %s in / %s out / %s thinking, $%.4f" % (
+            shot_ms, path, getattr(look, "model", "") or "?", usage.get("promptTokenCount", "?"),
             usage.get("candidatesTokenCount", "?"), usage.get("thoughtsTokenCount", 0), cost)
         if region:
             detail += ", window only"

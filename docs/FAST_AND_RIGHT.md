@@ -216,7 +216,21 @@ names what happened.
 *Prove:* a test that audio is pushed while the screen line is still being
 built; the timeline shows it.
 
-### FS-05 · Capture once — S — free
+### FS-05 · Capture once — S — free — **done (9 Oct)**
+
+**Done:**
+* **A look asks for the monitors' numbers only**
+  (`_capture_shots(pixels=False)`, `screen.capture.monitor_frames`), then
+  grabs one picture: the window, or that monitor (`grab_frame`) when
+  there is no window to crop.
+* **A fresh cached capture is still used** when there is one.
+  Number-only frames are never cached, so nothing else gets a frame with
+  no picture.
+* **Measured on the owner's PC** (3 monitors): getting the monitors went
+  from **201 ms to 2 ms**; the window grab itself is 54 ms either way.
+  The timeline's look detail now starts with "capture N ms".
+* **Tested:** with no window to crop, one grab, of the monitor in front;
+  frames carry numbers and no pictures.
 
 **Why:** finding 6.
 
@@ -318,7 +332,7 @@ PC's.
 | FS-02 | Yesterday's conversation is over — done | A | S | free | – |
 | FS-03 | Say what it did; ask only when it matters | A | S | free | **your decision** |
 | FS-04 | The question goes out at once — done | B | S | free | – |
-| FS-05 | Capture once | B | S | free | – |
+| FS-05 | Capture once — done | B | S | free | – |
 | FS-06 | Measure the server hop | B | S | ~$0.001 | function deploy |
 | FS-07 | A faster server hop | B | M | – | FS-06, deploy |
 | FS-08 | A lighter voice context | B | S | ~$0.30 | – |

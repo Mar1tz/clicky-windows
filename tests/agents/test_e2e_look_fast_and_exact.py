@@ -434,3 +434,59 @@ def test_pointing_words_are_narrower_than_the_hint_words():
     assert not look_region.points_at_mouse("which one should I pick?")
     assert look_region.frame_under((2500, 400), [(0, 0, 1920, 1080), (1920, 0, 1920, 1080)]) == 1
     assert look_region.frame_under(None, [(0, 0, 1920, 1080)]) is None
+
+
+# -- FS-05: capture once ----------------------------------------------------------------------------------------
+
+def test_a_look_grabs_one_picture_not_every_monitor(monkeypatch):
+    """No window to crop (it fills its monitor): that one monitor is grabbed,
+    once - the other two are never encoded."""
+    from screen.capture import ScreenShot
+    mgr = cm.CompanionManager.__new__(cm.CompanionManager)
+    mgr.sig_draw = SimpleNamespace(emit=lambda sh: None)
+    mgr.sig_clear_drawings = SimpleNamespace(emit=lambda: None)
+    mgr._privacy_guard = False
+    mgr._activity = lambda what: None
+    mgr._heard_buf = []
+    mgr._last_look = None
+    mgr._screens_ctx = []
+    mgr.CLEAR_BEFORE_SHOT_S = 0.0
+    frames = [ScreenShot(index=i + 1, width=1920, height=1080, base64_jpeg="", physical_width=1920,
+                         physical_height=1080, physical_left=1920 * i, physical_top=0, dpi_scale=1.0,
+                         logical_left=1920 * i, logical_top=0) for i in range(3)]
+    asked = {}
+
+    async def capture(**kw):
+        asked.update(kw)
+        return frames
+    mgr._capture_shots = capture
+    mgr._active_shot = lambda screens=None: frames[1]
+    mgr._shape_from_tag = lambda tag: {"tag": tag}
+    import tutor
+    monkeypatch.setattr(tutor, "foreground_window_rect", lambda: (1920, 0, 3840, 1080))   # the whole monitor
+    monkeypatch.setattr(cm, "active_window_title", lambda: "Shop")
+    monkeypatch.setattr(look_region, "cursor_position", lambda: (2500.0, 500.0))
+    monkeypatch.setattr(look_region, "control_chain_at", lambda x, y, limit=None: [])
+    grabbed = []
+
+    def grab(frame, width):
+        grabbed.append(frame.index)
+        from dataclasses import replace
+        return replace(frame, base64_jpeg="monitor-2")
+    monkeypatch.setattr(cm, "grab_frame", grab)
+    monkeypatch.setattr(cm, "capture_region", lambda *a: pytest.fail("no window crop here"))
+    seen = {}
+
+    async def fake_look(q, image, **kw):
+        seen["image"] = image
+        return gemini_vision.Look(answer="Click Buy.", sure=True, path="fast", model="flash", actions=[])
+    monkeypatch.setattr(gemini_vision, "look", fake_look)
+    asyncio.run(mgr._tool_look_at_screen({"question": "which one should I pick?"}))
+    assert asked.get("pixels") is False, "the monitors' numbers only"
+    assert grabbed == [2] and seen["image"] == "monitor-2", "one grab, the monitor in front"
+
+
+def test_monitor_frames_have_numbers_and_no_pictures():
+    from screen.capture import monitor_frames
+    frames = monitor_frames()
+    assert frames and all(f.base64_jpeg == "" and f.physical_width > 0 for f in frames)
