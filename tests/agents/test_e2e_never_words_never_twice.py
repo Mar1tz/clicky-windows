@@ -91,13 +91,16 @@ def _png_b64(colour=(240, 240, 240), mark=None):
     return base64.b64encode(buf.getvalue()).decode()
 
 
-def test_the_same_screen_has_the_same_sketch_even_with_an_arrow_on_it():
-    a = look_region.fingerprint(_png_b64())
-    assert look_region.same_screen(a, look_region.fingerprint(_png_b64()))
-    assert look_region.same_screen(a, look_region.fingerprint(_png_b64(mark=(200, 120, 260, 150)))), "Tora's own arrow"
-    other = look_region.fingerprint(_png_b64(colour=(20, 20, 20)))
-    assert not look_region.same_screen(a, other)
-    assert look_region.fingerprint("not an image") is None and not look_region.same_screen(None, None)
+def test_the_same_screen_has_the_same_sketch_and_a_mark_is_seen():
+    """FS-01: the sketch is 64x36 grey cells, compared cell by cell."""
+    a = look_region.sketch(_png_b64())
+    assert look_region.changed_cells(a, look_region.sketch(_png_b64())) == 0
+    marked = look_region.changed_cells(a, look_region.sketch(_png_b64(mark=(200, 120, 260, 150))))
+    assert 0 < marked <= 40, "a small mark is a small change - seen, not a whole new screen"
+    other = look_region.sketch(_png_b64(colour=(20, 20, 20)))
+    assert look_region.changed_cells(a, other) > 1000
+    assert look_region.sketch("not an image") is None
+    assert look_region.changed_cells(None, None) == look_region.DIFFERENT
 
 
 def _look_manager(monkeypatch, image):
@@ -109,6 +112,7 @@ def _look_manager(monkeypatch, image):
     mgr._activity = lambda what: None
     mgr._heard_buf = []
     mgr._last_look = None
+    mgr.CLEAR_BEFORE_SHOT_S = 0.0
     shot = SimpleNamespace(base64_jpeg=image)
 
     async def capture(**_kw):

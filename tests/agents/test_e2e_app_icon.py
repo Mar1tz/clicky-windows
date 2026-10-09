@@ -37,7 +37,7 @@ def test_the_exe_icon_is_the_brand_mark_at_every_size(qapp, tmp_path):
     big = ico.copy().convert("RGBA")
     left, top, right, bottom = big.getbbox()
     assert max(right - left, bottom - top) >= 0.85 * 256, "the mark fills its square, not a corner of it"
-    opaque = [px for px in big.getdata() if px[3] > 200]
+    opaque = [px for px in big.get_flattened_data() if px[3] > 200]
     r, g, b = (sum(px[i] for px in opaque) / len(opaque) for i in range(3))
     assert b > 200 and r < 60, "the brand blue (#009EFD)"
 

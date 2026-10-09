@@ -90,7 +90,26 @@ Read from `tora.log` and `journal.db`, not guessed.
 
 ## Wave A — never stuck, never stale
 
-### FS-01 · "I've done that" means a new screen — S — free
+### FS-01 · "I've done that" means a new screen — S — free — **done (9 Oct)**
+
+**Done:**
+* **The sketch** (`look_region.sketch` / `changed_cells`) is 64×36 grey
+  cells. On a test board, the pawn's move d2→d4 changes 8 cells; the old
+  16×9 hash saw 0 bits of difference and called it the same screen.
+* **Their words come first.** "done / I've done / did it / I clicked /
+  now / next / moved / look again / check again / another" always look
+  again. "show me that again / where was it / remind me / repeat that"
+  re-show the last look while at most 40 cells have changed.
+* **The same question, with nothing said,** reuses only with 2 cells
+  changed or fewer.
+* **A move in a game** (`needs_judgement`, the window title too) is never
+  reused.
+* **Tora's drawings are rubbed out before the screenshot,** not after it,
+  with 0.1 s for the overlay to repaint. The model no longer sees its own
+  stale arrow on the board.
+* **Tested** (`test_e2e_never_stuck.py`): the 9 Oct sentences each look
+  again; the moved board looks again; a game move is never reused; "show me
+  that again" still re-shows; the clear comes before the capture.
 
 **Why:** finding 1. Three stale answers in a row is exactly "still stuck
 and didn't realise".
@@ -260,7 +279,7 @@ PC's.
 
 | # | milestone | wave | size | cost | needs |
 |---|---|---|---|---|---|
-| FS-01 | "I've done that" means a new screen | A | S | free | – |
+| FS-01 | "I've done that" means a new screen — done | A | S | free | – |
 | FS-02 | Yesterday's conversation is over | A | S | free | – |
 | FS-03 | Say what it did; ask only when it matters | A | S | free | **your decision** |
 | FS-04 | The question goes out at once | B | S | free | – |

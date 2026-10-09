@@ -165,27 +165,34 @@ def best_control(box: Rect, chain: list[tuple[Rect, str]], window: Optional[Rect
     return min(clickable, key=lambda f: abs(math.log(max(1.0, (f[0][2] - f[0][0]) * (f[0][3] - f[0][1])) / area)))[0]
 
 
-def fingerprint(image_b64: str) -> Optional[int]:
-    """A 144-bit sketch of an image (16x9 average hash): two screens that look
-    the same give nearly the same sketch, whatever JPEG noise or a small
-    arrow of Tora's adds. What UD-05 compares to know nothing has changed."""
+# FS-01: what UD-05 compares to know nothing has changed. It was a 16x9
+# average hash - 144 bits - and on 9 Oct it could not see a chess piece
+# move: "Okay, I've done that. Where's my next best move?" got the old move
+# back, three times. A grey 64x36 thumbnail is compared cell by cell
+# instead: one chess square is about six cells, so a move changes a dozen.
+SKETCH_SIZE = (64, 36)
+CELL_DIFF = 24                 # grey levels a cell must change by to count
+DIFFERENT = 10 ** 6            # what changed_cells says when it cannot compare
+
+
+def sketch(image_b64: str) -> Optional[bytes]:
+    """The image as 64x36 grey cells. None when it cannot be read."""
     try:
         import base64
         import io
         from PIL import Image
-        im = Image.open(io.BytesIO(base64.b64decode(image_b64))).convert("L").resize((16, 9))
-        px = list(im.getdata())
+        im = Image.open(io.BytesIO(base64.b64decode(image_b64))).convert("L")
+        return im.resize(SKETCH_SIZE, Image.Resampling.BOX).tobytes()
     except Exception:  # noqa: BLE001 - no sketch: never reuse
         return None
-    mean = sum(px) / len(px)
-    bits = 0
-    for v in px:
-        bits = (bits << 1) | (v > mean)
-    return bits
 
 
-def same_screen(a: Optional[int], b: Optional[int], tolerance: int = 6) -> bool:
-    return a is not None and b is not None and bin(a ^ b).count("1") <= tolerance
+def changed_cells(a: Optional[bytes], b: Optional[bytes]) -> int:
+    """How many cells differ by more than CELL_DIFF; DIFFERENT when either
+    sketch is missing or they are not the same size."""
+    if a is None or b is None or len(a) != len(b):
+        return DIFFERENT
+    return sum(1 for x, y in zip(a, b) if abs(x - y) > CELL_DIFF)
 
 
 # SP-10: words that point at a place. Narrower than _DEICTIC on purpose -

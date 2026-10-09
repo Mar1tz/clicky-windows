@@ -2850,12 +2850,17 @@ class CompanionManager(QObject):
         # possibly-cached image.
         self._activity("screen")
         careful = bool(args.get("careful"))
+        # FS-01: rub out what Tora drew BEFORE the screenshot, not after it.
+        # Her last arrow was in the next look's picture - the model saw its
+        # own stale move on the board - and it made a changed screen and an
+        # unchanged one hard to tell apart.
+        self.sig_clear_drawings.emit()
+        await asyncio.sleep(self.CLEAR_BEFORE_SHOT_S)
         screens = await self._capture_shots(
             max_width=1280 if careful else 1024, reuse=not careful,
         )
         if not screens:
             return {"error": "could not capture the screen"}
-        self.sig_clear_drawings.emit()
 
         shot = self._active_shot(screens) or screens[0]
         cursor = look_region.cursor_position()
@@ -2891,8 +2896,8 @@ class CompanionManager(QObject):
 
         # UD-05: asked again about a screen that has not changed - the last
         # look's answer and drawing again, and no call.
-        fp = look_region.fingerprint(image)
-        again = self._reusable_look(question, fp)
+        sk = look_region.sketch(image)
+        again = self._reusable_look(question, sk, title)
         if again is not None:
             for tag in again["tags"]:
                 sh = self._shape_from_tag(tag)
@@ -2959,28 +2964,44 @@ class CompanionManager(QObject):
             "drawn": [("arrow: " if getattr(a, "is_move", False) else f"{a.kind}: ") + a.label for a in drawn],
             "highlights": [{"label": a.label, "tag": a.as_tag()} for a in drawn],
         }
-        self._last_look = {"fp": fp, "question": _norm_question(question), "at": time.monotonic(),
+        self._last_look = {"sketch": sk, "question": _norm_question(question), "at": time.monotonic(),
                            "result": result, "tags": [a.as_tag() for a in drawn]}
         return result
 
     # ── UD-05: never pay twice for the same screen ──────────────────────────
     _last_look: Optional[dict] = None
     _LOOK_REUSE_S = 180.0
-    _AGAIN_RE = re.compile(r"\b(again|one more time|repeat|where was (it|that)|show me that|remind me)\b",
-                           re.IGNORECASE)
+    CLEAR_BEFORE_SHOT_S = 0.1     # the overlay repaints, and Windows composes it, in this
+    # FS-01: on 9 Oct "Okay, I've done that. Where's my next best move?", "Okay,
+    # look again" and "I've done that. Please do the next move." were all
+    # answered from the look before - the old move, three times: "still stuck,
+    # and didn't realise". Words that say the screen changed, or ask for a
+    # fresh look, always look again; only asking to SEE the last answer again
+    # re-shows it.
+    _FRESH_RE = re.compile(
+        r"\b(done|did (it|that)|i(?:'ve| have)? (?:done|moved|made|clicked|changed|played|typed)|now|next|"
+        r"moved|changed|updated|look again|check again|try again|another|new)\b", re.IGNORECASE)
+    _RESHOW_RE = re.compile(
+        r"\b(show (me )?(that|it) again|where was (it|that)|remind me|repeat that|say that again|"
+        r"one more time)\b", re.IGNORECASE)
+    SAME_CELLS = 2          # the same question, nothing said: as good as nothing changed
+    RESHOW_CELLS = 40       # "show me that again": the buddy, the clock or a caret may have moved
 
-    def _reusable_look(self, question: str, fp) -> Optional[dict]:
-        """The last look, when it can answer this one with no call: the same
-        screen (its sketch, look_region.fingerprint), within three minutes, and
-        either the same question or the user asking for it again."""
+    def _reusable_look(self, question: str, sketch, title: str = "") -> Optional[dict]:
+        """The last look, when it can answer this one with no call: within
+        three minutes, never after words that say the screen changed, never a
+        move in a game (the other side moves too); "show me that again" on a
+        nearly unchanged screen, or the same question on an unchanged one."""
         last = self._last_look
         if not last or time.monotonic() - last["at"] > self._LOOK_REUSE_S:
             return None
-        if not look_region.same_screen(fp, last["fp"]):
+        words = " ".join(getattr(self, "_heard_buf", None) or []) + " " + question
+        if self._FRESH_RE.search(words) or gemini_vision.needs_judgement(question, title):
             return None
-        heard = " ".join(getattr(self, "_heard_buf", None) or [])
-        if _norm_question(question) == last["question"] or self._AGAIN_RE.search(heard) \
-                or self._AGAIN_RE.search(question):
+        change = look_region.changed_cells(sketch, last.get("sketch"))
+        if self._RESHOW_RE.search(words):
+            return last if change <= self.RESHOW_CELLS else None
+        if _norm_question(question) == last["question"] and change <= self.SAME_CELLS:
             return last
         return None
 
