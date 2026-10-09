@@ -357,8 +357,104 @@ def compare(before: dict, after: dict) -> None:
         print(f"  {k:14} {before['summary'].get(k)} -> {after['summary'].get(k)}")
 
 
+# FS-08: one long conversation, in one session. The field's voice context
+# grew to 33k tokens an answer (9 Oct) - every generation re-bills all of
+# it - while each SP-02 question starts blank. A prefilled earlier chat
+# takes the context past the compression trigger, as a real session is;
+# then six questions, two of which refer back.
+CONVERSATION = [
+    ("where is the bold button?", {"point_at"}, ["bold"]),
+    ("and italic?", {"point_at"}, ["italic"]),
+    ("where do I make the text bigger?", {"point_at"}, ["size", "font"]),
+    ("what did I ask you about first, just now?", {"none"}, ["bold"]),
+    ("thanks", {"none"}, []),
+    ("show me that italic one again", {"point_at"}, ["italic"]),
+]
+
+
+def earlier_chat(tokens: int) -> list[dict]:
+    """About `tokens` tokens of an earlier, unrelated chat, as real turns -
+    user, then Tora - so the server's sliding window can drop the oldest
+    ones, as it does in a real session. One big message it cannot: the
+    session died on the first question at 8k."""
+    apps = ["Excel", "Spotify", "Chrome", "Outlook", "Photoshop", "Teams", "Explorer", "Settings"]
+    turns, n, size = [], 0, 0
+    while size < tokens * 4:
+        app = apps[n % len(apps)]
+        ask = f"In {app}, where do I find the option for item {n}? I have looked everywhere for it."
+        said = (f"In {app}, item {n} is under the menu at the top; I pointed at it. It is the third "
+                f"entry, and it opens a small panel with its settings, where you can change it.")
+        turns += [{"role": "user", "parts": [{"text": ask}]}, {"role": "model", "parts": [{"text": said}]}]
+        size += len(ask) + len(said)
+        n += 1
+    return turns
+
+
+async def converse(system_prompt: str, prefill_tokens: int) -> list[dict]:
+    from ai.gemini_realtime import RealtimeConversation
+    word = next(c for c in CASES if c.name == "where_named")
+    rows: list[dict] = []
+    turn: dict = {}
+
+    def tool(name):
+        async def run(args: dict) -> dict:
+            turn.setdefault("tools", []).append(name)
+            turn["last_tool"] = time.monotonic()
+            if name == "look_at_screen":
+                return {"say": "It's in the Home tab.", "drawn": [], "highlights": []}
+            return CANNED[name](args)
+        return run
+
+    def said(text):
+        turn.setdefault("said", []).append((time.monotonic(), text))
+
+    def ended(t):
+        turn.setdefault("usage", []).append(getattr(t, "usage", None) or {})
+        turn["ended"] = time.monotonic()
+
+    conv = RealtimeConversation(tools={n: tool(n) for n in ["look_at_screen", *CANNED]},
+                                on_said=said, on_turn_end=ended)
+    conv._player = Mute()
+    assert await conv.connect(system_prompt), "could not open a live session"
+    try:
+        await conv._session._send({"clientContent": {"turns": earlier_chat(prefill_tokens), "turnComplete": False}})
+        for question, expect, must in CONVERSATION:
+            turn.clear()
+            await conv.send_context(context_line(word))
+            t0 = time.monotonic()
+            await conv._session.send_text(question, turn_complete=True)
+            while time.monotonic() < t0 + 30:
+                await asyncio.sleep(0.1)
+                spoke = [t for t, _ in turn.get("said", []) if t > turn.get("last_tool", 0)]
+                if spoke and turn.get("ended", 0) > spoke[0] and time.monotonic() - turn["ended"] > 0.8:
+                    break
+            words = "".join(w for _, w in turn.get("said", [])).strip()
+            tools = turn.get("tools", [])
+            ok_tool = (tools[0] if tools else "none") in expect
+            ok_words = not must or any(m in words.lower() for m in must)
+            usage = [u for u in turn.get("usage", []) if u] + [u for u in (conv._gen_usage, conv._turn.usage) if u]
+            cost = sum(live_cost_usd_(u) for u in usage)
+            prompt = sum(int(u.get("promptTokenCount", 0)) for u in usage)
+            rows.append({"question": question, "ok": ok_tool and ok_words, "tools": tools, "said": words,
+                         "cost": round(cost, 5), "prompt_tokens": prompt})
+            print(f"  {'PASS' if rows[-1]['ok'] else 'FAIL'} {question!r:45} {','.join(tools) or 'no tool':10} "
+                  f"{prompt:6} in ${cost:.4f} | {words[:60]!r}")
+    finally:
+        await conv.close()
+    return rows
+
+
+def live_cost_usd_(usage: dict) -> float:
+    from ai.gemini_live import live_cost_usd
+    return live_cost_usd(usage)
+
+
 async def main():
     ap = argparse.ArgumentParser(description="The voice test bench (SP-02).")
+    ap.add_argument("--conversation", action="store_true",
+                    help="FS-08: one long conversation in one session instead of the questions")
+    ap.add_argument("--prefill", type=int, default=9000, help="tokens of earlier chat before it (FS-08)")
+    ap.add_argument("--compress", default="", help="TRIGGER,TARGET tokens for the session (FS-08)")
     ap.add_argument("--dry", action="store_true", help="print the questions and checks, free")
     ap.add_argument("--only", default="", help="comma-separated case names")
     ap.add_argument("--max-dollars", type=float, default=0.25)
@@ -393,6 +489,23 @@ async def main():
         system_prompt = system_prompt.replace(FILLER_RULE, FILLERS[args.filler])
     trace_the_wire()
     OUT.mkdir(exist_ok=True)
+    if args.conversation:
+        from ai import gemini_realtime
+        if args.compress:
+            trig, target = (int(x) for x in args.compress.split(","))
+            gemini_realtime.COMPRESSION_TRIGGER_TOKENS, gemini_realtime.COMPRESSION_TARGET_TOKENS = trig, target
+        print(f"conversation: compression {gemini_realtime.COMPRESSION_TRIGGER_TOKENS} -> "
+              f"{gemini_realtime.COMPRESSION_TARGET_TOKENS}, {args.prefill} tokens of earlier chat")
+        conv_rows = await converse(system_prompt, args.prefill)
+        total = sum(r["cost"] for r in conv_rows)
+        print(f"passed {sum(r['ok'] for r in conv_rows)}/{len(conv_rows)}, avg ${total / len(conv_rows):.4f} "
+              f"an answer, total ${total:.3f}")
+        path = OUT / f"conversation-{time.strftime('%Y%m%d-%H%M%S')}.json"
+        path.write_text(json.dumps({"compress": [gemini_realtime.COMPRESSION_TRIGGER_TOKENS,
+                                                 gemini_realtime.COMPRESSION_TARGET_TOKENS],
+                                    "rows": conv_rows}, indent=1), encoding="utf-8")
+        print("report:", path)
+        return
     rows, spent = [], 0.0
     for c in cases:
         if spent >= args.max_dollars:

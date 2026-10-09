@@ -282,7 +282,29 @@ real look shows the split (about $0.001).
 *Prove:* FS-06's split before and after. A look through the server within
 0.5 s of a look straight to Google.
 
-### FS-08 · A lighter voice context — S — about $0.30 of runs
+### FS-08 · A lighter voice context — S — about $0.30 of runs — **measured; setting not changed yet**
+
+**Measured** (`tools/voice_eval.py --conversation`: one session, about
+9k tokens of earlier chat, then six questions with two references back;
+$0.30 spent):
+* **The bench reproduces the field.** With today's window (16k trigger,
+  8k kept), a long conversation costs **$0.022–0.024 an answer**: about
+  28k prompt tokens over a look's two generations. Six of six passed, the
+  references included.
+* **8k / 4k is unsafe as tested.**
+  * With the earlier chat sent as one big message, the session died on
+    the first question, twice.
+  * With almost no earlier chat it ran fine: $0.0095–0.012 an answer while
+    small, before compression ever triggered.
+  * The likely cause: a message too big to drop, or the never-dropped
+    prompt and tools (about 4.5k tokens) above a 4k target. Not confirmed.
+  * A session dying mid-conversation would be exactly "stuck", so the
+    setting stays as it is until a run proves it.
+
+**Next** (about $0.15, the owner's OK):
+* send the earlier chat as separate messages;
+* compare 16k/8k, 12k/8k and 10k/6k;
+* take the smallest that keeps 6/6 with no session lost.
 
 **Why:** finding 4. The context grew to 33k tokens an answer.
 
