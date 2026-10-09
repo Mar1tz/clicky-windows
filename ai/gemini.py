@@ -506,7 +506,7 @@ async def generate(
     if r.status_code != 200:
         raise GeminiError(r.status_code, r.text, model)
     out = r.json()
-    timing = server_timing(r.headers.get("server-timing", ""))
+    timing = server_timing((getattr(r, "headers", None) or {}).get("server-timing", ""))
     if timing and isinstance(out, dict):
         out["_server_timing"] = timing
     return out
