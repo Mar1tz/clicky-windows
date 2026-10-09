@@ -413,7 +413,21 @@ itself.
 *Prove:* a test logs a URL with a key and finds it blanked. The owner's
 log has no key after one start.
 
-### FS-11 · Ship 1.7.4, and check it on a slow PC — S
+### FS-11 · Ship 1.7.4, and check it on a slow PC — S — **shipped 9 Oct; the slow-PC check is to come**
+
+**Shipped:**
+* **HeyTora 1.7.4,** with FS-01, 02, 04, 05, 06 (the app's half), 09
+  and 10.
+* **The self-update test passed** on the owner's copy: installed, reopened
+  by itself, "updated to 1.7.4".
+* **Its own log showed the fixes working:**
+  * "redacted 256 line(s) of earlier logs that contained credentials";
+  * "HeyTora starting" written again;
+  * the PC line: "8 cores, CPU 19% busy, RAM 16 GB (2.8 GB free), 3
+    monitor(s) at 125/100/125%";
+  * no more request lines.
+* **Still to come:** one session on a slow PC, with its `tora.log` read;
+  the FS-06 deploy; FS-07.
 
 **Do:**
 * **The usual release:** a dry run, the self-update with relaunch, then
