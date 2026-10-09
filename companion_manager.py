@@ -397,7 +397,8 @@ class CompanionManager(QObject):
         # to the span between hotkey down and hotkey up.
         self._realtime = None
         self._rt_streaming = False
-        self._rt_on_demand = False          # this question opened its own session (metered plan)
+        self._rt_on_demand = False          # this question opened its own session
+        self._last_talk_at = time.monotonic()   # FS-02: when they last talked to her
         self._rt_audio: deque[bytes] = deque()
         self._heard_buf: list[str] = []
         # Increments per realtime turn so a watchdog can tell whether the turn
@@ -1358,11 +1359,35 @@ class CompanionManager(QObject):
             # Metered plan: the next question takes a new voice pass.
             self._submit(self._close_metered_session(self._turn_seq))
 
+    # FS-02: a conversation nobody has spoken in for this long is over. The
+    # next question starts a new one, opening the voice as it is asked; a
+    # session that drops before then is not reopened in the background. On
+    # 8-9 Oct an idle session was reopened every ten minutes all night - on
+    # a plan each of those is a voice pass - and kept the day before's talk.
+    IDLE_FRESH_S = 30 * 60
+    _last_talk_at: Optional[float] = None    # None: not known - keep the voice warm
+
+    def _idle_s(self) -> float:
+        return 0.0 if self._last_talk_at is None else time.monotonic() - self._last_talk_at
+
+    def _forget_conversation(self) -> None:
+        """FS-02: what was said before a long silence is not this conversation."""
+        _log.info("a new conversation: nothing said for %d min", self._idle_s() // 60)
+        self._app_memory.clear()
+        self._last_look = None
+        if self._realtime is not None:
+            self._realtime.forget()
+
     def _on_realtime_lost(self, reason: str) -> None:
-        """The session dropped. Reconnect quietly, in the background."""
+        """The session dropped. Reconnect quietly, in the background - while
+        they are talking to her, or a walkthrough needs her voice."""
         _log.info("realtime session lost: %s", reason)
         if self._state != AppState.IDLE:
             self._emit_state(AppState.IDLE)
+        guide = getattr(self, "_guide_runner", None)
+        if self._idle_s() > self.IDLE_FRESH_S and not (guide is not None and guide.running):
+            _log.info("not reopened while idle - it opens when they next talk")
+            return
         self._submit(self._realtime_reconnect())
 
     async def _realtime_reconnect(self) -> None:
@@ -3405,6 +3430,9 @@ class CompanionManager(QObject):
             stop_audio()
         except Exception:
             pass
+        if self._idle_s() > self.IDLE_FRESH_S:
+            self._forget_conversation()
+        self._last_talk_at = time.monotonic()
         if self._realtime is not None:
             self._realtime.cancel()
         self._rt_audio.clear()
@@ -3438,11 +3466,11 @@ class CompanionManager(QObject):
         # handshake a moment in _realtime_stream rather than sending this
         # question down the 25-second cascade.
         connecting = bool(conv is not None and not ready and conv.connecting)
-        # A metered plan opens the session now, on the question - the mic is
-        # already buffering, and _realtime_stream waits for it.
-        metered = self._metered_talk()
-        on_demand = (not ready and not connecting and cfg.realtime()
-                     and cfg.has_key() and metered)
+        # No session: it is opened now, on the question - the mic is already
+        # buffering, and _realtime_stream waits for it. A metered plan always
+        # works this way; since FS-02 every plan does after a silence, rather
+        # than sending the question down the much slower cascade.
+        on_demand = (not ready and not connecting and cfg.realtime() and cfg.has_key())
         if self._is_new_question():
             # Every time the user talks is a talk message, on every plan.
             # Said before the pass is asked for (Free opens the voice now),
@@ -3457,6 +3485,7 @@ class CompanionManager(QObject):
         self._rt_streaming = ready or connecting or on_demand
         _log.info("turn: %s", "realtime" if ready
                   else "realtime (waiting for session)" if connecting
+                  else "realtime (opening the session)" if on_demand
                   else "cascade (no live session)")
         if self._rt_streaming:
             self._submit(self._realtime_stream())

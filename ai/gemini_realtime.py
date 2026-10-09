@@ -446,6 +446,9 @@ class RealtimeConversation:
         self._player = PcmStreamPlayer()
         self._connecting: Optional[asyncio.Task] = None
         self._resume_handle: Optional[str] = None
+        # FS-02: the conversation is over (forget): the next connect starts
+        # blank, and an open session is replaced rather than continued.
+        self._forget = False
         # Bumped whenever a session starts BLANK rather than resuming. Callers
         # that avoid repeating themselves — the per-turn screen context — use
         # it to know that everything they said earlier is gone.
@@ -478,9 +481,20 @@ class RealtimeConversation:
 
     # ── Session ──────────────────────────────────────────────────────────────
 
+    _forget = False
+
     @property
     def ready(self) -> bool:
-        return self._session is not None and self._session.is_open
+        return self._session is not None and self._session.is_open and not self._forget
+
+    def forget(self) -> None:
+        """FS-02: the conversation is over. On 9 Oct "Hello." was answered
+        with a request from the day before: the session had been resumed,
+        or re-seeded with a recap, every ten minutes all night. The next
+        question starts a new conversation - no resumption handle, and an
+        open session is replaced instead of continued."""
+        self._resume_handle = None
+        self._forget = True
 
     @property
     def speaking(self) -> bool:
@@ -618,7 +632,8 @@ class RealtimeConversation:
         server's own way of saying "carry on where you were".
         """
         await self.close()
-        resume = self._resume_handle if system_prompt == self._system else None
+        resume = self._resume_handle if system_prompt == self._system and not self._forget else None
+        self._forget = False
         session = LiveSession(Models.REALTIME, self._setup(system_prompt), resume_handle=resume)
         try:
             await session.connect()

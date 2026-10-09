@@ -131,7 +131,29 @@ and didn't realise".
 * the 9 Oct sentences: each one looks again;
 * "show me that again" on the same screen is still reused.
 
-### FS-02 · Yesterday's conversation is over — S — free
+### FS-02 · Yesterday's conversation is over — S — free — **done (9 Oct)**
+
+**Done:**
+* **After 30 min with nothing said, the next question is a new
+  conversation** (`IDLE_FRESH_S`). The kept history (`_app_memory`) and
+  the last look are cleared.
+* **The voice session forgets** (`RealtimeConversation.forget`): no
+  resumption handle, and an open session counts as not ready, so it is
+  replaced rather than continued. With the history cleared, no recap is
+  sent.
+* **A dropped session is reopened in the background only while they are
+  talking** (the last 30 min) or a walkthrough is running. No more all-night
+  reconnects, each a voice pass on a plan.
+* **A question that finds no session opens one on the spot,** on every
+  plan, as metered plans already did. Before, Pro and Max sent it down the
+  cascade, which took about 12 s on 8 Oct. The log says "turn: realtime
+  (opening the session)".
+* **Tested** (`test_e2e_fresh_conversation.py`):
+  * a forgotten session starts blank, with no handle and no recap;
+  * a dropped session is reopened at 5 min idle, not at 31 min, and
+    always for a walkthrough;
+  * at 31 min the question clears the history and opens the voice;
+  * at 4 min it keeps the conversation.
 
 **Why:** finding 2, and part of finding 4.
 
@@ -280,7 +302,7 @@ PC's.
 | # | milestone | wave | size | cost | needs |
 |---|---|---|---|---|---|
 | FS-01 | "I've done that" means a new screen — done | A | S | free | – |
-| FS-02 | Yesterday's conversation is over | A | S | free | – |
+| FS-02 | Yesterday's conversation is over — done | A | S | free | – |
 | FS-03 | Say what it did; ask only when it matters | A | S | free | **your decision** |
 | FS-04 | The question goes out at once | B | S | free | – |
 | FS-05 | Capture once | B | S | free | – |
