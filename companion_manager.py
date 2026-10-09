@@ -399,6 +399,10 @@ class CompanionManager(QObject):
         self._rt_streaming = False
         self._rt_on_demand = False          # this question opened its own session
         self._last_talk_at = time.monotonic()   # FS-02: when they last talked to her
+        # FS-09: what this PC is, once a session - so a slow user's log says
+        # why. Off the start-up path: it samples the CPU for a moment.
+        threading.Thread(target=lambda: _log.info(__import__("pcinfo").describe()),
+                         name="pcinfo", daemon=True).start()
         self._rt_audio: deque[bytes] = deque()
         self._heard_buf: list[str] = []
         # Increments per realtime turn so a watchdog can tell whether the turn

@@ -49,6 +49,9 @@ hidden = [
 
     # Log hygiene, imported inside _setup_logging
     "logsafe",
+    # The once-a-session line about the PC (FS-09), imported by name in a thread
+    "pcinfo",
+    "ui.app_icon",
 
     # HeyTora accounts (sign-in, the server function's client) and the
     # per-monitor pixel maths - both imported inside functions.

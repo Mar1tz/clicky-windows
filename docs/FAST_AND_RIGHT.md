@@ -296,7 +296,23 @@ real look shows the split (about $0.001).
 *Prove:* the conversation's cost per answer drops, and every question in
 it still passes.
 
-### FS-09 · A slow PC says why in its log — S — free
+### FS-09 · A slow PC says why in its log — S — free — **done (9 Oct)**
+
+**Done:**
+* **Once a session, one line about the PC** (`pcinfo.describe`, from
+  Windows' own calls, no new package). The owner's reads "pc: 8 cores, CPU
+  61% busy, RAM 16 GB (3.3 GB free), 3 monitor(s): …, Windows 10.0.26200".
+  It is logged off the start-up path, and added to `heytora.spec` because
+  it is imported by name.
+* **Each look's line now carries:**
+  * the capture time (FS-05);
+  * the server's split, once FS-06 is deployed;
+  * the total and the first word, as before.
+  A slow screen line is logged on its own (FS-04).
+* **Not added:** a separate upload time. FS-06's total against the look's
+  time gives it.
+* **Tested:** the line's parts; one failing part does not lose the rest;
+  the manager logs it on a thread; the build includes it.
 
 **Why:** finding 9.
 
@@ -378,7 +394,7 @@ PC's.
 | FS-06 | Measure the server hop | B | S | ~$0.001 | function deploy |
 | FS-07 | A faster server hop | B | M | – | FS-06, deploy |
 | FS-08 | A lighter voice context | B | S | ~$0.30 | – |
-| FS-09 | A slow PC says why in its log | B | S | free | – |
+| FS-09 | A slow PC says why in its log — done | B | S | free | – |
 | FS-10 | No keys in the log — done | C | S | free | – |
 | FS-11 | Ship 1.7.4, check on a slow PC | C | S | – | all above |
 
