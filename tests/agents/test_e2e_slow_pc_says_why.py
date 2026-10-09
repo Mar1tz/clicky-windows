@@ -39,3 +39,15 @@ def test_the_build_includes_it():
     from pathlib import Path
     spec = (Path(__file__).resolve().parents[2] / "heytora.spec").read_text(encoding="utf-8")
     assert '"pcinfo"' in spec, "imported by name, so PyInstaller would not find it on its own"
+
+
+def test_a_plain_answer_logs_its_first_word_too(caplog):
+    import logging
+
+    import companion_manager as cm
+    m = cm.CompanionManager.__new__(cm.CompanionManager)
+    m._ans = {"heard": 10.0, "asked": 11.0, "audio": 12.4}
+    with caplog.at_level(logging.INFO, logger="tora.manager"):
+        m._log_answer("Hello! How can I help?")
+    assert "answer timeline: no look, first word +1.4s, said 22 chars" in caplog.text
+    assert m._ans is None

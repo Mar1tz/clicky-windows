@@ -1210,9 +1210,19 @@ class CompanionManager(QObject):
             a["voice_cost"] = a.get("voice_cost", 0.0) + cost
 
     def _log_answer(self, said: str) -> None:
-        """One timeline line for an answer that looked at the screen."""
+        """One timeline line for every answer - a look's in full."""
         a, self._ans = self._ans, None
-        if not a or "tool" not in a:
+        if not a:
+            return
+        if "tool" not in a:
+            # FS-09: an answer with no look still says how long the first word
+            # took, so a slow PC's log shows it on plain questions too.
+            if "audio" in a:
+                t0 = a.get("asked", a.get("heard", a["audio"]))
+                line = "no look, first word +%.1fs, said %d chars" % (a["audio"] - t0, len(said or ""))
+                if "voice_in" in a:
+                    line += ", voice %d in / %d out $%.4f" % (a["voice_in"], a["voice_out"], a["voice_cost"])
+                _log.info("answer timeline: %s", line)
             return
         t0 = a.get("asked", a.get("heard", a["tool"]))
         parts = ["look called +%.1fs" % (a["tool"] - t0)]
