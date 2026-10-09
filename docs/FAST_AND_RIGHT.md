@@ -169,7 +169,13 @@ and didn't realise".
 * a 5-minute gap resumes;
 * the recap holds only recent exchanges.
 
-### FS-03 · Say what it did; ask only when it matters — S — **needs your decision**
+### FS-03 · Say what it did; ask only when it matters — S — **decided (9 Oct): keep asking**
+
+**The owner's decision:** every app action keeps its yes. After an
+approved action, Tora already says how it went (`_after_approval` →
+`say_now`). The journal only records answers to questions, so 9 Oct's
+log cannot show whether that line was heard. Nothing changed.
+
 
 **Why:** finding 7.
 * The spoken answer was the request for permission. The site then opened
@@ -253,10 +259,17 @@ built; the timeline shows it.
   `server_*_ms` in the look's usage; a fast→deep look adds both. The look
   line in `tora.log` gets "server N ms (sign-in N, usage N, Google N)".
 * **Tested:** the header is parsed; a forwarded look carries the split.
-* **Waiting:**
-  * `supabase functions deploy heytora` (the owner's yes, or Dylan's);
-  * a type check with Deno, which is not on the owner's PC;
-  * then one real look to read the split (about $0.001).
+* **Waiting** (approved 9 Oct): the deploy. The CLI on the owner's PC is
+  signed in to an account that cannot see the TORA project, so someone
+  with access runs:
+  ```
+  npx supabase login
+  npx supabase functions download heytora --project-ref uizwfpxzzkokyrkvjzkr   # compare with the repo first
+  npx supabase functions deploy heytora --project-ref uizwfpxzzkokyrkvjzkr --use-api
+  ```
+  Also needed: a Deno type check (no Deno on the owner's PC), then one
+  real look to read the split (about $0.001). The app's half ships in
+  1.7.4 and shows the split as soon as the server sends it.
 
 **Why:** finding 3. Before the hop is changed, it must say where its time
 goes.
@@ -301,10 +314,19 @@ $0.30 spent):
   * A session dying mid-conversation would be exactly "stuck", so the
     setting stays as it is until a run proves it.
 
-**Next** (about $0.15, the owner's OK):
-* send the earlier chat as separate messages;
-* compare 16k/8k, 12k/8k and 10k/6k;
-* take the smallest that keeps 6/6 with no session lost.
+**The follow-up (9 Oct, the owner's OK):**
+* The earlier chat was sent as 40 separate messages. 10k/6k still lost
+  the session on the first question.
+* **The pattern:** the session closes the moment compression first
+  triggers on injected text history, whatever the size. With almost no
+  history it is fine.
+* **The field shows compression working at 16k with spoken turns.** At
+  13:37 on 9 Oct the voice's context fell from about 16.8k to 8.4k
+  tokens a generation.
+* **So this bench cannot test compression.** A real test needs about 20
+  real question-and-answer turns per setting, about $0.20 each.
+* **The setting stays at 16k/8k:** it is proven in the field, and an
+  untested one could drop sessions.
 
 **Why:** finding 4. The context grew to 33k tokens an answer.
 

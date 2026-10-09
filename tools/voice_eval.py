@@ -417,7 +417,9 @@ async def converse(system_prompt: str, prefill_tokens: int) -> list[dict]:
     conv._player = Mute()
     assert await conv.connect(system_prompt), "could not open a live session"
     try:
-        await conv._session._send({"clientContent": {"turns": earlier_chat(prefill_tokens), "turnComplete": False}})
+        chat = earlier_chat(prefill_tokens)
+        for i in range(0, len(chat), 2):                # one exchange a message, as a session builds up
+            await conv._session._send({"clientContent": {"turns": chat[i:i + 2], "turnComplete": False}})
         for question, expect, must in CONVERSATION:
             turn.clear()
             await conv.send_context(context_line(word))
