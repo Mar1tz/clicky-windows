@@ -486,7 +486,17 @@ journal against the log). Three causes cover them.
 * the renewal happens at 7½ minutes, waits while she speaks, and not
   after 30 minutes idle.
 
-### FS-13 · "I didn't catch that" in seconds, not 22 — S — free
+### FS-13 · "I didn't catch that" in seconds, not 22 — S — free — **done (9 Oct)**
+
+**Done:**
+* **No words heard 5 s after the question ended:** "Sorry - I didn't catch
+  that" at once. The session is kept: it did nothing wrong.
+* **Words heard, no answer, no tool for 12 s:** the same, and the session
+  is replaced.
+* **A tool still gets up to 75 s.** The old 22 s wait for everything is
+  gone, and the log line says which case it was.
+* **Tested** (`test_e2e_didnt_catch_that.py`): both timings, the running
+  tool, and an answer ending the watch.
 
 **Why:**
 * **5 Oct, 11:07:** a 1.1 s question got nothing back. Tora sat on
@@ -502,7 +512,24 @@ journal against the log). Three causes cover them.
 
 *Prove:* tests on both timings, and that a running tool still waits.
 
-### FS-14 · When HeyTora's own credits run out — S — free
+### FS-14 · When HeyTora's own credits run out — S — free — **done (9 Oct)**
+
+**Done:**
+* **A new problem kind, "service"** (`gemini.problem_of`): on a HeyTora
+  plan, Google refusing for billing, key or quota is HeyTora's side. On an
+  own key it stays "billing", "key" or "quota", the user's to fix.
+* **Every place words it as HeyTora's side:**
+  * "HeyTora is having trouble on our side right now - it's not you, and
+    there's nothing to top up";
+  * the tray, with no AI Studio link;
+  * the app's banner and its live-session row;
+  * the planner, and the voice fallback notice.
+* **No wasted call.** A question asked during the outage is told at once,
+  instead of trying the slow route on the same refused account.
+* **Tested** (`test_e2e_service_trouble.py`).
+* **The owner, still to do** (a setting, not code): auto-reload and a
+  budget alert on the business account's billing in Google AI Studio. The
+  35 minutes on 9 Oct were found in a log, not by an alert.
 
 **Why:**
 * **9 Oct, 13:45 to about 14:20:** Google refused HeyTora's business
@@ -539,8 +566,8 @@ journal against the log). Three causes cover them.
 | FS-10 | No keys in the log — done | C | S | free | – |
 | FS-11 | Ship 1.7.4, check on a slow PC | C | S | – | all above |
 | FS-12 | Never ask into a session about to close — done | D | S | free | – |
-| FS-13 | "I didn't catch that" in seconds | D | S | free | – |
-| FS-14 | When HeyTora's own credits run out | D | S | free | – |
+| FS-13 | "I didn't catch that" in seconds — done | D | S | free | – |
+| FS-14 | When HeyTora's own credits run out — done | D | S | free | – |
 
 **The user's two complaints:**
 * **"Still stuck":** FS-01 fixes it, and FS-02 stops the stale answers.

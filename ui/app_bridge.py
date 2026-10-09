@@ -762,6 +762,7 @@ class AppBridge(QObject):
         problem = self.problem()
         if problem:
             rows.append(("Live session", "Refused - out of Gemini credit" if problem == "billing"
+                         else "HeyTora's service is having trouble (not yours)" if problem == "service"
                          else "Refused - the API key", "bad"))
         elif self.live():
             rows.append(("Live session", f"Open · {Models.REALTIME}", "ok"))

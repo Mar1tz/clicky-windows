@@ -228,6 +228,8 @@ class HomePage(Page):
             words = "Out of Gemini credit. Tora can't answer until it's topped up."
         elif problem == "key":
             words = "API key refused. Add a working key in Help > Keys and diagnostics."
+        elif problem == "service":
+            words = "HeyTora is having trouble on our side. It's not you - ask again in a few minutes."
         elif getattr(br, "manager", None) is not None and not br.live():
             words = "Not connected. Tora can't hear you right now - she keeps trying."
         else:

@@ -1045,7 +1045,8 @@ class CompanionManager(QObject):
         back = (datetime.now() + timedelta(seconds=secs)).strftime("%H:%M")
         why = {"quota": "Google's daily limit for Tora's voice is used up on this key",
                "billing": "Google refused Tora's voice: the Gemini credits have run out",
-               "key": "Google refused Tora's voice: check the API key in Setup"}.get(
+               "key": "Google refused Tora's voice: check the API key in Setup",
+               "service": "HeyTora's voice is having trouble on our side - not yours"}.get(
                    kind, "Google did not answer for Tora's voice")
         if self._guide_stats is not None:
             self._guide_stats["windows_voice"] = True
@@ -1451,6 +1452,10 @@ class CompanionManager(QObject):
         # words, which say which allowance and how much (_problem_detail).
         "plan": ("This month's allowance on your HeyTora plan is used up. Upgrade "
                  "on the HeyTora website, or use your own Gemini key in Settings."),
+        # FS-14: Google refused HeyTora's own account - a HeyTora plan's
+        # billing, key or quota. Nothing for the user to do.
+        "service": ("HeyTora is having trouble on our side right now - it's not you, and "
+                    "there's nothing to top up. Ask again in a few minutes."),
         "signin": ("Sign in to HeyTora to keep talking: tray icon → Sign in to "
                    "HeyTora, or use your own Gemini key."),
     }
@@ -3665,7 +3670,7 @@ class CompanionManager(QObject):
         if len(pcm) < 3200:
             self._emit_state(AppState.IDLE)
             return
-        if not gemini.own_key() and self._problem_kind in ("plan", "signin"):
+        if not gemini.own_key() and self._problem_kind in ("plan", "signin", "service"):
             # The voice pass was refused: this month's talk is used up, or
             # the sign-in has lapsed. The slower route would only spend the
             # dictation allowance on the same question - say why instead.
@@ -3676,9 +3681,9 @@ class CompanionManager(QObject):
             return
         await self._cascade_turn(pcm)
 
-    # A turn that gets no answer at all must not strand the UI on "Thinking…".
-    _TURN_WATCHDOG_S = 22.0
-    # ...unless a tool is running for the model. Then the model is not
+    # A turn that gets no answer at all must not strand the UI on "Thinking…"
+    # (_NOTHING_HEARD_S, _HEARD_NO_ANSWER_S: FS-13) - unless a tool is
+    # running for the model. Then the model is not
     # silent, it is waiting on us, and killing the turn (and the session
     # with it) throws away work that was about to land. The log showed a
     # 40 s deep look being cut off at 22 s, the session dropped, and the
@@ -3697,9 +3702,15 @@ class CompanionManager(QObject):
         """
         started = time.monotonic()
         # Poll on a short interval rather than one long sleep, so a normal
-        # answer (state leaves THINKING) is noticed within ~0.3 s. The turn
-        # is declared dead only after WATCHDOG_S of genuine quiet — no tool
-        # running and none finished in the last 6 s — capped at MAX_S total.
+        # answer (state leaves THINKING) is noticed within ~0.3 s.
+        #
+        # FS-13: how long to wait depends on what has happened. 5 Oct, 11:07:
+        # a 1.1 s question got nothing back and Tora sat on "Thinking..." for
+        # 22 s - then seven presses in ten seconds, none of them answered.
+        #   no words heard at all       NOTHING_HEARD_S: the server never
+        #                               registered the speech
+        #   heard, no answer, no tool   HEARD_NO_ANSWER_S
+        #   a tool running or just done up to MAX_S, as before
         while True:
             await asyncio.sleep(0.3)
             if seq != self._turn_seq:
@@ -3709,20 +3720,27 @@ class CompanionManager(QObject):
             now = time.monotonic()
             elapsed = now - started
             busy = self._tools_in_flight > 0 or now - self._tool_done_at < 6.0
+            heard = bool(getattr(self, "_heard_buf", None)) or self._tool_done_at >= started
             if elapsed >= self._TURN_WATCHDOG_MAX_S:
                 break                   # hard ceiling, tool or no tool
-            if not busy and elapsed >= self._TURN_WATCHDOG_S:
+            if not busy and elapsed >= (self._HEARD_NO_ANSWER_S if heard else self._NOTHING_HEARD_S):
                 break                   # quiet long enough — really stuck
-        _log.warning("realtime turn produced no response in %.0fs",
-                     time.monotonic() - started)
+        _log.warning("realtime turn produced no response in %.0fs (%s)", time.monotonic() - started,
+                     "words were heard" if heard else "no words were heard")
         self._activity("")
         self._emit_state(AppState.IDLE)
-        # The session is suspect — retire it so the next question gets a
-        # fresh one rather than hitting the same silence again.
-        self._drop_realtime()
+        if heard:
+            # The model heard them and said nothing: the session is suspect —
+            # retire it so the next question gets a fresh one rather than
+            # hitting the same silence again. Nothing heard is not the
+            # session's fault: it stays.
+            self._drop_realtime()
         await self._reply_local(
             "Sorry — I didn't catch that. Could you say it again?"
         )
+
+    _NOTHING_HEARD_S = 5.0          # FS-13
+    _HEARD_NO_ANSWER_S = 12.0       # FS-13 (one 22 s wait for everything, before)
 
     def _record_turn(self, question: str, answer: str) -> None:
         """Everything that happens after an answer, whichever route made it."""

@@ -482,6 +482,7 @@ _FAILURE_WORDS = {
     "busy": "Google's planner is overloaded right now - ask me again in a moment.",
     "network": "I can't reach Google right now - check the internet connection.",
     "billing": "I can't plan that: the Gemini credits have run out.",
+    "service": "I can't plan that right now - HeyTora is having trouble on our side.",
     "key": "I can't plan that: Google refused the API key.",
 }
 

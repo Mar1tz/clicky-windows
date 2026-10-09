@@ -200,6 +200,9 @@ class TrayManager(QObject):
                            lambda: __import__("webbrowser").open("https://ai.studio/projects"))
         elif self._account_problem == "key":
             notice = Entry("notice", "Google refused the API key", self.on_api_keys.emit)
+        elif self._account_problem == "service":
+            # FS-14: HeyTora's own account, not theirs - nothing to open or fix.
+            notice = Entry("notice", "HeyTora is having trouble on our side", lambda: None)
         if notice is not None:
             rows.append(notice)
 
@@ -374,10 +377,10 @@ class TrayManager(QObject):
         has stopped. A warning at the top of the menu while it lasts, and
         one notification when it starts - Tora cannot SAY it, her voice is
         on the same account (APP-02)."""
-        kind = kind if kind in ("billing", "key", "plan", "signin") else ""
+        kind = kind if kind in ("billing", "key", "plan", "signin", "service") else ""
         if kind and words:
-            heading = {"plan": "HeyTora plan", "signin": "Sign in to HeyTora"}.get(
-                kind, "Tora can't reach Google")
+            heading = {"plan": "HeyTora plan", "signin": "Sign in to HeyTora",
+                       "service": "HeyTora"}.get(kind, "Tora can't reach Google")
             self._tray.showMessage(heading, words, QSystemTrayIcon.MessageIcon.Warning, 8000)
         if kind != self._account_problem:
             self._account_problem = kind

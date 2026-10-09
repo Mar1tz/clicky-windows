@@ -294,9 +294,10 @@ _NETWORK = ("getaddrinfo failed", "name or service not known", "timed out during
 
 
 def problem_of(error: Any) -> str:
-    """"plan", "signin", "quota", "billing", "key", "busy", "network", or ""
-    - what went wrong, in the terms a person can act on. Takes an exception
-    or a message."""
+    """"plan", "signin", "quota", "billing", "key", "service", "busy",
+    "network", or "" - what went wrong, in the terms a person can act on.
+    Takes an exception or a message. "service": Google refused HeyTora's
+    own account (a HeyTora plan) - nothing for the user to fix."""
     text = str(error or "").lower()
     status = getattr(error, "status", 0) or 0
     body = str(getattr(error, "body", "") or "").lower()
@@ -312,12 +313,19 @@ def problem_of(error: Any) -> str:
     if named in ("SignInNeeded", "NotConfigured") or "heytora_signin" in body \
             or "heytora_signin" in text:
         return "signin"
+    google_side = ""
     if any(w in text or w in body for w in _QUOTA):
-        return "quota"
-    if any(w in text for w in _BILLING) or status == 402:
-        return "billing"
-    if any(w in text for w in _KEY) or status in (401, 403):
-        return "key"
+        google_side = "quota"
+    elif any(w in text for w in _BILLING) or status == 402:
+        google_side = "billing"
+    elif any(w in text for w in _KEY) or status in (401, 403):
+        google_side = "key"
+    if google_side:
+        # FS-14: on a HeyTora plan the account Google refused is HeyTora's,
+        # not the user's. 9 Oct, 13:45-14:20: "prepayment credits are
+        # depleted" on HeyTora's business key, and every plan user was told
+        # to top up Gemini credits in AI Studio - credits they do not have.
+        return google_side if own_key() else "service"
     if status in (429, 503) or any(w in text for w in _BUSY):
         return "busy"
     if isinstance(error, (httpx.ConnectError, httpx.ConnectTimeout, ConnectionError)) \
@@ -363,7 +371,7 @@ def report_problem(error: Any) -> str:
     Returns the kind. Never raises - a report must not become the failure."""
     global _problem_active
     kind = problem_of(error)
-    if kind in ("billing", "key", "plan", "signin") and _problem_listener is not None:
+    if kind in ("billing", "key", "plan", "signin", "service") and _problem_listener is not None:
         _problem_active = True
         try:
             _problem_listener(kind, str(error)[:300])
