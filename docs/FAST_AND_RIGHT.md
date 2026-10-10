@@ -548,6 +548,47 @@ journal against the log). Three causes cover them.
 
 *Prove:* tests on the plan's words against the own key's.
 
+### FS-15 · A look never waits on a busy model — M — **done (10 Oct)**
+
+**What happened** (10 Oct, 10:47): "What do you see on my screen?" took
+**85 s**, and it answered about a window they had already left.
+
+**The cause, measured:**
+* **It was not the PC, the network or HeyTora's server.** Google's
+  `gemini-3.8-flash`, the fast model, was overloaded. Of 8 identical looks
+  on fresh connections, 4 got 503 and the rest took 28–45 s.
+* **The deep model was too.** `gemini-3.1-pro-preview` timed out.
+* **Other models answered at once, that same morning:**
+  * `gemini-3.6-flash`: 8 of 8 in 1.6–3.2 s;
+  * `gemini-3.5-flash-lite`: 8 of 8 in 1.2–2.4 s.
+
+**Done:**
+* **The fast model is now `gemini-3.5-flash-lite`.** On the 23 test
+  screens in the app's routing it got every everyday screen right (21 of
+  21), at **p50 1.3 s** and **$0.0002 a look**, a ninth of before.
+  `gemini-2.5-flash` was as quick but drew 7 of 23 in the wrong place.
+* **The race** (`gemini_vision._fast`): if the fast look has not answered
+  in 2.5 s, or fails, the same look goes to the backup,
+  `gemini-3.6-flash`, and the first usable answer wins.
+  * The whole fast look is capped at 15 s, and one call at 12 s.
+  * A raced look never sits in busy retries.
+* **A sick model is skipped for 5 minutes:** one that failed, crawled
+  (over 8 s) or lost a race. The deep model too, so games and reading go to
+  the raced fast look meanwhile.
+* **The deep look gives up at 12 s,** not 35.
+* **Every model call is timed in `tora.log`:** "fast look call: MODEL
+  N.N s", and failures name the model.
+* **The bench** gained `--fast-model` and `--backup-model` (an env var is
+  overridden by `.env`) and prints UTF-8: it had died at the first
+  "deep→fast".
+* **The baseline** (`tools/look_eval_baseline.json`) is that morning's
+  run. The deep model was down, so its two game screens fell back; on a
+  normal day they go deep.
+* **Tested** (`test_e2e_look_never_waits_on_a_busy_model.py`): a quick
+  answer never asks the backup; a slow model loses and is skipped; a
+  failure hands over at once; both down gives up within budget.
+* **Spent:** about $0.14 of measurement.
+
 ---
 
 ## The order, at a glance
@@ -568,6 +609,7 @@ journal against the log). Three causes cover them.
 | FS-12 | Never ask into a session about to close — done | D | S | free | – |
 | FS-13 | "I didn't catch that" in seconds — done | D | S | free | – |
 | FS-14 | When HeyTora's own credits run out — done | D | S | free | – |
+| FS-15 | A look never waits on a busy model — done | D | M | ~$0.14 | – |
 
 **The user's two complaints:**
 * **"Still stuck":** FS-01 fixes it, and FS-02 stops the stale answers.
