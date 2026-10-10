@@ -1,9 +1,10 @@
 """
 Two ways of looking at the screen.
 
-  fast  gemini-3.8-flash with thinking switched off. The first look at
-        nearly every question: measured on 16 everyday screens, 2-3 s and
-        about $0.0014, and the right thing drawn on 15 of them.
+  fast  gemini-3.5-flash-lite, raced with gemini-3.6-flash when it is slow
+        or fails (FAST-01). The first look at nearly every question: on 23
+        test screens, p50 1.3 s and about $0.0002, the right thing drawn on
+        every everyday screen.
 
   deep  gemini-3.1-pro-preview. The careful look: dense reading (code,
         small print, formulas) and a move in a game go here first; anything
@@ -24,8 +25,10 @@ pointing at it".
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
+import time
 from dataclasses import dataclass, field
 from typing import Optional
 
@@ -123,7 +126,11 @@ _DEEP_THINK = "low"
 # --resolution measures with it.
 _FAST_RESOLUTION = "medium"
 RESOLUTION: Optional[str] = None
-_DEEP_TIMEOUT_S = 35.0
+# FAST-01: a deep look takes 4-7 s (SP-04). On 10 Oct gemini-3.1-pro-preview
+# was overloaded and a deep look sat out the old 35 s before the fast model
+# answered; now it gives up at 12 s, and a deep model that failed is not
+# asked again for COOL_S - games and reading go to the raced fast look.
+_DEEP_TIMEOUT_S = 12.0
 
 _SYSTEM = """You are the eyes of Tora, a visual tutor that points at things
 on the user's screen while it talks.
@@ -400,9 +407,11 @@ def _parse(data: dict, model: str, deep: bool) -> Look:
     )
 
 
-async def _ask(question: str, screenshot_b64: str, *, deep: bool, context: str, timeout: float) -> Optional[Look]:
+async def _ask(question: str, screenshot_b64: str, *, deep: bool, context: str, timeout: float,
+               model: Optional[str] = None, busy_retries: bool = True) -> Optional[Look]:
     """One call to one model. None when it failed or came back unusable."""
-    model = Models.VISION_DEEP if deep else Models.VISION_FAST
+    model = model or (Models.VISION_DEEP if deep else Models.VISION_FAST)
+    started = time.monotonic()
     ask = f"{context}\n\n{question}" if context else question
     contents = [{"role": "user", "parts": [
         gemini.image_part(screenshot_b64),
@@ -420,10 +429,17 @@ async def _ask(question: str, screenshot_b64: str, *, deep: bool, context: str, 
             media_resolution=RESOLUTION or (None if deep else _FAST_RESOLUTION),
             timeout=min(timeout, _DEEP_TIMEOUT_S) if deep else timeout,
             usage=usage,
+            busy_retries=busy_retries,
         )
+    except asyncio.CancelledError:
+        raise                              # the race was won by the other model
     except Exception as e:
-        _log.warning("%s look failed: %s", "deep" if deep else "fast", e)
+        _log.warning("%s look failed on %s after %.1fs: %s", "deep" if deep else "fast", model,
+                     time.monotonic() - started, str(e)[:160] or type(e).__name__)
         return None
+    # Every call timed: on 10 Oct a look took 85 s and nothing in the log
+    # said where (the HTTP library's request lines are off since FS-10).
+    _log.info("%s look call: %s %.1fs", "deep" if deep else "fast", model, time.monotonic() - started)
     if not data:
         return None
     out = _parse(data, model, deep)
@@ -456,6 +472,81 @@ def _summed(*usages: dict) -> dict:
     return out
 
 
+# FAST-01: the fast look is raced. On 10 Oct 2026 gemini-3.8-flash - the fast
+# model - answered 4 of 8 identical looks with 503 (overloaded) and took
+# 28-45 s over the rest; a user's "what do you see on my screen?" took 85 s.
+# Older models looked in 1-2 s that morning. A fast look that has not
+# answered in HEDGE_AFTER_S, or fails, races the same request on the backup
+# model, and the first usable answer wins. A model that was overloaded or
+# crawled is skipped for COOL_S, so the next looks go straight to the other.
+HEDGE_AFTER_S = 2.5
+FAST_TRY_S = 12.0          # one fast call, at most
+FAST_BUDGET_S = 15.0       # the whole fast look, race included
+SLOW_S = 8.0               # an answer slower than this cools its model too
+COOL_S = 300.0
+_cool_until: dict[str, float] = {}
+
+
+def _cool(model: str, why: str) -> None:
+    if _cool_until.get(model, 0) <= time.monotonic():
+        _log.info("fast look: %s %s - the other model first for %d min", model, why, COOL_S // 60)
+    _cool_until[model] = time.monotonic() + COOL_S
+
+
+def fast_models() -> list[str]:
+    """The fast model and its backup, the one not cooling first."""
+    order = [Models.VISION_FAST]
+    if Models.VISION_FAST_BACKUP and Models.VISION_FAST_BACKUP != Models.VISION_FAST:
+        order.append(Models.VISION_FAST_BACKUP)
+    now = time.monotonic()
+    return sorted(order, key=lambda m: _cool_until.get(m, 0) > now)
+
+
+def _usable(look: Optional[Look]) -> bool:
+    return bool(look and (look.answer or look.actions))
+
+
+async def _fast(question: str, screenshot_b64: str, *, context: str) -> Optional[Look]:
+    models = fast_models()
+    started = time.monotonic()
+    running: dict[asyncio.Task, tuple[str, float]] = {}
+
+    def run(model: str) -> None:
+        task = asyncio.ensure_future(_ask(question, screenshot_b64, deep=False, context=context,
+                                          timeout=FAST_TRY_S, model=model, busy_retries=False))
+        running[task] = (model, time.monotonic())
+
+    run(models[0])
+    raced = len(models) < 2
+    try:
+        while running:
+            elapsed = time.monotonic() - started
+            if elapsed >= FAST_BUDGET_S:
+                break
+            wait = FAST_BUDGET_S - elapsed if raced else max(0.0, HEDGE_AFTER_S - elapsed)
+            done, _ = await asyncio.wait(set(running), timeout=wait, return_when=asyncio.FIRST_COMPLETED)
+            for task in done:
+                model, at = running.pop(task)
+                result = task.result()
+                if _usable(result):
+                    if time.monotonic() - at > SLOW_S:
+                        _cool(model, "answered in %.0fs" % (time.monotonic() - at))
+                    for other, (late, _at) in running.items():
+                        other.cancel()
+                        _cool(late, "lost the race")
+                    return result
+                _cool(model, "failed")
+            if not raced and (not running or time.monotonic() - started >= HEDGE_AFTER_S):
+                raced = True
+                _log.info("fast look: %s slow or failed - racing %s", models[0], models[1])
+                run(models[1])
+        return None
+    finally:
+        for task, (model, _at) in running.items():
+            task.cancel()
+            _cool(model, "ran out of time")
+
+
 async def look(
     question: str,
     screenshot_b64: str,
@@ -485,20 +576,23 @@ async def look(
     if not screenshot_b64:
         return Look()
 
-    if deep is True or (deep is None and (needs_reading(question) or needs_judgement(question, title))):
+    deep_ok = _cool_until.get(Models.VISION_DEEP, 0) <= time.monotonic()
+    if deep_ok and (deep is True or (deep is None and (needs_reading(question)
+                                                        or needs_judgement(question, title)))):
         first = await _ask(question, screenshot_b64, deep=True, context=context, timeout=timeout)
         if first:
             first.path = "deep"
             return first
+        _cool(Models.VISION_DEEP, "failed")
         # Was: only an EXCEPTION fell back. A truncated or unparseable reply
         # returned an empty Look and the user heard nothing after 40 s.
         _log.info("deep look gave nothing usable — answering with the fast model")
-        fast = await _ask(question, screenshot_b64, deep=False, context=context, timeout=timeout)
+        fast = await _fast(question, screenshot_b64, context=context)
         if fast:
             fast.path = "deep→fast"
         return fast or Look()
 
-    fast = await _ask(question, screenshot_b64, deep=False, context=context, timeout=timeout)
+    fast = await _fast(question, screenshot_b64, context=context)
     if deep is False:
         if fast:
             fast.path = "fast"
@@ -506,10 +600,15 @@ async def look(
     if fast and fast.answer and fast.sure and not (is_next_action(question) and not fast.actions):
         fast.path = "fast"
         return fast
+    if not deep_ok and fast and fast.answer:
+        fast.path = "fast (deep resting)"
+        return fast
     why = ("gave nothing usable" if not fast or not fast.answer else
            "was not sure" if not fast.sure else "had nothing to draw")
     _log.info("fast look %s — asking the deep model", why)
     careful = await _ask(question, screenshot_b64, deep=True, context=context, timeout=timeout)
+    if not careful:
+        _cool(Models.VISION_DEEP, "failed")
     if careful and careful.answer:
         careful.path = "fast→deep"
         careful.usage = _summed(fast.usage if fast else {}, careful.usage)

@@ -277,7 +277,7 @@ def test_a_resolution_goes_in_the_generation_config(monkeypatch):
         def json():
             return {"candidates": []}
 
-    async def fake_post(url, body, timeout):
+    async def fake_post(url, body, timeout, **_kw):
         bodies.append(body)
         return Reply()
     monkeypatch.setattr(gemini, "_post", fake_post)

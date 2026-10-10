@@ -57,7 +57,15 @@ class Models:
 
     REALTIME    = _m("GEMINI_REALTIME_MODEL", "gemini-3.8-live")
     PLANNER     = _m("GEMINI_PLANNER_MODEL",  "gemini-3.1-pro-preview")
-    VISION_FAST = _m("GEMINI_VISION_FAST",    "gemini-3.8-flash")
+    # FAST-01 (10 Oct 2026): gemini-3.8-flash answered 4 of 8 identical looks
+    # with 503 and took 28-45 s over the rest - one user's look took 85 s.
+    # On the 23 test screens gemini-3.5-flash-lite was as right on everyday
+    # screens (21 of 21; the two games are the deep model's), at p50 1.3 s
+    # and a ninth of the cost. gemini-3.6-flash, steady at 1.6-3.2 s and
+    # 22/23 on its own, is raced when the fast one is slow or fails.
+    # (gemini-2.5-flash was as quick but drew 7 of 23 in the wrong place.)
+    VISION_FAST = _m("GEMINI_VISION_FAST",    "gemini-3.5-flash-lite")
+    VISION_FAST_BACKUP = _m("GEMINI_VISION_FAST_BACKUP", "gemini-3.6-flash")
     VISION_DEEP = _m("GEMINI_VISION_DEEP",    "gemini-3.1-pro-preview")
     STT         = _m("GEMINI_STT_MODEL",      "gemini-3.5-transcribe-live")
     TTS         = _m("GEMINI_TTS_MODEL",      "gemini-3.1-flash-tts-preview")
@@ -396,7 +404,7 @@ def report_ok() -> None:
 BUSY_RETRY_DELAYS = (1.0, 2.0)
 
 
-async def _post(path: str, body: dict, timeout: float) -> httpx.Response:
+async def _post(path: str, body: dict, timeout: float, busy_retries: bool = True) -> httpx.Response:
     async def once() -> httpx.Response:
         root, params, headers = await _route(answer=path.endswith(":generateContent"))
         extra = {"headers": headers} if headers else {}      # own key: exactly as before
@@ -416,7 +424,9 @@ async def _post(path: str, body: dict, timeout: float) -> httpx.Response:
     except GeminiError as e:              # HeyTora said no before Google was asked
         report_problem(e)
         raise
-    for delay in BUSY_RETRY_DELAYS:
+    # A caller with another model to try (a raced look) moves on at once
+    # rather than waiting on an overloaded one (FAST-01).
+    for delay in (BUSY_RETRY_DELAYS if busy_retries else ()):
         if r.status_code not in (429, 503) or problem_of(r.text) != "busy":
             break
         _log.info("Google is busy (%d) - asking again in %.0fs", r.status_code, delay)
@@ -480,6 +490,7 @@ async def generate(
     audio_voice: Optional[str] = None,
     media_resolution: Optional[str] = None,
     timeout: float = 120.0,
+    busy_retries: bool = True,
 ) -> dict:
     """One non-streaming generateContent call. Returns the raw response.
 
@@ -510,7 +521,7 @@ async def generate(
     if tools:
         body["tools"] = tools
 
-    r = await _post(_url(model, "generateContent"), body, timeout)
+    r = await _post(_url(model, "generateContent"), body, timeout, busy_retries=busy_retries)
     if r.status_code != 200:
         raise GeminiError(r.status_code, r.text, model)
     out = r.json()
@@ -546,6 +557,7 @@ async def generate_json(
     media_resolution: Optional[str] = None,
     timeout: float = 120.0,
     usage: Optional[dict] = None,
+    busy_retries: bool = True,
 ) -> Optional[dict]:
     """generateContent constrained to a JSON schema. None if it came back
     unparseable — every caller has a sane path for 'no structured answer'.
@@ -555,6 +567,7 @@ async def generate_json(
         model, contents,
         system=system, max_tokens=max_tokens, temperature=0.2,
         think=think, schema=schema, media_resolution=media_resolution, timeout=timeout,
+        busy_retries=busy_retries,
     )
     if usage is not None:
         usage.update(resp.get("usageMetadata") or {})

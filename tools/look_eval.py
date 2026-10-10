@@ -36,6 +36,9 @@ import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+# The paths print "fast→deep"; Windows' console encoding cannot, and the run
+# died at the first one (10 Oct).
+sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 from PIL import Image  # noqa: E402
 
 import config  # noqa: E402,F401 - loads .env
@@ -339,6 +342,9 @@ async def main():
     ap.add_argument("--only", default="", help="comma-separated screen names")
     ap.add_argument("--max-dollars", type=float, default=0.30)
     ap.add_argument("--resolution", default="", help="low | medium | high: the image's tokens (SP-06)")
+    ap.add_argument("--fast-model", default="",
+                    help="try another fast model (an env var is overridden by .env, so this is the way)")
+    ap.add_argument("--backup-model", default="", help="the model the fast look races when slow (FAST-01)")
     ap.add_argument("--against", default="", help="an earlier report.json to compare with")
     args = ap.parse_args()
 
@@ -353,6 +359,12 @@ async def main():
     assert gemini.own_key() and gemini.api_key(), "no own key in .env (GOOGLE_API_KEY)"
     deep = False if args.fast_only else True if args.deep_only else None
     mode = "fast-only" if args.fast_only else "deep-only" if args.deep_only else "app routing"
+    if args.fast_model:
+        gemini.Models.VISION_FAST = args.fast_model
+        mode += f", fast {args.fast_model}"
+    if args.backup_model:
+        gemini.Models.VISION_FAST_BACKUP = args.backup_model
+        mode += f", backup {args.backup_model}"
     if args.resolution:
         gemini_vision.RESOLUTION = args.resolution
         mode += f", {args.resolution} resolution"

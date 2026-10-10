@@ -8,7 +8,8 @@ Code Mode, journal questions, quiz mode, anything typed.
 
 Model choice is per question rather than fixed:
 
-  gemini-3.8-flash        the default, with thinking switched off. A tutor
+  the fast vision model   the default (Models.VISION_FAST), thinking as
+                          low as it goes. A tutor
                           answering "what is this button" does not need a
                           reasoning pass, and skipping it takes roughly half
                           a second off every reply.

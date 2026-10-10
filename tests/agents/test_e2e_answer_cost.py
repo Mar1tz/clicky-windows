@@ -319,7 +319,7 @@ def test_a_forwarded_look_carries_the_split_into_its_usage(monkeypatch):
                                                                    '"sure": true}'}]}}],
                     "usageMetadata": {"promptTokenCount": 830}}
 
-    async def post(path, body, timeout):
+    async def post(path, body, timeout, **_kw):
         return Reply()
     monkeypatch.setattr(gemini, "_post", post)
     usage = {}

@@ -1,236 +1,236 @@
 {
- "when": "2026-10-06 01:44:42",
- "fast": "gemini-3.8-flash",
+ "when": "2026-10-10 11:36:44",
+ "fast": "gemini-3.5-flash-lite",
  "deep": "gemini-3.1-pro-preview",
  "rows": [
   {
    "name": "signin",
    "ok": true,
    "path": "fast",
-   "s": 3.58,
-   "cost": 0.00091,
+   "s": 2.19,
+   "cost": 0.00017,
    "in": 829,
-   "out": 80,
-   "thinking": 84,
-   "answer": "Click the blue Sign in button."
+   "out": 82,
+   "thinking": 0,
+   "answer": "Click the sign in button to access your account."
   },
   {
    "name": "darkmode",
    "ok": true,
    "path": "fast",
-   "s": 1.85,
-   "cost": 0.00088,
+   "s": 1.51,
+   "cost": 0.00017,
    "in": 828,
-   "out": 82,
-   "thinking": 72,
-   "answer": "Click this toggle switch next to Dark mode."
+   "out": 83,
+   "thinking": 0,
+   "answer": "Toggle the second switch to turn on dark mode."
   },
   {
    "name": "cheapest4star",
    "ok": true,
    "path": "fast",
-   "s": 2.31,
-   "cost": 0.00107,
+   "s": 1.22,
+   "cost": 0.00018,
    "in": 838,
-   "out": 91,
-   "thinking": 126,
-   "answer": "Choose the Arctic Fan for thirty-nine dollars with a four-point-three star rating."
+   "out": 97,
+   "thinking": 0,
+   "answer": "Pick the Arctic Fan for thirty-nine dollars since it has over four stars and is the cheapest option meeting your criteria."
   },
   {
    "name": "chart",
    "ok": true,
    "path": "fast",
-   "s": 1.76,
-   "cost": 0.00076,
+   "s": 1.31,
+   "cost": 0.00016,
    "in": 828,
-   "out": 78,
-   "thinking": 38,
+   "out": 54,
+   "thinking": 0,
    "answer": "May had the highest sales."
   },
   {
    "name": "wrongcell",
    "ok": true,
    "path": "fast",
-   "s": 2.54,
-   "cost": 0.00163,
+   "s": 1.56,
+   "cost": 0.00017,
    "in": 826,
-   "out": 93,
-   "thinking": 313,
-   "answer": "The total for folders should be 15.00 instead of 18.00."
+   "out": 85,
+   "thinking": 0,
+   "answer": "The total for folders is incorrect since five times three is fifteen."
   },
   {
    "name": "diskdialog",
    "ok": true,
    "path": "fast",
-   "s": 3.3,
-   "cost": 0.00098,
+   "s": 1.18,
+   "cost": 0.00017,
    "in": 829,
-   "out": 88,
-   "thinking": 100,
-   "answer": "Click Free up space to clear unneeded files and resolve the storage warning."
+   "out": 81,
+   "thinking": 0,
+   "answer": "Click free up space to clear storage."
   },
   {
    "name": "bossemail",
    "ok": true,
    "path": "fast",
-   "s": 1.63,
-   "cost": 0.00096,
+   "s": 1.18,
+   "cost": 0.00018,
    "in": 829,
-   "out": 65,
-   "thinking": 118,
-   "answer": "The third email is from Sarah Mitchell regarding the Q3 budget review."
+   "out": 87,
+   "thinking": 0,
+   "answer": "The email from Sarah Mitchell is about the Q3 budget review."
   },
   {
    "name": "checkout",
    "ok": true,
    "path": "fast",
-   "s": 2.59,
-   "cost": 0.00088,
+   "s": 1.06,
+   "cost": 0.00017,
    "in": 828,
-   "out": 78,
-   "thinking": 76,
-   "answer": "Click Checkout to proceed to payment."
+   "out": 79,
+   "thinking": 0,
+   "answer": "Click Checkout to proceed with your payment."
   },
   {
    "name": "ccicon",
    "ok": true,
    "path": "fast",
-   "s": 1.98,
-   "cost": 0.00124,
+   "s": 1.38,
+   "cost": 0.00018,
    "in": 828,
-   "out": 89,
-   "thinking": 185,
-   "answer": "The subtitles button is the CC icon in the bottom right corner of the player."
+   "out": 86,
+   "thinking": 0,
+   "answer": "The subtitles button is in the bottom right corner of the video player."
   },
   {
    "name": "missingfield",
    "ok": true,
    "path": "fast",
-   "s": 1.98,
-   "cost": 0.00089,
+   "s": 1.14,
+   "cost": 0.00017,
    "in": 829,
    "out": 78,
-   "thinking": 80,
-   "answer": "The email address is missing."
+   "thinking": 0,
+   "answer": "Your email address is missing."
   },
   {
    "name": "biggestfile",
    "ok": true,
    "path": "fast",
-   "s": 1.78,
-   "cost": 0.00109,
+   "s": 1.96,
+   "cost": 0.00018,
    "in": 827,
-   "out": 90,
-   "thinking": 135,
-   "answer": "Holiday dot mp4 is the largest file at 1.2 gigabytes."
+   "out": 89,
+   "thinking": 0,
+   "answer": "Holiday dot mp4 is the biggest file at one point two gigabytes."
   },
   {
    "name": "tictactoe",
-   "ok": true,
-   "path": "deep",
-   "s": 4.57,
-   "cost": 0.00751,
-   "in": 1448,
-   "out": 126,
-   "thinking": 133,
-   "answer": "Play in the top right cell to complete your row of three and win."
+   "ok": false,
+   "path": "deep\u2192fast",
+   "s": 13.55,
+   "cost": 0.00017,
+   "in": 828,
+   "out": 82,
+   "thinking": 0,
+   "answer": "Play in the top right corner to win the game."
   },
   {
    "name": "wrongsum",
    "ok": true,
    "path": "fast",
-   "s": 3.77,
-   "cost": 0.00104,
+   "s": 1.71,
+   "cost": 0.00017,
    "in": 826,
-   "out": 85,
-   "thinking": 125,
-   "answer": "Eight plus five equals fourteen is incorrect because the sum is thirteen."
+   "out": 81,
+   "thinking": 0,
+   "answer": "Eight plus five is thirteen, not fourteen."
   },
   {
    "name": "vegmenu",
    "ok": true,
    "path": "fast",
-   "s": 2.05,
-   "cost": 0.00104,
+   "s": 1.19,
+   "cost": 0.00017,
    "in": 829,
    "out": 84,
-   "thinking": 123,
-   "answer": "The cheapest vegetarian dish is the garden salad at eleven dollars."
+   "thinking": 0,
+   "answer": "The garden salad is the cheapest vegetarian dish at eleven dollars."
   },
   {
    "name": "cardnumber",
    "ok": true,
    "path": "fast",
-   "s": 2.42,
-   "cost": 0.00074,
+   "s": 1.14,
+   "cost": 0.00017,
    "in": 829,
-   "out": 60,
-   "thinking": 50,
-   "answer": "Enter your card number into the Card number input field."
+   "out": 82,
+   "thinking": 0,
+   "answer": "Type your card number in the second input field."
   },
   {
    "name": "chess",
-   "ok": true,
-   "path": "deep",
-   "s": 5.46,
-   "cost": 0.00985,
-   "in": 1452,
-   "out": 183,
-   "thinking": 232,
-   "answer": "Rook from a1 to a8, delivering a back-rank checkmate."
+   "ok": false,
+   "path": "fast",
+   "s": 1.29,
+   "cost": 0.00019,
+   "in": 832,
+   "out": 114,
+   "thinking": 0,
+   "answer": "Rook from a1 to a8, checkmate."
   },
   {
    "name": "darktheme",
    "ok": true,
    "path": "fast",
-   "s": 1.88,
-   "cost": 0.00108,
+   "s": 1.22,
+   "cost": 0.00017,
    "in": 827,
-   "out": 83,
-   "thinking": 139,
-   "answer": "Click Log out at the bottom of the profile menu."
+   "out": 79,
+   "thinking": 0,
+   "answer": "Click log out in the menu."
   },
   {
    "name": "toolbar",
    "ok": true,
    "path": "fast",
-   "s": 1.93,
-   "cost": 0.00067,
+   "s": 1.4,
+   "cost": 0.00017,
    "in": 827,
-   "out": 84,
+   "out": 80,
    "thinking": 0,
-   "answer": "Click the B icon on the toolbar to make text bold."
+   "answer": "Click the B button to make text bold."
   },
   {
    "name": "tinyclose",
    "ok": true,
    "path": "fast",
-   "s": 2.47,
-   "cost": 0.00107,
+   "s": 1.44,
+   "cost": 0.00018,
    "in": 828,
-   "out": 86,
-   "thinking": 133,
-   "answer": "Click the small cross icon in the top right corner of the notification."
+   "out": 85,
+   "thinking": 0,
+   "answer": "Click the X button in the top right corner of the notification."
   },
   {
    "name": "savedialog",
    "ok": true,
    "path": "fast",
-   "s": 2.21,
-   "cost": 0.00089,
+   "s": 1.85,
+   "cost": 0.00017,
    "in": 830,
    "out": 78,
-   "thinking": 82,
-   "answer": "Click Save to preserve your changes."
+   "thinking": 0,
+   "answer": "Click Save to keep your changes."
   },
   {
    "name": "german",
    "ok": true,
    "path": "fast",
-   "s": 1.61,
-   "cost": 0.00066,
+   "s": 1.16,
+   "cost": 0.00017,
    "in": 827,
-   "out": 83,
+   "out": 82,
    "thinking": 0,
    "answer": "Click the blue Anmelden button to sign in."
   },
@@ -238,36 +238,36 @@
    "name": "decoy",
    "ok": true,
    "path": "fast",
-   "s": 1.82,
-   "cost": 0.00071,
+   "s": 1.09,
+   "cost": 0.00014,
    "in": 828,
-   "out": 21,
-   "thinking": 77,
-   "answer": "There is no export button visible on this screen."
+   "out": 32,
+   "thinking": 0,
+   "answer": "I do not see an export button in these settings."
   },
   {
    "name": "music",
    "ok": true,
    "path": "fast",
-   "s": 3.1,
-   "cost": 0.00088,
+   "s": 1.23,
+   "cost": 0.00017,
    "in": 827,
-   "out": 53,
-   "thinking": 104,
-   "answer": "Select Blinding Lights by The Weeknd at the top of the queue."
+   "out": 82,
+   "thinking": 0,
+   "answer": "Play Blinding Lights by The Weeknd next."
   }
  ],
  "summary": {
-  "right": "23/23",
-  "p50_s": 2.21,
-  "avg_cost": 0.00163,
-  "total_cost": 0.0374,
-  "thinking": 2525,
+  "right": "21/23",
+  "p50_s": 1.29,
+  "avg_cost": 0.00017,
+  "total_cost": 0.004,
+  "thinking": 0,
   "paths": {
-   "fast": 21,
-   "deep": 2
+   "fast": 22,
+   "deep\u2192fast": 1
   },
-  "mode": "app routing"
+  "mode": "app routing, fast gemini-3.5-flash-lite, backup gemini-3.6-flash"
  },
- "note": "SP-06 (6 Oct): the fast look at medium resolution, the deep look full. Before: SP-05's run (avg $0.0021, p50 2.6 s). First run (SP-01): avg $0.0035, p50 2.61 s. SP-08 (6 Oct): the music row is from a --only music,chess,tictactoe run after 'play' stopped counting as a game word."
+ "note": "FAST-01 (10 Oct): fast gemini-3.5-flash-lite raced with gemini-3.6-flash. gemini-3.1-pro-preview (deep) was overloaded that morning, so the two games fell back after 12 s - on a normal day they go deep. Before: SP-06's run, gemini-3.8-flash, 23/23 at p50 2.21 s, $0.0018 a look."
 }

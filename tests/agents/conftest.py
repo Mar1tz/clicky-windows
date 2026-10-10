@@ -148,3 +148,14 @@ def _data_folder_in_the_sandbox(tmp_path, monkeypatch):
         monkeypatch.setattr(config, "MIGRATION_NOTES", [])
     except Exception:  # noqa: BLE001 - a suite without the app still runs
         pass
+
+
+@pytest.fixture(autouse=True)
+def _no_model_is_resting(monkeypatch):
+    """FAST-01: a model that failed is skipped for five minutes - module-wide.
+    Each test starts with every model available, whatever the last one did."""
+    try:
+        from ai import gemini_vision
+        monkeypatch.setattr(gemini_vision, "_cool_until", {})
+    except Exception:  # noqa: BLE001
+        pass
