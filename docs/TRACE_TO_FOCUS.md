@@ -120,7 +120,7 @@ Read from the code, not guessed.
 **Why:** the user must see what they have shown, as they show it, and it
 should feel alive (like the agents' small animated orbs).
 
-**Do** (`ui/overlay.py`, after the SP-11/12 decision; see finding 3):
+**Do** (`ui/overlay.py`, on top of the SP-11/12 changes; see finding 3):
 * **The mist is puffs left along the cursor's path.**
   * They are emitted every ~6 px, and interpolated between frames, so a
     fast sweep leaves a continuous ribbon, never dots.
@@ -134,11 +134,11 @@ should feel alive (like the agents' small animated orbs).
   * cap it at about 160 live puffs;
   * repaint only the trail's bounds, in the existing region logic;
   * when no puffs are left, go back to the rest-frame saving.
-* **Only while the shortcut is held** (see decision 2). The cursor buddy
-  keeps following as now; the mist trails behind it.
+* **Only while the shortcut is held** (decided). The cursor buddy keeps
+  following as now; the mist trails behind it.
 * **At the release the trail settles into a faint haze** over the traced
-  area, so the user sees what Tora will look at. It fades when she answers,
-  or after ~2.5 s (see decision 1).
+  area, so the user sees what Tora will look at. It fades when she answers
+  (decided), or after ~8 s at most.
 * **Multi-monitor:** the mist is drawn in desktop coordinates like
   everything else, so it crosses monitors the way the cursor does.
 
@@ -337,25 +337,28 @@ words say which is which by when they were drawn.
 
 **Do:**
 * **Settings > General: "Show Tora with your mouse while holding the
-  shortcut"**, on by default (decision 4).
+  shortcut"**, on by default.
 * **The mist follows Tora's colour.**
 * **Release** with the usual self-update check, after the owner has tried
   it live.
 
 ---
 
-## Decisions for the owner
+## Decided with the owner (10 Oct)
 
-1. **The mist's look:** in Tora's colour, or a white-grey mist? And after
-   the release, does the traced area keep a faint haze until she answers
-   (recommended), or fade at once?
-2. **When it draws:** only while the shortcut is physically held
-   (recommended, as asked), or also while she listens hands-free after a
-   tap?
-3. **Pixels:** read the traced thing first and look only when it is a
-   picture (recommended: fast, and no screenshot for text), or always look
-   at the traced area?
-4. **On by default,** with a switch to turn it off?
+1. **The mist is in Tora's colour,** and the haze stays. At the release, a
+   faint haze stays over what was traced until she answers, so the user
+   sees what she will focus on.
+2. **It draws only while the shortcut is held,** as asked. A tap
+   (hands-free listening) leaves no trail.
+3. **Read first, look only if it is a picture.** Text, buttons and messages
+   are read straight off the page, instantly and with no screenshot. A
+   screenshot of the traced area is taken only for charts, photos or a
+   board.
+4. **SP-11/12 stays, and the mist is built on top of it.** Both are shown
+   live before anything in `ui/overlay.py` is committed.
+
+Still open: on by default, with a switch (TF-12). The assumption is yes.
 
 ---
 
@@ -364,17 +367,17 @@ words say which is which by when they were drawn.
 | # | milestone | size | cost | needs |
 |---|---|---|---|---|
 | TF-01 | record the trace while held | S | free | — |
-| TF-02 | the mist | M | free | SP-11/12 decided; decision 1, 2 |
+| TF-02 | the mist | M | free | TF-01 (decided: Tora's colour, haze, held only; on top of SP-11/12) |
 | TF-03 | trail → what they meant | S | free | TF-01 |
 | TF-04 | what is under it, read | M | free | TF-03 |
 | TF-05 | the voice is told at the release | S | free | TF-04 |
-| TF-06 | the look focuses on the trace | M | ~$0.05 runs | TF-03; decision 3 |
+| TF-06 | the look focuses on the trace | M | ~$0.05 runs | TF-03 (decided: pictures only) |
 | TF-07 | the answer lands on the traced thing | S | free | TF-06 |
 | TF-08 | reply/write about "this" | S | free | TF-04 |
 | TF-09 | "this… and this" | M | free | TF-05 |
 | TF-10 | the last trace stays | S | free | TF-05 |
 | TF-11 | measured | S | free | TF-05 |
-| TF-12 | switch and release | S | — | all; decision 4 |
+| TF-12 | switch and release | S | — | all |
 
 **First useful cut:** TF-01 to TF-05. The mist, plus the voice knowing what
 was traced, from text alone. Then TF-06 for pictures.
