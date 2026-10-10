@@ -30,7 +30,7 @@ def race(monkeypatch):
     delays: dict = {}
     asked: list = []
 
-    async def fake_ask(question, image, *, deep, context, timeout, model=None, busy_retries=True):
+    async def fake_ask(question, image, *, deep, context, timeout, model=None, busy_retries=True, game=False):
         asked.append((model, busy_retries))
         delay = delays.get(model)
         if delay is None:

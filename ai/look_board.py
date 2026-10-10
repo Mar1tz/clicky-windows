@@ -169,22 +169,27 @@ def _lattices(p, s_lo: float, s_hi: float, keep: int = 3, step: float = 0.5) -> 
     return best
 
 
+def _corners(rgb, x0: float, y0: float, s: float):
+    """The colour at a square's four corners, just inside them."""
+    import numpy as np
+    h, w = rgb.shape[:2]
+    inset, half = max(2.0, _INSET * s), max(1, int(0.04 * s))
+    samples = []
+    for fx, fy in ((inset, inset), (s - inset, inset), (inset, s - inset), (s - inset, s - inset)):
+        x, y = min(w - 1, max(0, int(x0 + fx))), min(h - 1, max(0, int(y0 + fy)))
+        patch = rgb[max(0, y - half):y + half + 1, max(0, x - half):x + half + 1].reshape(-1, 3)
+        samples.append(np.median(patch, axis=0))
+    return np.array(samples)
+
+
 def _square_colours(rgb, left: float, top: float, s: float):
     """Each square's own colour: the median of its four corners, where no
     piece reaches - a coordinate printed in one corner does not move it."""
     import numpy as np
-    h, w = rgb.shape[:2]
-    inset, half = max(2.0, _INSET * s), max(1, int(0.04 * s))
     out = np.zeros((8, 8, 3))
     for r in range(8):
         for c in range(8):
-            x0, y0 = left + c * s, top + r * s
-            samples = []
-            for fx, fy in ((inset, inset), (s - inset, inset), (inset, s - inset), (s - inset, s - inset)):
-                x, y = min(w - 1, max(0, int(x0 + fx))), min(h - 1, max(0, int(y0 + fy)))
-                patch = rgb[max(0, y - half):y + half + 1, max(0, x - half):x + half + 1].reshape(-1, 3)
-                samples.append(np.median(patch, axis=0))
-            out[r, c] = np.median(samples, axis=0)
+            out[r, c] = np.median(_corners(rgb, left + c * s, top + r * s, s), axis=0)
     return out
 
 
@@ -236,6 +241,46 @@ def _holds_piece(rgb, board: Board, col: int, row: int) -> bool:
     half = max(1, int(0.15 * s))
     mid = rgb[int(y) - half:int(y) + half + 1, int(x) - half:int(x) + half + 1].reshape(-1, 3)
     return float(np.abs(mid - colour).sum(axis=1).mean()) > 60
+
+
+def read_squares(rgb, board: Board, lit: Optional[set] = None) -> list[str]:
+    """What stands on each square, row by row from the top left as the
+    picture shows it: "." empty, "w" a white piece, "b" a black one, and "?"
+    when the square is hidden - Tora's own card, a mark across it - so
+    nothing can be said about it. This is how a position read by a model is
+    checked before a move is played from it (ai/look_chess.py). `lit`, when
+    given, gets the squares a highlight tints - the last move's two."""
+    import numpy as np
+    s = board.size
+    colours = _square_colours(rgb, board.left, board.top, s)
+    odd = (np.add.outer(np.arange(8), np.arange(8)) % 2).astype(bool)
+    light, dark = np.median(colours[~odd], axis=0), np.median(colours[odd], axis=0)
+    half = max(2, int(0.18 * s))
+    out = []
+    for r in range(8):
+        for c in range(8):
+            own = colours[r, c]
+            corners = _corners(rgb, board.left + c * s, board.top + r * s, s)
+            if np.abs(corners - (dark if odd[r, c] else light)).sum(axis=1).max() > 60:
+                # The last move's highlight tints the whole square one light
+                # colour - and those two squares are the ones that show the
+                # move list is a move behind. A card's edge across a corner,
+                # or the dark card over the whole square, hides it.
+                spread = np.abs(corners - corners.mean(axis=0)).sum(axis=1).max()
+                if spread > 30 or corners.mean() < 70:
+                    out.append("?")
+                    continue
+                own = corners.mean(axis=0)
+                if lit is not None:
+                    lit.add(r * 8 + c)
+            x, y = board.centre(c, r)
+            patch = rgb[int(y) - half:int(y) + half + 1, int(x) - half:int(x) + half + 1].reshape(-1, 3)
+            piece = patch[np.abs(patch - own).sum(axis=1) > 60]
+            if len(piece) < 0.15 * len(patch):
+                out.append(".")
+            else:
+                out.append("w" if piece.mean() > 150 else "b")
+    return out
 
 
 def _white_bottom(rgb, board: Board, ends: list[tuple[str, tuple[float, float], bool]]) -> bool:

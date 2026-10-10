@@ -347,7 +347,19 @@ priority.
   a corner; it found no board on any of the bench's 22 other screens.
   Boards with squares under about 20 px are left to the model's boxes.
   Tests: `tests/agents/test_e2e_move_on_its_square.py`.
-* **SN-07:** the position from pixels.
+* **SN-05 and SN-07, the position, and the engine wired in: done (10 Oct).**
+  After 1.e4 e5 2.Nf3 d5 3.Nc3 dxe4, Tora said "Knight from f3 to e4".
+  No knight on f3 can go there. A game look now also reads the game:
+  the move list as printed, and the board as a FEN (the `chess` field).
+  `ai/look_chess.py` replays the list into the exact position, or else
+  takes the FEN. It believes either only when the screenshot agrees
+  square by square (`look_board.read_squares`: empty, white, black, or
+  hidden under Tora's card). A move list must end with the move the site
+  highlights, and a FEN must match every visible square. The SN-06
+  engine then picks the move and says why. Anything that doesn't check
+  out keeps the look's own move. It adds the engine's 0.8 s to a game
+  look, plus ~100-250 output tokens for the reading (≈ $0.002-0.004 on
+  the deep model). Tests: `tests/agents/test_e2e_chess_move_is_legal.py`.
 
 Without them, a chess question takes the general path: UD-01's look,
 escalating to deep when the fast model is not sure. That is the right

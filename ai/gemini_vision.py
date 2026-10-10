@@ -109,6 +109,31 @@ _FAST_SCHEMA = {
     "propertyOrdering": ["actions", "answer"],
 }
 
+# 10 Oct: the deep look answered a chess position with "Knight from f3 to
+# e4" - a square no knight on f3 can reach. A model reads a board well and
+# plays chess badly. So a game look also READS the game for the engine on
+# the PC (ai/look_chess.py), which then picks the move: the move list as the
+# page prints it, the board as a FEN, and which way up it is. Read first,
+# so its own move is made looking at what it wrote down.
+_CHESS = {
+    "type": "object",
+    "description": "Only when a chess board is on screen; otherwise leave it out.",
+    "properties": {
+        "moves": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": ('Every move in the game\'s move list, in order, as printed, e.g. ["e4", "e5", '
+                            '"Nf3"]. Empty when the screen shows no move list.'),
+        },
+        "fen": {"type": "string", "description": "The pieces as they stand, as a FEN: rank 8 first."},
+        "white_at_bottom": {"type": "boolean"},
+    },
+}
+_GAME_SCHEMA = {**_SCHEMA, "properties": {**_SCHEMA["properties"], "chess": _CHESS},
+                "propertyOrdering": ["chess", *_SCHEMA["propertyOrdering"]]}
+_GAME_FAST_SCHEMA = {**_FAST_SCHEMA, "properties": {**_FAST_SCHEMA["properties"], "chess": _CHESS},
+                     "propertyOrdering": ["chess", *_FAST_SCHEMA["propertyOrdering"]]}
+
 # Thinking tokens count against maxOutputTokens on this API. Unbounded
 # (think=None) let the pro model reason for ~3,500 of its 4,096 tokens and
 # then get cut off mid-answer — 40 s for nothing, three times in one
@@ -156,6 +181,13 @@ _OBSERVATIONS_RULE = """
   • observations are the specific things you read off the screen that your
     answer depends on — piece positions, axis values, the exact error text.
     They are kept for checking and are never read to the user."""
+
+_CHESS_RULE = """
+  • On a chess board, also fill chess - you read the game, an engine plays
+    it: moves is the game's move list exactly as the page prints it, every
+    move in order; fen is where every piece stands now, rank 8 first
+    whichever way up the board is shown; white_at_bottom says which way up
+    it is."""
 
 
 @dataclass
@@ -219,6 +251,7 @@ class Look:
     sure: bool = True
     path: str = ""                                # "fast", "deep", "fast→deep" (UD-01)
     cost: float = 0.0                             # US dollars, every call it took (UD-06)
+    chess: dict = field(default_factory=dict)     # a game look's reading: moves, fen (ai/look_chess.py)
 
     def __bool__(self) -> bool:
         return bool(self.answer)
@@ -406,12 +439,14 @@ def _parse(data: dict, model: str, deep: bool) -> Look:
         observations=[o for o in data.get("observations", []) if o],
         model=model,
         deep=deep,
+        chess=data.get("chess") if isinstance(data.get("chess"), dict) else {},
     )
 
 
 async def _ask(question: str, screenshot_b64: str, *, deep: bool, context: str, timeout: float,
-               model: Optional[str] = None, busy_retries: bool = True) -> Optional[Look]:
-    """One call to one model. None when it failed or came back unusable."""
+               model: Optional[str] = None, busy_retries: bool = True, game: bool = False) -> Optional[Look]:
+    """One call to one model. None when it failed or came back unusable.
+    game: a move in a game - the look also reads it for the engine."""
     model = model or (Models.VISION_DEEP if deep else Models.VISION_FAST)
     started = time.monotonic()
     ask = f"{context}\n\n{question}" if context else question
@@ -420,10 +455,15 @@ async def _ask(question: str, screenshot_b64: str, *, deep: bool, context: str, 
         gemini.text_part(ask),
     ]}]
     usage: dict = {}
+    if game:
+        schema = _GAME_SCHEMA if deep else _GAME_FAST_SCHEMA
+    else:
+        schema = _SCHEMA if deep else _FAST_SCHEMA
+    system = _SYSTEM + (_OBSERVATIONS_RULE if deep else "") + (_CHESS_RULE if game else "")
     try:
         data = await gemini.generate_json(
-            model, contents, _SCHEMA if deep else _FAST_SCHEMA,
-            system=_SYSTEM + _OBSERVATIONS_RULE if deep else _SYSTEM,
+            model, contents, schema,
+            system=system,
             max_tokens=4096,
             # As little thinking as each model takes: "low" on Gemini 3, for
             # the deep look too, so it always has room left to answer (SP-04).
@@ -508,14 +548,14 @@ def _usable(look: Optional[Look]) -> bool:
     return bool(look and (look.answer or look.actions))
 
 
-async def _fast(question: str, screenshot_b64: str, *, context: str) -> Optional[Look]:
+async def _fast(question: str, screenshot_b64: str, *, context: str, game: bool = False) -> Optional[Look]:
     models = fast_models()
     started = time.monotonic()
     running: dict[asyncio.Task, tuple[str, float]] = {}
 
     def run(model: str) -> None:
         task = asyncio.ensure_future(_ask(question, screenshot_b64, deep=False, context=context,
-                                          timeout=FAST_TRY_S, model=model, busy_retries=False))
+                                          timeout=FAST_TRY_S, model=model, busy_retries=False, game=game))
         running[task] = (model, time.monotonic())
 
     run(models[0])
@@ -579,9 +619,9 @@ async def look(
         return Look()
 
     deep_ok = _cool_until.get(Models.VISION_DEEP, 0) <= time.monotonic()
-    if deep_ok and (deep is True or (deep is None and (needs_reading(question)
-                                                        or needs_judgement(question, title)))):
-        first = await _ask(question, screenshot_b64, deep=True, context=context, timeout=timeout)
+    game = needs_judgement(question, title)          # a move: read for the engine too
+    if deep_ok and (deep is True or (deep is None and (needs_reading(question) or game))):
+        first = await _ask(question, screenshot_b64, deep=True, context=context, timeout=timeout, game=game)
         if first:
             first.path = "deep"
             return first
@@ -589,12 +629,12 @@ async def look(
         # Was: only an EXCEPTION fell back. A truncated or unparseable reply
         # returned an empty Look and the user heard nothing after 40 s.
         _log.info("deep look gave nothing usable — answering with the fast model")
-        fast = await _fast(question, screenshot_b64, context=context)
+        fast = await _fast(question, screenshot_b64, context=context, game=game)
         if fast:
             fast.path = "deep→fast"
         return fast or Look()
 
-    fast = await _fast(question, screenshot_b64, context=context)
+    fast = await _fast(question, screenshot_b64, context=context, game=game)
     if deep is False:
         if fast:
             fast.path = "fast"
@@ -608,7 +648,7 @@ async def look(
     why = ("gave nothing usable" if not fast or not fast.answer else
            "was not sure" if not fast.sure else "had nothing to draw")
     _log.info("fast look %s — asking the deep model", why)
-    careful = await _ask(question, screenshot_b64, deep=True, context=context, timeout=timeout)
+    careful = await _ask(question, screenshot_b64, deep=True, context=context, timeout=timeout, game=game)
     if not careful:
         _cool(Models.VISION_DEEP, "failed")
     if careful and careful.answer:

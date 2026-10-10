@@ -40,7 +40,7 @@ from ai.gemini import Models
 from audio.ambient_listener import AmbientListener
 from screen import monitors
 from screen.capture import capture_all_screens, capture_region, grab_frame, monitor_frames
-from ai import look_board, look_region
+from ai import look_board, look_chess, look_region
 from ui.panel import AppState
 from tutor import (
     active_window_title, app_key,
@@ -3061,12 +3061,21 @@ class CompanionManager(QObject):
         if gemini_vision.is_next_action(question):
             moves = [a for a in actions if getattr(a, "is_move", False)]
             actions = (moves or actions)[:1]
-        # 10 Oct: "knight from g1 to f3" four times running, and every arrow
-        # ended on g3 - the words right, the box a file off. On a board a move
-        # is drawn between the squares the answer names (ai/look_board.py).
-        on_board = await asyncio.to_thread(look_board.place_moves, actions, image, look.answer)
-        if on_board:
-            detail += ", " + on_board
+        # 10 Oct: "knight from f3 to e4" - a move no knight can make. In a
+        # chess game the engine plays the position the screen shows, read
+        # by the look and checked square by square (ai/look_chess.py).
+        played = await asyncio.to_thread(look_chess.play, look, image) if getattr(look, "chess", None) else None
+        if played:
+            look.answer = played.say
+            actions = [played.action] if played.action else []
+            detail += ", " + played.note
+        else:
+            # 10 Oct: "knight from g1 to f3" four times running, and every
+            # arrow ended on g3 - the words right, the box a file off. On a
+            # board a move is drawn between the squares the answer names.
+            on_board = await asyncio.to_thread(look_board.place_moves, actions, image, look.answer)
+            if on_board:
+                detail += ", " + on_board
         if region:
             for a in actions:
                 a.box = look_region.to_monitor_box(a.box, region, monitor)
