@@ -335,7 +335,19 @@ priority.
 * **SN-05, reading the move list:** the spike (5 Oct) found lichess's move
   list is **not** in the accessibility tree (279 elements, no moves).
   Reading it would need OCR of the move-list panel, or a browser hook.
-* **SN-04 and SN-07:** board geometry, and the position from pixels.
+* **SN-04, board geometry: done (10 Oct).** A user was told "knight from
+  g1 to f3" four times and shown g1 → g3 every time: the model's words
+  were right and its box was a file off. `ai/look_board.py` finds the 8×8
+  board in the look's own screenshot (the even lattice of square borders,
+  checked as a checker of two colours) and draws a move between the
+  squares the answer names. The model's boxes only say which way up the
+  board is. It runs in about 0.1 s, with no call. On the user's own
+  screenshot it found the board to a pixel. In tests it held for chess.com
+  and lichess colours, black at the bottom, highlights, and the card over
+  a corner; it found no board on any of the bench's 22 other screens.
+  Boards with squares under about 20 px are left to the model's boxes.
+  Tests: `tests/agents/test_e2e_move_on_its_square.py`.
+* **SN-07:** the position from pixels.
 
 Without them, a chess question takes the general path: UD-01's look,
 escalating to deep when the fast model is not sure. That is the right

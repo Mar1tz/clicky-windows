@@ -43,7 +43,7 @@ from PIL import Image  # noqa: E402
 
 import config  # noqa: E402,F401 - loads .env
 os.environ["TORA_ACCESS"] = "own_key"          # straight to Google with the owner's key, not the plan
-from ai import gemini, gemini_vision  # noqa: E402
+from ai import gemini, gemini_vision, look_board  # noqa: E402
 from agents.tools import design_tools  # noqa: E402
 
 W, H = 1600, 900
@@ -377,6 +377,7 @@ async def main():
         t0 = time.monotonic()
         look = await gemini_vision.look(q, imgs[name][1], deep=deep)
         took = time.monotonic() - t0
+        look_board.place_moves(look.actions, imgs[name][1], look.answer)    # as the app draws a move
         u = look.usage or {}
         cost = float(look.cost or 0.0)
         spent += cost

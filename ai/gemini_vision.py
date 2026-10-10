@@ -167,6 +167,8 @@ class Action:
     # action, every kind a labelled circle, so "knight b1 to c3" reached the
     # screen as two circles and no arrow (5 Oct, a user's chess game).
     to_box: Optional[tuple[int, int, int, int]] = None
+    # Placed on the board's own squares (ai/look_board.py): nothing to snap.
+    exact: bool = False
 
     @property
     def is_move(self) -> bool:
