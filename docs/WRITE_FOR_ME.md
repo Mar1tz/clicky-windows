@@ -6,17 +6,24 @@ writes it properly, and puts it in whatever text box you are typing in:
 an email, a chat, a form, a document, or a prompt. More detail is coming
 from the owner; this is version 1.
 
-## How it works
+## How it works (instant, since the evening of 10 Oct)
+
+The owner: "it mustn't take screenshots and click - it needs to be instant.
+HeyClicky's is so fast the person doesn't leave the page; this one takes so
+long I leave the page and then it doesn't work." The first version looked
+at a picture of the window, waited 2-5 s for the whole text and pasted it.
+Now:
 
 | step | where | what |
 |---|---|---|
 | 1. Hear it | the live voice | Ctrl+Win. The voice decides between dictation, a command and a question; dictation goes to `write_for_me(request)` with everything you said. |
-| 2. The box | `ai/write_for_me.focused_box` | Windows UI Automation reports what has the keyboard focus: its kind and name, the window, and the text already in it. Buttons, lists and read-only fields are not boxes. A password box is never written into. With no box, Tora asks you to click into one. |
-| 3. The writing | `write_for_me.compose` | One call to `Models.WRITER` (gemini-3.6-flash, `GEMINI_WRITER_MODEL`) with your words, the box, its text, and a picture of the window, so "reply to this" works. No picture is taken of a sensitive window. It writes only the text: no preamble or quotes, and a `[placeholder]` for any fact you did not give. |
-| 4. Into the box | `write_for_me.put` | It waits for the talk shortcut to be let go, then pastes with Ctrl+V. Every clipboard format is put back afterwards; this was tested on the owner's clipboard holding a picture. The pasted text is kept out of Windows' clipboard history. It never presses Enter. If the box lost the focus, the text is left on the clipboard instead. |
+| 2. The box | `write_for_me.focused_box` | Windows UI Automation reports what has the keyboard focus: its kind and name, the window, the text already in it. Buttons, lists and read-only fields are not boxes. A password box is never written into. With no box, Tora asks you to click into one. |
+| 3. The writing | `write_for_me.stream_dictation` | The fastest model (`Models.WRITER`, gemini-3.5-flash-lite, no thinking) streams. Its first line is `TYPE`, or `DO: <what>` for a command, which is never typed and goes back to the voice. "Reply to this" reads the page's own text (`page_context`, UI Automation), **never a screenshot**. |
+| 4. Into the box | `write_for_me.Typist` | Typed as it is written, a word at a time, as keystrokes in one batched SendInput call per piece. The first words appear about a second after you stop talking. A new line is Shift+Enter, never Enter alone. A code editor (VS Code, Cursor, JetBrains…) gets one paste at the end instead, with the clipboard put back exactly. **If you leave the window or the tab, typing stops** and the rest waits on the clipboard. |
 
-The voice is not handed the text and only says that it is in.
-`tora.log` gets one line per use: `write for me: N chars into <kind> '<name>' in '<window>' - pasted (written in N s)`.
+The voice is not handed the text and only says that it is in; the text goes
+on Tora's card with its Copy button. `tora.log`: `write for me: N chars into
+<kind> '<name>' in '<window>' - typed, first words at N s, all in N s`.
 
 ## Decided with the owner (10 Oct, from their spec)
 
@@ -35,8 +42,8 @@ The voice is not handed the text and only says that it is in.
   Live on the spec's five examples: 4/5 at first. "Send an email…" was
   typed because a box was open; the prompt now says an instruction to act
   is a command even then.
-* **Inserted straight away.** The written text also goes on Tora's card,
-  with its Copy button, and Ctrl+Z undoes it.
+* **Inserted straight away**, typed as it is written. The written text also
+  goes on Tora's card, with its Copy button.
 * **Automatic detection only**: no separate type/do shortcuts.
 
 ## Not yet (for the owner's further information)

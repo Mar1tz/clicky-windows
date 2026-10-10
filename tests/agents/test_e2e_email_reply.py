@@ -2,10 +2,12 @@
 
 Asked for on 10 Oct 2026: "look at this email and write a reply" - Tora
 reads the email the user is looking at, writes a reply in its tone, signed
-off the way they sign off, and fills in the reply form: To, Subject, and
-the body above the quoted original. Never sent: they press Send. The page's
-own text is read; a picture only when the page shows none. Nothing of the
-email is kept.
+off the way they sign off, and fills in the reply form. Never sent: they
+press Send. That evening: "it mustn't take screenshots and click - it needs
+to be instant". So the page's own text is read (never a picture), Gmail's
+Reply is pressed through Windows (no mouse) while it is read, the subject
+comes from the window's title, and the body is typed in as it is written.
+Nothing of the email is kept.
 """
 from __future__ import annotations
 
@@ -17,7 +19,7 @@ import pytest
 
 import companion_manager as cm
 from ai import email_reply, gemini, write_for_me
-from ai.email_reply import GmailWeb, Mail, MailError, Reply
+from ai.email_reply import GmailWeb, Mail, MailError
 from ai.gemini import Models
 
 THREAD = ("Inbox\nSunflex Ops - additions made along the way\nJohn Rostance <john@sunflex.co.za> to me, "
@@ -25,12 +27,13 @@ THREAD = ("Inbox\nSunflex Ops - additions made along the way\nJohn Rostance <joh
           "through it?\nRegards, John\nTorben Mikkelsen <mtorben642@gmail.com>\nHi John, I've attached a "
           "short summary.\nKind regards,\nTorben Mikkelsen\nAgentora")
 ME = "mtorben642@gmail.com"
+TITLE = "Sunflex Ops – additions made along the way - mtorben642@gmail.com - Gmail - Opera"
 
 
-# -- which app ----------------------------------------------------------------------------------------------------
+# -- which app, which subject, who it goes to -------------------------------------------------------------------
 
 @pytest.mark.parametrize("title, app", [
-    ("Sunflex Ops - additions made along the way - mtorben642@gmail.com - Gmail - Opera", "Gmail"),
+    (TITLE, "Gmail"),
     ("Inbox (1,952) - mtorben642@gmail.com - Gmail - Google Chrome", "Gmail"),
     ("Sent Items - Torben Mikkelsen - Outlook", None),
     ("WhatsApp", None),
@@ -40,28 +43,43 @@ def test_the_app_in_front(title, app):
     assert (found.name if found else None) == app
 
 
-# -- the writing --------------------------------------------------------------------------------------------------
+def test_the_subject_is_the_windows_title():
+    assert GmailWeb.subject_of(TITLE) == "Sunflex Ops – additions made along the way"
+    assert GmailWeb.subject_of("WhatsApp") == ""
 
-def _writer(monkeypatch, data=None):
+
+@pytest.mark.parametrize("said, all_", [("reply to this", True), ("say yes but ask about pricing", True),
+                                        ("just reply to him", False), ("only send it back to the sender", False),
+                                        ("reply, not to everyone", False)])
+def test_reply_all_unless_they_say_only_the_sender(said, all_):
+    assert email_reply.reply_all_wanted(said) is all_
+
+
+# -- the writing, streamed ----------------------------------------------------------------------------------------
+
+def _stream(monkeypatch, *pieces):
     sent = {}
 
-    async def fake_generate_json(model, contents, schema, **kw):
-        sent.update(model=model, contents=contents, schema=schema, **kw)
-        return data if data is not None else {
-            "to": ["john@sunflex.co.za"], "cc": ["anna@sunflex.co.za", ME], "reply_all": True,
-            "subject": "Re: Re: Sunflex Ops - additions made along the way",
-            "body": "Hi John,\n\nYes, happy to meet. Does [confirm day] work?\n\nKind regards,\nTorben Mikkelsen\nAgentora"}
-    monkeypatch.setattr(gemini, "generate_json", fake_generate_json)
+    async def fake_stream(model, contents, **kw):
+        sent.update(model=model, contents=contents, **kw)
+        for p in pieces:
+            yield p
+    monkeypatch.setattr(gemini, "stream", fake_stream)
     return sent
 
 
+def _written(request="say yes but ask which day", mail=Mail(THREAD, ME, "Gmail"), draft="-- \nTorben"):
+    async def collect():
+        return [p async for p in email_reply.stream_reply(request, mail, draft)]
+    return asyncio.run(collect())
+
+
 def test_the_reply_is_written_from_the_page_and_their_words(monkeypatch):
-    sent = _writer(monkeypatch)
-    reply = asyncio.run(email_reply.compose_reply("say yes but ask which day", Mail(THREAD, ME, "Gmail"),
-                                                  "pic", draft="-- \nTorben"))
-    assert sent["model"] == Models.WRITER
+    sent = _stream(monkeypatch, "\n Hi John,\n\n", "Yes, happy to meet. ", "Which day works?")
+    assert _written() == ["Hi John,\n\n", "Yes, happy to meet. ", "Which day works?"]
+    assert sent["model"] == Models.WRITER and sent["think"] == 0, "the fastest model, no thinking"
     parts = sent["contents"][0]["parts"]
-    assert len(parts) == 1, "the page's text, so no picture"
+    assert len(parts) == 1 and "text" in parts[0], "the page's text - never a picture"
     ask = parts[0]["text"]
     assert "Can we meet this week" in ask and "say yes but ask which day" in ask
     assert "already holds" in ask and "Torben" in ask, "a signature in the box: no second sign-off"
@@ -69,59 +87,36 @@ def test_the_reply_is_written_from_the_page_and_their_words(monkeypatch):
     assert ME in system, "who the user is - so the right message is answered"
     assert "Never invent a fact, date, price or promise" in system and "[confirm date]" in system
     assert "Sign off the way the user signs off their own emails in the thread" in system
-    assert reply.subject == "Re: Sunflex Ops - additions made along the way", "never Re: Re:"
-    assert reply.to == ["john@sunflex.co.za"] and reply.cc == ["anna@sunflex.co.za"], "never cc'd to themselves"
-    assert reply.reply_all and "[confirm day]" in reply.body
+    assert "ONLY the body" in system
 
 
-def test_a_page_with_no_text_is_read_from_its_picture(monkeypatch):
-    sent = _writer(monkeypatch)
-    asyncio.run(email_reply.compose_reply("reply to this", Mail("", ME, "Gmail"), "pic"))
-    assert sent["contents"][0]["parts"][0] == gemini.image_part("pic")
-
-
-def test_made_up_addresses_are_dropped(monkeypatch):
-    _writer(monkeypatch, {"to": ["John Rostance", "john@sunflex.co.za"], "subject": "Re: x", "body": "Hi."})
-    reply = asyncio.run(email_reply.compose_reply("reply", Mail(THREAD, ME)))
-    assert reply.to == ["john@sunflex.co.za"]
-
-
-def test_a_failed_call_fills_nothing(monkeypatch):
+def test_a_failed_call_types_nothing(monkeypatch):
     async def fails(*_a, **_kw):
         raise RuntimeError("503")
-    monkeypatch.setattr(gemini, "generate_json", fails)
-    assert not asyncio.run(email_reply.compose_reply("reply", Mail(THREAD, ME)))
+        yield  # pragma: no cover - an async generator
+    monkeypatch.setattr(gemini, "stream", fails)
+    assert _written() == []
 
 
-# -- filling Gmail's reply form -----------------------------------------------------------------------------------
+# -- opening Gmail's reply, through Windows ---------------------------------------------------------------------
 
 class Page:
-    """Gmail's page as UI Automation shows it, to the degree fill() looks."""
+    """Gmail's page as UI Automation shows it, to the degree open_reply() looks."""
 
-    def __init__(self, *, reply_open=False, subject_field=False, subject="", chips=True, reply_all_button=True):
-        self.invoked, self.focused, self.pasted = [], [], []
-        self.body = SimpleNamespace(Name="Message Body")
-        row = SimpleNamespace(Name="row")
-        row.GetParentControl = lambda: SimpleNamespace(Name="compose", GetParentControl=lambda: None)
-        self.to_parent = row
-        self.to = SimpleNamespace(Name="To recipients", GetParentControl=lambda: row)
-        self.chips = [SimpleNamespace(Name="John Rostance <john@sunflex.co.za>")] if chips else []
+    def __init__(self, *, reply_open=False, subject_field=False, subject="", reply_all_button=True, text=THREAD):
+        self.invoked, self.focused = [], []
+        self.body = SimpleNamespace(Name="Message Body", value="")
         self.subject = SimpleNamespace(Name="Subject", value=subject)
-        self.reply_open = reply_open
-        self.subject_field = subject_field
+        self.reply_open, self.subject_field, self.text = reply_open, subject_field, text
         self.buttons = {"Reply": SimpleNamespace(Name="Reply"), "Send": SimpleNamespace(Name="Send")}
         if reply_all_button:
             self.buttons["Reply all"] = SimpleNamespace(Name="Reply all")
 
     def find_all(self, root, *, name=None, control_type=None, limit=40):
-        if name is None:
-            return list(self.chips)
         if name in self.buttons:
             return [self.buttons[name]]
         if name == "Message Body":
             return [self.body] if self.reply_open else []
-        if name == "To recipients":
-            return [self.to] if self.reply_open else []
         if name == "Subject":
             return [self.subject] if self.reply_open and self.subject_field else []
         return []
@@ -142,70 +137,77 @@ class Keys:
     def to_start(self):
         self.done.append("ctrl+home")
 
+    def type(self, text):
+        self.done.append(("typed", text))
+
 
 @pytest.fixture
 def page(monkeypatch):
+    from ai import uia_page
+
     def make(**kw):
         p = Page(**kw)
-        monkeypatch.setattr(email_reply, "_window", lambda: SimpleNamespace(Name="x - Gmail"))
-        monkeypatch.setattr(email_reply, "_find_all", p.find_all)
-        monkeypatch.setattr(email_reply, "_invoke", p.invoke)
-        monkeypatch.setattr(email_reply, "_focus", lambda c: p.focused.append(c.Name))
-        monkeypatch.setattr(email_reply, "_value", lambda c: getattr(c, "value", ""))
-        monkeypatch.setattr(email_reply, "_shown", lambda c: True)
-        monkeypatch.setattr(email_reply, "_wait", lambda found, seconds: found())
-        monkeypatch.setattr(write_for_me, "paste", lambda text, **kw: p.pasted.append((p.focused[-1], text)) or "pasted")
+        monkeypatch.setattr(uia_page, "window", lambda: SimpleNamespace(Name=TITLE))
+        monkeypatch.setattr(uia_page, "find_all", p.find_all)
+        monkeypatch.setattr(uia_page, "invoke", p.invoke)
+        monkeypatch.setattr(uia_page, "focus", lambda c: p.focused.append(c.Name))
+        monkeypatch.setattr(uia_page, "value", lambda c: getattr(c, "value", ""))
+        monkeypatch.setattr(uia_page, "shown", lambda c: True)
+        monkeypatch.setattr(uia_page, "wait", lambda found, seconds: found())
+        monkeypatch.setattr(uia_page, "page_text", lambda win: p.text)
         return p
     return make
 
 
-REPLY = Reply(["john@sunflex.co.za"], ["anna@sunflex.co.za"], "Re: Sunflex Ops", "Hi John,\n\nYes.", True)
-
-
-def test_no_reply_open_presses_gmails_reply_all_then_writes_at_the_top(page):
+def test_no_reply_open_presses_gmails_reply_all_and_puts_the_caret_at_the_top(page):
     p = page()
     keys = Keys()
-    filled = GmailWeb().fill(REPLY, keyboard=keys)
-    assert p.invoked == ["Reply all"], "Gmail's own Reply all fills To and Cc"
+    draft, done = GmailWeb().open_reply(True, keys)
+    assert p.invoked == ["Reply all"], "Gmail's own Reply all fills To and Cc - pressed, not clicked"
     assert "Send" not in p.invoked, "never sent"
-    assert p.pasted == [("Message Body", "Hi John,\n\nYes.\n\n")]
-    assert keys.done == ["ctrl+home"], "above the quoted original and the signature"
-    assert filled == ["reply all", "body"]
+    assert p.focused[-1] == "Message Body" and keys.done == ["ctrl+home"], "above the quote and the signature"
+    assert done == ["reply all"] and draft == ""
 
 
 def test_only_the_sender_gets_plain_reply(page):
     p = page()
-    GmailWeb().fill(Reply(["john@sunflex.co.za"], [], "Re: x", "Hi.", False), keyboard=Keys())
+    GmailWeb().open_reply(False, Keys())
     assert p.invoked == ["Reply"]
 
 
-def test_an_open_reply_gets_its_empty_subject_and_keeps_its_recipients(page):
+def test_an_open_reply_gets_its_empty_subject_from_the_title(page):
     p = page(reply_open=True, subject_field=True, subject="")
-    filled = GmailWeb().fill(REPLY, keyboard=Keys())
+    keys = Keys()
+    _draft, done = GmailWeb().open_reply(True, keys)
     assert p.invoked == [], "a reply was open: nothing pressed"
-    assert ("Subject", "Re: Sunflex Ops") in p.pasted
-    assert not any(field == "To recipients" for field, _ in p.pasted), "John was already on it"
-    assert filled == ["subject", "body"]
+    assert ("typed", "Re: Sunflex Ops – additions made along the way") in keys.done
+    assert done == ["subject"]
 
 
 def test_a_subject_already_written_is_kept(page):
-    p = page(reply_open=True, subject_field=True, subject="Meeting this week")
-    GmailWeb().fill(REPLY, keyboard=Keys())
-    assert not any(field == "Subject" for field, _ in p.pasted)
-
-
-def test_an_open_reply_keeps_the_recipients_the_user_chose(page):
-    p = page(reply_open=True, chips=False)
-    filled = GmailWeb().fill(REPLY, keyboard=Keys())
-    assert not any(field == "To recipients" for field, _ in p.pasted), "never John twice on a guess"
-    assert "to" not in filled
+    page(reply_open=True, subject_field=True, subject="Meeting this week")
+    keys = Keys()
+    GmailWeb().open_reply(True, keys)
+    assert not any(isinstance(d, tuple) for d in keys.done)
 
 
 def test_no_reply_button_says_open_the_email(page):
     p = page()
     p.buttons.clear()
     with pytest.raises(MailError, match="open the email"):
-        GmailWeb().fill(REPLY, keyboard=Keys())
+        GmailWeb().open_reply(True, Keys())
+
+
+def test_a_page_with_no_text_is_said_at_once_never_photographed(page):
+    page(text="")
+    with pytest.raises(MailError, match="can't read"):
+        GmailWeb().read()
+
+
+def test_the_page_is_read_with_the_users_address(page):
+    page()
+    mail = GmailWeb().read()
+    assert mail.text == THREAD and mail.me == ME
 
 
 # -- the voice tool -----------------------------------------------------------------------------------------------
@@ -213,24 +215,36 @@ def test_no_reply_button_says_open_the_email(page):
 class FakeGmail(email_reply.MailApp):
     name = "Gmail"
 
-    def __init__(self, text=THREAD):
-        self.text, self.filled_with = text, None
+    def __init__(self, draft=""):
+        self.draft, self.opened_with = draft, None
 
     def matches(self, title):
         return "Gmail" in title
 
     def read(self):
-        return Mail(self.text, ME, self.name)
+        return Mail(THREAD, ME, self.name)
 
-    def draft_text(self):
-        return None
-
-    def fill(self, reply, keyboard=None, clipboard=None):
-        self.filled_with = reply
-        return ["reply all", "body"]
+    def open_reply(self, reply_all, keyboard):
+        self.opened_with = reply_all
+        return self.draft, ["reply all"]
 
 
-def _manager(monkeypatch, app, title="Sunflex Ops - mtorben642@gmail.com - Gmail - Opera"):
+class FakeKeyboard:
+    def __init__(self):
+        self.done = []
+
+    def modifiers_down(self):
+        return False
+
+    def where(self):
+        return ("hwnd", TITLE)
+
+    def type(self, text):
+        self.done.append(text)
+
+
+def _manager(monkeypatch, app, title=TITLE, pieces=("Hi John,\n\n", "Yes - which day suits you?\n\n",
+                                                   "Kind regards,\nTorben Mikkelsen\nAgentora")):
     mgr = cm.CompanionManager.__new__(cm.CompanionManager)
     mgr._activity = lambda what: None
     mgr._privacy_guard = False
@@ -238,37 +252,57 @@ def _manager(monkeypatch, app, title="Sunflex Ops - mtorben642@gmail.com - Gmail
     mgr.sig_response_chunk = SimpleNamespace(emit=card.append)
     monkeypatch.setattr(cm, "active_window_title", lambda: title)
     monkeypatch.setattr(email_reply, "APPS", [app])
+    keyboard = FakeKeyboard()
+    monkeypatch.setattr(write_for_me, "Keyboard", lambda: keyboard)
+    sent = {}
 
-    async def picture():
-        return "pic"
-    mgr._window_picture = picture
-    return mgr, card
+    async def stream_reply(request, mail, draft=""):
+        sent.update(request=request, mail=mail, draft=draft)
+        for p in pieces:
+            yield p
+    monkeypatch.setattr(email_reply, "stream_reply", stream_reply)
+    return mgr, card, keyboard, sent
 
 
-def test_the_voice_tool_fills_the_draft_and_never_sends(monkeypatch, caplog):
-    _writer(monkeypatch)
+def test_the_voice_tool_types_the_reply_into_the_draft_and_never_sends(monkeypatch, caplog):
     app = FakeGmail()
-    mgr, card = _manager(monkeypatch, app)
+    mgr, card, keyboard, sent = _manager(monkeypatch, app)
     with caplog.at_level(logging.INFO):
         out = asyncio.run(mgr._tool_reply_to_email({"request": "say yes but ask which day"}))
     assert out["ok"] and "NOT sent" in out["result"] and "press Send" in out["result"]
-    assert app.filled_with.to == ["john@sunflex.co.za"]
+    assert app.opened_with is True, "reply all - the owner's choice"
+    assert "".join(keyboard.done) == "Hi John,\n\nYes - which day suits you?\n\nKind regards,\nTorben Mikkelsen\nAgentora"
     assert card and card[0].startswith("Hi John,"), "the reply on the card"
-    assert "email reply: Gmail, read the page" in caplog.text
+    assert "email reply: Gmail, read the page" in caplog.text and "first words at" in caplog.text
     assert "Can we meet this week" not in caplog.text, "nothing of the email is kept"
 
 
+def test_a_signature_in_the_box_gets_a_blank_line_above_it(monkeypatch):
+    mgr, _card, keyboard, _sent = _manager(monkeypatch, FakeGmail(draft="-- \nTorben"))
+    asyncio.run(mgr._tool_reply_to_email({"request": "reply"}))
+    assert "".join(keyboard.done).endswith("Agentora\n\n")
+
+
+def test_just_him_is_plain_reply(monkeypatch):
+    app = FakeGmail()
+    mgr, *_ = _manager(monkeypatch, app)
+    asyncio.run(mgr._tool_reply_to_email({"request": "just reply to him saying thanks"}))
+    assert app.opened_with is False
+
+
 def test_not_gmail_says_so(monkeypatch):
-    mgr, _card = _manager(monkeypatch, FakeGmail(), title="Sent Items - Outlook")
+    mgr, *_ = _manager(monkeypatch, FakeGmail(), title="Sent Items - Outlook")
     out = asyncio.run(mgr._tool_reply_to_email({"request": "reply to this"}))
     assert "Gmail" in out["error"]
 
 
-def test_a_page_with_no_text_is_answered_from_a_picture(monkeypatch):
-    sent = _writer(monkeypatch)
-    mgr, _card = _manager(monkeypatch, FakeGmail(text=""))
+def test_an_unreadable_email_is_said_at_once(monkeypatch):
+    class Unreadable(FakeGmail):
+        def read(self):
+            raise MailError("I can't read this email's text - open it in Gmail and ask again.")
+    mgr, _card, keyboard, _sent = _manager(monkeypatch, Unreadable())
     out = asyncio.run(mgr._tool_reply_to_email({"request": "reply to this"}))
-    assert out["ok"] and sent["contents"][0]["parts"][0] == gemini.image_part("pic")
+    assert "can't read" in out["error"] and keyboard.done == []
 
 
 def test_the_voice_knows_replying_is_its_own_mode():

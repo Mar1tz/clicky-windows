@@ -16,40 +16,37 @@ Send.
 | Recipients | Reply all when others were on the email; say "just reply to him" to answer only the sender. |
 | Starting it | Ctrl+Win, as for everything. Replying is its own mode beside dictation and commands. Even "send a reply" only fills the draft. |
 
-## How it works
+## How it works (instant, since the evening of 10 Oct)
 
-`ai/email_reply.py`
+"It mustn't take screenshots and click - it needs to be instant." The
+first version waited about 5 s for a reply written whole. Now
+(`ai/email_reply.py`, on `ai/uia_page.py`):
 
 1. **`app_for(title)`** picks the email app in front. `GmailWeb` matches
-   any browser window whose title says Gmail. Others get "replying works
-   in Gmail for now".
-2. **`read()`** takes the text of the web page (the document's
-   TextPattern, at most 30,000 characters) and your own address from the
-   window title.
-3. **`compose_reply()`** makes one call to `Models.WRITER`. The newest
-   message not from you is the one answered, your instructions come first,
-   and the reply matches the email's tone and language. Nothing is
-   invented: missing facts become `[confirm date]`. Subjects are cleaned
-   from "Re: Re:" to "Re:", any address not in the email is dropped, and
-   you are never Cc'd yourself.
-4. **`fill()`**:
-   * With no reply open, it presses Gmail's own **Reply all** (or
-     **Reply**), so Gmail fills To and Cc.
-   * A reply you opened keeps the recipients you chose. Tora won't add
-     addresses next to recipient chips it can't see for certain.
-   * Otherwise it fills only what is empty: the Subject in a pop-out
-     reply.
-   * The body is pasted at the top (Ctrl+Home), above the quote and the
-     signature.
-   * The clipboard is put back afterwards, as with dictation.
-
-   Controls are found with Windows' own search (FindAll on a name), which
-   takes milliseconds, by Gmail's labels: `Message Body`,
-   `To recipients`, `Subject`, `Reply`, `Reply all`.
-5. **Privacy:** the email is read only when you ask. Its text goes to the
-   writer and is dropped. `tora.log` records only lengths and what was
-   filled: `email reply: Gmail, read the page (N chars) in N s, wrote N
-   chars, filled reply all, body in N s`.
+   any browser window whose title says Gmail. Others get "replying works in
+   Gmail for now".
+2. **At once, side by side:**
+   * **`read()`** takes the page's own text (UI Automation, ~0.3 s) and your
+     address from the window title. **Never a screenshot**: a page with no
+     readable text is said so at once.
+   * **`open_reply()`**: with no reply open, Gmail's own **Reply all** (when
+     others were on it and you didn't say "just him") or **Reply** is
+     pressed through Windows' Invoke. No mouse moves, and Gmail fills To and
+     Cc itself. A pop-out reply's empty Subject gets "Re: " plus the window
+     title's subject, with no AI. The caret goes to the top of the body,
+     above the quote and the signature. A reply you opened keeps the
+     recipients you chose.
+3. **`stream_reply()`**: the fastest model (`Models.WRITER`, no thinking)
+   writes only the body: the newest message not from you is the one
+   answered, your instructions come first, the email's tone and language
+   are matched, nothing is invented (`[confirm date]`), and you sign off as
+   you do in the thread. **It is typed into the body as it is written**
+   (`write_for_me.Typist`). If you leave the page, typing stops and the
+   rest goes on the clipboard. **It never sends.**
+4. **Privacy:** the email is read only when you ask. Its text goes to the
+   writer and is dropped. `tora.log` gets lengths and timings only: `email
+   reply: Gmail, read the page (N chars) and opened reply all in N s, first
+   words at N s, N chars - typed, all in N s`.
 
 ## Checked live (10 Oct, on the owner's Gmail in Opera, read-only)
 
@@ -66,8 +63,8 @@ Send.
 
 ## Adding an app (Outlook next)
 
-Subclass `MailApp`: implement `matches(title)`, `read()`, `draft_text()`
-and `fill(reply)`, then add it to `APPS`.
+Subclass `MailApp`: implement `matches(title)`, `read()` and
+`open_reply(reply_all, keyboard)`, then add it to `APPS`.
 
 ## Later (the owner will add details)
 

@@ -70,9 +70,12 @@ class Models:
     STT         = _m("GEMINI_STT_MODEL",      "gemini-3.5-transcribe-live")
     TTS         = _m("GEMINI_TTS_MODEL",      "gemini-3.1-flash-tts-preview")
     EMBED       = _m("GEMINI_EMBED_MODEL",    "gemini-embedding-001")
-    # Writes what the user asks for into the box they are in (ai/write_for_me.py):
-    # good prose in 1-3 s, and it reads the window for "reply to this".
-    WRITER      = _m("GEMINI_WRITER_MODEL",   "gemini-3.6-flash")
+    # Writes into the box the user is in, and their email replies
+    # (ai/write_for_me.py, ai/email_reply.py), streamed as it is typed. The
+    # fastest model, no thinking: the first words in the box within about
+    # a second - "HeyClicky's is so fast the person doesn't leave the page"
+    # (10 Oct). gemini-3.6-flash took 4.6 s for a reply, all of it waited for.
+    WRITER      = _m("GEMINI_WRITER_MODEL",   "gemini-3.5-flash-lite")
 
     # Models that refuse thinkingBudget=0 — asking anyway is a hard 400
     # ("This model only works in thinking mode"), so the fast path has to

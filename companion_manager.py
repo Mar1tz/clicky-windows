@@ -1864,7 +1864,8 @@ class CompanionManager(QObject):
 
     async def _tool_reply_to_email(self, args: dict) -> dict:
         """The email on screen, read and answered in the app's own reply
-        form (ai/email_reply.py). Never sent: the user presses Send."""
+        form (ai/email_reply.py) - typed in as it is written. Never sent:
+        the user presses Send."""
         request = str(args.get("request") or "").strip() or "Reply to this email."
         app = email_reply.app_for(active_window_title())
         if app is None:
@@ -1872,40 +1873,54 @@ class CompanionManager(QObject):
                               "there, then ask again.")}
         started = time.monotonic()
         self._activity("reading_email")
+        keyboard = write_for_me.Keyboard()
         try:
-            mail = await asyncio.to_thread(app.read)
-            draft = await asyncio.to_thread(app.draft_text)
+            # The page is read while Gmail's reply opens: both are ready at once.
+            mail, (draft, done) = await asyncio.gather(
+                asyncio.to_thread(app.read),
+                asyncio.to_thread(app.open_reply, email_reply.reply_all_wanted(request), keyboard))
         except email_reply.MailError as e:
             return {"error": f"{e}"}
-        except Exception as e:  # noqa: BLE001 - the page could not be read: the picture still can
-            _log.info("email reply: reading the page failed (%s)", e)
-            mail, draft = email_reply.Mail(app=app.name), None
-        picture = "" if mail.text else await self._window_picture()
-        if not mail.text and not picture:
-            return {"error": "The email could not be read. Ask them to open it and try again."}
-        read_s = time.monotonic() - started
+        except Exception as e:  # noqa: BLE001 - say so, never half-guess an email
+            _log.info("email reply: could not read it or open the reply (%s)", e)
+            return {"error": "The email could not be read, or its reply could not be opened. Ask them to try again."}
+        ready_s = time.monotonic() - started
         self._activity("writing")
-        reply = await email_reply.compose_reply(request, mail, picture, draft)
-        if not reply:
+        typist = write_for_me.Typist(keyboard)
+        how, first = await self._type_as_written(email_reply.stream_reply(request, mail, draft), typist,
+                                                 tail="\n\n" if draft.strip() else "")
+        # Nothing of the email is kept: its length and what was done, no more.
+        _log.info("email reply: %s, read the page (%d chars) and opened %s in %.1fs, first words at %s, "
+                  "%d chars - %s, all in %.1fs", app.name, len(mail.text), ", ".join(done) or "the open reply",
+                  ready_s, f"{first - started:.1f}s" if first else "-", len(typist.text.strip()), how or "nothing",
+                  time.monotonic() - started)
+        if not how:
             return {"error": "The reply did not come back. Ask them to try again."}
-        try:
-            filled = await asyncio.to_thread(app.fill, reply)
-        except email_reply.MailError as e:
-            return {"error": f"{e}"}
-        # Nothing of the email is kept: its length and what was filled, no more.
-        _log.info("email reply: %s, read %s (%d chars) in %.1fs, wrote %d chars, filled %s in %.1fs",
-                  app.name, "the page" if mail.text else "a picture", len(mail.text), read_s, len(reply.body),
-                  ", ".join(filled), time.monotonic() - started)
-        self.sig_response_chunk.emit(reply.body.strip() + "\n\n")
-        to = ", ".join(reply.to) or "the sender"
-        return {"ok": True, "result": (f"The reply to {to} is in the draft ({', '.join(filled)} filled). It is NOT "
-                                       "sent: tell them to check it and press Send. Never read it out.")}
+        self.sig_response_chunk.emit(typist.text.strip() + "\n\n")
+        if how == "clipboard":
+            return {"ok": True, "result": ("They left the page while it was written: what was typed is in the "
+                                           "draft and the rest is on their clipboard. It is NOT sent.")}
+        return {"ok": True, "result": ("The reply is in the draft. It is NOT sent: tell them to check it and "
+                                       "press Send. Never read it out.")}
 
     # ── Writing for them (ai/write_for_me.py) ─────────────────────────────────
     #
     # Asked for on 10 Oct: they talk about what they want written, loosely,
     # and Tora works out what they mean, writes it well and puts it in the
-    # box they are typing in. The voice is never handed the text to read out.
+    # box they are typing in - as it is written, the first words in about a
+    # second ("it needs to be instant"). The voice is never handed the text.
+
+    async def _type_as_written(self, pieces, typist, tail: str = "") -> tuple[str, Optional[float]]:
+        """Each piece typed as it arrives. (How it went - typed, pasted or
+        clipboard, "" for nothing - and when the first words came.)"""
+        first = None
+        async for piece in pieces:
+            if first is None:
+                first = time.monotonic()
+            typist.feed(piece)
+        if tail and typist.text.strip():
+            typist.feed(tail)
+        return await asyncio.to_thread(typist.finish), first
 
     async def _tool_write_for_me(self, args: dict) -> dict:
         request = str(args.get("request") or "").strip()
@@ -1919,50 +1934,39 @@ class CompanionManager(QObject):
         if box.password:
             return {"error": "That is a password box - Tora never types into one. Tell them so."}
         started = time.monotonic()
-        picture = await self._window_picture()
-        written = await write_for_me.compose(request, box, picture)
-        if written.kind == "command":
+        # "Reply to this": the page's own text says what "this" is - never a picture.
+        sensitive = self._privacy_guard and is_sensitive_window(active_window_title())
+        page = (await asyncio.to_thread(write_for_me.page_context)
+                if write_for_me.leans_on_screen(request) and not sensitive else "")
+        pieces = write_for_me.stream_dictation(request, box, page).__aiter__()
+        head = await anext(pieces, "")
+        if head.startswith("DO"):
             # Never mix the two: a command is not typed into the box. The
             # app actions and agents ask the user before anything runs.
-            _log.info("write for me: a command, not dictation - %r", written.command or request[:80])
+            command = head[3:].strip()
+            _log.info("write for me: a command, not dictation - %r", command or request[:80])
             return {"ok": False, "result": (
-                f"Nothing was typed: that is a command ({written.command or 'an action'}), not text "
+                f"Nothing was typed: that is a command ({command or 'an action'}), not text "
                 "for the box. Do it with desktop_action or delegate_task - they ask the user first.")}
-        text = written.text
-        if not text:
+        if head != "TYPE":
             return {"error": "The writing did not come back. Ask them to try again."}
-        how = await asyncio.to_thread(write_for_me.put, text, box)
-        _log.info("write for me: %d chars into %s %r in %r - %s (written in %.1fs%s)", len(text), box.kind,
-                  box.name, box.window, how or "failed", time.monotonic() - started,
-                  ", with the window" if picture else "")
-        if how == "clipboard":
-            return {"ok": True, "result": ("The box lost the focus while it was written, so it is on their "
-                                           "clipboard: tell them to press Ctrl+V where they want it.")}
+        keyboard = write_for_me.Keyboard()
+        await asyncio.to_thread(write_for_me.keys_let_go, keyboard)
+        typist = write_for_me.Typist(keyboard, paste_at_end=write_for_me.pastes(box))
+        how, first = await self._type_as_written(pieces, typist)
+        text = typist.text.strip()
+        _log.info("write for me: %d chars into %s %r in %r - %s, first words at %s, all in %.1fs%s", len(text),
+                  box.kind, box.name, box.window, how or "nothing", f"{first - started:.1f}s" if first else "-",
+                  time.monotonic() - started, ", with the page" if page else "")
         if not how:
-            return {"error": "It could not be put in the box."}
+            return {"error": "The writing did not come back. Ask them to try again."}
         # What was written, on the card (with its Copy) as she says it's in.
-        self.sig_response_chunk.emit(text.strip() + "\n\n")
+        self.sig_response_chunk.emit(text + "\n\n")
+        if how == "clipboard":
+            return {"ok": True, "result": ("They left the box while it was written: what was typed is in it and "
+                                           "the rest is on their clipboard - Ctrl+V puts it where they want it.")}
         return {"ok": True, "result": f"Written into the box ({len(text)} characters). Say it's in - "
                                       "never read it out."}
-
-    async def _window_picture(self) -> str:
-        """The window in front, for the writer - none for a sensitive one."""
-        if self._privacy_guard and is_sensitive_window(active_window_title()):
-            return ""
-        try:
-            from tutor import foreground_window_rect
-            screens = await self._capture_shots(max_width=1024, reuse=True, pixels=False)
-            shot = self._active_shot(screens) or screens[0]
-            monitor = (shot.physical_left, shot.physical_top, shot.physical_width, shot.physical_height)
-            region = look_region.window_region(foreground_window_rect(), monitor)
-            if region:
-                grabbed = await asyncio.to_thread(capture_region, *region, 1024)
-                if grabbed:
-                    return grabbed[0]
-            whole = await asyncio.to_thread(grab_frame, shot, 1024)
-            return whole.base64_jpeg if whole is not None else ""
-        except Exception:  # noqa: BLE001 - the words alone still write it
-            return ""
 
     # ── Agent delegation ──────────────────────────────────────────────────────
     #
