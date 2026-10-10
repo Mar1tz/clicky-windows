@@ -70,6 +70,9 @@ class Models:
     STT         = _m("GEMINI_STT_MODEL",      "gemini-3.5-transcribe-live")
     TTS         = _m("GEMINI_TTS_MODEL",      "gemini-3.1-flash-tts-preview")
     EMBED       = _m("GEMINI_EMBED_MODEL",    "gemini-embedding-001")
+    # Writes what the user asks for into the box they are in (ai/write_for_me.py):
+    # good prose in 1-3 s, and it reads the window for "reply to this".
+    WRITER      = _m("GEMINI_WRITER_MODEL",   "gemini-3.6-flash")
 
     # Models that refuse thinkingBudget=0 — asking anyway is a hard 400
     # ("This model only works in thinking mode"), so the fast path has to

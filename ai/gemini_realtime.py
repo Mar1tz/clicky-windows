@@ -258,6 +258,32 @@ def tool_declarations() -> list[dict]:
             },
         },
         {
+            "name": "write_for_me",
+            "description": (
+                "Write text INTO the box the user is typing in - an email, a "
+                "message, a reply, a post, notes, a description, a prompt, a "
+                "plan for something they want built, a form field - when they "
+                "ask you to write, type, draft, reply or put something down, "
+                "or talk about what they want written there. Tora works out "
+                "what they mean, writes it properly and puts it in the box. "
+                "Never read the text out: say one short line that it's in."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "request": {
+                        "type": "string",
+                        "description": (
+                            "Everything they said about what to write, in "
+                            "their own words and complete: what it should say, "
+                            "who it is for, tone, length, any exact wording."
+                        ),
+                    },
+                },
+                "required": ["request"],
+            },
+        },
+        {
             "name": "search_web",
             "description": (
                 "Search the web. ONLY when the user explicitly asks you to "

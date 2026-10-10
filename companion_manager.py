@@ -40,7 +40,7 @@ from ai.gemini import Models
 from audio.ambient_listener import AmbientListener
 from screen import monitors
 from screen.capture import capture_all_screens, capture_region, grab_frame, monitor_frames
-from ai import look_board, look_chess, look_region
+from ai import look_board, look_chess, look_region, write_for_me
 from ui.panel import AppState
 from tutor import (
     active_window_title, app_key,
@@ -1858,7 +1858,61 @@ class CompanionManager(QObject):
             "read_skill":      self._tool_read_skill,
             "desktop_action":  self._tool_desktop_action,
             "manage_agents":   self._tool_manage_agents,
+            "write_for_me":    self._tool_write_for_me,
         }
+
+    # ── Writing for them (ai/write_for_me.py) ─────────────────────────────────
+    #
+    # Asked for on 10 Oct: they talk about what they want written, loosely,
+    # and Tora works out what they mean, writes it well and puts it in the
+    # box they are typing in. The voice is never handed the text to read out.
+
+    async def _tool_write_for_me(self, args: dict) -> dict:
+        request = str(args.get("request") or "").strip()
+        if not request:
+            return {"error": "nothing was said about what to write"}
+        self._activity("writing")
+        box = await asyncio.to_thread(write_for_me.focused_box)
+        if box is None:
+            return {"error": ("No text box has the focus. Ask them to click into the box they want it in, "
+                              "then ask again.")}
+        if box.password:
+            return {"error": "That is a password box - Tora never types into one. Tell them so."}
+        started = time.monotonic()
+        picture = await self._window_picture()
+        text = await write_for_me.compose(request, box, picture)
+        if not text:
+            return {"error": "The writing did not come back. Ask them to try again."}
+        how = await asyncio.to_thread(write_for_me.put, text, box)
+        _log.info("write for me: %d chars into %s %r in %r - %s (written in %.1fs%s)", len(text), box.kind,
+                  box.name, box.window, how or "failed", time.monotonic() - started,
+                  ", with the window" if picture else "")
+        if how == "clipboard":
+            return {"ok": True, "result": ("The box lost the focus while it was written, so it is on their "
+                                           "clipboard: tell them to press Ctrl+V where they want it.")}
+        if not how:
+            return {"error": "It could not be put in the box."}
+        return {"ok": True, "result": f"Written into the box ({len(text)} characters). Say it's in - "
+                                      "never read it out."}
+
+    async def _window_picture(self) -> str:
+        """The window in front, for the writer - none for a sensitive one."""
+        if self._privacy_guard and is_sensitive_window(active_window_title()):
+            return ""
+        try:
+            from tutor import foreground_window_rect
+            screens = await self._capture_shots(max_width=1024, reuse=True, pixels=False)
+            shot = self._active_shot(screens) or screens[0]
+            monitor = (shot.physical_left, shot.physical_top, shot.physical_width, shot.physical_height)
+            region = look_region.window_region(foreground_window_rect(), monitor)
+            if region:
+                grabbed = await asyncio.to_thread(capture_region, *region, 1024)
+                if grabbed:
+                    return grabbed[0]
+            whole = await asyncio.to_thread(grab_frame, shot, 1024)
+            return whole.base64_jpeg if whole is not None else ""
+        except Exception:  # noqa: BLE001 - the words alone still write it
+            return ""
 
     # ── Agent delegation ──────────────────────────────────────────────────────
     #
@@ -5336,6 +5390,7 @@ class CompanionManager(QObject):
         "verifying":     "Checking if that worked…",
         "waiting":       "Waiting for you…",
         "searching":     "Looking that up…",
+        "writing":       "Writing it for you…",
     }
 
     def _activity(self, key: str) -> None:
