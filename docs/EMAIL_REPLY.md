@@ -35,7 +35,10 @@ Send.
 4. **`fill()`**:
    * With no reply open, it presses Gmail's own **Reply all** (or
      **Reply**), so Gmail fills To and Cc.
-   * It fills only what is empty: To, and Subject in a pop-out reply.
+   * A reply you opened keeps the recipients you chose. Tora won't add
+     addresses next to recipient chips it can't see for certain.
+   * Otherwise it fills only what is empty: the Subject in a pop-out
+     reply.
    * The body is pasted at the top (Ctrl+Home), above the quote and the
      signature.
    * The clipboard is put back afterwards, as with dictation.
@@ -47,6 +50,19 @@ Send.
    writer and is dropped. `tora.log` records only lengths and what was
    filled: `email reply: Gmail, read the page (N chars) in N s, wrote N
    chars, filled reply all, body in N s`.
+
+## Checked live (10 Oct, on the owner's Gmail in Opera, read-only)
+
+* **Labels:** all found by name. `Reply` (button and link), `Forward`,
+  `Message Body` (Edit), `To recipients` (ComboBox), `Subject` (Edit).
+  There was no `Reply all` on an email to one person, which is right:
+  plain Reply is used.
+* **Speed:** the page text took 0.3 s; each control search takes about
+  0.1-0.2 s on Gmail's large page.
+* **The reply** was written in 4.6 s from the real thread. It went to the
+  sender with "Re: <subject>" and the owner's own sign-off ("Kind regards,
+  Torben Mikkelsen, Agentora"), and invented nothing. It was not put in
+  the draft.
 
 ## Adding an app (Outlook next)
 

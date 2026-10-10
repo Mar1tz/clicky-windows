@@ -15,8 +15,9 @@ above the quoted original. It never sends: they read it and press Send.
      the user's instructions word for word, nothing invented ([confirm
      date] where a fact is missing), their own sign-off from the thread.
   3. Fill: with no reply open, the app's own Reply - or Reply all when
-     others were on it - so the app fills the addresses itself; then only
-     what is still empty: To, Subject, and the body, pasted at its top.
+     others were on it - so the app fills the addresses itself; a reply the
+     user opened keeps the recipients they chose. Then only what is still
+     empty: the Subject, and the body, pasted at its top.
 
 Each email app is a MailApp: how to know it, read it, and fill a reply.
 Gmail in the browser first; Outlook goes in the same shape. Nothing of the
@@ -190,6 +191,116 @@ class GmailWeb(MailApp):
         body = self._last(_window(), self.BODY)
         return None if body is None else _value(body)
 
+    def fill(self, reply: Reply, keyboard=None, clipboard=None) -> list[str]:
+        """Open a reply if none is, fill what is empty. Returns what was
+        filled. Never sends."""
+        raise NotImplementedError
+
+
+# ── Windows UI Automation, in small pieces a test can stand in for ───────────
+
+def _ui():
+    from uiautomation import uiautomation as _ua
+    return _ua._AutomationClient.instance().IUIAutomation
+
+
+def _window():
+    import ctypes
+    import uiautomation as auto
+    hwnd = ctypes.windll.user32.GetForegroundWindow()
+    return auto.ControlFromHandle(hwnd) if hwnd else None
+
+
+def _find_all(root, *, name: Optional[str] = None, control_type: Optional[int] = None, limit: int = 40) -> list:
+    """Windows' own search - milliseconds on a page of thousands of nodes,
+    where walking it from Python takes seconds."""
+    import uiautomation as auto
+    if root is None:
+        return []
+    ui = _ui()
+    conds = []
+    if name is not None:
+        conds.append(ui.CreatePropertyCondition(auto.PropertyId.NameProperty, name))
+    if control_type is not None:
+        conds.append(ui.CreatePropertyCondition(auto.PropertyId.ControlTypeProperty, control_type))
+    cond = (conds[0] if len(conds) == 1 else ui.CreateAndCondition(conds[0], conds[1]) if conds
+            else ui.CreateTrueCondition())
+    found = root.Element.FindAll(4, cond)                     # TreeScope_Descendants
+    n = found.Length if found else 0
+    return [auto.Control.CreateControlFromElement(found.GetElement(i)) for i in range(min(n, limit))]
+
+
+def _page_text(window) -> str:
+    """The text of the web page in `window`."""
+    import uiautomation as auto
+    for doc in _find_all(window, control_type=auto.ControlType.DocumentControl, limit=4):
+        try:
+            text = doc.GetTextPattern().DocumentRange.GetText(MAX_TEXT * 2)
+        except Exception:  # noqa: BLE001 - no text pattern on this one
+            continue
+        if text and len(text.strip()) > 200:
+            return text
+    return ""
+
+
+def _value(control) -> str:
+    try:
+        return str(control.GetValuePattern().Value or "")
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+def _shown(control) -> bool:
+    try:
+        return not control.IsOffscreen
+    except Exception:  # noqa: BLE001
+        return True
+
+
+def _focus(control) -> None:
+    control.SetFocus()
+    time.sleep(0.08)
+
+
+def _invoke(control) -> None:
+    control.GetInvokePattern().Invoke()
+
+
+def _wait(found: Callable, seconds: float):
+    deadline = time.monotonic() + seconds
+    while True:
+        got = found()
+        if got is not None or time.monotonic() > deadline:
+            return got
+        time.sleep(0.1)
+
+
+class GmailWeb(MailApp):
+    """Gmail in a Chromium browser (Opera, Chrome, Edge). Its page is in the
+    accessibility tree, and its controls carry Gmail's own labels."""
+    name = "Gmail"
+    BODY, SUBJECT, TO = "Message Body", "Subject", "To recipients"
+    REPLY, REPLY_ALL = "Reply", "Reply all"
+
+    def matches(self, title: str) -> bool:
+        return bool(re.search(r"\bGmail\b", title or ""))
+
+    def read(self) -> Mail:
+        window = _window()
+        if window is None:
+            raise MailError("no window in front")
+        me = _EMAIL_RE.search(window.Name or "")
+        text = _page_text(window)
+        return Mail(_tidy(text)[:MAX_TEXT], me.group(0) if me else "", self.name)
+
+    def _last(self, window, name: str):
+        shown = [c for c in _find_all(window, name=name) if _shown(c)]
+        return shown[-1] if shown else None              # the newest reply on the page
+
+    def draft_text(self) -> Optional[str]:
+        body = self._last(_window(), self.BODY)
+        return None if body is None else _value(body)
+
     def _has_recipients(self, to) -> bool:
         """A recipient already on the reply: Gmail shows each as a chip
         beside the To box, named with its address or with "Remove"."""
@@ -219,12 +330,9 @@ class GmailWeb(MailApp):
             body = _wait(lambda: self._last(window, self.BODY), 4.0)
             if body is None:
                 raise MailError("the reply did not open")
-        to = self._last(window, self.TO)
-        if to is not None and reply.to and not self._has_recipients(to):
-            _focus(to)
-            write_for_me.paste(", ".join(reply.to + (reply.cc if reply.reply_all else [])) + ", ",
-                               keyboard=keyboard, clipboard=clipboard)
-            filled.append("to")
+        # To is Gmail's own: its Reply fills it, and a reply the user opened
+        # keeps the recipients they chose. Pasting addresses beside chips that
+        # could not be seen for certain would put John on it twice.
         subject = self._last(window, self.SUBJECT)
         if subject is not None and reply.subject and not _value(subject).strip():
             _focus(subject)

@@ -194,11 +194,11 @@ def test_a_subject_already_written_is_kept(page):
     assert not any(field == "Subject" for field, _ in p.pasted)
 
 
-def test_an_open_reply_with_nobody_on_it_gets_the_addresses(page):
+def test_an_open_reply_keeps_the_recipients_the_user_chose(page):
     p = page(reply_open=True, chips=False)
     filled = GmailWeb().fill(REPLY, keyboard=Keys())
-    assert ("To recipients", "john@sunflex.co.za, anna@sunflex.co.za, ") in p.pasted
-    assert "to" in filled
+    assert not any(field == "To recipients" for field, _ in p.pasted), "never John twice on a guess"
+    assert "to" not in filled
 
 
 def test_no_reply_button_says_open_the_email(page):
