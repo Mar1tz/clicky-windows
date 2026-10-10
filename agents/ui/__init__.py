@@ -104,11 +104,16 @@ def open_accounts(manager=None, parent=None) -> ConnectedAccountsDialog:
 _orbs: Optional[AgentOrbs] = None
 
 
-def show_orbs(manager, parent=None) -> AgentOrbs:
-    """The floating top-right strip: one orb per working agent. Created
-    once; it shows and hides itself as agents come and go."""
+def show_orbs(manager, parent=None, on_open=None) -> AgentOrbs:
+    """The floating top-right cards: one per working agent. Created once;
+    they show and hide themselves as agents come and go. `on_open(agent_id,
+    task_id)` is what a click opens - the app's Agents page with that job
+    (main.py); without one, this package's own Active Agents window."""
     global _orbs
     if _orbs is None:
         _orbs = AgentOrbs(manager, parent=parent)
-        _orbs.clicked.connect(lambda _agent_id: open_agents_window(manager))
+        if on_open is not None:
+            _orbs.opened.connect(on_open)
+        else:
+            _orbs.clicked.connect(lambda _agent_id: open_agents_window(manager))
     return _orbs

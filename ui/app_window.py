@@ -304,6 +304,17 @@ class ToraApp(QWidget):
             if page is not None and hasattr(page, "show_tab"):
                 page.show_tab("skills")
             return
+        # "agents/job/<task id>": the Agents page with that job's drawer open
+        # - what a click on an agent's card at the top right opens.
+        if key.startswith("agents/job/"):
+            self.show_page("agents")
+            page = self._pages.get("agents")
+            task_id = key.split("/", 2)[2]
+            if page is not None and task_id and hasattr(page, "open_job"):
+                # After open_at has shown the window: the drawer slides in
+                # from the page's right edge, measured once it is laid out.
+                QTimer.singleShot(0, lambda: page.open_job(task_id))
+            return
         if key not in self._pages:
             for k, _text, _place, cls in PAGES:
                 if k == key:

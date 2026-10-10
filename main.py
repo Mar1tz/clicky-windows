@@ -235,9 +235,11 @@ def _wire_agents(manager, tray):
     from agents.ui.settings import AgentSettingsDialog
 
     attach_approvals(workforce)
-    # The top-right orbs: one per working agent, with its progress ring.
-    # Hidden until the first agent starts; a click opens the panel.
-    windows_orbs = show_orbs(workforce)
+    # The top-right cards: one per working agent - its job, its step, its
+    # progress. Hidden until the first agent starts; a click opens that job
+    # on the app's Agents page (agents/ui/orbs.py).
+    windows_orbs = show_orbs(workforce, on_open=lambda _agent, task: tray.on_open_app_page.emit(
+        f"agents/job/{task}" if task else "agents"))
 
     windows: dict[str, object] = {}
 
