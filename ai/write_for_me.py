@@ -11,9 +11,14 @@ document, a prompt.
   1. The box: what has the keyboard focus (Windows UI Automation) - its
      kind and name, the window, the text already in it. A password box is
      never written into, and with no box Tora says so rather than guess.
-  2. The writing: one call to the writer model with the user's own words,
-     the box, the text already there, and a picture of the window - "reply
-     to this" means what is on screen.
+  2. Dictation or command, then the writing: one call to the writer model
+     with the user's own words, the box, the text already there, and a
+     picture of the window - "reply to this" means what is on screen. It
+     first says which this is: text to type, or something to DO ("send the
+     email", "open Spotify"). A command is never typed: it goes back to the
+     voice, whose app actions and agents ask the user before anything runs.
+     The live voice already made that call when it chose this tool; this is
+     the second look, so the two modes never mix (the owner's spec).
   3. Into the box: pasted, the way dictation apps do it - a page of text
      lands at once, in any app, without an editor's auto-indent and
      closing brackets mangling it - and the clipboard is put back exactly
@@ -95,14 +100,33 @@ def focused_box() -> Optional[Box]:
 # ── The writing ──────────────────────────────────────────────────────────────
 
 _SYSTEM = """You write for the user: the text they want in the box they are
-typing in. They talk loosely - thinking aloud, correcting themselves,
-mixing what they want said with how they want it said. Work out what they
-actually want, then write the finished text, well: clear and natural, in
-their voice, as long as it needs to be and no longer.
+typing in. They talk loosely - thinking aloud, rambling, repeating
+themselves, changing their mind mid-sentence, mixing what they want said
+with how they want it said. Work out what they actually mean, then write
+the finished text, well: clear, natural and in their voice, the filler
+gone, the grammar right, the ideas in a sensible order - as long as it
+needs to be and no longer.
 
+FIRST decide what this is - kind:
+  • "dictation": words to write out - a message, an email, a reply, notes,
+    a description, a prompt, or just talking an idea through. "Write",
+    "type", "say", "tell them", "reply that" are dictation.
+  • "command": they want something DONE, not written - "open", "go to",
+    "search for", "send", "run", "create a file", "remind me". An
+    instruction to act is a command even with a text box open in front of
+    them: "write an email saying I'll be late" is dictation; "send an email
+    saying I'll be late" is a command, though the email is half written.
+    A command gets no text.
+  • Only when it could truly be either - no instruction to act, no
+    instruction to write - it is dictation: a text box is focused.
+
+For dictation, the text:
   • Follow everything they asked: what to say, who it is for, the tone,
     length, format, language, names and details - word for word where they
-    dictate exact words.
+    dictate exact words. Where they changed their mind, write what they
+    settled on.
+  • Something they want built or developed ("I want a feature that does X,
+    but also Y") becomes a clear, well-organised description or request.
   • Fit the box: a chat message reads like a message; an email like an
     email (a greeting and sign-off only when it is the body of one); a
     search box gets a search; a form field just its value; a prompt or a
@@ -113,14 +137,37 @@ their voice, as long as it needs to be and no longer.
     "reply to that" mean. Use it; never describe it.
   • Never invent a fact they did not give - a date, a price, a name: put a
     short [placeholder] in its place.
-  • Output ONLY the text for the box: no preamble, no quotes round it, no
+  • text is ONLY what goes in the box: no preamble, no quotes round it, no
     notes after it, and no markdown unless the box is a place for it."""
+
+_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "kind": {"type": "string", "enum": ["dictation", "command"]},
+        "text": {"type": "string", "description": "For dictation: the finished text. Empty for a command."},
+        "command": {"type": "string", "description": "For a command: what they want done, in a few words."},
+    },
+    "required": ["kind", "text"],
+    "propertyOrdering": ["kind", "command", "text"],
+}
+
+
+@dataclass
+class Written:
+    """What the writer made of it: text to type, or a command to hand on."""
+    kind: str = "dictation"
+    text: str = ""
+    command: str = ""
+
+    def __bool__(self) -> bool:
+        return bool(self.text) or self.kind == "command"
 
 WRITE_TIMEOUT_S = 25.0
 
 
-async def compose(request: str, box: Box, picture_b64: str = "") -> str:
-    """The text for `box`, written from what the user said. "" if it failed."""
+async def compose(request: str, box: Box, picture_b64: str = "") -> Written:
+    """Dictation or command, and for dictation the text for `box`, written
+    from what the user said. An empty Written if it failed."""
     where = f'A {box.kind.replace("Control", "").lower() or "text"} box'
     if box.name:
         where += f' named "{box.name}"'
@@ -132,14 +179,17 @@ async def compose(request: str, box: Box, picture_b64: str = "") -> str:
     ask += f"\nWhat they said they want written:\n{request.strip()}"
     parts = ([gemini.image_part(picture_b64)] if picture_b64 else []) + [gemini.text_part(ask)]
     try:
-        resp = await gemini.generate(
-            Models.WRITER, [{"role": "user", "parts": parts}], system=_SYSTEM,
-            max_tokens=4096, temperature=0.6, think="low", media_resolution="medium",
-            timeout=WRITE_TIMEOUT_S)
+        data = await gemini.generate_json(
+            Models.WRITER, [{"role": "user", "parts": parts}], _SCHEMA, system=_SYSTEM,
+            max_tokens=4096, think="low", media_resolution="medium", timeout=WRITE_TIMEOUT_S)
     except Exception as e:  # noqa: BLE001 - say so; never a half-written box
         _log.warning("writing failed: %s", str(e)[:200])
-        return ""
-    return _clean(gemini.first_text(resp))
+        return Written(text="")
+    if not isinstance(data, dict):
+        return Written(text="")
+    if data.get("kind") == "command":
+        return Written("command", "", str(data.get("command") or "").strip()[:200])
+    return Written("dictation", _clean(str(data.get("text") or "")))
 
 
 def _clean(text: str) -> str:

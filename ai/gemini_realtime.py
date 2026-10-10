@@ -260,13 +260,15 @@ def tool_declarations() -> list[dict]:
         {
             "name": "write_for_me",
             "description": (
-                "Write text INTO the box the user is typing in - an email, a "
-                "message, a reply, a post, notes, a description, a prompt, a "
-                "plan for something they want built, a form field - when they "
-                "ask you to write, type, draft, reply or put something down, "
-                "or talk about what they want written there. Tora works out "
-                "what they mean, writes it properly and puts it in the box. "
-                "Never read the text out: say one short line that it's in."
+                "DICTATION: write text INTO the box the user is typing in - an "
+                "email, a message, a reply, a post, notes, a description, a "
+                "prompt, a plan for something they want built, a form field - "
+                "when they ask you to write, type, draft, reply or put something "
+                "down, or talk about what they want written there. Never for a "
+                "command ('send', 'open', 'search'): that is desktop_action or "
+                "delegate_task. Tora works out what they mean, writes it "
+                "properly and puts it in the box. Never read the text out: say "
+                "one short line that it's in."
             ),
             "parameters": {
                 "type": "object",

@@ -3,7 +3,9 @@
 Asked for on 10 Oct 2026: talk about what you want written - loosely, the
 way you'd explain it - and Tora works out what you mean, writes it well,
 and puts it in whatever text box you are typing in. Never a password box,
-never Enter, and the clipboard it borrows is put back as it was.
+never Enter, and the clipboard it borrows is put back as it was. The
+owner's spec the same day: dictation or command is decided first, and the
+two never mix - a command is never typed, and dictation never acts.
 """
 from __future__ import annotations
 
@@ -16,27 +18,29 @@ import pytest
 import companion_manager as cm
 from ai import gemini, write_for_me
 from ai.gemini import Models
-from ai.write_for_me import Box
+from ai.write_for_me import Box, Written
 
 BOX = Box("EditControl", "Message", "Inbox - Gmail - Opera", "Hi Sam,\n")
 
 
 # -- the writing ------------------------------------------------------------------------------------------------
 
-def _writer(monkeypatch, reply="Thursday works for me, but Friday doesn't - see you then!"):
+def _writer(monkeypatch, reply="Thursday works for me, but Friday doesn't - see you then!", kind="dictation",
+            command=""):
     sent = {}
 
-    async def fake_generate(model, contents, **kw):
-        sent.update(model=model, contents=contents, **kw)
-        return {"candidates": [{"content": {"parts": [{"text": reply}]}}]}
-    monkeypatch.setattr(gemini, "generate", fake_generate)
+    async def fake_generate_json(model, contents, schema, **kw):
+        sent.update(model=model, contents=contents, schema=schema, **kw)
+        return {"kind": kind, "text": reply, "command": command}
+    monkeypatch.setattr(gemini, "generate_json", fake_generate_json)
     return sent
 
 
 def test_the_writer_gets_their_words_the_box_and_the_window(monkeypatch):
     sent = _writer(monkeypatch)
-    text = asyncio.run(write_for_me.compose("say thursday works but not friday, friendly", BOX, "pic"))
-    assert text == "Thursday works for me, but Friday doesn't - see you then!"
+    written = asyncio.run(write_for_me.compose("say thursday works but not friday, friendly", BOX, "pic"))
+    assert written.kind == "dictation"
+    assert written.text == "Thursday works for me, but Friday doesn't - see you then!"
     assert sent["model"] == Models.WRITER
     parts = sent["contents"][0]["parts"]
     assert parts[0] == gemini.image_part("pic"), "the window, for what 'this' means"
@@ -44,7 +48,24 @@ def test_the_writer_gets_their_words_the_box_and_the_window(monkeypatch):
     assert 'named "Message"' in ask and "Inbox - Gmail - Opera" in ask
     assert "Hi Sam," in ask, "what is in the box already"
     assert "say thursday works but not friday, friendly" in ask
-    assert "ONLY the text" in sent["system"] and "[placeholder]" in sent["system"]
+    assert "ONLY what goes in the box" in sent["system"] and "[placeholder]" in sent["system"]
+    system = " ".join(sent["system"].split())
+    assert "changing their mind" in system and "filler" in system, "rambling made into clear text"
+    assert sent["schema"]["properties"]["kind"]["enum"] == ["dictation", "command"]
+    assert sent["schema"]["propertyOrdering"][0] == "kind", "it decides what this is first"
+
+
+def test_a_command_is_not_written(monkeypatch):
+    _writer(monkeypatch, reply="", kind="command", command="send the email to Sam")
+    written = asyncio.run(write_for_me.compose("send an email to sam saying I'll be late", BOX))
+    assert written.kind == "command" and written.text == "" and written.command == "send the email to Sam"
+
+
+def test_the_writer_knows_write_from_send():
+    system = " ".join(write_for_me._SYSTEM.split())
+    assert "\"write an email saying I'll be late\" is dictation" in system
+    assert "\"send an email saying I'll be late\" is a command" in system
+    assert "it is dictation: a text box is focused" in system and "a command even with a text box open" in system
 
 
 def test_without_a_picture_it_writes_from_the_words(monkeypatch):
@@ -65,8 +86,9 @@ def test_the_text_alone(raw, clean):
 def test_a_failed_call_writes_nothing(monkeypatch):
     async def fails(*_a, **_kw):
         raise RuntimeError("503")
-    monkeypatch.setattr(gemini, "generate", fails)
-    assert asyncio.run(write_for_me.compose("anything", BOX)) == ""
+    monkeypatch.setattr(gemini, "generate_json", fails)
+    written = asyncio.run(write_for_me.compose("anything", BOX))
+    assert not written and written.text == ""
 
 
 # -- into the box -----------------------------------------------------------------------------------------------
@@ -163,16 +185,18 @@ def test_a_password_box_is_found_but_never_read(monkeypatch):
 
 # -- the voice tool ---------------------------------------------------------------------------------------------
 
-def _manager(box, monkeypatch, *, written="Thursday works, Friday doesn't.", how="pasted", sensitive=False):
+def _manager(box, monkeypatch, *, written="Thursday works, Friday doesn't.", how="pasted", sensitive=False,
+             kind="dictation"):
     mgr = cm.CompanionManager.__new__(cm.CompanionManager)
     mgr._activity = lambda what: None
     mgr._privacy_guard = sensitive
-    asked = {}
+    asked = {"card": []}
+    mgr.sig_response_chunk = SimpleNamespace(emit=asked["card"].append)
     monkeypatch.setattr(write_for_me, "focused_box", lambda: box)
 
     async def compose(request, b, picture=""):
         asked.update(request=request, box=b, picture=picture)
-        return written
+        return Written(kind, written if kind == "dictation" else "", "send the email" if kind == "command" else "")
     monkeypatch.setattr(write_for_me, "compose", compose)
     monkeypatch.setattr(write_for_me, "put", lambda text, b: asked.update(put=text) or how)
 
@@ -190,7 +214,18 @@ def test_the_voice_tool_writes_into_the_box(monkeypatch, caplog):
     assert asked["request"] == "tell Sam thursday yes friday no" and asked["picture"] == "pic"
     assert asked["put"] == "Thursday works, Friday doesn't."
     assert "Thursday" not in str(out), "the voice is not handed the text to read out"
+    assert asked["card"] == ["Thursday works, Friday doesn't.\n\n"], "what was written, on the card"
     assert "write for me: 31 chars into EditControl 'Message'" in caplog.text
+
+
+def test_a_command_is_handed_back_and_nothing_typed(monkeypatch, caplog):
+    mgr, asked = _manager(BOX, monkeypatch, kind="command")
+    with caplog.at_level(logging.INFO, logger="tora.manager"):
+        out = asyncio.run(mgr._tool_write_for_me({"request": "send an email to sam saying I'll be late"}))
+    assert out["ok"] is False and "Nothing was typed" in out["result"]
+    assert "desktop_action" in out["result"] and "delegate_task" in out["result"], "Tora's actions, which ask first"
+    assert "put" not in asked and asked["card"] == []
+    assert "a command, not dictation" in caplog.text
 
 
 def test_with_no_box_it_says_click_into_one(monkeypatch):
@@ -217,5 +252,9 @@ def test_the_live_model_knows_the_tool():
     decl = next(d for d in gemini_realtime.tool_declarations()[0]["functionDeclarations"]
                 if d["name"] == "write_for_me")
     assert decl["parameters"]["required"] == ["request"]
-    assert "write_for_me" in config._REALTIME_RULES
+    rules = " ".join(config._REALTIME_RULES.split())
+    assert "write_for_me" in rules and "WRITING OR DOING - decide first, and never mix them" in rules
+    assert "\"Write an email saying I'll be late\" is dictation" in rules
+    assert "Never run an action on a guess" in rules
+    assert "Never for a command" in decl["description"]
     assert "write_for_me" in cm.CompanionManager._tool_handlers(cm.CompanionManager.__new__(cm.CompanionManager))

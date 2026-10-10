@@ -1880,7 +1880,15 @@ class CompanionManager(QObject):
             return {"error": "That is a password box - Tora never types into one. Tell them so."}
         started = time.monotonic()
         picture = await self._window_picture()
-        text = await write_for_me.compose(request, box, picture)
+        written = await write_for_me.compose(request, box, picture)
+        if written.kind == "command":
+            # Never mix the two: a command is not typed into the box. The
+            # app actions and agents ask the user before anything runs.
+            _log.info("write for me: a command, not dictation - %r", written.command or request[:80])
+            return {"ok": False, "result": (
+                f"Nothing was typed: that is a command ({written.command or 'an action'}), not text "
+                "for the box. Do it with desktop_action or delegate_task - they ask the user first.")}
+        text = written.text
         if not text:
             return {"error": "The writing did not come back. Ask them to try again."}
         how = await asyncio.to_thread(write_for_me.put, text, box)
@@ -1892,6 +1900,8 @@ class CompanionManager(QObject):
                                            "clipboard: tell them to press Ctrl+V where they want it.")}
         if not how:
             return {"error": "It could not be put in the box."}
+        # What was written, on the card (with its Copy) as she says it's in.
+        self.sig_response_chunk.emit(text.strip() + "\n\n")
         return {"ok": True, "result": f"Written into the box ({len(text)} characters). Say it's in - "
                                       "never read it out."}
 
