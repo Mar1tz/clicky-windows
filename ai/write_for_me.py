@@ -225,10 +225,13 @@ def _split_head(head: str) -> list[str]:
     that skipped the verdict and went straight to the text is writing it."""
     first, _, rest = head.partition("\n")
     verdict = first.strip().strip("*`").strip()
-    if verdict.upper() == "TYPE":
+    # The verdict in capitals, sometimes with a label after it ("TYPE:
+    # WhatsApp message", seen live) - never the text's own "Type the report".
+    if re.fullmatch(r"TYPE\b(\s*[:\-–].*)?", verdict):
         return ["TYPE"] + ([rest.lstrip("\n")] if rest.strip() else [])
-    if verdict.upper().startswith("DO"):
-        return ["DO: " + verdict[2:].lstrip(" :-").strip()]
+    done = re.fullmatch(r"DO\b\s*[:\-–]?\s*(.*)", verdict)
+    if done:
+        return ["DO: " + done.group(1).strip()]
     return ["TYPE", head]
 
 

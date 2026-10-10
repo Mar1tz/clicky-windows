@@ -74,6 +74,17 @@ def test_a_writer_that_skips_the_verdict_is_writing(monkeypatch):
     assert _items("a note") == ["TYPE", "Hello Sam,\nsee you then."]
 
 
+def test_a_labelled_verdict_is_never_typed(monkeypatch):
+    """Seen live on 10 Oct: "TYPE: WhatsApp message" on the first line."""
+    _stream(monkeypatch, "TYPE: WhatsApp message\nThursday works for me.")
+    assert _items("a note") == ["TYPE", "Thursday works for me."]
+
+
+def test_text_that_starts_with_the_word_type_is_typed_whole(monkeypatch):
+    _stream(monkeypatch, "Type the report by Friday, please.")
+    assert _items("a note") == ["TYPE", "Type the report by Friday, please."]
+
+
 def test_the_writer_knows_write_from_send():
     system = " ".join(write_for_me._SYSTEM.split())
     assert "\"write an email saying I'll be late\" is TYPE" in system
