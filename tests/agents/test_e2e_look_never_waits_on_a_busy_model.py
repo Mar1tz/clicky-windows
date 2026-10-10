@@ -91,3 +91,17 @@ def test_a_slow_answer_still_counts_but_cools_its_model(race):
 def test_the_real_settings():
     assert gemini_vision.HEDGE_AFTER_S == 2.5 and gemini_vision.FAST_BUDGET_S == 15.0
     assert Models.VISION_FAST_BACKUP and Models.VISION_FAST_BACKUP != Models.VISION_FAST
+
+
+def test_a_deep_look_gives_up_at_its_limit_however_google_stalls(monkeypatch):
+    """10 Oct: a deep look hung 19 s on a 12 s limit - the HTTP timeout
+    counts a silence, not the whole call - before the fast model answered."""
+    from ai import gemini
+    monkeypatch.setattr(gemini_vision, "_DEEP_TIMEOUT_S", 0.2)
+
+    async def stalls(*_a, **_kw):
+        await asyncio.sleep(5)
+    monkeypatch.setattr(gemini, "generate_json", stalls)
+    t = time.monotonic()
+    out = asyncio.run(gemini_vision._ask("what's my best move?", "img", deep=True, context="", timeout=90))
+    assert out is None and time.monotonic() - t < 1.0

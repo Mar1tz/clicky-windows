@@ -460,8 +460,12 @@ async def _ask(question: str, screenshot_b64: str, *, deep: bool, context: str, 
     else:
         schema = _SCHEMA if deep else _FAST_SCHEMA
     system = _SYSTEM + (_OBSERVATIONS_RULE if deep else "") + (_CHESS_RULE if game else "")
+    limit = min(timeout, _DEEP_TIMEOUT_S) if deep else timeout
     try:
-        data = await gemini.generate_json(
+        # The whole call, not each read: on 10 Oct a deep look hung 19 s on
+        # a 12 s timeout - the HTTP timeout counts a silence, and Google was
+        # slow to start answering - and a busy retry adds its wait on top.
+        data = await asyncio.wait_for(gemini.generate_json(
             model, contents, schema,
             system=system,
             max_tokens=4096,
@@ -469,15 +473,15 @@ async def _ask(question: str, screenshot_b64: str, *, deep: bool, context: str, 
             # the deep look too, so it always has room left to answer (SP-04).
             think=_DEEP_THINK if deep else 0,
             media_resolution=RESOLUTION or (None if deep else _FAST_RESOLUTION),
-            timeout=min(timeout, _DEEP_TIMEOUT_S) if deep else timeout,
+            timeout=limit,
             usage=usage,
             busy_retries=busy_retries,
-        )
+        ), limit if deep else None)
     except asyncio.CancelledError:
         raise                              # the race was won by the other model
     except Exception as e:
         _log.warning("%s look failed on %s after %.1fs: %s", "deep" if deep else "fast", model,
-                     time.monotonic() - started, str(e)[:160] or type(e).__name__)
+                     time.monotonic() - started, str(e)[:160] or type(e).__name__ or "timed out")
         return None
     # Every call timed: on 10 Oct a look took 85 s and nothing in the log
     # said where (the HTTP library's request lines are off since FS-10).
