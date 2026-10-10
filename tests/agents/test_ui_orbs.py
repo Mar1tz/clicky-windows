@@ -1,6 +1,7 @@
-"""The top-right agent cards (agents/ui/orbs.py): lifecycle, colour, what
-each says, the click, and the animation timer - which must not run when
-nothing moves, and must keep running until a finished card has gone."""
+"""The top-right agent orbs (agents/ui/orbs.py): lifecycle, colour, what the
+hover label says, the icons, the click, and the animation timer - which must
+not run when nothing moves, and must keep running until a finished orb has
+gone."""
 from __future__ import annotations
 
 import os
@@ -16,7 +17,7 @@ from PyQt6.QtWidgets import QApplication  # noqa: E402
 
 from agents.bootstrap import build_agent_manager  # noqa: E402
 from agents.core import AgentSpec, AgentState, AgentStatus, TaskStatus  # noqa: E402
-from agents.ui.orbs import CARD_H, GAP, ORB, WIDTH, AgentOrbs, Orb, progress_colour  # noqa: E402
+from agents.ui.orbs import GAP, ORB, WIDTH, AgentOrbs, Orb, kind_of, progress_colour  # noqa: E402
 
 REQUEST = "Create a new folder called MyApp and build the foundation of a React application inside it."
 
@@ -73,8 +74,8 @@ def test_orbs_appear_stack_and_vanish(qapp):
     orbs.on_agent_changed(b)
     assert [o.name for o in orbs.orbs] == ["A", "B"]
     assert orbs.isVisible()
-    assert orbs.height() > CARD_H * 2 + GAP                     # stacked downward
-    assert orbs._centre(1).y() - orbs._centre(0).y() == CARD_H + GAP
+    assert orbs.height() > ORB * 2 + GAP                        # stacked downward
+    assert orbs._centre(1).y() - orbs._centre(0).y() == ORB + GAP
 
     a.status = AgentStatus.IDLE
     a.progress = 1.0
@@ -182,7 +183,7 @@ def test_a_finished_card_leaves_by_itself(qapp, monkeypatch):
     orbs.on_agent_changed(s)
     s.status, s.progress = AgentStatus.IDLE, 1.0
     orbs.on_agent_changed(s)
-    for _ in range(200):                      # the ring fills; nothing else moves
+    for _ in range(100):                      # 1.6 s: the ring fills, the tick draws; nothing else moves
         clock[0] += 0.016
         orbs._tick()
     assert orbs.orbs and orbs._timer.isActive(), "still holding - and still ticking"
@@ -235,3 +236,27 @@ def test_a_click_opens_the_apps_agents_page_on_that_job():
     assert "agents/job/" in inspect.getsource(app_window.ToraApp.show_page)
     main = (Path(__file__).resolve().parents[2] / "main.py").read_text(encoding="utf-8")
     assert 'on_open=lambda _agent, task: tray.on_open_app_page.emit(' in main
+
+
+def test_small_again_and_each_wears_its_kind():
+    """10 Oct: "I want the agents to still be small circles" - the cards took
+    too much of the screen."""
+    assert WIDTH <= 100 and ORB <= 44
+    assert kind_of("Application Builder") == "code" and kind_of("Research Agent") == "research"
+    assert kind_of("File Agent") == "file" and kind_of("Terminal Agent") == "terminal"
+    assert kind_of("Project Lead") == "spark"
+
+
+def test_the_hover_label_never_catches_the_mouse(qapp):
+    from PyQt6.QtCore import Qt
+    orbs = AgentOrbs(None)
+    orbs.on_agent_changed(st(status=AgentStatus.RUNNING, progress=0.4, current_task_title="Build my site"))
+    orbs.orbs[0].hovered = True
+    settle(orbs, 30)
+    lab = orbs._label
+    assert lab is not None and lab.isVisible()
+    assert lab.testAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+    orbs.orbs[0].hovered = False
+    settle(orbs, 40)
+    assert not lab.isVisible()
+    orbs.close()
