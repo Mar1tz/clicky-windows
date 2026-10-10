@@ -54,6 +54,7 @@ class Mail:
     text: str = ""          # the page's text: the thread, its senders, the subject
     me: str = ""            # the user's own address, when the window says it
     app: str = ""
+    draft: str = ""         # what a reply already open held (a signature): the writer leaves the sign-off
 
 
 class MailApp:
@@ -109,9 +110,11 @@ class GmailWeb(MailApp):
                 raise MailError("no window in front")
             me = _EMAIL_RE.search(win.Name or "")
             text = uia_page.page_text(win)
+            open_body = self._last(win, self.BODY)
+            draft = uia_page.value(open_body) if open_body is not None else ""
         if not text:
             raise MailError("I can't read this email's text - open it in Gmail and ask again.")
-        return Mail(text, me.group(0) if me else "", self.name)
+        return Mail(text, me.group(0) if me else "", self.name, draft)
 
     def _last(self, win, name: str):
         shown = [c for c in uia_page.find_all(win, name=name) if uia_page.shown(c)]
@@ -137,13 +140,25 @@ class GmailWeb(MailApp):
             subject_box = self._last(win, self.SUBJECT)       # a pop-out reply shows one; inline does not
             write_for_me.keys_let_go(keyboard)
             subject = self.subject_of(title)
-            if subject_box is not None and subject and not uia_page.value(subject_box).strip():
-                uia_page.focus(subject_box)
-                keyboard.type(subject if re.match(r"re:", subject, re.IGNORECASE) else "Re: " + subject)
+            if subject_box is not None and subject and _empty_subject(uia_page.value(subject_box)):
+                wanted = subject if re.match(r"re:", subject, re.IGNORECASE) else "Re: " + subject
+                # Set, not typed: on 10 Oct a typed subject was cut off at "Re:"
+                # and its rest ran on into the body when the focus moved on.
+                if not uia_page.set_value(subject_box, wanted):
+                    uia_page.focus(subject_box)
+                    if uia_page.value(subject_box).strip():
+                        keyboard.select_all()                 # its lone "Re:", replaced whole
+                    keyboard.type(wanted)
+                    uia_page.wait(lambda: True if uia_page.value(subject_box).strip() == wanted else None, 2.0)
                 done.append("subject")
             uia_page.focus(body)
             keyboard.to_start()                               # above the quoted original and the signature
         return draft, done
+
+
+def _empty_subject(text: str) -> bool:
+    """No subject yet - or only a "Re:" with nothing after it."""
+    return (text or "").strip().lower() in ("", "re:", "re")
 
 
 APPS: list[MailApp] = [GmailWeb()]

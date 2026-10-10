@@ -15,23 +15,31 @@ from __future__ import annotations
 
 import contextlib
 import ctypes
+import threading
 import time
 from typing import Callable, Optional
 
 MAX_TEXT = 30000           # characters of a page: a long thread, not a whole mailbox
 
 
+_ready = threading.local()
+
+
 @contextlib.contextmanager
 def in_thread():
     """UI Automation made ready on this thread - a worker thread (asyncio's
-    to_thread) has no COM until it is asked for."""
-    try:
-        import uiautomation as auto
-        ready = auto.UIAutomationInitializerInThread()
-    except Exception:  # noqa: BLE001 - no UI Automation here (tests): nothing to ready
-        ready = contextlib.nullcontext()
-    with ready:
-        yield
+    to_thread) has no COM until it is asked for. Readied once per thread and
+    left ready: on 10 Oct it was torn down after each use, the controls made
+    inside were released into the dead apartment later, and the app crashed
+    a minute after an email reply."""
+    if not getattr(_ready, "done", False):
+        try:
+            import uiautomation as auto
+            auto.InitializeUIAutomationInCurrentThread()
+        except Exception:  # noqa: BLE001 - no UI Automation here (tests): nothing to ready
+            pass
+        _ready.done = True
+    yield
 
 
 def _ui():
@@ -97,9 +105,29 @@ def shown(control) -> bool:
         return True
 
 
-def focus(control) -> None:
+def set_value(control, text: str) -> bool:
+    """A box's text set by Windows - no keystrokes, so none can land in the
+    next box. True when the box then says it holds `text`."""
+    try:
+        control.GetValuePattern().SetValue(text)
+    except Exception:  # noqa: BLE001 - the app will not take it this way
+        return False
+    return value(control).strip() == text.strip()
+
+
+def has_focus(control) -> bool:
+    try:
+        return bool(control.HasKeyboardFocus)
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def focus(control, seconds: float = 1.0) -> None:
+    """The keyboard focus on `control` - waited for. Keystrokes go to where
+    the focus IS when they arrive, not where it was asked to be: on 10 Oct a
+    subject typed into Gmail ran on into the body when the focus moved."""
     control.SetFocus()
-    time.sleep(0.05)
+    wait(lambda: True if has_focus(control) else None, seconds)
 
 
 def invoke(control) -> None:

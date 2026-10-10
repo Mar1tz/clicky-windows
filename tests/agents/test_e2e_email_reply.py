@@ -103,8 +103,10 @@ def test_a_failed_call_types_nothing(monkeypatch):
 class Page:
     """Gmail's page as UI Automation shows it, to the degree open_reply() looks."""
 
-    def __init__(self, *, reply_open=False, subject_field=False, subject="", reply_all_button=True, text=THREAD):
-        self.invoked, self.focused = [], []
+    def __init__(self, *, reply_open=False, subject_field=False, subject="", reply_all_button=True, text=THREAD,
+                 settable=True):
+        self.invoked, self.focused, self.timeline = [], [], []
+        self.settable = settable
         self.body = SimpleNamespace(Name="Message Body", value="")
         self.subject = SimpleNamespace(Name="Subject", value=subject)
         self.reply_open, self.subject_field, self.text = reply_open, subject_field, text
@@ -126,6 +128,17 @@ class Page:
         if control.Name in ("Reply", "Reply all"):
             self.reply_open = True
 
+    def set_value(self, control, text):
+        if not self.settable:
+            return False
+        control.value = text
+        self.timeline.append(("set", control.Name, text))
+        return True
+
+    def focus(self, control):
+        self.focused.append(control.Name)
+        self.timeline.append(("focus", control.Name))
+
 
 class Keys:
     def __init__(self):
@@ -136,6 +149,9 @@ class Keys:
 
     def to_start(self):
         self.done.append("ctrl+home")
+
+    def select_all(self):
+        self.done.append("ctrl+a")
 
     def type(self, text):
         self.done.append(("typed", text))
@@ -150,7 +166,8 @@ def page(monkeypatch):
         monkeypatch.setattr(uia_page, "window", lambda: SimpleNamespace(Name=TITLE))
         monkeypatch.setattr(uia_page, "find_all", p.find_all)
         monkeypatch.setattr(uia_page, "invoke", p.invoke)
-        monkeypatch.setattr(uia_page, "focus", lambda c: p.focused.append(c.Name))
+        monkeypatch.setattr(uia_page, "focus", p.focus)
+        monkeypatch.setattr(uia_page, "set_value", p.set_value)
         monkeypatch.setattr(uia_page, "value", lambda c: getattr(c, "value", ""))
         monkeypatch.setattr(uia_page, "shown", lambda c: True)
         monkeypatch.setattr(uia_page, "wait", lambda found, seconds: found())
@@ -175,13 +192,35 @@ def test_only_the_sender_gets_plain_reply(page):
     assert p.invoked == ["Reply"]
 
 
-def test_an_open_reply_gets_its_empty_subject_from_the_title(page):
+def test_an_open_reply_gets_its_empty_subject_from_the_title_set_not_typed(page):
+    """10 Oct: a typed subject was cut off at "Re:" and its rest ran on into
+    the body when the focus moved. Now it is set - no keystrokes at all."""
     p = page(reply_open=True, subject_field=True, subject="")
     keys = Keys()
     _draft, done = GmailWeb().open_reply(True, keys)
     assert p.invoked == [], "a reply was open: nothing pressed"
-    assert ("typed", "Re: Sunflex Ops – additions made along the way") in keys.done
+    assert p.subject.value == "Re: Sunflex Ops – additions made along the way"
+    assert not any(isinstance(d, tuple) for d in keys.done), "not one key typed for the subject"
+    assert p.timeline.index(("set", "Subject", p.subject.value)) < p.timeline.index(("focus", "Message Body"))
     assert done == ["subject"]
+
+
+def test_a_lone_re_is_an_empty_subject(page):
+    p = page(reply_open=True, subject_field=True, subject="Re:")
+    GmailWeb().open_reply(True, Keys())
+    assert p.subject.value == "Re: Sunflex Ops – additions made along the way"
+
+
+def test_a_subject_that_cannot_be_set_is_typed_and_waited_for_before_the_body(page, monkeypatch):
+    from ai import uia_page
+    p = page(reply_open=True, subject_field=True, subject="Re:", settable=False)
+    waited = []
+    monkeypatch.setattr(uia_page, "wait", lambda found, seconds: waited.append(seconds) or found())
+    keys = Keys()
+    GmailWeb().open_reply(True, keys)
+    assert keys.done[:2] == ["ctrl+a", ("typed", "Re: Sunflex Ops – additions made along the way")]
+    assert waited, "the typed subject is waited for before the focus moves"
+    assert p.focused == ["Subject", "Message Body"] and keys.done[-1] == "ctrl+home"
 
 
 def test_a_subject_already_written_is_kept(page):
@@ -207,7 +246,13 @@ def test_a_page_with_no_text_is_said_at_once_never_photographed(page):
 def test_the_page_is_read_with_the_users_address(page):
     page()
     mail = GmailWeb().read()
-    assert mail.text == THREAD and mail.me == ME
+    assert mail.text == THREAD and mail.me == ME and mail.draft == ""
+
+
+def test_a_reply_already_open_is_read_with_its_signature(page):
+    p = page(reply_open=True)
+    p.body.value = "-- \nTorben"
+    assert GmailWeb().read().draft == "-- \nTorben"
 
 
 # -- the voice tool -----------------------------------------------------------------------------------------------
@@ -281,6 +326,31 @@ def test_a_signature_in_the_box_gets_a_blank_line_above_it(monkeypatch):
     mgr, _card, keyboard, _sent = _manager(monkeypatch, FakeGmail(draft="-- \nTorben"))
     asyncio.run(mgr._tool_reply_to_email({"request": "reply"}))
     assert "".join(keyboard.done).endswith("Agentora\n\n")
+
+
+def test_the_writing_starts_while_gmails_reply_opens(monkeypatch):
+    import threading
+    import time as _time
+
+    class SlowGmail(FakeGmail):
+        def open_reply(self, reply_all, keyboard):
+            _time.sleep(0.3)                           # Gmail opening its reply box
+            self.opened_at = _time.monotonic()
+            return super().open_reply(reply_all, keyboard)
+    app = SlowGmail()
+    mgr, _card, keyboard, sent = _manager(monkeypatch, app)
+    asked_at = []
+    real = email_reply.stream_reply
+
+    async def timed(request, mail, draft=""):
+        asked_at.append(_time.monotonic())
+        async for p in real(request, mail, draft):
+            yield p
+    monkeypatch.setattr(email_reply, "stream_reply", timed)
+    out = asyncio.run(mgr._tool_reply_to_email({"request": "reply"}))
+    assert out["ok"] and asked_at and asked_at[0] < app.opened_at, "written while the reply box opened"
+    assert "".join(keyboard.done).startswith("Hi John,")
+    assert threading.active_count() >= 1
 
 
 def test_just_him_is_plain_reply(monkeypatch):

@@ -48,6 +48,24 @@ first version waited about 5 s for a reply written whole. Now
    reply: Gmail, read the page (N chars) and opened reply all in N s, first
    words at N s, N chars - typed, all in N s`.
 
+## Fixed after the owner's first try (10 Oct, 21:32)
+
+* **The subject.** It was typed: the keystrokes were still arriving when
+  the focus moved to the body, so the subject box showed only "Re:" and
+  the rest ("Sunflex Ops – additions made along the way") landed at the
+  end of the reply. Now the subject is **set** through Windows'
+  ValuePattern, with no keystrokes. If an app won't take that, it is typed
+  and the box is waited on until it says so. A lone "Re:" counts as empty.
+  Every focus change now waits until the box really has the keyboard
+  focus (`uia_page.focus`).
+* **Speed.** The first words came at 2.4 s. Now the writing starts the
+  moment the page is read, while Gmail's reply box is still opening
+  (`_prefetched` in `companion_manager`).
+* **A crash a minute after a reply.** UI Automation's COM was torn down
+  after each use on a worker thread, and the controls made there were
+  released into it later. It is now readied once per thread and left
+  ready (`uia_page.in_thread`).
+
 ## Checked live (10 Oct, on the owner's Gmail in Opera, read-only)
 
 * **Labels:** all found by name. `Reply` (button and link), `Forward`,

@@ -284,6 +284,27 @@ def _speakable(text: str) -> str:
     return t
 
 
+def _prefetched(gen):
+    """(pieces, task): `gen` read ahead into a queue from now on, so a
+    stream starts while something else gets ready - an email reply is
+    written while Gmail opens its reply box. Cancel the task to stop it."""
+    queue: asyncio.Queue = asyncio.Queue()
+
+    async def pump():
+        try:
+            async for piece in gen:
+                await queue.put(piece)
+        finally:
+            queue.put_nowait(None)
+
+    task = asyncio.ensure_future(pump())
+
+    async def pieces():
+        while (piece := await queue.get()) is not None:
+            yield piece
+    return pieces(), task
+
+
 def _one_line(text: str, limit: int = 240) -> str:
     """What a screen look hands the voice to say: its first sentence (and a
     second when the first is only a few words), plain, never a list - see
@@ -1874,21 +1895,29 @@ class CompanionManager(QObject):
         started = time.monotonic()
         self._activity("reading_email")
         keyboard = write_for_me.Keyboard()
+        # Three things at once: the page is read (~0.3 s) while Gmail's reply
+        # opens (~0.9 s), and the writing starts the moment the page is read
+        # - its first words wait for the reply box, not the other way round.
+        opening = asyncio.ensure_future(
+            asyncio.to_thread(app.open_reply, email_reply.reply_all_wanted(request), keyboard))
+        pump = None
         try:
-            # The page is read while Gmail's reply opens: both are ready at once.
-            mail, (draft, done) = await asyncio.gather(
-                asyncio.to_thread(app.read),
-                asyncio.to_thread(app.open_reply, email_reply.reply_all_wanted(request), keyboard))
-        except email_reply.MailError as e:
-            return {"error": f"{e}"}
+            mail = await asyncio.to_thread(app.read)
+            pieces, pump = _prefetched(email_reply.stream_reply(request, mail, mail.draft))
+            draft, done = await opening
         except Exception as e:  # noqa: BLE001 - say so, never half-guess an email
+            if pump is not None:
+                pump.cancel()
+            if not opening.done():
+                opening.add_done_callback(lambda f: f.exception())     # let it finish; nothing to type into
+            if isinstance(e, email_reply.MailError):
+                return {"error": f"{e}"}
             _log.info("email reply: could not read it or open the reply (%s)", e)
             return {"error": "The email could not be read, or its reply could not be opened. Ask them to try again."}
         ready_s = time.monotonic() - started
         self._activity("writing")
         typist = write_for_me.Typist(keyboard)
-        how, first = await self._type_as_written(email_reply.stream_reply(request, mail, draft), typist,
-                                                 tail="\n\n" if draft.strip() else "")
+        how, first = await self._type_as_written(pieces, typist, tail="\n\n" if draft.strip() else "")
         # Nothing of the email is kept: its length and what was done, no more.
         _log.info("email reply: %s, read the page (%d chars) and opened %s in %.1fs, first words at %s, "
                   "%d chars - %s, all in %.1fs", app.name, len(mail.text), ", ".join(done) or "the open reply",

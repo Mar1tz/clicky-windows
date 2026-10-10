@@ -291,6 +291,9 @@ class Keyboard:
     def to_start(self) -> None:
         self._ctrl(0x24)                                                 # Ctrl+Home: the top of the box
 
+    def select_all(self) -> None:
+        self._ctrl(0x41)                                                 # Ctrl+A: in a one-line box, its text
+
     def _ctrl(self, vk_key: int) -> None:
         user32 = ctypes.windll.user32
         for vk, up in ((0x11, 0), (vk_key, 0), (vk_key, 2), (0x11, 2)):  # ctrl down, key down, key up, ctrl up
