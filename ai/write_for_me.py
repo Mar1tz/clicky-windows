@@ -213,8 +213,14 @@ class Keyboard:
         return any(user32.GetAsyncKeyState(vk) & 0x8000 for vk in (0x10, 0x11, 0x12, 0x5B, 0x5C))
 
     def paste(self) -> None:
+        self._ctrl(0x56)                                                 # Ctrl+V
+
+    def to_start(self) -> None:
+        self._ctrl(0x24)                                                 # Ctrl+Home: the top of the box
+
+    def _ctrl(self, vk_key: int) -> None:
         user32 = ctypes.windll.user32
-        for vk, up in ((0x11, 0), (0x56, 0), (0x56, 2), (0x11, 2)):   # ctrl down, v down, v up, ctrl up
+        for vk, up in ((0x11, 0), (vk_key, 0), (vk_key, 2), (0x11, 2)):  # ctrl down, key down, key up, ctrl up
             user32.keybd_event(vk, 0, up, 0)
             time.sleep(0.01)
 
@@ -353,20 +359,20 @@ class Clipboard:
 PASTE_SETTLE_S = 0.4       # the app reads the clipboard after Ctrl+V arrives, not at once
 
 
-def put(text: str, box: Box, *, keyboard: Optional[Keyboard] = None, clipboard=None,
-        now_focused=focused_box) -> str:
-    """Put `text` into `box`. Returns how: "pasted", "typed", or "clipboard"
-    (the box lost the focus - the text waits on the clipboard)."""
-    keyboard = keyboard or Keyboard()
-    deadline = time.monotonic() + 3.0
+def keys_let_go(keyboard: Keyboard, seconds: float = 3.0) -> None:
+    """Wait for the talk shortcut to be let go: Ctrl+V with Win still held
+    is Win+Ctrl+V."""
+    deadline = time.monotonic() + seconds
     while keyboard.modifiers_down() and time.monotonic() < deadline:
-        time.sleep(0.05)                          # the talk shortcut, still held: Ctrl+V would be Win+Ctrl+V
+        time.sleep(0.05)
+
+
+def paste(text: str, *, keyboard: Optional[Keyboard] = None, clipboard=None) -> str:
+    """`text` into whatever has the focus now: "pasted" (the clipboard put
+    back after), or "typed" when the clipboard cannot be had."""
+    keyboard = keyboard or Keyboard()
     if clipboard is None and sys.platform == "win32":
         clipboard = Clipboard()
-    if not box.same(now_focused()):
-        if clipboard is not None and clipboard.set_text(text):
-            return "clipboard"
-        return ""
     saved = clipboard.save() if clipboard is not None else None
     if saved is not None and clipboard.set_text(text):
         keyboard.paste()
@@ -375,3 +381,18 @@ def put(text: str, box: Box, *, keyboard: Optional[Keyboard] = None, clipboard=N
         return "pasted"
     keyboard.type(text)
     return "typed"
+
+
+def put(text: str, box: Box, *, keyboard: Optional[Keyboard] = None, clipboard=None,
+        now_focused=focused_box) -> str:
+    """Put `text` into `box`. Returns how: "pasted", "typed", or "clipboard"
+    (the box lost the focus - the text waits on the clipboard)."""
+    keyboard = keyboard or Keyboard()
+    keys_let_go(keyboard)
+    if clipboard is None and sys.platform == "win32":
+        clipboard = Clipboard()
+    if not box.same(now_focused()):
+        if clipboard is not None and clipboard.set_text(text):
+            return "clipboard"
+        return ""
+    return paste(text, keyboard=keyboard, clipboard=clipboard)

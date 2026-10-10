@@ -40,7 +40,7 @@ from ai.gemini import Models
 from audio.ambient_listener import AmbientListener
 from screen import monitors
 from screen.capture import capture_all_screens, capture_region, grab_frame, monitor_frames
-from ai import look_board, look_chess, look_region, write_for_me
+from ai import email_reply, look_board, look_chess, look_region, write_for_me
 from ui.panel import AppState
 from tutor import (
     active_window_title, app_key,
@@ -1859,7 +1859,47 @@ class CompanionManager(QObject):
             "desktop_action":  self._tool_desktop_action,
             "manage_agents":   self._tool_manage_agents,
             "write_for_me":    self._tool_write_for_me,
+            "reply_to_email":  self._tool_reply_to_email,
         }
+
+    async def _tool_reply_to_email(self, args: dict) -> dict:
+        """The email on screen, read and answered in the app's own reply
+        form (ai/email_reply.py). Never sent: the user presses Send."""
+        request = str(args.get("request") or "").strip() or "Reply to this email."
+        app = email_reply.app_for(active_window_title())
+        if app is None:
+            return {"error": ("Replying works in Gmail in the browser for now. Ask them to open the email "
+                              "there, then ask again.")}
+        started = time.monotonic()
+        self._activity("reading_email")
+        try:
+            mail = await asyncio.to_thread(app.read)
+            draft = await asyncio.to_thread(app.draft_text)
+        except email_reply.MailError as e:
+            return {"error": f"{e}"}
+        except Exception as e:  # noqa: BLE001 - the page could not be read: the picture still can
+            _log.info("email reply: reading the page failed (%s)", e)
+            mail, draft = email_reply.Mail(app=app.name), None
+        picture = "" if mail.text else await self._window_picture()
+        if not mail.text and not picture:
+            return {"error": "The email could not be read. Ask them to open it and try again."}
+        read_s = time.monotonic() - started
+        self._activity("writing")
+        reply = await email_reply.compose_reply(request, mail, picture, draft)
+        if not reply:
+            return {"error": "The reply did not come back. Ask them to try again."}
+        try:
+            filled = await asyncio.to_thread(app.fill, reply)
+        except email_reply.MailError as e:
+            return {"error": f"{e}"}
+        # Nothing of the email is kept: its length and what was filled, no more.
+        _log.info("email reply: %s, read %s (%d chars) in %.1fs, wrote %d chars, filled %s in %.1fs",
+                  app.name, "the page" if mail.text else "a picture", len(mail.text), read_s, len(reply.body),
+                  ", ".join(filled), time.monotonic() - started)
+        self.sig_response_chunk.emit(reply.body.strip() + "\n\n")
+        to = ", ".join(reply.to) or "the sender"
+        return {"ok": True, "result": (f"The reply to {to} is in the draft ({', '.join(filled)} filled). It is NOT "
+                                       "sent: tell them to check it and press Send. Never read it out.")}
 
     # ── Writing for them (ai/write_for_me.py) ─────────────────────────────────
     #
@@ -5401,6 +5441,7 @@ class CompanionManager(QObject):
         "waiting":       "Waiting for you…",
         "searching":     "Looking that up…",
         "writing":       "Writing it for you…",
+        "reading_email": "Reading the email…",
     }
 
     def _activity(self, key: str) -> None:

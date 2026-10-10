@@ -286,6 +286,32 @@ def tool_declarations() -> list[dict]:
             },
         },
         {
+            "name": "reply_to_email",
+            "description": (
+                "REPLY to the email on screen: when they ask you to read the "
+                "email they are looking at and reply, respond or answer it - "
+                "'reply to this', 'look at this email and answer it', 'respond "
+                "saying I'll do it Monday'. Tora reads it, writes the reply and "
+                "fills in the reply form: To, Subject and the body. It NEVER "
+                "sends - they read it and press Send. Say one short line that "
+                "the draft is ready; never read it out."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "request": {
+                        "type": "string",
+                        "description": (
+                            "Everything they said about the reply, in their own "
+                            "words: what to say, any instruction ('say yes but "
+                            "ask about pricing'), who to answer."
+                        ),
+                    },
+                },
+                "required": ["request"],
+            },
+        },
+        {
             "name": "search_web",
             "description": (
                 "Search the web. ONLY when the user explicitly asks you to "
