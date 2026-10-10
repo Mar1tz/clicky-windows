@@ -157,5 +157,12 @@ def _no_model_is_resting(monkeypatch):
     try:
         from ai import gemini_vision
         monkeypatch.setattr(gemini_vision, "_cool_until", {})
+
+        # A chess board in a test picture makes the look read the game first
+        # (companion_manager._play_chess): never over the network. A test
+        # that wants a reading fakes read_game itself.
+        async def no_reading(*_a, **_kw):
+            return None
+        monkeypatch.setattr(gemini_vision, "read_game", no_reading)
     except Exception:  # noqa: BLE001
         pass

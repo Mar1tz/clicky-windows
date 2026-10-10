@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import logging
 import re
+import time
 from dataclasses import dataclass
 from typing import Optional
 
@@ -34,7 +35,7 @@ from specialists.chess import engine
 
 _log = logging.getLogger("tora.chess")
 
-ENGINE_S = 0.8        # the engine's thinking time: depth 3-4
+ENGINE_S = 1.2        # the engine's thinking time: depth 4-5
 _MIN_SEEN = 32        # squares the picture must show clearly enough to check
 _MARGIN = 6           # the board turned round must be plainly worse
 
@@ -47,6 +48,24 @@ class Played:
     say: str                     # what Tora says: "Knight from f3 to e5: it wins the pawn."
     action: Optional[object]     # the arrow (gemini_vision.Action), None when there is no move
     note: str                    # for the look's line in tora.log
+    game: Optional["Game"] = None  # the position it was played from: where the next question starts
+
+
+@dataclass
+class Game:
+    """The last position Tora was sure of. The next "and now?" starts here:
+    their move and the reply are found from the picture alone (follow)."""
+    pos: engine.Position
+    white_bottom: bool
+    last: Optional[engine.Move] = None      # the move that led to it, as the site highlights it
+
+
+@dataclass
+class Seen:
+    """A board in a screenshot, read square by square (look_board.read_squares)."""
+    board: object                 # look_board.Board
+    squares: list                 # ".", "w", "b" or "?" - row by row from the top left
+    lit: set                      # the squares a highlight tints
 
 
 def moves_of(raw) -> list[str]:
@@ -100,6 +119,14 @@ def _from_fen(placement: str, white: bool) -> Optional[engine.Position]:
     return None if pos.problems() else pos
 
 
+def _pattern(pos: engine.Position) -> list[str]:
+    """What the picture should show for `pos`, white at the bottom: ".",
+    "w" or "b" for each square from a8 to h1."""
+    b = pos.board
+    return ["." if b[r * 16 + f] == "." else "w" if b[r * 16 + f].isupper() else "b"
+            for r in range(7, -1, -1) for f in range(8)]
+
+
 def _replay(moves: list[str]) -> tuple[engine.Position, Optional[engine.Move]]:
     """The position a move list leads to, and its last move."""
     pos, last = engine.Position.start(), None
@@ -128,7 +155,7 @@ def _shown_last(last: Optional[engine.Move], wb: bool, seen: list[str], lit: set
 def _fits(pos: engine.Position, seen: list[str], max_wrong: int) -> Optional[tuple[bool, int]]:
     """(white at the bottom, squares contradicted) when the picture agrees
     with the position one way up and plainly not the other; else None."""
-    expected = ["." if p == "." else "w" if p.isupper() else "b" for p in _cells(pos.fen().split()[0])]
+    expected = _pattern(pos)
     shown = [i for i, s in enumerate(seen) if s != "?"]
     if len(shown) < _MIN_SEEN:
         return None
@@ -171,25 +198,77 @@ def _readings(chess: dict):
                         yield name, pos, None, said
 
 
-def play(look, image_b64: str) -> Optional[Played]:
-    """The engine's move for the game on screen, or None to keep the look's."""
-    chess = getattr(look, "chess", None) or {}
-    if not chess or not image_b64:
-        return None
-    rgb = look_board._decode(image_b64)
+def see(image_b64: str) -> Optional[Seen]:
+    """The chess board in the picture, read square by square - None when
+    there is plainly no board."""
+    rgb = look_board._decode(image_b64) if image_b64 else None
     board = look_board.find_board(rgb) if rgb is not None else None
     if board is None:
         return None
     lit: set = set()
-    seen = look_board.read_squares(rgb, board, lit)
-    for source, pos, last, said_bottom in _readings(chess):
+    return Seen(board, look_board.read_squares(rgb, board, lit), lit)
+
+
+def follow(game: Optional[Game], seen: Seen) -> Optional[tuple[engine.Position, Optional[engine.Move]]]:
+    """The game on screen, moved on from `game` by at most two moves - their
+    move and the reply - found with no model at all: every legal
+    continuation is checked against the picture, square by square, and the
+    last move against the site's highlight. None when no position fits, or
+    more than one does (then the game is read again)."""
+    if game is None:
+        return None
+    wb = game.white_bottom
+    shown = [i for i, s in enumerate(seen.squares) if s != "?"]
+    if len(shown) < _MIN_SEEN:
+        return None
+    want = [seen.squares[i] if wb else seen.squares[63 - i] for i in range(64)]   # a8..h1
+    order = [i if wb else 63 - i for i in shown]
+    fits: dict = {}
+
+    def check(pos: engine.Position, last: Optional[engine.Move], plies: int) -> None:
+        got = _pattern(pos)
+        if all(got[i] == want[i] for i in order) and _shown_last(last, wb, seen.squares, seen.lit):
+            fits.setdefault(pos.fen().rsplit(" ", 2)[0], (plies, -_lit_ends(last, wb, seen), pos, last))
+
+    check(game.pos, game.last, 0)
+    for m in game.pos.legal_moves():
+        once = game.pos.play(m)
+        check(once, m, 1)
+        for reply in once.legal_moves():
+            check(once.play(reply), reply, 2)
+    if not fits:
+        return None
+    # The fewest moves that explain the picture, and of those the one the
+    # highlight shows: a move from one hidden square to another (a rook
+    # under Tora's card) explains it as well as no move at all.
+    best = min(f[:2] for f in fits.values())
+    left = [f for f in fits.values() if f[:2] == best]
+    return (left[0][2], left[0][3]) if len(left) == 1 else None
+
+
+def _lit_ends(last: Optional[engine.Move], wb: bool, seen: Seen) -> int:
+    """How many ends of `last` the picture shows highlighted."""
+    if last is None:
+        return 0
+    n = 0
+    for sq in (last.frm, last.to):
+        c, r = look_board.cell(engine.name_of(sq), wb)
+        n += (r * 8 + c) in seen.lit
+    return n
+
+
+def from_reading(chess: dict, seen: Seen):
+    """(position, its last move, white at the bottom, where it came from,
+    squares unclear) from a model's reading of the game - the first reading
+    the picture bears out; None when none does."""
+    for source, pos, last, said_bottom in _readings(chess or {}):
         # A move list is the exact game: one square the picture reads wrong
         # is a misread. Where pieces stand, read by eye, must match them all.
-        fit = _fits(pos, seen, 1 if last else 0)
+        fit = _fits(pos, seen.squares, 1 if last else 0)
         if fit is None:
             continue
         wb, wrong = fit
-        if not _shown_last(last, wb, seen, lit):
+        if not _shown_last(last, wb, seen.squares, seen.lit):
             _log.info("chess: the move list ends with %s, not the move the board shows", engine.name_of(last.to))
             continue
         if source.startswith("its reading"):
@@ -197,18 +276,20 @@ def play(look, image_b64: str) -> Optional[Played]:
                 continue                          # read upside down
             if pos.white != wb:
                 continue                          # the user's side moves
-        break
-    else:
-        _log.info("chess: no reading of the game matches the board - the look's own move stands")
-        return None
-    return _played(look, pos, board, wb, source, wrong)
+        return pos, last, wb, source, wrong
+    moves = moves_of((chess or {}).get("moves"))
+    _log.info("chess: no reading matches the board - %d moves read (... %s), fen %s", len(moves),
+              " ".join(moves[-6:]), str((chess or {}).get("fen") or "-")[:80])
+    return None
 
 
-def _played(look, pos: engine.Position, board, wb: bool, source: str, wrong: int) -> Played:
+def answer(pos: engine.Position, wb: bool, seen: Seen, note: str, last: Optional[engine.Move] = None,
+           model_said: str = "") -> Played:
+    """The engine's move on `pos`, said and drawn on the board's squares."""
     from ai.gemini_vision import Action
     side = "White" if pos.white else "Black"
-    note = f"chess: the position from {source}" + (f" ({wrong} square unclear)" if wrong else "")
-    said = look_board.named_move(getattr(look, "answer", ""))
+    game = Game(pos, wb, last)
+    said = look_board.named_move(model_said)
     if all(said):
         legal = any(engine.name_of(m.frm) == said[0] and engine.name_of(m.to) == said[1]
                     for m in pos.legal_moves())
@@ -217,11 +298,50 @@ def _played(look, pos: engine.Position, board, wb: bool, source: str, wrong: int
               "white" if wb else "black", note)
     if pos.white != wb:
         return Played(f"It's {side}'s move now, not yours - ask me again after it.", None,
-                      note + f"; {side.lower()} to move")
+                      note + f"; {side.lower()} to move", game)
     best = engine.best_move(pos, seconds=ENGINE_S)
     if best is None:
         over = "checkmate" if pos.in_check() else "stalemate"
-        return Played(f"There's no move to make - it's {over}.", None, note + f"; {over}")
+        return Played(f"There's no move to make - it's {over}.", None, note + f"; {over}", game)
+    board = seen.board
     action = Action(label=best.san, box=board.box(*look_board.cell(best.frm, wb)), kind="move",
                     to_box=board.box(*look_board.cell(best.to, wb)), exact=True)
-    return Played(best.says, action, note + f"; the engine plays {best.san} (depth {best.depth})")
+    return Played(best.says, action, note + f"; the engine plays {best.san} (depth {best.depth})", game)
+
+
+def play(look, image_b64: str) -> Optional[Played]:
+    """The engine's move from a look's own reading of the game - the last
+    chance when following and reading the game did not work. None keeps
+    the look's move."""
+    chess = getattr(look, "chess", None) or {}
+    seen = see(image_b64) if chess else None
+    if seen is None:
+        return None
+    found = from_reading(chess, seen)
+    if found is None:
+        return None
+    pos, last, wb, source, wrong = found
+    note = f"chess: the position from {source}" + (f" ({wrong} square unclear)" if wrong else "")
+    return answer(pos, wb, seen, note, last, getattr(look, "answer", ""))
+
+
+MISSES_KEPT = 10
+
+
+def keep_miss(folder, image_b64: str, readings: list) -> None:
+    """A board no reading matched: the picture and what was read, kept (the
+    last few) so the next "it got it wrong" is fixed from what it saw."""
+    import base64
+    import json
+    from pathlib import Path
+    try:
+        folder = Path(folder)
+        folder.mkdir(parents=True, exist_ok=True)
+        stamp = time.strftime("%Y%m%d-%H%M%S")
+        (folder / f"{stamp}.jpg").write_bytes(base64.b64decode(image_b64))
+        (folder / f"{stamp}.json").write_text(json.dumps(readings, indent=1, default=str), encoding="utf-8")
+        for old in sorted(folder.glob("*.jpg"))[:-MISSES_KEPT]:
+            old.unlink(missing_ok=True)
+            old.with_suffix(".json").unlink(missing_ok=True)
+    except Exception as e:  # noqa: BLE001 - a diagnosis aid, never in the way
+        _log.info("chess: could not keep the miss (%s)", e)

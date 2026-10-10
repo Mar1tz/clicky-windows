@@ -305,6 +305,53 @@ async def confirm(question: str, screenshot_b64: str, *, timeout: float = 30.0):
     return bool(data.get("done"))
 
 
+_READ_GAME_SYSTEM = """You copy a chess game off the screen, exactly. You do
+not play or judge it.
+
+  • moves: the game's move list as the page prints it, every move in order
+    from move 1 - each numbered row is White's move, then Black's -
+    character for character (Nf3, exd5, O-O, Qxd2+). Never skip, merge,
+    reorder or add a move; a figurine is its letter (♘f3 is Nf3). Empty
+    when the screen shows no move list.
+  • fen: where every piece stands now, rank 8 first, whichever way up the
+    board is drawn.
+  • white_at_bottom: whether the white pieces' side is at the bottom."""
+
+_READ_GAME_SCHEMA = {**_CHESS, "required": ["moves", "fen", "white_at_bottom"],
+                     "propertyOrdering": ["moves", "fen", "white_at_bottom"]}
+
+
+async def read_game(screenshot_b64: str, *, model: Optional[str] = None,
+                    timeout: float = 10.0) -> Optional[dict]:
+    """The chess game on screen, read and nothing else (ai/look_chess.py):
+    {moves, fen, white_at_bottom, model, cost}. None if the call failed.
+
+    10 Oct: one look asked to read the game AND answer AND draw misread a
+    move list of fourteen moves, and the slow deep look took 8-15 s for a
+    move the engine then replaced anyway. Copying the list is all a chess
+    question needs from a model, and the fast one does it in 1-2 s at full
+    resolution."""
+    model = model or Models.VISION_FAST
+    usage: dict = {}
+    started = time.monotonic()
+    try:
+        data = await asyncio.wait_for(gemini.generate_json(
+            model, [{"role": "user", "parts": [gemini.image_part(screenshot_b64),
+                                               gemini.text_part("Copy the chess game on this screen.")]}],
+            _READ_GAME_SCHEMA, system=_READ_GAME_SYSTEM, max_tokens=2048, think=0,
+            timeout=timeout, usage=usage, busy_retries=False), timeout)
+    except asyncio.CancelledError:
+        raise
+    except Exception as e:  # noqa: BLE001 - the look still answers
+        _log.warning("reading the game failed on %s after %.1fs: %s", model, time.monotonic() - started,
+                     str(e)[:160] or type(e).__name__)
+        return None
+    _log.info("game read by %s in %.1fs", model, time.monotonic() - started)
+    if not isinstance(data, dict):
+        return None
+    return {**data, "model": model, "cost": cost_usd(model, usage)}
+
+
 _JUDGE_SCHEMA = {
     "type": "object",
     "properties": {

@@ -3031,15 +3031,23 @@ class CompanionManager(QObject):
             self._note_answer(path="reused", cost=0.0)
             return dict(again["result"], reused=True)
 
+        # 10 Oct: a chess move is the engine's, on the exact position -
+        # followed from the last one Tora was sure of (no model at all), or
+        # read off the screen by a fast model - before any slow look.
+        title_now = active_window_title()
+        chess = await self._play_chess(image) if gemini_vision.needs_judgement(question, title_now) else None
         # UD-01: fast first; the deep model only when the fast look is not sure.
-        look = await gemini_vision.look(question, image, context=hint, title=active_window_title())
+        look = chess[0] if chess else await gemini_vision.look(question, image, context=hint, title=title_now)
         usage = getattr(look, "usage", None) or {}
         cost = float(getattr(look, "cost", 0.0) or 0.0)
         path = getattr(look, "path", "") or ("deep" if getattr(look, "deep", False) else "fast")
         self._note_answer(path=path, cost=cost)
-        detail = "capture %d ms, %s %s, %s in / %s out / %s thinking, $%.4f" % (
-            shot_ms, path, getattr(look, "model", "") or "?", usage.get("promptTokenCount", "?"),
-            usage.get("candidatesTokenCount", "?"), usage.get("thoughtsTokenCount", 0), cost)
+        if chess:
+            detail = "capture %d ms, %s, $%.4f" % (shot_ms, chess[1], cost)
+        else:
+            detail = "capture %d ms, %s %s, %s in / %s out / %s thinking, $%.4f" % (
+                shot_ms, path, getattr(look, "model", "") or "?", usage.get("promptTokenCount", "?"),
+                usage.get("candidatesTokenCount", "?"), usage.get("thoughtsTokenCount", 0), cost)
         if usage.get("server_total_ms"):
             # FS-06: through HeyTora's server - its own share, step by step.
             detail += ", server %d ms (sign-in %d, usage %d, Google %d)" % (
@@ -3069,6 +3077,7 @@ class CompanionManager(QObject):
             look.answer = played.say
             actions = [played.action] if played.action else []
             detail += ", " + played.note
+            self._chess_game = played.game
         else:
             # 10 Oct: "knight from g1 to f3" four times running, and every
             # arrow ended on g3 - the words right, the box a file off. On a
@@ -3108,6 +3117,55 @@ class CompanionManager(QObject):
         self._last_look = {"sketch": sk, "question": _norm_question(question), "at": time.monotonic(),
                            "result": result, "tags": [a.as_tag() for a in drawn]}
         return result
+
+    # ── A chess game: the engine's move on the exact position ────────────────
+    #
+    # 10 Oct, after the engine went in (1.7.10): the first move was right,
+    # then the deep model was busy, the fast look misread a fourteen-move
+    # list, and Tora fell back on the model's own moves - four different
+    # arrows in one turn. Now the game is FOLLOWED: the position Tora was
+    # last sure of, moved on by their move and the reply, found from the
+    # picture alone in ~20 ms. Only a new game, or one that ran on further,
+    # is READ - by a fast model that only copies the move list, at full
+    # resolution - and every reading must match the board square by square.
+
+    _chess_game: Optional["look_chess.Game"] = None
+    CHESS_MISSES = "chess_misses"
+
+    async def _play_chess(self, image: str):
+        """(a Look holding the engine's answer, its line for the log) - or
+        None when there is no board or it could not be read, and the look
+        answers instead."""
+        seen = await asyncio.to_thread(look_chess.see, image)
+        if seen is None:
+            return None
+        found = await asyncio.to_thread(look_chess.follow, self._chess_game, seen)
+        cost, model, readings = 0.0, "", []
+        if found is not None:
+            (pos, last), wb = found, self._chess_game.white_bottom
+            note = "chess: followed from the last position, no model"
+        else:
+            for model in gemini_vision.fast_models():
+                reading = await gemini_vision.read_game(image, model=model)
+                if reading is None:
+                    continue
+                cost += float(reading.get("cost") or 0.0)
+                readings.append(reading)
+                got = await asyncio.to_thread(look_chess.from_reading, reading, seen)
+                if got is not None:
+                    pos, last, wb, source, wrong = got
+                    note = f"chess: the position from {source}, read by {model}" + (
+                        f" ({wrong} square unclear)" if wrong else "")
+                    break
+            else:
+                from config import data_dir
+                await asyncio.to_thread(look_chess.keep_miss, data_dir() / self.CHESS_MISSES, image, readings)
+                return None
+        played = await asyncio.to_thread(look_chess.answer, pos, wb, seen, note, last)
+        self._chess_game = played.game
+        look = gemini_vision.Look(answer=played.say, actions=[played.action] if played.action else [],
+                                  model=model, path="chess", cost=cost)
+        return look, played.note
 
     # ── UD-05: never pay twice for the same screen ──────────────────────────
     _last_look: Optional[dict] = None

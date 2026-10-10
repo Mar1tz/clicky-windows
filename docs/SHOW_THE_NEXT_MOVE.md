@@ -360,6 +360,22 @@ priority.
   out keeps the look's own move. It adds the engine's 0.8 s to a game
   look, plus ~100-250 output tokens for the reading (≈ $0.002-0.004 on
   the deep model). Tests: `tests/agents/test_e2e_chess_move_is_legal.py`.
+* **Followed, then read (10 Oct, after 1.7.10).** On the user's PC the
+  first answer was right. Then the deep model was busy, the fast look
+  misread a longer move list, and Tora fell back on the model's own
+  moves: four different arrows in one turn. Now a chess question goes:
+  1. **Follow** the position Tora was last sure of: every legal move and
+     reply is checked against the picture, with no model, in ~20 ms. The
+     fewest moves win, and the one the site highlights.
+  2. **Read** (a new game, or one further on): `gemini_vision.read_game`
+     only copies the move list, on the fast model at full resolution,
+     then on its backup.
+  3. **The look** as before, as the last resort. A board nothing reads is
+     kept in `chess_misses/` in the data folder (the last 10) for
+     diagnosis.
+
+  On the user's three screenshots, live: all three right, 3.1-4.6 s
+  each including a 1.2 s engine (was 8-15 s), $0.0003 each.
 
 Without them, a chess question takes the general path: UD-01's look,
 escalating to deep when the fast model is not sure. That is the right

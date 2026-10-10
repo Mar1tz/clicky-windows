@@ -308,7 +308,7 @@ def place_moves(actions: list, image_b64: str, answer: str = "") -> str:
     The boxes are in the picture's 0-1000, as the look returned them. The
     spoken answer names the move when there is one move; each move's label
     can name its own."""
-    moves = [a for a in actions if getattr(a, "is_move", False)]
+    moves = [a for a in actions if getattr(a, "is_move", False) and not getattr(a, "exact", False)]
     if not moves or not image_b64:
         return ""
     rgb = _decode(image_b64)

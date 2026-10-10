@@ -227,3 +227,139 @@ def test_a_game_look_asks_for_the_reading_and_others_do_not(monkeypatch):
     sent.clear()
     asyncio.run(gemini_vision.look("where do I sign in?", "img"))
     assert all("chess" not in schema["properties"] and "an engine plays" not in system for schema, system in sent)
+
+
+# -- following the game: no model between moves ----------------------------------------------------------------
+#
+# 10 Oct, on 1.7.10: the first answer was right, then the deep model was busy,
+# the fast look misread the longer move list and Tora fell back on the model's
+# own moves. The game is now followed from the last position Tora was sure of.
+
+def _game(moves):
+    pos, last = look_chess._replay(look_chess.moves_of(moves))
+    return look_chess.Game(pos, True, last)
+
+
+def _now(moves, lit):
+    pos = look_chess._replay(look_chess.moves_of(moves))[0]
+    return look_chess.see(_picture(pos.fen().split()[0], lit=lit))
+
+
+def test_their_move_and_the_reply_are_followed_from_the_picture():
+    later = MOVES_10_OCT + ["4. Nxe4", "Qg5"]
+    found = look_chess.follow(_game(MOVES_10_OCT), _now(later, ("d8", "g5")))
+    assert found is not None
+    assert found[0].fen() == look_chess._replay(look_chess.moves_of(later))[0].fen()
+
+
+def test_one_move_on_is_the_opponents_turn():
+    later = MOVES_10_OCT + ["4. Nxe4"]
+    pos, _last = look_chess.follow(_game(MOVES_10_OCT), _now(later, ("c3", "e4")))
+    assert not pos.white
+
+
+def test_nothing_moved_is_the_same_position():
+    pos, _last = look_chess.follow(_game(MOVES_10_OCT), _now(MOVES_10_OCT, ("d5", "e4")))
+    assert pos.fen() == _game(MOVES_10_OCT).pos.fen()
+
+
+def test_a_different_game_is_not_followed():
+    assert look_chess.follow(_game(["e4", "e5"]), _now(MOVES_10_OCT, ("d5", "e4"))) is None
+
+
+def test_no_game_yet_is_not_followed():
+    assert look_chess.follow(None, _now(MOVES_10_OCT, ("d5", "e4"))) is None
+
+
+# -- the look, for a chess question -----------------------------------------------------------------------------
+
+def _chess_manager(monkeypatch, picture, readings=(), game=None):
+    mgr = _manager(picture)
+    mgr._chess_game = game
+    asked = {"read": [], "looked": 0}
+
+    async def read_game(image, *, model=None, timeout=10.0):
+        asked["read"].append(model)
+        return readings[len(asked["read"]) - 1] if len(asked["read"]) <= len(readings) else None
+    monkeypatch.setattr(gemini_vision, "read_game", read_game)
+
+    async def look(*_a, **_kw):
+        asked["looked"] += 1
+        return _look({})
+    monkeypatch.setattr(gemini_vision, "look", look)
+    monkeypatch.setattr(cm, "active_window_title", lambda: "Play Chess Online Against the Computer - Chess.com")
+    return mgr, asked
+
+
+def _ask_move(mgr):
+    return asyncio.run(mgr._tool_look_at_screen({"question": "what's my best move?"}))
+
+
+def test_a_followed_game_asks_no_model(monkeypatch):
+    later = MOVES_10_OCT + ["4. Nxe4", "Qg5"]
+    pos = look_chess._replay(look_chess.moves_of(later))[0]
+    mgr, asked = _chess_manager(monkeypatch, _picture(pos.fen().split()[0], lit=("d8", "g5")),
+                                game=_game(MOVES_10_OCT))
+    out = _ask_move(mgr)
+    assert asked == {"read": [], "looked": 0}, "no model at all"
+    frm, to = look_board.named_move(out["say"])
+    assert _legal(later, frm, to)
+    assert mgr._chess_game.pos.fen() == pos.fen(), "and the next question starts here"
+
+
+def test_a_new_game_is_read_by_a_fast_model_not_the_slow_look(monkeypatch):
+    reading = {"moves": MOVES_10_OCT, "fen": FEN_10_OCT, "white_at_bottom": True, "cost": 0.0003}
+    mgr, asked = _chess_manager(monkeypatch, _picture(), readings=[reading])
+    out = _ask_move(mgr)
+    assert asked["looked"] == 0 and len(asked["read"]) == 1
+    frm, to = look_board.named_move(out["say"])
+    assert _legal(MOVES_10_OCT, frm, to)
+    assert mgr._chess_game is not None
+
+
+def test_a_misread_list_is_read_again_by_the_other_model(monkeypatch):
+    wrong = {"moves": MOVES_10_OCT[:-1], "fen": "", "white_at_bottom": True}
+    right = {"moves": MOVES_10_OCT, "fen": "", "white_at_bottom": True}
+    mgr, asked = _chess_manager(monkeypatch, _picture(), readings=[wrong, right])
+    out = _ask_move(mgr)
+    assert len(asked["read"]) == 2 and asked["read"][0] != asked["read"][1], "the fast model, then its backup"
+    assert asked["looked"] == 0 and _legal(MOVES_10_OCT, *look_board.named_move(out["say"]))
+
+
+def test_a_board_nothing_reads_is_kept_and_the_look_answers(monkeypatch, tmp_path):
+    import config
+    monkeypatch.setattr(config, "data_dir", lambda: tmp_path)
+    wrong = {"moves": MOVES_10_OCT[:-1], "fen": "", "white_at_bottom": True}
+    mgr, asked = _chess_manager(monkeypatch, _picture(), readings=[wrong, wrong])
+    _ask_move(mgr)
+    assert asked["looked"] == 1, "the look is the last resort"
+    kept = list((tmp_path / "chess_misses").glob("*"))
+    assert {p.suffix for p in kept} == {".jpg", ".json"}, "the picture and what was read, for diagnosis"
+
+
+def test_only_the_last_misses_are_kept(tmp_path, monkeypatch):
+    stamps = iter(f"2026101{i:02d}" for i in range(15))
+    monkeypatch.setattr(look_chess.time, "strftime", lambda _f: next(stamps))
+    for _ in range(15):
+        look_chess.keep_miss(tmp_path, _picture(board=False), [])
+    assert len(list(tmp_path.glob("*.jpg"))) == look_chess.MISSES_KEPT
+
+
+def test_no_board_means_no_reading(monkeypatch):
+    mgr, asked = _chess_manager(monkeypatch, _picture(board=False))
+    _ask_move(mgr)
+    assert asked["read"] == [] and asked["looked"] == 1
+
+
+def test_reading_the_game_is_its_own_quick_call(monkeypatch):
+    sent = {}
+
+    async def fake_generate_json(model, contents, schema, **kw):
+        sent.update(model=model, schema=schema, **kw)
+        return {"moves": ["e4"], "fen": "x", "white_at_bottom": True}
+    monkeypatch.undo()                                   # the real read_game, not the suite's stub
+    monkeypatch.setattr(gemini, "generate_json", fake_generate_json)
+    out = asyncio.run(gemini_vision.read_game("img"))
+    assert out["moves"] == ["e4"] and sent["model"] == gemini.Models.VISION_FAST
+    assert sent["think"] == 0 and sent.get("media_resolution") is None, "full resolution: small print"
+    assert "Never skip" in sent["system"] and sent["schema"]["required"] == ["moves", "fen", "white_at_bottom"]
