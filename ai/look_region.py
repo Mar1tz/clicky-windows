@@ -91,6 +91,58 @@ def pointer_hint(question: str, cursor: Optional[tuple[float, float]], frame: Fr
             "here, it or which one, they most likely mean what is under or right beside it.")
 
 
+def trace_crop(rects: list, frame: Frame) -> Optional[Frame]:
+    """The traced area, with room round it to see what it is in: the union
+    of what was traced, a third of its size again on each side (80 px at
+    least), at least 360x220, kept inside `frame`. (left, top, width,
+    height) in physical px; None when none of it is on the frame."""
+    fl, ft, fw, fh = frame
+    inside = [(max(l, fl), max(t, ft), min(r, fl + fw), min(b, ft + fh)) for l, t, r, b in rects]
+    inside = [(l, t, r, b) for l, t, r, b in inside if r > l and b > t]
+    if not inside:
+        return None
+    left, top = min(r[0] for r in inside), min(r[1] for r in inside)
+    right, bottom = max(r[2] for r in inside), max(r[3] for r in inside)
+    pad_x, pad_y = max(80.0, (right - left) / 3), max(80.0, (bottom - top) / 3)
+    left, top, right, bottom = left - pad_x, top - pad_y, right + pad_x, bottom + pad_y
+    box = [left, top, right, bottom]
+    for lo, hi, least, edge0, edge1 in ((0, 2, 360.0, fl, fl + fw), (1, 3, 220.0, ft, ft + fh)):
+        if box[hi] - box[lo] < least:
+            mid = (box[hi] + box[lo]) / 2
+            box[lo], box[hi] = mid - least / 2, mid + least / 2
+        # Near an edge it slides back onto the screen rather than lose half.
+        if box[lo] < edge0:
+            box[lo], box[hi] = edge0, box[hi] + (edge0 - box[lo])
+        if box[hi] > edge1:
+            box[lo], box[hi] = box[lo] - (box[hi] - edge1), edge1
+        box[lo] = max(edge0, box[lo])
+    left, top, right, bottom = box
+    return int(left), int(top), int(right - left), int(bottom - top)
+
+
+def trace_hint(rects: list, frame: Frame) -> str:
+    """One line for the look: where on its image the user traced while
+    asking (docs/TRACE_TO_FOCUS.md) - each area in the image's 0-1000, in
+    the order traced. It takes the place of pointer_hint: a trace says more
+    than where the mouse stopped. "" when none of it is on this image."""
+    fl, ft, fw, fh = frame
+    parts = []
+    for left, top, right, bottom in rects:
+        if right < fl or left > fl + fw or bottom < ft or top > ft + fh:
+            continue
+        x0, x1 = (int(max(0, min(1000, (v - fl) / fw * 1000))) for v in (left, right))
+        y0, y1 = (int(max(0, min(1000, (v - ft) / fh * 1000))) for v in (top, bottom))
+        parts.append(f"x {x0}-{x1}, y {y0}-{y1}")
+    if not parts:
+        return ""
+    if len(parts) == 1:
+        return (f"While asking, the user traced over this area of the image (0-1000): {parts[0]}. The question "
+                "is about what is there.")
+    listed = "; ".join(f"({i}) {p}" for i, p in enumerate(parts, 1))
+    return (f"While asking, the user traced over these areas of the image (0-1000), in this order: {listed}. "
+            "The question is about what is there; 'this' and 'that' follow that order.")
+
+
 def snap_rect(box: Rect, element: Optional[Rect], window: Optional[Rect] = None) -> Optional[Rect]:
     """The control's own rectangle when it is the thing the box was drawn
     round: it holds the box's centre, its size is within a factor of three

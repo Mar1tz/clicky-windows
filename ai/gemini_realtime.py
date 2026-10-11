@@ -215,7 +215,9 @@ def tool_declarations() -> list[dict]:
             "name": "show_me_how",
             "description": (
                 "Start a guided walkthrough of a multi-step task — 'how do I "
-                "export/install/configure/set up…'. Returns INSTANTLY: call "
+                "export/install/configure/set up…' - only when they ask HOW. "
+                "Never when they ask you to DO it ('turn this into a PDF', "
+                "'convert it', 'rename these'): that is delegate_task. Returns INSTANTLY: call "
                 "it FIRST, before saying anything, then say one short "
                 "sentence confirming you'll walk them through it. Tora then "
                 "speaks and points at each step and advances on its own as "

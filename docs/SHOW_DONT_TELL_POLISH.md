@@ -640,7 +640,19 @@ at that fragment, and the caption never shows it. SP-02 has no
 *Prove:* a unit test with two fake monitors; a pointing question with the
 mouse on the second one looks there.
 
-### SP-11 · The arrow's head is visible; the card glides — S — free
+### SP-11 · The arrow's head is visible; the card glides — S — free — **built; to be shown live**
+
+**Built:**
+* **The buddy rests off the arrowhead.** When a stroke ends, it rests
+  40 px back along the arrow's last segment (`overlay._rest_point`; half
+  the segment at most), not on its head. Other shapes are unchanged.
+* **The card slides.** A drawing that pushes it away moves it over 0.25 s
+  (`CARD_GLIDE_S`). Placing it the first time is still instant.
+* **Tested:**
+  * a drawn arrow leaves the buddy 40 px back, head in view;
+  * the card's path over five frames goes a little way, then further,
+    then arrives in 0.25 s.
+* **Waiting:** to be shown on the owner's screen before it is committed.
 
 **Why:**
 * **The cursor covers the arrowhead.** In the wave-1 demo, Tora's cursor
@@ -658,7 +670,19 @@ mouse on the second one looks there.
 *Prove:* overlay and flow-bar tests on the positions over time; shown live
 (the owner's rule).
 
-### SP-12 · The card follows what is really on screen — S — free
+### SP-12 · The card follows what is really on screen — S — free — **built; to be shown live**
+
+**Built:**
+* **The overlay says what it shows now:** `CursorOverlay.drawn_now()`
+  returns the drawings still showing and the pointing ring.
+* **The card keeps off that:** `FlowBar.watch(overlay)` asks it, wired in
+  `main.py`.
+* **The card's own notes** now only cover the 2 s before the overlay has
+  a new drawing. With nothing to ask, the old 20 s list still applies.
+* **Tested:** a walkthrough drawing kept 60 s keeps the card clear at 0,
+  30 and 59 s, and the card goes back by the pill once the overlay rubs
+  the drawing out.
+* **Waiting:** shown live together with SP-11.
 
 **Why:**
 * The card forgets a drawing after 20 s (`AVOID_FOR_S`).

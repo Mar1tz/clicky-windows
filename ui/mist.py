@@ -1,0 +1,222 @@
+"""
+The ghost trail: a soft mist behind the cursor while the shortcut is held.
+
+Asked for on 10 Oct 2026: "when I'm holding down the shortcut it can use my
+cursor to move around and it leaves a little ghost trail behind it of like
+mist" (docs/TRACE_TO_FOCUS.md, TF-02). Decided with the owner: in Tora's
+own colour; only while the shortcut is held; and when it is let go the
+trail settles into a faint haze over what was traced, until she answers -
+so they can see what she will look at.
+
+A puff is left every few pixels along the cursor's path, filled in between
+frames so a fast sweep leaves a ribbon and never dots. Each one swells a
+little, drifts upward like mist, and fades out over about a second. They
+are drawn from one soft blob rendered once per colour, scaled, so the
+overlay's 60 frames a second stay cheap; at most MAX_PUFFS live at once.
+
+Painting only and state - the overlay (ui/overlay.py) ticks it, asks where
+it is to repaint just that, and paints it under everything else.
+"""
+
+from __future__ import annotations
+
+import math
+import random
+from dataclasses import dataclass
+from typing import Optional
+
+from PyQt6.QtCore import QPointF, QRectF, Qt
+from PyQt6.QtGui import QColor, QPainter, QPixmap, QRadialGradient
+
+from ui import buddy
+
+SPACING_PX = 7.0           # a puff every this far along the path
+MAX_PER_FRAME = 24         # a fast flick: wider spacing, never a flood
+MAX_PUFFS = 160
+LIFE_S = 1.25              # a moving puff, from first light to gone
+SIZE_PX = 30.0             # its diameter when it appears
+GROW = 0.45                # and how much it swells over its life
+RISE_PX_S = 9.0            # mist drifts upward
+HAZE_EVERY_PX = 16.0       # the haze: one resting puff this far apart
+HAZE_ALPHA = 0.40
+HAZE_MAX_S = 8.0           # an answer that never comes does not leave it up
+HAZE_FADE_S = 0.6
+_BLOB_PX = 96              # the cached blob's size
+
+
+@dataclass
+class _Puff:
+    x: float
+    y: float
+    born: float
+    size: float
+    vx: float
+    vy: float
+
+
+_blobs: dict[str, QPixmap] = {}
+
+
+def _blob() -> QPixmap:
+    """The soft puff in Tora's colour, rendered once: a whiter core, her
+    colour, then nothing - mist, not paint."""
+    colour = QColor(buddy.BLUE)
+    key = colour.name()
+    if key not in _blobs:
+        pm = QPixmap(_BLOB_PX, _BLOB_PX)
+        pm.fill(Qt.GlobalColor.transparent)
+        p = QPainter(pm)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        r = _BLOB_PX / 2
+        g = QRadialGradient(QPointF(r, r), r)
+        core = QColor(buddy.BLUE_LIGHT).lighter(115)
+        core.setAlphaF(0.66)
+        mid = QColor(colour)
+        mid.setAlphaF(0.32)
+        edge = QColor(colour)
+        edge.setAlphaF(0.0)
+        g.setColorAt(0.0, core)
+        g.setColorAt(0.35, mid)
+        g.setColorAt(1.0, edge)
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(g)
+        p.drawEllipse(QRectF(0, 0, _BLOB_PX, _BLOB_PX))
+        p.end()
+        _blobs[key] = pm
+    return _blobs[key]
+
+
+class Mist:
+    """The trail and its haze. Desktop coordinates, as the overlay paints."""
+
+    def __init__(self, seed: Optional[int] = None) -> None:
+        self.puffs: list[_Puff] = []
+        self.tracing = False
+        self._last: Optional[tuple[float, float]] = None
+        self._path: list[tuple[float, float]] = []      # where the cursor went, for the haze
+        self.haze: list[tuple[float, float, float]] = []  # x, y, phase
+        self._haze_from = 0.0
+        self._haze_fade_at: Optional[float] = None
+        self._rand = random.Random(seed)
+
+    # -- driven by the overlay ---------------------------------------------------------------------------------
+
+    def start(self, now: float) -> None:
+        """The shortcut went down: the trail begins at the cursor's next move."""
+        self.tracing = True
+        self._last = None
+        self._path = []
+        self.haze = []
+        self._haze_fade_at = None
+
+    def stop(self, now: float, keep: bool) -> None:
+        """The shortcut came up. `keep`: the traced area stays as a faint
+        haze until she answers (end_haze); otherwise the trail just fades."""
+        self.tracing = False
+        self._last = None
+        if keep and self._path:
+            self.haze = [(x, y, self._rand.uniform(0, math.tau)) for x, y in _every(self._path, HAZE_EVERY_PX)]
+            self._haze_from = now
+            self._haze_fade_at = None
+        self._path = []
+
+    def end_haze(self, now: float) -> None:
+        """She is answering: the haze has done its job."""
+        if self.haze and self._haze_fade_at is None:
+            self._haze_fade_at = now
+
+    def tick(self, x: float, y: float, now: float) -> None:
+        """A frame: the cursor is at (x, y)."""
+        if self.tracing:
+            self._trail_to(x, y, now)
+        self.puffs = [p for p in self.puffs if now - p.born < LIFE_S]
+        if self.haze:
+            if self._haze_fade_at is None and now - self._haze_from > HAZE_MAX_S:
+                self._haze_fade_at = now
+            if self._haze_fade_at is not None and now - self._haze_fade_at > HAZE_FADE_S:
+                self.haze = []
+
+    def _trail_to(self, x: float, y: float, now: float) -> None:
+        if self._last is None:
+            self._last = (x, y)
+            return
+        lx, ly = self._last
+        dist = math.hypot(x - lx, y - ly)
+        if dist < SPACING_PX:
+            return
+        n = min(MAX_PER_FRAME, int(dist / SPACING_PX))
+        for i in range(1, n + 1):
+            f = i / n
+            px, py = lx + (x - lx) * f, ly + (y - ly) * f
+            # Born a touch apart along the move, so a ribbon fades from its tail.
+            self.puffs.append(_Puff(px + self._rand.uniform(-2, 2), py + self._rand.uniform(-2, 2),
+                                    now - (1 - f) * 0.016, SIZE_PX * self._rand.uniform(0.8, 1.2),
+                                    self._rand.uniform(-6, 6), -RISE_PX_S * self._rand.uniform(0.6, 1.4)))
+            self._path.append((px, py))
+        if len(self.puffs) > MAX_PUFFS:
+            del self.puffs[:len(self.puffs) - MAX_PUFFS]
+        self._last = (x, y)
+
+    # -- what the overlay asks -----------------------------------------------------------------------------------
+
+    def active(self) -> bool:
+        return bool(self.puffs or self.haze or self.tracing)
+
+    def bounds(self) -> Optional[QRectF]:
+        """Everywhere it is drawn now, with room for a puff's full size."""
+        pts = [(p.x + p.vx * LIFE_S, p.y + p.vy * LIFE_S) for p in self.puffs] + \
+              [(p.x, p.y) for p in self.puffs] + [(x, y) for x, y, _ in self.haze]
+        if not pts:
+            return None
+        pad = SIZE_PX * (1 + GROW) * 1.3
+        xs, ys = [p[0] for p in pts], [p[1] for p in pts]
+        return QRectF(min(xs) - pad, min(ys) - pad, max(xs) - min(xs) + 2 * pad, max(ys) - min(ys) + 2 * pad)
+
+    def draw(self, p: QPainter, now: float) -> None:
+        if not (self.puffs or self.haze):
+            return
+        blob = _blob()
+        p.save()
+        try:
+            if self.haze:
+                fade = 1.0
+                if self._haze_fade_at is not None:
+                    fade = max(0.0, 1.0 - (now - self._haze_fade_at) / HAZE_FADE_S)
+                settle = min(1.0, (now - self._haze_from) / 0.35)     # the trail eases into it
+                for x, y, phase in self.haze:
+                    breath = 0.85 + 0.15 * math.sin(now * 2.2 + phase)
+                    a = HAZE_ALPHA * fade * breath * (0.6 + 0.4 * settle)
+                    size = SIZE_PX * 1.25 * breath
+                    p.setOpacity(a)
+                    p.drawPixmap(QRectF(x - size / 2, y - size / 2, size, size), blob,
+                                 QRectF(0, 0, _BLOB_PX, _BLOB_PX))
+            for puff in self.puffs:
+                age = (now - puff.born) / LIFE_S
+                if age < 0 or age >= 1:
+                    continue
+                alpha = min(1.0, age / 0.08) * (1 - age) ** 1.6
+                size = puff.size * (1 + GROW * age)
+                x, y = puff.x + puff.vx * age * LIFE_S, puff.y + puff.vy * age * LIFE_S
+                p.setOpacity(alpha * 0.9)
+                p.drawPixmap(QRectF(x - size / 2, y - size / 2, size, size), blob,
+                             QRectF(0, 0, _BLOB_PX, _BLOB_PX))
+        finally:
+            p.restore()
+
+
+def _every(path: list[tuple[float, float]], spacing: float) -> list[tuple[float, float]]:
+    """Points along `path`, `spacing` px apart."""
+    if not path:
+        return []
+    out = [path[0]]
+    carried = 0.0
+    for (ax, ay), (bx, by) in zip(path, path[1:]):
+        seg = math.hypot(bx - ax, by - ay)
+        while carried + seg >= spacing and seg > 0:
+            f = (spacing - carried) / seg
+            ax, ay = ax + (bx - ax) * f, ay + (by - ay) * f
+            out.append((ax, ay))
+            seg = math.hypot(bx - ax, by - ay)
+            carried = 0.0
+        carried += seg
+    return out[:400]

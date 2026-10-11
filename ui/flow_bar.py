@@ -115,6 +115,11 @@ def parse_dock(text: str) -> tuple[str, float, str]:
 
 
 AVOID_FOR_S = 20.0             # a drawing older than this no longer pushes the card away
+# SP-12: with the overlay to ask (FlowBar.watch), a note of a drawing only
+# covers the moment before the overlay has it - it is on screen exactly as
+# long as the overlay shows it, a walkthrough's minute included.
+JUST_DRAWN_S = 2.0
+CARD_GLIDE_S = 0.25            # SP-11: off a drawing, the card slides; it never jumps
 AVOID_PAD = 24.0               # room kept around what Tora drew
 
 
@@ -144,6 +149,20 @@ def shape_bounds(shape: dict) -> Optional[QRectF]:
     except (KeyError, TypeError, ValueError, IndexError):
         return None
     return rect.adjusted(-AVOID_PAD, -AVOID_PAD, AVOID_PAD, AVOID_PAD)
+
+
+def point_bounds(x: float, y: float) -> QRectF:
+    """Where a pointed-at target sits with its ring and its name bubble."""
+    return QRectF(x - 70, y - 70, 140 + 240, 140)
+
+
+def overlay_bounds(overlay) -> list[QRectF]:
+    """What the overlay shows now (CursorOverlay.drawn_now), as rectangles."""
+    shapes, ring = overlay.drawn_now()
+    rects = [r for r in (shape_bounds(sh) for sh in shapes) if r is not None]
+    if ring is not None:
+        rects.append(point_bounds(*ring))
+    return rects
 
 
 def place_card(edge: str, pill: QRectF, geo: QRect, cw: float, ch: float,
@@ -372,6 +391,9 @@ class FlowBar(QObject):
         self._last = time.monotonic()
         self._painted: tuple = ()        # what the pill looked like when last painted
         self._avoid: list[tuple[float, QRectF]] = []   # (when, where) Tora drew - the card keeps off
+        # SP-12: what is drawn now, asked of the overlay (watch); None: the notes alone.
+        self.drawn_now: Optional[Callable[[], list[QRectF]]] = None
+        self._card_glide: Optional[tuple[QPoint, QPoint, float]] = None   # (from, to, since)
 
         self.pill = _Pill(self)
         self.pill.setToolTip(f"Hold {hotkey} to talk to Tora · drag me to any side")
@@ -496,25 +518,44 @@ class FlowBar(QObject):
         self.pill.move(self._home())
         self._place_card()
 
-    def _place_card(self) -> None:
+    def watch(self, overlay) -> None:
+        """Keep the card off what the overlay shows now (SP-12)."""
+        self.drawn_now = lambda: overlay_bounds(overlay)
+
+    def _avoiding(self, now: float) -> list[QRectF]:
+        keep = JUST_DRAWN_S if self.drawn_now is not None else AVOID_FOR_S
+        self._avoid = [(t, a) for t, a in self._avoid if now - t < keep]
+        rects = [a for _t, a in self._avoid]
+        if self.drawn_now is not None:
+            try:
+                rects += list(self.drawn_now())
+            except Exception:  # noqa: BLE001 - the card is placed regardless
+                pass
+        return rects
+
+    def _place_card(self, glide: bool = False) -> None:
         """Beside the pill, towards the middle of the screen, on the screen
         the pill is ACTUALLY on - not the one its saved dock names, which a
         changed monitor layout can make another (a user's card ran off the
-        screen's edge) - and clear of what Tora drew (SN-09)."""
+        screen's edge) - and clear of what Tora drew (SN-09). glide: it is
+        showing and a drawing moved it - slide there (SP-11)."""
         r = self.pill.pill_rect().translated(QPointF(self.pill.pos()))
         screen = QGuiApplication.screenAt(r.center().toPoint()) or self._screen()
         geo = screen.availableGeometry()
         now = time.monotonic()
-        self._avoid = [(t, a) for t, a in self._avoid if now - t < AVOID_FOR_S]
-        x, y = place_card(self._edge, r, geo, CARD_W, CARD_H, tuple(a for _t, a in self._avoid))
-        self.card.move(int(round(x - PAD)), int(round(y - PAD)))
-        # Moved, Windows may have put it on a screen of another size: check again on that one.
-        on = self.card.screen()
+        x, y = place_card(self._edge, r, geo, CARD_W, CARD_H, tuple(self._avoiding(now)))
+        # Where it lands may be a screen of another size: keep it on that one.
+        on = QGuiApplication.screenAt(QPoint(int(x + CARD_W / 2), int(y + CARD_H / 2)))
         if on is not None and on is not screen:
             g = on.availableGeometry()
             x = max(g.left() + 8, min(g.right() - 8 - CARD_W, x))
             y = max(g.top() + 8, min(g.bottom() - 8 - CARD_H, y))
-            self.card.move(int(round(x - PAD)), int(round(y - PAD)))
+        to = QPoint(int(round(x - PAD)), int(round(y - PAD)))
+        if glide and self.card.isVisible() and self.card.pos() != to:
+            self._card_glide = (QPoint(self.card.pos()), to, now)
+        else:
+            self._card_glide = None
+            self.card.move(to)
 
     # ── what Tora drew: the card keeps clear of it ─────────────────────────────
     def note_drawing(self, shape: dict) -> None:
@@ -523,13 +564,13 @@ class FlowBar(QObject):
         if rect is not None:
             self._avoid.append((time.monotonic(), rect))
             if self.card.isVisible():
-                self._place_card()
+                self._place_card(glide=True)
 
     def note_point(self, x: float, y: float, label: str = "") -> None:
         """Slot for CompanionManager.sig_point_at: the target, its ring and its name bubble."""
-        self._avoid.append((time.monotonic(), QRectF(x - 70, y - 70, 140 + 240, 140)))
+        self._avoid.append((time.monotonic(), point_bounds(x, y)))
         if self.card.isVisible():
-            self._place_card()
+            self._place_card(glide=True)
 
     def clear_drawings(self) -> None:
         """Slot for CompanionManager.sig_clear_drawings."""
@@ -611,6 +652,13 @@ class FlowBar(QObject):
             if u >= 1.0:
                 self._snap = None
                 self._place_card()
+        if self._card_glide is not None:
+            start, end, t0 = self._card_glide
+            u = _ease((now - t0) / CARD_GLIDE_S)
+            self.card.move(QPoint(int(start.x() + (end.x() - start.x()) * u),
+                                  int(start.y() + (end.y() - start.y()) * u)))
+            if u >= 1.0:
+                self._card_glide = None
         self._tick_card(now, dt)
         # Idle (or hovered) and settled, the pill does not change: painting it
         # 60 times a second anyway kept Windows composing it 60 times a second.

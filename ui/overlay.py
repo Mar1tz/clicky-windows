@@ -34,6 +34,7 @@ from PyQt6.QtGui import (
 
 from screen import monitors
 from ui import buddy
+from ui.mist import Mist
 from ui.caption import CaptionIsland
 
 
@@ -209,6 +210,27 @@ def _stroke_tip(shape: dict, u: float):
     drawn = _partial_pts(pts, closed, u)
     return drawn[-1] if drawn else None
 
+# SP-11: the buddy rides the pen tip, so when an arrow is finished it sat on
+# the arrowhead - covering the very thing it drew, for 2.5 s. It rests this
+# far back along the last stroke instead, the head in clear view.
+REST_BACK_PX = 40.0
+
+
+def _rest_point(shape: dict):
+    """Where the buddy rests when a stroke is done: for a line or an arrow,
+    REST_BACK_PX back along its last segment (at most half of it); for any
+    other shape, where the pen stopped."""
+    if shape.get("kind") in ("arrow", "line"):
+        pts, _closed = _shape_path_pts(shape)
+        if pts and len(pts) >= 2:
+            (px, py), (ex, ey) = pts[-2], pts[-1]
+            seg = math.hypot(ex - px, ey - py)
+            if seg > 0:
+                back = min(REST_BACK_PX, seg / 2)
+                return ex - (ex - px) / seg * back, ey - (ey - py) / seg * back
+    return _stroke_tip(shape, 1.0)
+
+
 # Pointing phrases from the original
 POINTER_PHRASES = (
     "right here!", "this one!", "over here!",
@@ -296,6 +318,8 @@ class CursorOverlay(QWidget):
         self._rest_frames = 0                  # frames in a row with nothing moving (_tick)
         self._mode: str = MODE_IDLE
         self._audio_level: float = 0.0
+        # TF-02: the ghost trail while the shortcut is held, and its haze.
+        self._mist = Mist()
         self._phase: float = 0.0
 
         # Pointing / speech bubble
@@ -354,6 +378,7 @@ class CursorOverlay(QWidget):
         self._ann_painted = 0               # how many were on screen at the last frame
         self._draw_queue_end: float = 0.0   # when the last queued stroke finishes
         self._last_tip = None               # pen position held between strokes
+        self._last_stroke = None            # the shape it was last drawing (SP-11)
 
         # Thinking spinner phase
         self._spin_phase: float = 0.0
@@ -389,6 +414,19 @@ class CursorOverlay(QWidget):
 
     def set_mode(self, mode: str):
         self._mode = mode
+        if mode in (MODE_SPEAKING, MODE_IDLE):
+            self._mist.end_haze(time.monotonic())         # she is answering: the haze has done its job
+
+    def set_tracing(self, state: str) -> None:
+        """The shortcut's trail (docs/TRACE_TO_FOCUS.md): "on" when it goes
+        down, "keep" when it comes up after showing something - the traced
+        area stays as a haze until she answers - and "drop" for a tap."""
+        now = time.monotonic()
+        if state == "on":
+            self._mist.start(now)
+        else:
+            self._mist.stop(now, keep=state == "keep")
+        self._refresh()
 
     def set_audio_level(self, rms: float):
         # Match Swift easing: eased = pow(min(rms*2.85, 1), 0.76)
@@ -587,6 +625,7 @@ class CursorOverlay(QWidget):
         self._annotations = []
         self._draw_queue_end = 0.0
         self._last_tip = None
+        self._last_stroke = None
 
     def _active_stroke_tip(self):
         """Pen tip of the currently-animating shape, or None. The buddy
@@ -599,8 +638,18 @@ class CursorOverlay(QWidget):
                     active = ann
         if active is None:
             return None
+        self._last_stroke = active
         u = (now - active["start"]) / active["dur"]
         return _stroke_tip(active, u)
+
+    def drawn_now(self):
+        """What is on screen now, for the answer card to keep off (SP-12):
+        every drawing still showing, and where the pointing ring is (or
+        None)."""
+        now = time.monotonic()
+        shapes = [a for a in self._annotations if a.get("ttl") is None or now - a["start"] <= a["ttl"]]
+        ring = (self._ring[0], self._ring[1]) if self._ring is not None else None
+        return shapes, ring
 
     def _begin_flight(self, start: QPointF, end: QPointF, phase: str,
                       duration: Optional[float] = None):
@@ -714,6 +763,10 @@ class CursorOverlay(QWidget):
             out.append(QRectF(rx - r - 30, ry - r - 30, 2 * r + 60, 2 * r + 60))
         if self._caption.active():
             out.append(self._caption.bounds())
+        if self._mist.active():
+            mist = self._mist.bounds()
+            if mist is not None:
+                out.append(mist)
         return out
 
     def _refresh(self, force: bool = False) -> None:
@@ -758,6 +811,8 @@ class CursorOverlay(QWidget):
     def _tick(self):
         qp = QCursor.pos()
         real = QPointF(qp.x(), qp.y())
+        # Before any phase returns early: the mist follows the real mouse.
+        self._mist.tick(real.x(), real.y(), time.monotonic())
 
         # ── Caption island ── before the flight machine: it returns early in
         # the pointing states, which is precisely when Tora is talking.
@@ -845,6 +900,10 @@ class CursorOverlay(QWidget):
             self._last_tip = tip
         elif time.monotonic() >= self._draw_queue_end + 2.5:
             self._last_tip = None   # lesson over — resume cursor follow
+            self._last_stroke = None
+        elif self._last_tip is not None and self._last_stroke is not None:
+            # Between strokes and after the last: off the arrowhead (SP-11).
+            self._last_tip = _rest_point(self._last_stroke) or self._last_tip
         hold = tip or self._last_tip
         if hold is not None:
             # Strong pull toward the pen tip — smooth but keeps up with it
@@ -895,7 +954,7 @@ class CursorOverlay(QWidget):
                    and abs(target.x() - self._display_pos.x())
                    + abs(target.y() - self._display_pos.y()) < 0.5)
         quiet = (settled and self._mode in (MODE_IDLE, MODE_SPEAKING)
-                 and not self._annotations and not self._caption.active()
+                 and not self._annotations and not self._caption.active() and not self._mist.active()
                  and self._island_alpha < 0.02 and self._locked_pos is None)
         self._rest_frames = self._rest_frames + 1 if quiet else 0
         if self._rest_frames % 3:
@@ -909,6 +968,9 @@ class CursorOverlay(QWidget):
         window with its painter already moved to that monitor; the window's
         edges clip the rest. Painting only - nothing here changes state, as
         it runs once per monitor per frame."""
+        # The mist goes under everything: it is where they pointed, not hers.
+        self._mist.draw(p, time.monotonic())
+
         # Ring goes UNDER the buddy
         if self._ring is not None and self._flight_phase in (
             _PHASE_DWELLING, _PHASE_FLYING

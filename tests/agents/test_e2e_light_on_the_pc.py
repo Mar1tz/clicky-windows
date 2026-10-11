@@ -221,3 +221,22 @@ def test_a_clean_last_run_says_nothing(guards, caplog):
     with caplog.at_level(logging.WARNING, logger="tora.crash"):
         main._install_crash_guards()
     assert "crashed" not in caplog.text
+
+
+def test_after_an_arrow_the_buddy_rests_off_its_head(overlay, monkeypatch):
+    """SP-11: it rode the pen tip and then sat on the arrowhead for 2.5 s."""
+    import math
+    import ui.overlay as overlay_mod
+    t = [time.monotonic()]
+    monkeypatch.setattr(overlay_mod.time, "monotonic", lambda: t[0])
+    overlay.add_shape({"kind": "arrow", "pts": [(100.0, 100.0), (400.0, 500.0)], "ttl": None})
+    shape = overlay._annotations[-1]
+    t[0] = shape["start"] + shape["dur"] * 0.5
+    overlay._tick()                                        # drawing: on the pen tip
+    t[0] = shape["start"] + shape["dur"] + 0.5             # drawn; the lesson is still on screen
+    for _ in range(40):
+        overlay._tick()
+    head = (400.0 + 6, 500.0 + 6)                          # where it used to rest
+    pos = overlay._display_pos
+    assert math.hypot(pos.x() - head[0], pos.y() - head[1]) > 35, "the head is in view"
+    assert abs(pos.x() - (376 + 6)) < 2 and abs(pos.y() - (468 + 6)) < 2, "back along the arrow"

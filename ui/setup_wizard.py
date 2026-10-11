@@ -112,7 +112,7 @@ SKILLS_FOR = {
               "chase-an-unpaid-invoice"),
     "Design & video": ("social-post", "send-an-invoice", "make-a-quote", "tidy-downloads"),
     "Admin & office": ("inbox-summary", "book-a-meeting", "file-documents", "fill-a-form",
-                       "month-end-checklist"),
+                       "month-end-checklist", "convert-to-pdf"),
     "Writing": ("voice-note-to-email", "draft-an-email-reply", "social-post"),
 }
 # Everyone gets these; "Something else" (or no answer) keeps every one on.
@@ -135,6 +135,7 @@ SKILL_CARDS = {
     "tidy-downloads": ("code", "Tidy my Downloads folder"),
     "compare-prices": ("chart", "Find the best price for a kettle"),
     "fill-a-form": ("cap", "Fill in this form for me"),
+    "convert-to-pdf": ("ledger", "Turn this document into a PDF"),
 }
 SKILL_CARDS_SHOWN = 6
 

@@ -23,6 +23,7 @@ lesson steps, collab, recording — is shared by both.
 import asyncio
 import logging
 import math
+import os
 import re
 import threading
 import time
@@ -40,7 +41,7 @@ from ai.gemini import Models
 from audio.ambient_listener import AmbientListener
 from screen import monitors
 from screen.capture import capture_all_screens, capture_region, grab_frame, monitor_frames
-from ai import email_reply, look_board, look_chess, look_region, write_for_me
+from ai import convert_pdf, email_reply, look_board, look_chess, look_region, screen_files, trace as tracing, trace_read, write_for_me
 from ui.panel import AppState
 from tutor import (
     active_window_title, app_key,
@@ -284,6 +285,26 @@ def _speakable(text: str) -> str:
     return t
 
 
+_FILES_RE = re.compile(r"\b(this|these|that|those|the|it|them|selected|open)\b.{0,40}\b(file|files|document|"
+                       r"documents|doc|docx|pdf|spreadsheet|workbook|sheet|presentation|deck|photo|photos|"
+                       r"image|images|picture|pictures|folder)\b|\b(this|these|it|them)\b", re.IGNORECASE)
+
+
+def _files_meant(trace_readings, goal: str) -> list[str]:
+    """The files a job is about, as paths: what they traced over this
+    question, else - when the words point ("this document", "these files") -
+    what is selected in File Explorer or open in Office (ai/screen_files)."""
+    traced = [f for r in (trace_readings or []) for f in getattr(r, "files", [])]
+    if traced:
+        return list(dict.fromkeys(traced))
+    if not _FILES_RE.search(goal or ""):
+        return []
+    try:
+        return screen_files.in_view()
+    except Exception:  # noqa: BLE001 - the job still runs, without paths
+        return []
+
+
 def _prefetched(gen):
     """(pieces, task): `gen` read ahead into a queue from now on, so a
     stream starts while something else gets ready - an email reply is
@@ -397,6 +418,7 @@ class CompanionManager(QObject):
     sig_agents_ready        = pyqtSignal()                # workforce built (or failed); wire the UI now
     sig_account_problem     = pyqtSignal(str, str)        # (kind, plain words); ("", "") = over
     sig_hands_free          = pyqtSignal(bool)            # listening with no key held: the flow bar's ✕ ✓
+    sig_trace               = pyqtSignal(str)             # the shortcut's mist: "on", "keep" (its haze) or "drop"
 
     def __init__(self):
         super().__init__()
@@ -1590,12 +1612,30 @@ class CompanionManager(QObject):
                 _log.info("screen line took %.1fs - sent while they spoke", took)
             await conv.send_context(line)
 
+        held: list[bytes] = []
+        quiet_since: Optional[float] = None
         while self._rt_streaming:
             if not sent and context.done():
                 await send_context()
             if self._rt_audio:
                 chunk = b"".join(self._rt_audio)
                 self._rt_audio.clear()
+                if self._key_down:
+                    # Held: a pause is not the end. The server decides a turn
+                    # ended by HEARING silence, so it is not sent the silence -
+                    # it is kept back, and goes ahead of the next words. At the
+                    # release the trace goes first, then the end of the question.
+                    if self._last_rms > self._SPEECH_RMS:
+                        quiet_since = None
+                        if held:
+                            chunk = b"".join(held) + chunk
+                            held.clear()
+                    else:
+                        now = time.monotonic()
+                        quiet_since = quiet_since or now
+                        if now - quiet_since > self.HOLD_QUIET_S:
+                            held.append(chunk)
+                            continue
                 await conv.push_audio(chunk)
             else:
                 await asyncio.sleep(0.02)
@@ -1616,6 +1656,9 @@ class CompanionManager(QObject):
                 context.cancel()
                 _log.info("screen line not ready %.1fs after the question - answered without it",
                           time.monotonic() - started)
+
+        # What they traced while asking (TF-05): the trace is only whole now.
+        await self._send_trace_line(conv)
 
         # Let the server hear the question end. See end_user_audio — this is
         # what makes the first word arrive immediately rather than a second
@@ -2031,12 +2074,37 @@ class CompanionManager(QObject):
         except ValueError:
             kind = TaskKind.CODING
         meta = {"request": goal, "reply": f"Understood. Starting on {title} now."}
+        workspace = self._agents.workspace_root
+        # 11 Oct: "turn this Word document into a PDF" - the agent was given its
+        # own workspace and no file, searched Tora Projects and failed twice.
+        # The files they mean (traced over, selected in Explorer, open in
+        # Office) go with the job as paths, and it works in their folder.
+        files = await asyncio.to_thread(_files_meant, getattr(self, "_trace_readings", None), goal)
+        if files and "pdf" in goal.lower() and screen_files.is_conversion(goal) and convert_pdf.can_convert(files):
+            # "Make sure it converts it in the background" (11 Oct): no agent,
+            # no window - the app that made it saves the PDF, unseen.
+            open_after = bool(re.search(r"\bopen\b", goal, re.IGNORECASE))
+            asyncio.ensure_future(self._convert_in_background(files, open_after))
+            names = ", ".join(os.path.basename(f) for f in files)
+            return {"ok": True, "result": (f"Converting {names} to PDF in the background - nothing opens on their "
+                                           "screen. Say in one line that it has started; Tora says when it is done.")}
+        if files:
+            goal += "\n\nThe file(s) they mean - use these exact paths: " + "; ".join(files)
+            meta["request"], meta["files"] = goal, files
+            workspace = os.path.dirname(os.path.commonpath(files)) if len(files) > 1 else os.path.dirname(files[0])
+            if screen_files.is_conversion(goal):
+                # Converting needs the app that made it, from PowerShell: the
+                # terminal agent. The file agent cannot run anything.
+                kind = TaskKind.TERMINAL
+                if skill is None and self._agents.skills is not None:
+                    skill = self._agents.skills.get("convert-to-pdf") if "pdf" in goal.lower() else None
+            _log.info("delegate_task: %d file(s) in question, working in %s", len(files), workspace)
         if skill is not None:
             meta["skill"] = skill.id
         hint = str(args.get("workspace_hint") or "").strip().strip("'\"")
-        if hint:
+        if hint and not files:
             meta["subdir"] = hint
-        task = Task(title=title, goal=goal, workspace=self._agents.workspace_root,
+        task = Task(title=title, goal=goal, workspace=workspace,
                     kind=kind, worker_type=self._WORKER_FOR_KIND.get(kind.value, "coding"),
                     metadata=meta)
         try:
@@ -2055,6 +2123,36 @@ class CompanionManager(QObject):
             "note": ("The agent is working in the background. Read the steps back "
                      "briefly and tell the user they can carry on with other things."),
         }
+
+    async def _convert_in_background(self, files: list[str], open_after: bool) -> None:
+        """Each file to a PDF beside it (ai/convert_pdf.py), then a word on
+        where it is - spoken if Tora is free, on the card if she is not."""
+        started = time.monotonic()
+        made, failed = [], []
+        for path in files:
+            try:
+                made.append(await asyncio.to_thread(convert_pdf.to_pdf, path))
+            except convert_pdf.ConvertError as e:
+                failed.append(f"{os.path.basename(path)}: {e}")
+        _log.info("convert: %d made, %d failed in %.1fs", len(made), len(failed), time.monotonic() - started)
+        if made and open_after:
+            try:
+                os.startfile(made[0])                       # they asked to see it
+            except OSError:
+                pass
+        if made:
+            where = os.path.dirname(made[0])
+            msg = (f"Done - {os.path.basename(made[0])} is in {os.path.basename(where) or where}." if len(made) == 1
+                   else f"Done - {len(made)} PDFs are in {os.path.basename(where) or where}.")
+        else:
+            msg = "I couldn't make the PDF."
+        if failed:
+            msg += " " + "; ".join(failed[:2])
+        if self._state == AppState.IDLE:
+            await self._reply_local(msg)
+        else:
+            self.sig_response_chunk.emit(msg)
+            self.sig_response_done.emit(msg)
 
     async def _tool_read_skill(self, args: dict) -> dict:
         """One of the user's skills, in full - to guide them through it on
@@ -3145,8 +3243,23 @@ class CompanionManager(QObject):
             if whole is None:
                 return {"error": "could not capture the screen"}
             image = whole.base64_jpeg
+        hint_kind = "mouse hint"
+        traced = [r.focus.rect for r in self._trace_readings] if monitor else []
+        if traced and not gemini_vision.needs_judgement(question, active_window_title()):
+            # TF-06: traced while asking - the picture IS the traced area, with
+            # room round it, at full sharpness. (A game keeps its whole board.)
+            crop = look_region.trace_crop(traced, monitor)
+            grabbed = await asyncio.to_thread(capture_region, *crop, width) if crop else None
+            if grabbed:
+                image, region, hint_kind = grabbed[0], crop, "trace crop"
         shot_ms = (time.monotonic() - shot_t0) * 1000
         hint = look_region.pointer_hint(question, cursor, region or monitor) if monitor else ""
+        if traced:
+            # Where on this image they traced, in order (TF-05/06).
+            trace_line = look_region.trace_hint(traced, region or monitor)
+            if trace_line:
+                hint = trace_line
+                hint_kind = "trace crop" if hint_kind == "trace crop" else "trace hint"
         self._mouse_shot = (shot, time.monotonic()) if by_mouse else None
         if by_mouse:
             _log.info("look: the monitor under the mouse (%s), not the window in front's",
@@ -3193,7 +3306,7 @@ class CompanionManager(QObject):
         if region:
             detail += ", window only"
         if hint:
-            detail += ", mouse hint"
+            detail += f", {hint_kind}"
         if not look:
             self._mark_answer("look", detail)
             return {"error": "could not read the screen clearly"}
@@ -3635,22 +3748,129 @@ class CompanionManager(QObject):
         if not self._claim_begin():
             return
         self._hotkey_pressed_at = time.monotonic()
+        self._key_down = True
         self._begin_capture()
         # Arm the silence watchdog straight away. If this turns out to be a
         # hold rather than a tap, on_hotkey_release claims the end first.
         self._submit(self._auto_stop_on_silence())
+        if self._state == AppState.LISTENING:
+            self._start_trace()
 
     def on_hotkey_release(self):
+        self._key_down = False
+        trace = self._stop_trace()
         if self._state != AppState.LISTENING:
+            self._mist("drop")
             return
         held = time.monotonic() - self._hotkey_pressed_at
         if held < cfg.tap_max_seconds:
             # A tap, not a hold: keep listening and let the user finish
-            # speaking. The watchdog ends the capture on silence.
+            # speaking. The watchdog ends the capture on silence. A tap
+            # leaves no trail (decided 10 Oct: only while it is held).
+            self._mist("drop")
+            self._trace = None
             self.sig_hands_free.emit(True)
             return
+        shown = trace is not None and trace.moved
+        self._mist("keep" if shown else "drop")
+        if shown:
+            _log.info("trace: %s", trace.summary())
+            # Read before the question is processed - queued first, it is
+            # already under way when the voice's turn is about to end.
+            self._submit(self._start_trace_read(trace))
+        else:
+            self._trace = None
         if self._claim_end():
             self._submit(self._end_capture_and_process())
+
+    # ── Show it by tracing (docs/TRACE_TO_FOCUS.md) ──────────────────────────
+    #
+    # While the shortcut is held, the mouse's path is recorded (ai/trace.py)
+    # and the overlay leaves a mist behind it (ui/mist.py). TF-01: the
+    # record, in physical px, each point with its time since the press.
+
+    _trace: Optional["tracing.Trace"] = None
+    _trace_live = False
+    # The shortcut is physically down. While it is, the question is not over:
+    # 10 Oct, the owner drew round something, went quiet to finish the circle,
+    # and the live session's own end-of-speech detection (200 ms of silence)
+    # answered before the trace existed - and the local watchdog then ended
+    # the capture, so the trace was dropped at the release. Now neither hears
+    # a pause as the end while it is held (_realtime_stream, _auto_stop_on_silence).
+    _key_down = False
+    HOLD_QUIET_S = 0.12        # under the server's 200 ms end-of-speech window
+    TRACE_EVERY_S = 0.016
+
+    def _mist(self, state: str) -> None:
+        """Tell the overlay: "on", "keep" or "drop". Like _activity, a sign
+        on the screen - never a reason for the question to fail."""
+        try:
+            self.sig_trace.emit(state)
+        except Exception:  # noqa: BLE001
+            pass
+
+    def _start_trace(self) -> None:
+        self._trace = tracing.Trace()
+        self._trace_live = True
+        self._mist("on")
+        self._submit(self._record_trace(self._trace, self._hotkey_pressed_at))
+
+    def _stop_trace(self) -> Optional["tracing.Trace"]:
+        self._trace_live = False
+        return self._trace
+
+    # TF-04/05: what was traced is read (ai/trace_read.py) the moment the
+    # shortcut comes up, and the voice is told before its turn ends.
+
+    _trace_task: Optional[asyncio.Task] = None
+    _trace_readings: list = []
+    TRACE_WAIT_S = 0.25        # the answer waits no longer than this for it
+
+    async def _start_trace_read(self, trace) -> None:
+        self._trace_task = asyncio.ensure_future(self._read_trace(trace))
+
+    async def _read_trace(self, trace) -> str:
+        """The voice's line about what was traced - read, not photographed."""
+        focuses = tracing.focuses(trace)
+        if not focuses:
+            return ""
+        started = time.monotonic()
+        if self._privacy_guard and is_sensitive_window(active_window_title()):
+            readings = [trace_read.Reading(f) for f in focuses]          # a place and a shape, nothing read
+        else:
+            readings = await asyncio.to_thread(trace_read.read, focuses)
+        self._trace_readings = readings
+        _log.info("trace: %s - read %d of them in %.0f ms", ", ".join(f.kind for f in focuses),
+                  sum(1 for r in readings if r.text or r.things), (time.monotonic() - started) * 1000)
+        return trace_read.voice_line(readings)
+
+    async def _take_trace_line(self) -> str:
+        """This question's line about what they traced, or "" - waited for
+        at most TRACE_WAIT_S; late, it is the shapes and places alone."""
+        task, self._trace_task = self._trace_task, None
+        if task is None:
+            return ""
+        try:
+            return await asyncio.wait_for(asyncio.shield(task), self.TRACE_WAIT_S)
+        except Exception:  # noqa: BLE001 - late or failed: its shape and place, at once
+            trace = self._trace
+            return trace_read.voice_line([trace_read.Reading(f) for f in tracing.focuses(trace)]) if trace else ""
+
+    async def _send_trace_line(self, conv) -> None:
+        """Before the voice's turn ends: what they traced, in one line."""
+        started = time.monotonic()
+        line = await self._take_trace_line()
+        if line:
+            await conv.send_context(line)
+            _log.info("trace line sent %.2fs after the question", time.monotonic() - started)
+
+    async def _record_trace(self, trace, since: float) -> None:
+        """Sample the mouse ~60 times a second until the shortcut comes up."""
+        while self._trace_live and self._trace is trace:
+            pos = look_region.cursor_position()
+            if pos is not None:
+                trace.add(time.monotonic() - since, *pos)
+            await asyncio.sleep(self.TRACE_EVERY_S)
 
     def _handle_wake(self):
         """Triggered from ambient listener when wake-word is detected."""
@@ -3681,6 +3901,10 @@ class CompanionManager(QObject):
         """✕: never mind. Nothing is asked, and nothing of it is kept."""
         if self._state != AppState.LISTENING or not self._claim_end():
             return
+        self._key_down = False
+        self._stop_trace()
+        self._trace = None
+        self._mist("drop")
         streamed, self._rt_streaming = self._rt_streaming, False
         try:
             self._listener.stop_recording()
@@ -3754,6 +3978,7 @@ class CompanionManager(QObject):
         # A new thing the user is saying to Tora. Anything budgeted "per
         # request" - a guide move, for one - is measured against this.
         self._request_serial += 1
+        self._trace_readings = []           # a trace belongs to the question it was drawn for
         try:
             # The sink has to be attached BEFORE the first block is captured,
             # or the opening syllable of the question is only in the buffer
@@ -3845,13 +4070,15 @@ class CompanionManager(QObject):
             if self._last_rms > self._SPEECH_RMS:
                 speech_started = True
                 silence_from = None
+            elif self._key_down:
+                silence_from = None             # held: the release ends it, not a pause
             elif speech_started:
                 if silence_from is None:
                     silence_from = now
                 elif now - silence_from >= self._END_SILENCE_S:
                     break
 
-            if not speech_started and now - start_t > self._NO_SPEECH_S:
+            if not speech_started and not self._key_down and now - start_t > self._NO_SPEECH_S:
                 break
             if now - start_t > self._MAX_UTTERANCE_S:
                 break
@@ -4227,6 +4454,10 @@ class CompanionManager(QObject):
             except Exception:
                 _log.debug("recall failed", exc_info=True)
 
+            # What they traced while asking (TF-05), as the live voice is told.
+            trace_line = await self._take_trace_line()
+            trace_extra = f"\n\n{trace_line}\n" if trace_line else ""
+
             # 4. Build system prompt with all context
             system = _build_system_prompt(
                 window_title=title,
@@ -4236,7 +4467,7 @@ class CompanionManager(QObject):
                 detected_coord=detected_coord,
                 code_active=code_active,
                 language_code=lang_code,
-                extra=ocr_extra + doc_extra + fig_extra,
+                extra=ocr_extra + doc_extra + fig_extra + trace_extra,
             )
             if sensitive:
                 system += (

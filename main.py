@@ -453,9 +453,12 @@ def main():
     manager.sig_label.connect(overlay.add_text)
     # Teaching drawings — generic shape channel with progressive animation
     manager.sig_draw.connect(overlay.add_shape)
+    # TF-02: the shortcut's ghost trail of mist, and its haze until she answers.
+    manager.sig_trace.connect(overlay.set_tracing)
     manager.sig_clear_drawings.connect(overlay.clear_annotations)
     # The card keeps clear of what she drew and points at (SN-09): it covered
     # the very piece her arrow started from.
+    flow.watch(overlay)                     # the card keeps off what is drawn now (SP-12)
     manager.sig_draw.connect(flow.note_drawing)
     manager.sig_point_at.connect(flow.note_point)
     manager.sig_guide_point.connect(flow.note_point)
