@@ -80,6 +80,20 @@ def _write_grants(keys: set[str]) -> None:
 log = logging.getLogger("agents.manager")
 
 
+def job_scorecard(task) -> str:
+    """One line when a job ends (AG-04, the speed review of 17 Oct 2026): how
+    long, how many steps and tool calls, and why it failed - 5 of the
+    owner's 21 jobs failed and the reasons had to be dug out of agents.db."""
+    steps = list(task.steps or [])
+    done = sum(1 for s in steps if s.status == "done")       # StepStatus is a str enum
+    calls = sum(len(s.tool_calls or []) for s in steps)
+    failed = [s for s in steps if s.error]
+    why = (failed[-1].error if failed else task.error or "")
+    line = (f"{task.status.value}, {task.title!r} ({task.worker_type}), {time.time() - task.created_at:.0f}s, "
+            f"{done} of {len(steps)} steps done, {calls} tool calls")
+    return line + (f" - {why[:200]}" if why else "")
+
+
 def _title(text: str) -> str:
     t = " ".join((text or "").split())
     return (t[:57] + "...") if len(t) > 60 else t
@@ -1126,6 +1140,8 @@ class AgentManager:
                          agent_id=run.task.agent_id, data={"status": status.value})
         if self.store:
             self.store.save_task(run.task)
+        if status.is_terminal:
+            log.info("job scorecard: %s", job_scorecard(run.task))
 
     def _emit_agent(self, state: AgentState) -> None:
         self.events.emit(EventKind.AGENT_STATUS, state.status.value, agent_id=state.id,

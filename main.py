@@ -5,6 +5,7 @@ Boots Qt, spawns overlay+panel+tray, starts ambient mic listener, binds hotkey.
 
 import os
 import sys
+import time
 from pathlib import Path
 
 
@@ -37,6 +38,8 @@ def _ensure_std_streams() -> None:
 
 
 _ensure_std_streams()
+
+from ai import speed  # noqa: E402 - first: it stamps when HeyTora started (ST-02)
 
 from PyQt6.QtWidgets import QApplication
 from PyQt6.QtCore import QObject, Qt, QTimer, pyqtSignal
@@ -899,6 +902,9 @@ def main():
     # ── Show UI + start listener ──────────────────────────────────────────────
     overlay.show()        # persistent overlay (cursor follow)
     flow.show()           # Tora at the edge of the screen
+    import logging as _lg
+    _lg.getLogger("tora").info("on screen %.1fs after HeyTora started - the voice follows",
+                               time.monotonic() - speed.STARTED)
     # Panel is hidden by default — user can open it from the tray menu if needed
     # The workforce builds on a worker thread (~650 ms) so the tray icon
     # is not held up; wire its UI when it says it is ready.

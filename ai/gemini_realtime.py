@@ -45,7 +45,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Awaitable, Callable, Optional
 
-from ai import net_quality
+from ai import net_quality, speed
 from ai.gemini import Models
 from ai.gemini_live import CHUNK_BYTES, LiveSession, ToolCall, add_usage
 from audio.playback import PcmStreamPlayer
@@ -753,6 +753,7 @@ class RealtimeConversation:
         self._pump = asyncio.ensure_future(self._run_pump(session))
         _log.info("realtime session open (%s)%s", Models.REALTIME,
                   " - resumed" if resume else "")
+        speed.note_session()
         from ai import gemini
         gemini.report_ok()           # an account problem, if any, is over
         if not resume:

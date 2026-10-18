@@ -42,7 +42,7 @@ from ai.gemini import Models
 from audio.ambient_listener import AmbientListener
 from screen import monitors
 from screen.capture import capture_all_screens, capture_region, grab_frame, monitor_frames
-from ai import convert_pdf, email_reply, look_board, look_chess, look_region, net_quality, screen_files, trace as tracing, trace_read, write_for_me
+from ai import convert_pdf, email_reply, look_board, look_chess, look_region, net_quality, screen_files, speed, trace as tracing, trace_read, write_for_me
 from ui.panel import AppState
 from tutor import (
     active_window_title, app_key,
@@ -610,6 +610,10 @@ class CompanionManager(QObject):
         self._submit(self._account_warm_up())
         self._submit(self._realtime_connect())
         self._submit(self._keep_session_fresh())
+        # Speed, measured (ai/speed.py): how late the loop wakes, and what
+        # Tora costs the CPU while nobody talks to her.
+        self._submit(speed.watch_loop(asyncio.sleep))
+        self._submit(speed.watch_cpu(asyncio.sleep, lambda: self._state == AppState.IDLE))
         # Refresh a stale model cache in the background (weekly at most).
         self._submit(self._refresh_stale_models())
 
@@ -852,6 +856,7 @@ class CompanionManager(QObject):
         return self._agents
 
     def shutdown(self):
+        speed.log_scorecard()
         # Kill any audio that was playing when the user clicked Quit
         try:
             from audio.playback import stop_audio
@@ -1380,6 +1385,7 @@ class CompanionManager(QObject):
             return None
 
     def _on_realtime_speaking(self) -> None:
+        speed.mark("audio")
         self._mark_answer("audio")
         if self._ans is not None and "tool" in self._ans:
             self._mark_answer("answer")          # the first word after the look
@@ -1421,6 +1427,7 @@ class CompanionManager(QObject):
         except Exception:  # noqa: BLE001 - measuring must never break an answer
             _log.debug("answer timeline failed", exc_info=True)
         self._heard_buf = []
+        speed.finish("answered")
         self._emit_state(AppState.IDLE)
         if self._metered_talk():
             # Metered plan: the next question takes a new voice pass.
@@ -1672,6 +1679,7 @@ class CompanionManager(QObject):
         # Let the server hear the question end. See end_user_audio — this is
         # what makes the first word arrive immediately rather than a second
         # and a half later.
+        speed.mark("sent")
         await conv.end_user_audio(stop=lambda: question != self._question_no)
         if question == self._question_no and self._rt_said_nothing != question:
             # The new question has been sent whole: whatever comes now is its
@@ -1713,12 +1721,15 @@ class CompanionManager(QObject):
             return False                         # its audio is the new question's now
         if conv.ready:
             waited = time.monotonic() - started
+            if waited > 0.3:
+                speed.mark("session", waited=f"{waited:.1f}s for the session")
             if waited > 1.0:
                 _log.info("waited %.1fs for the live session to open", waited)
             if waited > net_quality.SLOW_OPEN_S:
                 net_quality.note_slow(f"the voice took {waited:.0f}s to open")
             return True
         _log.info("the live session did not open - this question goes the slow way")
+        speed.route("slow")
         if self._rt_streaming:
             self._rt_streaming = False           # still talking: the release takes the slow route
             return False
@@ -3409,6 +3420,7 @@ class CompanionManager(QObject):
         if snapped:
             detail += f", {snapped} snapped to the real control"
         self._mark_answer("look", detail)
+        speed.mark("look")
         drawn = []
         for action in actions[:4]:
             sh = self._shape_from_tag(action.as_tag())
@@ -4080,6 +4092,7 @@ class CompanionManager(QObject):
         self._request_serial += 1
         self._trace_readings = []           # a trace belongs to the question it was drawn for
         self._rt_question_pcm = None
+        speed.begin()
         # Shown before the microphone opens, not after: the press is answered
         # on screen (and by her sound) at once.
         self._emit_state(AppState.LISTENING)
@@ -4098,6 +4111,7 @@ class CompanionManager(QObject):
             )
             self._emit_state(AppState.IDLE)
             return
+        speed.mark("mic")
         took = time.monotonic() - opened
         if took > 0.15:
             _log.info("the microphone took %.0f ms to open", took * 1000)
@@ -4142,6 +4156,7 @@ class CompanionManager(QObject):
         else:
             # No live session: the cascade handles this one, and a reconnect
             # is started so the next question is fast again.
+            speed.route("slow")
             self._submit(self._realtime_connect())
 
     # End-of-speech tuning. SPEECH_RMS matches the ambient listener's VAD
@@ -4195,6 +4210,7 @@ class CompanionManager(QObject):
 
     async def _end_capture_and_process(self):
         """The hotkey came up. Answer through whichever route is live."""
+        speed.mark("release")
         was_realtime, self._rt_streaming = self._rt_streaming, False
         conv = self._realtime
         # Still waiting for its session to open (_await_session): it stays on
@@ -4214,6 +4230,7 @@ class CompanionManager(QObject):
         if was_realtime:
             if len(pcm) < 3200:            # nothing was said
                 self._rt_said_nothing = self._question_no
+                speed.finish("nothing said")
                 self._emit_state(AppState.IDLE)
                 return
             if awaiting:
@@ -4230,8 +4247,10 @@ class CompanionManager(QObject):
             return
 
         if len(pcm) < 3200:
+            speed.finish("nothing said")
             self._emit_state(AppState.IDLE)
             return
+        speed.route("slow")
         if not gemini.own_key() and self._problem_kind in ("plan", "signin", "service"):
             # The voice pass was refused: this month's talk is used up, or
             # the sign-in has lapsed. The slower route would only spend the
@@ -4292,6 +4311,7 @@ class CompanionManager(QObject):
                 break                   # quiet long enough — really stuck
         _log.warning("realtime turn produced no response in %.0fs (%s)", time.monotonic() - started,
                      "words were heard" if heard else "no words were heard")
+        speed.finish("unanswered")
         self._activity("")
         self._emit_state(AppState.IDLE)
         if heard:
@@ -4688,6 +4708,7 @@ class CompanionManager(QObject):
             if self._cancel_flag:
                 return
             self._emit_state(AppState.SPEAKING)
+            speed.mark("audio")
             try:
                 await self._play_lesson(full_response, clean)
             except asyncio.CancelledError:
@@ -4708,6 +4729,8 @@ class CompanionManager(QObject):
                 self.sig_point_release.emit()
             if self._answer_task is asyncio.current_task():
                 self._answer_task = None
+            if _ANSWERING.get() == self._question_no:
+                speed.finish("answered")          # a cut-off one is closed by the next question
             self._emit_state(AppState.IDLE)       # not if a new question has begun (_ANSWERING)
 
     async def _reply_local(self, msg: str, *, shown: str = ""):
