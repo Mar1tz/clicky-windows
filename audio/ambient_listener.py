@@ -118,6 +118,9 @@ class AmbientListener:
         self._mode: Mode = Mode.STANDBY
         self._stream: Optional[sd.InputStream] = None
         self._running = False
+        # PortAudio does not promise two streams can be opened at once from
+        # two threads: the start-up warm-up and a press take turns.
+        self._open_lock = threading.Lock()
 
         # Rolling pre-roll ring buffer (small)
         self._preroll: list[np.ndarray] = []
@@ -155,35 +158,66 @@ class AmbientListener:
         self._running = True
         if self._ambient:
             self._open_stream()
+        else:
+            self.warm_up()
+
+    def warm_up(self) -> None:
+        """Make the first press after launch as quick as every other.
+
+        Windows' first opening of a microphone in a process is slow: 0.2-1 s
+        on the owner's PC (18 Oct 2026, MME) against ~50 ms afterwards - and
+        in hotkey mode the device is opened on the press, so the start of
+        the first question went unheard. Creating a stream and closing it
+        unstarted, in the background, pays that once; nothing is recorded.
+        """
+        if self._ambient:
+            return                      # ambient mode keeps its stream open
+
+        def run() -> None:
+            with self._open_lock:
+                if self._stream is not None:
+                    return              # a press got there first
+                try:
+                    sd.InputStream(samplerate=SAMPLE_RATE, channels=1, dtype="int16",
+                                   blocksize=FRAMES_PER_BLOCK, device=self._device).close()
+                except Exception:
+                    pass                # the press reports a real problem
+
+        threading.Thread(target=run, name="mic-warm-up", daemon=True).start()
 
     def _open_stream(self):
-        if self._stream is not None:
-            return
-        try:
-            self._stream = sd.InputStream(
-                samplerate=SAMPLE_RATE,
-                channels=1,
-                dtype="int16",
-                blocksize=FRAMES_PER_BLOCK,
-                callback=self._callback,
-                device=self._device,
-            )
-            self._stream_rate = SAMPLE_RATE
-        except Exception:
-            # Device doesn't support 16kHz directly — open at its native
-            # rate and resample every block to the 16kHz the API expects.
-            info = sd.query_devices(self._device, "input")
-            native_rate = int(info["default_samplerate"])
-            self._stream_rate = native_rate
-            self._stream = sd.InputStream(
-                samplerate=native_rate,
-                channels=1,
-                dtype="int16",
-                blocksize=int(native_rate * BLOCK_MS / 1000),
-                callback=self._callback,
-                device=self._device,
-            )
-        self._stream.start()
+        with self._open_lock:
+            if self._stream is not None:
+                return
+            # latency="low": the device's shortest buffer - the words reach
+            # the model sooner. sounddevice's default is "high".
+            try:
+                self._stream = sd.InputStream(
+                    samplerate=SAMPLE_RATE,
+                    channels=1,
+                    dtype="int16",
+                    blocksize=FRAMES_PER_BLOCK,
+                    callback=self._callback,
+                    device=self._device,
+                    latency="low",
+                )
+                self._stream_rate = SAMPLE_RATE
+            except Exception:
+                # Device doesn't support 16kHz directly — open at its native
+                # rate and resample every block to the 16kHz the API expects.
+                info = sd.query_devices(self._device, "input")
+                native_rate = int(info["default_samplerate"])
+                self._stream_rate = native_rate
+                self._stream = sd.InputStream(
+                    samplerate=native_rate,
+                    channels=1,
+                    dtype="int16",
+                    blocksize=int(native_rate * BLOCK_MS / 1000),
+                    callback=self._callback,
+                    device=self._device,
+                    latency="low",
+                )
+            self._stream.start()
 
     def stop(self):
         self._running = False

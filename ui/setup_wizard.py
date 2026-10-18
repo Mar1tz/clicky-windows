@@ -52,7 +52,7 @@ from PyQt6.QtWidgets import (
     QVBoxLayout, QWidget,
 )
 
-from config import cfg
+from config import cfg, pretty_keys
 from ui import app_theme as T
 from ui import kit, tokens
 from ui import onboarding_parts as O
@@ -799,7 +799,11 @@ class SetupWizard(QDialog):
                                   cfg.ambient_mic())
         self.panel_row = ToggleRow("Show the floating panel",
                                    "The small glass window with the conversation in it.", False)
-        for r in (self.startup_row, self.wake_row, self.panel_row):
+        self.cursor_row = ToggleRow("Show her cursor",
+                                    "Off: only her bar shows - she still flies to what she points "
+                                    f"at. {pretty_keys(cfg.cursor_hotkey())} switches it any time.",
+                                    cfg.cursor_shown())
+        for r in (self.startup_row, self.wake_row, self.panel_row, self.cursor_row):
             body.addWidget(r)
         answers = QHBoxLayout()
         answers.addWidget(O.text("How she answers", 14, 600, wrap=False))
@@ -1129,9 +1133,12 @@ class SetupWizard(QDialog):
     def _save_personal(self) -> None:
         from ui import tokens
         cfg.set_cursor_colour(self._colour)
+        shown = self.cursor_row.switch.isChecked()
+        cfg.set_cursor_shown(shown)
         try:
-            from ui.overlay import set_cursor_colour
+            from ui.overlay import set_cursor_colour, set_cursor_shown
             set_cursor_colour(tokens.cursor_hex(self._colour))     # repaints at once
+            set_cursor_shown(shown)
         except Exception:  # noqa: BLE001 - no overlay (tests): saved for next start
             pass
         try:

@@ -21,6 +21,7 @@ lesson steps, collab, recording — is shared by both.
 """
 
 import asyncio
+import contextvars
 import logging
 import math
 import os
@@ -41,7 +42,7 @@ from ai.gemini import Models
 from audio.ambient_listener import AmbientListener
 from screen import monitors
 from screen.capture import capture_all_screens, capture_region, grab_frame, monitor_frames
-from ai import convert_pdf, email_reply, look_board, look_chess, look_region, screen_files, trace as tracing, trace_read, write_for_me
+from ai import convert_pdf, email_reply, look_board, look_chess, look_region, net_quality, screen_files, trace as tracing, trace_read, write_for_me
 from ui.panel import AppState
 from tutor import (
     active_window_title, app_key,
@@ -56,6 +57,11 @@ from tutor_features import (
 import skills as skills_pkg
 
 _log = logging.getLogger("tora.manager")
+
+# Which question the code running now is answering (0: none in particular).
+# Set by the slow route for its own task, so a state change it makes after
+# the user has asked something new is ignored (CompanionManager._emit_state).
+_ANSWERING: contextvars.ContextVar[int] = contextvars.ContextVar("tora_answering", default=0)
 
 # How many turns the screen context may say "same screen" before it is
 # spelled out again. Context compression can drop the turn that carried
@@ -948,6 +954,8 @@ class CompanionManager(QObject):
         fut = asyncio.run_coroutine_threadsafe(coro, self._loop)
 
         def _observe(f):
+            if f.cancelled():
+                return                  # stopped on purpose (a new question): not a failure
             try:
                 f.result()
             except Exception as e:
@@ -1441,7 +1449,11 @@ class CompanionManager(QObject):
         """The session dropped. Reconnect quietly, in the background - while
         they are talking to her, or a walkthrough needs her voice."""
         _log.info("realtime session lost: %s", reason)
-        if self._state != AppState.IDLE:
+        if self._state in (AppState.THINKING, AppState.SPEAKING):
+            # Its answer is gone with it. Not while they are still talking:
+            # the end of the question finds no session and takes the slow
+            # route with the whole recording - a weak signal dropping the
+            # socket mid-sentence used to throw the question away.
             self._emit_state(AppState.IDLE)
         guide = getattr(self, "_guide_runner", None)
         if self._idle_s() > self.IDLE_FRESH_S and not (guide is not None and guide.running):
@@ -1579,17 +1591,9 @@ class CompanionManager(QObject):
         conv = self._realtime
         if conv is None:
             return
-        if not conv.ready:
-            # Opened on the question (a metered plan) also asks HeyTora's
-            # server for the voice pass first, so it is given longer.
-            deadline = time.monotonic() + (8.0 if getattr(self, "_rt_on_demand", False) else 3.0)
-            while (not conv.ready and self._rt_streaming
-                   and time.monotonic() < deadline):
-                await asyncio.sleep(0.05)
-            if not conv.ready:
-                _log.info("live session not ready in time — cascade takes this one")
-                self._rt_streaming = False
-                return
+        question = self._question_no
+        if not conv.ready and not await self._await_session(conv):
+            return
         # FS-04: the question goes out at once. The screen line is an
         # accessibility walk - 0.2-0.5 s on the owner's PC (9 Oct), seconds
         # on a slow one with a busy browser - and the audio used to wait for
@@ -1657,15 +1661,72 @@ class CompanionManager(QObject):
                 _log.info("screen line not ready %.1fs after the question - answered without it",
                           time.monotonic() - started)
 
+        if question != self._question_no:
+            # A new question began while this one was being finished off: its
+            # trace and its trailing silence would land in the middle of it.
+            return
+
         # What they traced while asking (TF-05): the trace is only whole now.
         await self._send_trace_line(conv)
 
         # Let the server hear the question end. See end_user_audio — this is
         # what makes the first word arrive immediately rather than a second
         # and a half later.
-        await conv.end_user_audio()
+        await conv.end_user_audio(stop=lambda: question != self._question_no)
+        if question == self._question_no and self._rt_said_nothing != question:
+            # The new question has been sent whole: whatever comes now is its
+            # answer, even if the server sent no transcript of it. (A press
+            # that said nothing leaves the answer it cut off silenced.)
+            conv.release_superseded()
 
     CONTEXT_WAIT_S = 1.0        # FS-04: how long a finished question waits for the screen line
+
+    # A session still opening is waited for, the question buffered meanwhile
+    # and sent whole once it opens. On a slow connection opening takes
+    # several seconds, and the slow route - transcribe, think, then speak,
+    # every step its own upload - is slower still there; it used to take any
+    # question whose session was not open within 3 s (17 times, 1-17 Oct).
+    # Only a session that fails to open sends the question the slow way.
+    SESSION_WAIT_S = 15.0       # the handshake itself allows 20 s
+    _rt_awaiting = 0            # the question waiting for its session (0: none)
+    _rt_said_nothing = 0        # the last question that ended with nothing said
+    _rt_question_pcm: Optional[bytes] = None    # its audio, kept for the slow route
+
+    async def _await_session(self, conv) -> bool:
+        """Wait for the live session to open; True when it has. False: this
+        question goes the slow way - at the release if the user is still
+        talking, from here if they have finished - or it was abandoned."""
+        question = self._question_no
+        started = time.monotonic()
+        self._rt_awaiting = question
+        try:
+            while not conv.ready and time.monotonic() - started < self.SESSION_WAIT_S:
+                if question != self._question_no or self._rt_said_nothing == question:
+                    return False                 # a newer question, or nothing to send
+                if not conv.connecting and time.monotonic() - started > 0.5:
+                    break                        # nothing is opening it: it failed
+                await asyncio.sleep(0.05)
+        finally:
+            if self._rt_awaiting == question:
+                self._rt_awaiting = 0
+        if question != self._question_no:
+            return False                         # its audio is the new question's now
+        if conv.ready:
+            waited = time.monotonic() - started
+            if waited > 1.0:
+                _log.info("waited %.1fs for the live session to open", waited)
+            if waited > net_quality.SLOW_OPEN_S:
+                net_quality.note_slow(f"the voice took {waited:.0f}s to open")
+            return True
+        _log.info("the live session did not open - this question goes the slow way")
+        if self._rt_streaming:
+            self._rt_streaming = False           # still talking: the release takes the slow route
+            return False
+        pcm, self._rt_question_pcm = self._rt_question_pcm, None
+        if pcm:
+            self._turn_seq += 1                  # the live route's watchdog stands down
+            await self._cascade_turn(pcm)
+        return False
 
     LESSON_STALE_S = 600.0
     _lesson_key = None                    # (the lesson, its step) as last seen
@@ -3205,6 +3266,10 @@ class CompanionManager(QObject):
         self.sig_clear_drawings.emit()
         await asyncio.sleep(self.CLEAR_BEFORE_SHOT_S)
         width = 1280 if careful else 1024
+        if net_quality.slow():
+            # A weak connection: about half the bytes. The fast look sees the
+            # picture at "medium" anyway (gemini_vision._FAST_RESOLUTION).
+            width = 960 if careful else 768
         shot_t0 = time.monotonic()
         screens = await self._capture_shots(max_width=width, reuse=not careful, pixels=False)
         if not screens:
@@ -3932,12 +3997,47 @@ class CompanionManager(QObject):
 
         Sets LISTENING inside the lock so a second caller on another thread
         cannot also observe IDLE and start a parallel capture.
+
+        A press while she is thinking or answering used to do nothing until
+        she had finished. Now she stops and listens (the owner's choice,
+        18 Oct 2026): see _interrupt_answer.
         """
         with self._begin_lock:
-            if self._state != AppState.IDLE:
+            if self._state == AppState.LISTENING:
                 return False
+            busy = self._state != AppState.IDLE
             self._state = AppState.LISTENING
-            return True
+            # Before anything else: from here the last answer's code can no
+            # longer set the state (_emit_state, _ANSWERING).
+            self._question_no += 1
+        if busy:
+            self._interrupt_answer()
+        return True
+
+    # The question being answered on the slow route (_cascade_turn), so a
+    # new question can stop it; None on the live route, where the session
+    # stops its own answer (RealtimeConversation.interrupt).
+    _answer_task: Optional[asyncio.Task] = None
+    # Counts questions. An answer still finishing for an older one must not
+    # set the state of the new one (_cascade_turn).
+    _question_no = 0
+
+    def _interrupt_answer(self) -> None:
+        """Stop everything the last question set going - her voice, a look,
+        typing, a tool, the slow route - because a new one has begun. Runs
+        on the keyboard hook's thread: it flips flags and hands the rest to
+        the loop. A walkthrough, an agent job and a PDF being made carry on:
+        they are not an answer, and have their own stop."""
+        _log.info("a new question while she was answering - she stops and listens")
+        conv = self._realtime
+        if conv is not None:
+            conv.interrupt()
+        task, loop = self._answer_task, self._loop
+        if task is not None and loop is not None and loop.is_running():
+            loop.call_soon_threadsafe(task.cancel)
+        if self._pointing_held:
+            self._pointing_held = False
+            self.sig_point_release.emit()
 
     def _claim_end(self) -> bool:
         """Exactly one of {hotkey release, silence watchdog} ends a capture."""
@@ -3979,6 +4079,11 @@ class CompanionManager(QObject):
         # request" - a guide move, for one - is measured against this.
         self._request_serial += 1
         self._trace_readings = []           # a trace belongs to the question it was drawn for
+        self._rt_question_pcm = None
+        # Shown before the microphone opens, not after: the press is answered
+        # on screen (and by her sound) at once.
+        self._emit_state(AppState.LISTENING)
+        opened = time.monotonic()
         try:
             # The sink has to be attached BEFORE the first block is captured,
             # or the opening syllable of the question is only in the buffer
@@ -3993,7 +4098,9 @@ class CompanionManager(QObject):
             )
             self._emit_state(AppState.IDLE)
             return
-        self._emit_state(AppState.LISTENING)
+        took = time.monotonic() - opened
+        if took > 0.15:
+            _log.info("the microphone took %.0f ms to open", took * 1000)
 
         # The session is already open, so there is nothing to wait for —
         # audio starts flowing to the model on the next 30 ms block.
@@ -4090,7 +4197,10 @@ class CompanionManager(QObject):
         """The hotkey came up. Answer through whichever route is live."""
         was_realtime, self._rt_streaming = self._rt_streaming, False
         conv = self._realtime
-        if was_realtime and (conv is None or not conv.ready):
+        # Still waiting for its session to open (_await_session): it stays on
+        # the live route, and is sent the moment the session is there.
+        awaiting = bool(self._rt_awaiting) and self._rt_awaiting == self._question_no
+        if was_realtime and not awaiting and (conv is None or not conv.ready):
             was_realtime = False    # never opened; the cascade has the full pcm
         try:
             pcm = self._listener.stop_recording()
@@ -4103,8 +4213,11 @@ class CompanionManager(QObject):
 
         if was_realtime:
             if len(pcm) < 3200:            # nothing was said
+                self._rt_said_nothing = self._question_no
                 self._emit_state(AppState.IDLE)
                 return
+            if awaiting:
+                self._rt_question_pcm = pcm      # the slow way, if the session never opens
             # Nothing further to do. The server heard the question as it was
             # spoken, decided for itself that it finished, and the answer is
             # already on its way in through the pump — which will move the
@@ -4167,6 +4280,9 @@ class CompanionManager(QObject):
             if self._state != AppState.THINKING:
                 return                  # it answered, or moved on
             now = time.monotonic()
+            if self._rt_awaiting:
+                started = now           # not sent yet (_await_session): nothing to hear
+                continue
             elapsed = now - started
             busy = self._tools_in_flight > 0 or now - self._tool_done_at < 6.0
             heard = bool(getattr(self, "_heard_buf", None)) or self._tool_done_at >= started
@@ -4228,6 +4344,10 @@ class CompanionManager(QObject):
         """Transcribe, think, speak — the fallback route."""
         # 32000 bytes == 1s of 16 kHz mono int16.
         audio_seconds = len(pcm) / 32000.0
+        # A new question cancels this one (_interrupt_answer); its last
+        # moments must then leave the new one's state alone (_emit_state).
+        _ANSWERING.set(self._question_no)
+        self._answer_task = asyncio.current_task()
 
         self._emit_state(AppState.THINKING)
         pointing_held = False  # track whether we told overlay to hold dwell
@@ -4348,7 +4468,8 @@ class CompanionManager(QObject):
                 # loop that is 50-150 ms during which nothing else starts.
                 # reuse=False: a fresh question deserves a fresh grab, and this
                 # also stamps the cache so any drawing this turn reuses it.
-                screenshots = await self._capture_shots(max_width=1280, reuse=False)
+                screenshots = await self._capture_shots(
+                    max_width=960 if net_quality.slow() else 1280, reuse=False)
                 # Only the ACTIVE monitor goes to the model — sending all three
                 # and hardcoding "screen1" in the prompt made it point on the
                 # wrong screen. One image, one coordinate space.
@@ -4585,7 +4706,9 @@ class CompanionManager(QObject):
         finally:
             if pointing_held:
                 self.sig_point_release.emit()
-            self._emit_state(AppState.IDLE)
+            if self._answer_task is asyncio.current_task():
+                self._answer_task = None
+            self._emit_state(AppState.IDLE)       # not if a new question has begun (_ANSWERING)
 
     async def _reply_local(self, msg: str, *, shown: str = ""):
         """Show + speak a message that doesn't need an LLM round-trip.
@@ -5721,9 +5844,14 @@ class CompanionManager(QObject):
             pass
 
     def _emit_state(self, state: AppState):
+        asked = _ANSWERING.get()
+        if asked and asked != self._question_no:
+            # An answer the user talked over (_interrupt_answer), in its last
+            # moments: the state belongs to the question asked since.
+            return
         self._state = state
-        # Wake-word scanning only means anything while Tora is idle: a wake
-        # word during THINKING or SPEAKING is refused by _claim_begin. Left
+        # Wake-word scanning only means anything while Tora is idle: while
+        # she thinks or speaks, a press is the way in (_claim_begin). Left
         # running, it paid to transcribe Tora's own answer coming back
         # through the microphone.
         try:

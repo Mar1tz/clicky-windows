@@ -290,6 +290,7 @@ class SpeechBuffer:
                     await self._grew.wait()
                 if player is not None:
                     if not playback_stopped():
+                        player.end_of_answer()   # all of the line is here: no gathering at its end
                         await player.drain()
                     if playback_stopped():
                         # Cut off (the user spoke): what is still queued must

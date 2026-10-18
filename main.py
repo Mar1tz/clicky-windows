@@ -39,7 +39,7 @@ def _ensure_std_streams() -> None:
 _ensure_std_streams()
 
 from PyQt6.QtWidgets import QApplication
-from PyQt6.QtCore import Qt, QTimer
+from PyQt6.QtCore import QObject, Qt, QTimer, pyqtSignal
 
 from config import cfg
 from ui.tray import TrayManager
@@ -48,7 +48,7 @@ from ui.overlay import (
     CursorOverlay, MODE_IDLE, MODE_LISTENING, MODE_THINKING, MODE_SPEAKING
 )
 from ui.flow_bar import FlowBar
-from hotkey import GlobalHotkeyMonitor, StopHotkey
+from hotkey import GlobalHotkeyMonitor, KeyShortcut, StopHotkey
 from companion_manager import CompanionManager
 from ui import sign_in_gate
 
@@ -59,6 +59,12 @@ STATE_TO_CURSOR_MODE = {
     AppState.THINKING:  MODE_THINKING,
     AppState.SPEAKING:  MODE_SPEAKING,
 }
+
+
+class _Shortcuts(QObject):
+    """Global shortcuts fire on the keyboard hook's thread; these signals
+    bring them to Qt's, where the screen may be changed."""
+    toggle_cursor = pyqtSignal()
 
 
 def _setup_logging():
@@ -323,8 +329,9 @@ def main():
     from ui import app_theme, tokens
     app.setFont(tokens.app_font())
     app_theme.apply(tokens.resolve(cfg.theme()))
-    from ui.overlay import set_cursor_colour
+    from ui.overlay import set_cursor_colour, set_cursor_shown
     set_cursor_colour(tokens.cursor_hex(cfg.cursor_colour()))   # Make Tora yours
+    set_cursor_shown(cfg.cursor_shown())                        # or only her bar
     from ui import app_icon
     try:
         app.setWindowIcon(app_icon.qicon())    # every window's title bar and taskbar button
@@ -847,6 +854,14 @@ def main():
     def _show_panel(on: bool):
         (panel.show if on else panel.hide)()
 
+    def _show_cursor(on: bool):
+        """Her cursor beside the mouse, or only her bar - saved, shown on
+        the next frame, and the app window's switch follows."""
+        cfg.set_cursor_shown(on)
+        set_cursor_shown(on)
+        if "w" in app_window:
+            app_window["w"].bridge.changed.emit("cursor")
+
     from types import SimpleNamespace
     live = SimpleNamespace(
         claim_hotkey=_claim_hotkey,
@@ -868,6 +883,18 @@ def main():
         tray.on_stop.emit()
     stop_key = StopHotkey(on_stop=_esc, key="esc")
     stop_key.start()
+
+    # Win + Alt + H: show or hide her cursor, leaving only her bar. The hook
+    # fires on the keyboard thread; the signal does the switch on Qt's.
+    shortcuts = _Shortcuts(app)
+    shortcuts.toggle_cursor.connect(lambda: _show_cursor(not cfg.cursor_shown()))
+    cursor_key = KeyShortcut(cfg.cursor_hotkey(), shortcuts.toggle_cursor.emit)
+    try:
+        cursor_key.start()
+    except Exception:  # noqa: BLE001 - a bad saved shortcut must not stop HeyTora
+        import logging as _lg
+        _lg.getLogger("tora").warning("could not set the cursor shortcut %r", cfg.cursor_hotkey(),
+                                      exc_info=True)
 
     # ── Show UI + start listener ──────────────────────────────────────────────
     overlay.show()        # persistent overlay (cursor follow)

@@ -25,8 +25,11 @@ class Conv:
     async def push_audio(self, pcm):
         self.log.append(("audio", pcm, time.monotonic()))
 
-    async def end_user_audio(self):
+    async def end_user_audio(self, stop=None):
         self.log.append(("end", None, time.monotonic()))
+
+    def release_superseded(self):
+        pass
 
 
 def _run(context_s: float, speaking_s: float = 0.4):

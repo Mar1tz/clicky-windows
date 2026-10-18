@@ -469,8 +469,11 @@ class _LiveConv:
     async def send_context(self, line):
         self.log.append(("context", line))
 
-    async def end_user_audio(self):
+    async def end_user_audio(self, stop=None):
         self.log.append(("end",))
+
+    def release_superseded(self):
+        pass
 
 
 def _streaming_manager(monkeypatch):

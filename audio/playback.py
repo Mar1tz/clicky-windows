@@ -146,7 +146,18 @@ class PcmStreamPlayer:
     Underruns are filled with silence rather than treated as the end: the
     gap between two websocket frames is normal and must not close the device
     mid-sentence.
+
+    Bad reception (the owner's ask, 18 Oct 2026): over a weak connection the
+    voice arrives in bursts with gaps, and playing each piece the moment it
+    landed chopped words in half. So a little is gathered before playing -
+    PREBUFFER_S on a good connection, more after an answer that ran dry
+    mid-sentence twice or more, less again once answers flow - and a gap
+    mid-answer is gathered over the same way. Never longer than HOLD_MAX_S.
     """
+
+    PREBUFFER_S = 0.08
+    PREBUFFER_MAX_S = 0.6
+    HOLD_MAX_S = 0.5
 
     def __init__(self, sample_rate: int = 24000, block: int = 1200):
         self._rate = sample_rate
@@ -155,6 +166,12 @@ class PcmStreamPlayer:
         self._lock = threading.Lock()
         self._stream: Optional[sd.RawOutputStream] = None
         self._done = threading.Event()
+        self.prebuffer = self.PREBUFFER_S
+        self._gathering = True            # holding back until enough is here
+        self._gather_since = 0.0
+        self._ended = False               # all of this answer has arrived (end_of_answer)
+        self._played = False              # some of this answer has been heard
+        self.dry_runs = 0                 # times this answer ran dry mid-sentence
 
     def start(self) -> None:
         # Re-arm every time a turn's playback begins, even when the device is
@@ -168,7 +185,21 @@ class PcmStreamPlayer:
         # after shows its text but says nothing." Clearing it here fixes it.
         _arm_audio()
         self._done.clear()
+        with self._lock:
+            self._gathering, self._ended, self._played, self.dry_runs = True, False, False, 0
+            self._gather_since = time.monotonic()
         self.open()
+
+    def end_of_answer(self) -> None:
+        """All of this answer has arrived: play what is left without waiting
+        for more, and learn from how the answer flowed."""
+        with self._lock:
+            self._ended = True
+            if self.dry_runs >= 2:
+                self.prebuffer = min(self.PREBUFFER_MAX_S, self.prebuffer + 0.1)
+            elif self.dry_runs == 0:
+                self.prebuffer = max(self.PREBUFFER_S, self.prebuffer - 0.02)
+            self.dry_runs = 0
 
     def open(self) -> None:
         """Open the device without touching the stop flag - to have it
@@ -194,9 +225,21 @@ class PcmStreamPlayer:
     def _callback(self, outdata, frames, time_info, status) -> None:
         need = frames * 2      # int16 mono
         with self._lock:
-            have = min(need, len(self._buf))
+            if self._gathering and self._buf and (
+                    self._ended or len(self._buf) >= self.prebuffer * self._rate * 2
+                    or time.monotonic() - self._gather_since >= self.HOLD_MAX_S):
+                self._gathering = False
+            have = 0 if self._gathering else min(need, len(self._buf))
             chunk = bytes(self._buf[:have])
             del self._buf[:have]
+            if have:
+                self._played = True
+            if have < need and self._played and not self._ended and not self._gathering:
+                # Ran dry mid-answer: the connection paused. Gather again
+                # rather than play the next word in pieces.
+                self._gathering = True
+                self._gather_since = time.monotonic()
+                self.dry_runs += 1
         if _stop_event.is_set():
             outdata[:] = bytes(need)
             self._done.set()
@@ -214,6 +257,8 @@ class PcmStreamPlayer:
         if self._stream is None:
             self.start()
         with self._lock:
+            if self._gathering and not self._buf:
+                self._gather_since = time.monotonic()      # the hold counts from the first piece back
             self._buf.extend(pcm_bytes)
         self._done.clear()
 

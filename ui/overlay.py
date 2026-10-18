@@ -67,6 +67,23 @@ def set_cursor_colour(hex_colour: str) -> None:
     CURSOR_BLUE = c if c.isValid() else QColor(0x33, 0x80, 0xFF)
     buddy.set_colour(CURSOR_BLUE.name())
 
+
+# Her cursor beside the mouse (Settings > Tora, Win + Alt + H, the first
+# launch; asked for on 18 Oct 2026). Hidden, the screen shows only her bar -
+# but when she points at something she still flies there, because the arrow
+# is the answer, and is gone again once it is done (no flight home).
+_CURSOR_SHOWN = True
+
+
+def set_cursor_shown(on: bool) -> None:
+    """Show or hide her cursor. Read every frame, so the next one shows it."""
+    global _CURSOR_SHOWN
+    _CURSOR_SHOWN = bool(on)
+
+
+def cursor_shown() -> bool:
+    return _CURSOR_SHOWN
+
 # Teaching-annotation palette. A drawing wears TORA's colour - the one the
 # user picked for her cursor (Make Tora yours) - unless it names another
 # because the colour means something (red for a mistake, green for right).
@@ -752,12 +769,14 @@ class CursorOverlay(QWidget):
             return None
         d = self._display_pos
         cx, cy = d.x(), d.y()
-        out = [QRectF(cx - BUDDY_REACH, cy - BUDDY_REACH, 2 * BUDDY_REACH, 2 * BUDDY_REACH)]
-        if self._locked_pos is not None and self._bubble_text:
-            out.append(buddy.bubble_rect(cx, cy, self._bubble_text).adjusted(-8, -8, 8, 10))
-        lines = self._island_lines()
-        if lines and self._island_alpha >= 0.02:
-            out.append(self._island_box(cx, cy, *lines)[0].adjusted(-12, -12, 30, 12))
+        out = []
+        if self._buddy_visible():
+            out.append(QRectF(cx - BUDDY_REACH, cy - BUDDY_REACH, 2 * BUDDY_REACH, 2 * BUDDY_REACH))
+            if self._locked_pos is not None and self._bubble_text:
+                out.append(buddy.bubble_rect(cx, cy, self._bubble_text).adjusted(-8, -8, 8, 10))
+            lines = self._island_lines()
+            if lines and self._island_alpha >= 0.02:
+                out.append(self._island_box(cx, cy, *lines)[0].adjusted(-12, -12, 30, 12))
         if self._ring is not None:
             rx, ry, r = self._ring
             out.append(QRectF(rx - r - 30, ry - r - 30, 2 * r + 60, 2 * r + 60))
@@ -796,6 +815,11 @@ class CursorOverlay(QWidget):
             for r in rects + s.rects:
                 s.update(r)
             s.rects = rects
+
+    def _buddy_visible(self) -> bool:
+        """Is she drawn now? Always, unless her cursor is hidden - and then
+        only while she flies to, or rests on, what she points at."""
+        return _CURSOR_SHOWN or self._flight_phase in (_PHASE_FLYING, _PHASE_DWELLING)
 
     def _release_lock(self):
         self._locked_pos = None
@@ -884,10 +908,13 @@ class CursorOverlay(QWidget):
             # Stay planted on the element
             self._display_pos = QPointF(self._locked_pos.x(), self._locked_pos.y())
             if time.monotonic() >= self._dwell_until:
-                cursor_target = QPointF(real.x() + OFFSET_X, real.y() + OFFSET_Y)
-                self._begin_flight(self._display_pos, cursor_target, _PHASE_RETURNING)
-                # Fade bubble out during return
-                self._bubble_alpha = 0.0
+                if not _CURSOR_SHOWN:
+                    self._release_lock()        # hidden: done pointing, she is simply gone
+                else:
+                    cursor_target = QPointF(real.x() + OFFSET_X, real.y() + OFFSET_Y)
+                    self._begin_flight(self._display_pos, cursor_target, _PHASE_RETURNING)
+                    # Fade bubble out during return
+                    self._bubble_alpha = 0.0
             self._phase += 0.10
             self._refresh()
             return
@@ -984,21 +1011,22 @@ class CursorOverlay(QWidget):
         cx = self._display_pos.x()
         cy = self._display_pos.y()
 
-        # The buddy's look is ui/buddy.py (the polished triangle, chosen 30 Sep).
-        if self._mode == MODE_LISTENING:
-            buddy.draw_listening(p, cx, cy, self._audio_level, self._phase * 0.5)
-        elif self._mode == MODE_THINKING:
-            buddy.draw_thinking(p, cx, cy, self._spin_phase * 0.36)
-        else:
-            # idle, speaking, pointing: its glow breathes, slowly
-            buddy.draw_pointer(p, cx, cy, rotation=self._rotation_deg, scale=self._flight_scale,
-                               breath=0.5 + 0.5 * math.sin(self._phase * 0.37))
+        if self._buddy_visible():
+            # The buddy's look is ui/buddy.py (the polished triangle, chosen 30 Sep).
+            if self._mode == MODE_LISTENING:
+                buddy.draw_listening(p, cx, cy, self._audio_level, self._phase * 0.5)
+            elif self._mode == MODE_THINKING:
+                buddy.draw_thinking(p, cx, cy, self._spin_phase * 0.36)
+            else:
+                # idle, speaking, pointing: its glow breathes, slowly
+                buddy.draw_pointer(p, cx, cy, rotation=self._rotation_deg, scale=self._flight_scale,
+                                   breath=0.5 + 0.5 * math.sin(self._phase * 0.37))
 
-        if self._locked_pos is not None and self._bubble_text:
-            buddy.draw_bubble(p, cx, cy, self._bubble_text,
-                              alpha=self._bubble_alpha, scale=self._bubble_scale)
+            if self._locked_pos is not None and self._bubble_text:
+                buddy.draw_bubble(p, cx, cy, self._bubble_text,
+                                  alpha=self._bubble_alpha, scale=self._bubble_scale)
 
-        self._draw_island(p, cx, cy)
+            self._draw_island(p, cx, cy)
 
         # Top caption — last, so its save/restore is never leaked into
         # by another pass's pen or clip.

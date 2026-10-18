@@ -529,6 +529,27 @@ def _ask(bridge, name: str, default, *args):
         return default
 
 
+class _CursorRow(ToggleRow):
+    """Show her cursor - or only her bar. Follows the shortcut while the
+    page is open: Win + Alt + H flips it from anywhere (main.py)."""
+
+    def __init__(self, bridge):
+        keys = _ask(bridge, "cursor_hotkey", "Win + Alt + H")
+        super().__init__("Show her cursor",
+                         f"Off: only her bar shows - she still flies to what she points at. "
+                         f"{keys} switches it any time.",
+                         bool(_ask(bridge, "cursor_shown", True)), first=True)
+        self._bridge = bridge
+        self.switch.toggled.connect(lambda on: _ask(bridge, "set_cursor_shown", None, on))
+        changed = getattr(bridge, "changed", None)
+        if changed is not None:
+            changed.connect(self._follow)          # disconnected when the row goes (a QObject)
+
+    def _follow(self, topic: str) -> None:
+        if topic == "cursor":
+            self.switch.setChecked(bool(_ask(self._bridge, "cursor_shown", True)))
+
+
 def _padded(row: QWidget) -> QWidget:
     """A Row inside a ListBox: the row has no side padding of its own."""
     box = QWidget()
@@ -1040,6 +1061,7 @@ class ToraPage(Page):
             row.addWidget(sw)
         row.addStretch(1)
         card.body.addLayout(row)
+        card.body.addWidget(_CursorRow(self.bridge))
         return card
 
     def _sound(self) -> Card:

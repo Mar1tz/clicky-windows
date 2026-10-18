@@ -200,6 +200,8 @@ class VoicePass:
 class Account:
     def __init__(self, transport: Optional[httpx.BaseTransport] = None):
         self._transport = transport                 # tests give a fake one
+        self._client: Optional[httpx.Client] = None         # see _http
+        self._client_transport: Optional[httpx.BaseTransport] = None
         self._lock = threading.RLock()
         self._session: Optional[dict] = store.load()
         # The last plan read, kept with the sign-in: shown at once after a
@@ -320,10 +322,9 @@ class Account:
         self._changed()
         if session and settings.configured():
             try:
-                with self._http() as http:
-                    http.post(f"{settings.supabase_url()}/auth/v1/logout",
-                              headers={**self._apikey(),
-                                       "Authorization": f"Bearer {session.get('access_token', '')}"})
+                self._http().post(f"{settings.supabase_url()}/auth/v1/logout",
+                                  headers={**self._apikey(),
+                                           "Authorization": f"Bearer {session.get('access_token', '')}"})
             except Exception:  # noqa: BLE001 - signed out here either way
                 pass
 
@@ -697,9 +698,8 @@ class Account:
     def _call(self, method: str, path: str, body: Optional[dict] = None) -> dict:
         token = self.token()
         try:
-            with self._http() as http:
-                r = http.request(method, settings.function_url(path), json=body,
-                                 headers={**self._apikey(), "Authorization": f"Bearer {token}"})
+            r = self._http().request(method, settings.function_url(path), json=body,
+                                     headers={**self._apikey(), "Authorization": f"Bearer {token}"})
         except httpx.HTTPError as e:
             # Offline, or HeyTora's server not answering: words, not a traceback.
             raise AccountError("Could not reach HeyTora - check the internet connection.") from e
@@ -728,13 +728,26 @@ class Account:
         return {"apikey": settings.anon_key()}
 
     def _http(self) -> httpx.Client:
-        return httpx.Client(timeout=httpx.Timeout(15.0, connect=8.0), transport=self._transport)
+        """One pooled client for every call to HeyTora's server, kept for the
+        life of the app (httpx.Client is thread-safe). A new client per call
+        meant a new TCP and TLS handshake per call - 1,101 voice passes, 103
+        tickets, 70 plan reads and 57 token refreshes in two weeks on the
+        owner's PC (18 Oct 2026) - and on a weak or distant connection a
+        handshake is several round trips in front of every voice session.
+        Idle connections are let go before servers typically drop them."""
+        with self._lock:
+            # A transport swapped in later (the tests' fakes) gets its own client.
+            if self._client is None or self._client_transport is not self._transport:
+                self._client = httpx.Client(
+                    timeout=httpx.Timeout(15.0, connect=8.0), transport=self._transport,
+                    limits=httpx.Limits(max_keepalive_connections=4, keepalive_expiry=50.0))
+                self._client_transport = self._transport
+            return self._client
 
     def _auth_post(self, path: str, body: dict) -> httpx.Response:
         try:
-            with self._http() as http:
-                return http.post(f"{settings.supabase_url()}/auth/v1/{path}", json=body,
-                                 headers=self._apikey())
+            return self._http().post(f"{settings.supabase_url()}/auth/v1/{path}", json=body,
+                                     headers=self._apikey())
         except httpx.HTTPError as e:
             raise AccountError("Could not reach HeyTora - check the internet connection.") from e
 

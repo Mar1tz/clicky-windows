@@ -133,6 +133,7 @@ class LiveEvent:
     #   audio             spoken audio, PCM16 @ sample_rate
     #   text              text response (TEXT-modality sessions)
     #   tool_call         model wants a tool run; answer with send_tool_response
+    #   tool_cancel       those tool calls are void (raw["toolCallCancellation"]["ids"])
     #   turn_complete     model finished a turn
     #   interrupted       the user talked over the model; drop queued audio
     #   voice_activity    server VAD: text is ACTIVITY_START or ACTIVITY_END
@@ -220,6 +221,15 @@ class LiveSession:
     @property
     def is_open(self) -> bool:
         return self._ws is not None and not self._closed
+
+    def backlog_bytes(self) -> int:
+        """Bytes handed to the socket and not yet sent. On a weak connection
+        the upload falls behind the microphone and this grows (net_quality)."""
+        ws = self._ws
+        try:
+            return int(ws.transport.get_write_buffer_size()) if ws is not None else 0
+        except Exception:  # noqa: BLE001 - no transport to ask: say nothing
+            return 0
 
     # ── Sending ──────────────────────────────────────────────────────────────
 
@@ -316,6 +326,12 @@ class LiveSession:
 
                 if "goAway" in msg:
                     yield LiveEvent(kind="go_away", raw=msg)
+                    continue
+
+                # The user spoke over a tool call: the server will not use
+                # its answer. The ids say which calls to stop.
+                if "toolCallCancellation" in msg:
+                    yield LiveEvent(kind="tool_cancel", raw=msg)
                     continue
 
                 if "toolCall" in msg:

@@ -435,6 +435,9 @@ class _Player:
     def feed(self, pcm):
         _Player.events.append(("feed", len(pcm)))
 
+    def end_of_answer(self):
+        pass
+
     def clear(self):
         _Player.events.append("clear")
 
