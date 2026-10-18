@@ -69,7 +69,7 @@ or `max`.
    - make a **client-side token**.
 4. **Paddle sandbox → Checkout → Checkout settings:** set the **default
    payment link** to `https://<website>/pay`, e.g.
-   `https://app.agentora.co.za/pay`. Paddle builds checkout URLs from it. For
+   `https://heytora.co.za/pay`. Paddle builds checkout URLs from it. For
    live, Paddle must approve the domain.
 5. **Deploy the webhook:** `supabase functions deploy paddle --no-verify-jwt`.
 6. **Paddle sandbox → Developer tools → Notifications → New destination:**

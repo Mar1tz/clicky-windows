@@ -21,10 +21,10 @@ test("codes are cleaned, and only real-looking ones are passed on", () => {
 });
 
 test("only the website may call the two routes without a sign-in", () => {
-  const sites = ["https://app.agentora.co.za", "http://localhost:3500"];
-  assert.equal(corsHeaders("https://app.agentora.co.za", sites)["access-control-allow-origin"],
-    "https://app.agentora.co.za");
+  const sites = ["https://heytora.co.za", "http://localhost:3500"];
+  assert.equal(corsHeaders("https://heytora.co.za", sites)["access-control-allow-origin"],
+    "https://heytora.co.za");
   assert.equal(corsHeaders("http://localhost:3500", sites)["access-control-allow-origin"], "http://localhost:3500");
   assert.equal(corsHeaders("https://evil.example", sites)["access-control-allow-origin"],
-    "https://app.agentora.co.za", "anyone else is told the site's own origin - the browser refuses them");
+    "https://heytora.co.za", "anyone else is told the site's own origin - the browser refuses them");
 });

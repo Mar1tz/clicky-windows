@@ -88,7 +88,7 @@ completely, by us or anyone. The design keeps it rare and cheap.
 The hard part: the path is link → website → installer → app → sign-in, with no
 account on the website, and the installer carries nothing across.
 
-1. The link is `app.agentora.co.za/r/DYLAN7`. The page there remembers the code
+1. The link is `heytora.co.za/r/DYLAN7`. The page there remembers the code
    in the browser, says "Dylan gave you 14 days of HeyTora Pro", and offers the
    download.
 2. The friend installs, then clicks **Sign in via browser**. `/login` opens **in
