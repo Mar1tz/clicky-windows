@@ -41,6 +41,7 @@ import logging
 import re
 import threading
 import time
+from collections import deque
 from dataclasses import dataclass
 from typing import Optional, List, Tuple
 
@@ -227,23 +228,28 @@ def _pointing_root(hwnd: Optional[int] = None):
 
 
 def list_pointables(
-    limit: int = 40, *, max_nodes: int = 1400, max_depth: int = 16,
+    limit: int = 120, *, max_nodes: int = 1400, max_depth: int = 16,
     hwnd: Optional[int] = None,
 ) -> List[Tuple[int, int, str, str]]:
     """Named, on-screen controls from the foreground window.
 
-    Returns (center_x, center_y, name, control_type) in PHYSICAL pixels. This
-    is walked once per turn and the result feeds both the control-name list
-    the model is told about and directional coreference ("the one to its
-    left"), so neither pays for a second tree walk — repeated UIA walks are
-    the slow part in Electron apps like VS Code.
+    Returns (center_x, center_y, name, control_type) in PHYSICAL pixels, top
+    of the window first. This is read once per turn and feeds both the
+    control-name list the model is told about and the in-memory matching of
+    point_at (_match_snapshot) and of "the one to its left" - so none of
+    them pays for a second look at the tree.
 
-    Bounded on purpose: the useful controls (menus, toolbars, tabs) sit near
-    the top of the tree, and an unbounded walk of a deep Electron tree can
-    take many seconds. Names only — never values, never anything typed.
+    SC-06 (the speed review, 17 Oct 2026): ONE cross-process call - Windows
+    builds the whole tree of named, pointable controls in the app and hands
+    it back cached - instead of walking it here node by node, four COM round
+    trips a node. The screen line took 0.8 s at the median (p90 1.8 s); on
+    18 Oct a browser window took 221 ms walked and 20 ms cached, Spotify
+    185 ms and 51 ms, and VS Code, whose walk found nothing in its first
+    1,400 nodes, gave up 630 controls in 181 ms. The walk stays as the
+    fallback. Names only - never values, never anything typed.
     """
     try:
-        import uiautomation as auto
+        import uiautomation as auto  # noqa: F401
     except ImportError:
         return []
     try:
@@ -252,13 +258,78 @@ def list_pointables(
         return []
     if root is None:
         return []
+    try:
+        return _cached_pointables(root, limit)
+    except Exception:  # noqa: BLE001 - an app that will not build the cache: walk it
+        log.debug("cached control list failed - walking the tree", exc_info=True)
+        return _walk_pointables(root, limit, max_nodes, max_depth)
 
+
+def _pointable(name: str, ctrl_type: str, rect, seen: set) -> Optional[Tuple[int, int, str, str]]:
+    """(cx, cy, name, type) when this control can be pointed at by name."""
+    if not (name and ctrl_type in _NAMEABLE_TYPES and 1 < len(name) <= 40):
+        return None
+    left, top, right, bottom = rect
+    if right - left <= 0 or bottom - top <= 0:
+        return None
+    key = name.lower()
+    if key in seen or _is_chrome(name):
+        return None
+    seen.add(key)
+    return int((left + right) // 2), int((top + bottom) // 2), name, ctrl_type
+
+
+_FILTER = None            # the cache request's tree filter, made once per process
+
+
+def _cached_pointables(root, limit: int) -> List[Tuple[int, int, str, str]]:
+    import uiautomation as auto
+    from uiautomation import uiautomation as _ua
+    global _FILTER
+    ui = _ua._AutomationClient.instance().IUIAutomation
+    P = auto.PropertyId
+    if _FILTER is None:
+        kinds = None
+        for t in _NAMEABLE_TYPES:
+            if not t.endswith("Control"):
+                continue
+            cond = ui.CreatePropertyCondition(P.ControlTypeProperty, getattr(auto.ControlType, t))
+            kinds = cond if kinds is None else ui.CreateOrCondition(kinds, cond)
+        named = ui.CreateNotCondition(ui.CreatePropertyCondition(P.NameProperty, ""))
+        _FILTER = ui.CreateAndCondition(ui.CreateAndCondition(ui.ControlViewCondition, named), kinds)
+    request = ui.CreateCacheRequest()
+    for prop in (P.NameProperty, P.ControlTypeProperty, P.BoundingRectangleProperty, P.IsOffscreenProperty):
+        request.AddProperty(prop)
+    request.TreeScope = 7                                   # TreeScope_Subtree
+    request.TreeFilter = _FILTER
+    top = root.Element.BuildUpdatedCache(request)           # the one cross-process call
     out: List[Tuple[int, int, str, str]] = []
-    seen = set()
-    queue: List[Tuple["auto.Control", int]] = [(root, 0)]
+    seen: set = set()
+    queue = deque([top])
+    while queue and len(out) < limit:                       # breadth-first: the top of the window first
+        el = queue.popleft()
+        if not el.CachedIsOffscreen:
+            r = el.CachedBoundingRectangle
+            hit = _pointable((el.CachedName or "").strip(), auto.ControlTypeNames.get(el.CachedControlType, ""),
+                             (r.left, r.top, r.right, r.bottom), seen)
+            if hit is not None:
+                out.append(hit)
+        kids = el.GetCachedChildren()
+        if kids:
+            queue.extend(kids.GetElement(i) for i in range(kids.Length))
+    return out
+
+
+def _walk_pointables(root, limit: int, max_nodes: int, max_depth: int) -> List[Tuple[int, int, str, str]]:
+    """The old walk, node by node - bounded on purpose: the useful controls
+    sit near the top, and an unbounded walk of a deep Electron tree can take
+    many seconds."""
+    out: List[Tuple[int, int, str, str]] = []
+    seen: set = set()
+    queue = deque([(root, 0)])
     visited = 0
     while queue and visited < max_nodes and len(out) < limit:
-        node, depth = queue.pop(0)
+        node, depth = queue.popleft()
         visited += 1
         try:
             name = (node.Name or "").strip()
@@ -266,17 +337,10 @@ def list_pointables(
             rect = node.BoundingRectangle
         except Exception:
             continue
-
-        if (name and ctrl_type in _NAMEABLE_TYPES
-                and rect and rect.width() > 0 and rect.height() > 0
-                and 1 < len(name) <= 40):
-            key = name.lower()
-            if key not in seen and not _is_chrome(name):
-                seen.add(key)
-                cx = int((rect.left + rect.right) // 2)
-                cy = int((rect.top + rect.bottom) // 2)
-                out.append((cx, cy, name, ctrl_type))
-
+        if rect:
+            hit = _pointable(name, ctrl_type, (rect.left, rect.top, rect.right, rect.bottom), seen)
+            if hit is not None:
+                out.append(hit)
         if depth < max_depth:
             try:
                 queue.extend((c, depth + 1) for c in node.GetChildren())
