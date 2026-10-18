@@ -108,15 +108,38 @@ def test_free_has_no_standby_so_its_voice_opens_on_a_question(heytora):
 
 
 @pytest.mark.parametrize("reason", ["passes", "window"])
-def test_a_used_up_window_starts_the_next(heytora, reason):
+def test_a_reconnect_after_its_window_ended_waits_in_standby(heytora, reason):
+    """FX-02 (the speed review, 17 Oct 2026): a reconnect with no question
+    waiting found its window ended, asked for "new", and opened - and
+    counted - a talk message nobody asked (9 times on 6-9 Oct). It waits in
+    an uncounted standby window now."""
+    acc = heytora.account
+    _signed_in(heytora)
+    _pro(heytora)
+    acc.new_talk()
+    acc.voice_pass("talk", "gemini-3.8-live")                 # the question: its window
+    heytora.fake.pass_refusal = reason
+    acc.voice_pass("talk", "gemini-3.8-live")                 # a reconnect: that window has ended
+    passes = [(b.get("new"), b.get("standby")) for _m, p, _h, b in heytora.fake.calls
+              if p.endswith("/voice-pass")]
+    assert passes == [(True, None), (False, None), (None, True)]
+    assert heytora.fake.opened["talk"] == 1 and heytora.fake.standby == 1, "no talk message for it"
+
+
+@pytest.mark.parametrize("reason", ["passes", "window"])
+def test_on_free_a_reconnect_after_its_window_ended_waits_for_the_next_question(heytora, reason):
+    from account.service import LimitReached
     acc = heytora.account
     _signed_in(heytora)
     acc.new_talk()
     acc.voice_pass("talk", "gemini-3.8-live")
     heytora.fake.pass_refusal = reason
+    with pytest.raises(LimitReached):
+        acc.voice_pass("talk", "gemini-3.8-live")             # Free has no standby
+    assert heytora.fake.opened["talk"] == 1, "not counted"
+    acc.new_talk()                                            # they ask something: that opens one
     acc.voice_pass("talk", "gemini-3.8-live")
-    passes = [b.get("new") for _m, p, _h, b in heytora.fake.calls if p.endswith("/voice-pass")]
-    assert passes == [True, False, True] and heytora.fake.opened["talk"] == 2
+    assert heytora.fake.opened["talk"] == 2
 
 
 def test_an_ending_window_is_asked_for_again_and_never_stretched(heytora):

@@ -141,6 +141,18 @@ _TEXT_SIZES = {"s": 12, "m": 17, "l": 26}
 
 # The status card above the buddy (_island_box).
 _ISLAND_PAD_X, _ISLAND_PAD_Y, _ISLAND_GAP, _ISLAND_DOT_W = 11, 7, 3, 16
+_ISLAND_FONTS: Optional[tuple] = None
+
+
+def _island_fonts() -> tuple:
+    """(head font, sub font, their metrics) - made once, not every frame
+    the card is up (UI-04)."""
+    global _ISLAND_FONTS
+    if _ISLAND_FONTS is None:
+        head = QFont("Segoe UI", 9, QFont.Weight.DemiBold)
+        sub = QFont("Segoe UI", 8, QFont.Weight.Normal)
+        _ISLAND_FONTS = (head, sub, QFontMetricsF(head), QFontMetricsF(sub))
+    return _ISLAND_FONTS
 
 
 def _shape_path_pts(shape: dict):
@@ -1041,9 +1053,7 @@ class CursorOverlay(QWidget):
         """(card rect, head font, sub font) of the status card above the
         buddy at (cx, cy) - one place, so what is painted and what is
         repainted (_regions) cannot disagree."""
-        head_font = QFont("Segoe UI", 9, QFont.Weight.DemiBold)
-        sub_font = QFont("Segoe UI", 8, QFont.Weight.Normal)
-        fm_h, fm_s = QFontMetricsF(head_font), QFontMetricsF(sub_font)
+        head_font, sub_font, fm_h, fm_s = _island_fonts()
         w = _ISLAND_DOT_W + max(
             fm_h.horizontalAdvance(head),
             fm_s.horizontalAdvance(sub) if sub else 0,

@@ -306,3 +306,33 @@ def test_main_wires_it_and_her_words_go_to_the_card_not_the_island():
                  "flow.show()"):
         assert wire in src, wire
     assert "overlay.caption_chunk" not in src and "overlay.caption_done" not in src
+
+
+# -- at rest, the bar stops ticking (UI-02, the speed review of 17 Oct 2026) ---------------------------------------
+
+def test_the_bar_stops_ticking_at_rest_and_wakes_on_a_change(bar):
+    import time as _time
+    bar.show()
+    assert bar._timer.isActive()
+    bar._size_t0 = _time.monotonic() - 1.0          # its grow long finished
+    _settle(bar)
+    bar._tick()
+    assert not bar._timer.isActive(), "idle and still: no 60-a-second wake-ups"
+    bar.set_state("listening")
+    assert bar._timer.isActive(), "a press wakes it at once"
+
+
+def test_the_card_is_repainted_only_when_it_changes(bar, monkeypatch):
+    bar.show()
+    bar.push_answer("Knight to f3.")
+    bar.finish_answer()
+    painted = []
+    monkeypatch.setattr(bar.card, "update", lambda: painted.append(1))
+    bar._tick_card(1.0, 0.016)
+    bar._card_a = 1.0
+    bar._shown = float(len(bar._text))
+    bar._tick_card(1.0, 0.016)
+    before = len(painted)
+    for _ in range(5):
+        bar._tick_card(1.0, 0.016)                  # nothing changed on it
+    assert len(painted) == before

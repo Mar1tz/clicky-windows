@@ -92,8 +92,10 @@ def _setup_logging():
     except Exception:
         pass
     try:
+        # ST-05: five files of 1 MB keep two weeks or more; one request line
+        # per HTTP call (httpx) filled a third of the log on its own.
         handler = RotatingFileHandler(
-            log_dir / "tora.log", maxBytes=1_000_000, backupCount=2,
+            log_dir / "tora.log", maxBytes=1_000_000, backupCount=5,
             encoding="utf-8",
         )
         handler.setFormatter(logging.Formatter(
@@ -102,6 +104,7 @@ def _setup_logging():
         root = logging.getLogger()
         root.setLevel(logging.INFO)
         root.addHandler(handler)
+        logging.getLogger("httpx").setLevel(logging.WARNING)
         logsafe.install(root)
         logging.getLogger("tora").info(
             "=== HeyTora starting (python %s) ===", sys.version.split()[0]

@@ -166,6 +166,7 @@ class PcmStreamPlayer:
         self._lock = threading.Lock()
         self._stream: Optional[sd.RawOutputStream] = None
         self._done = threading.Event()
+        self._open_lock = threading.Lock()     # opened ahead on a worker (open) and on first audio (start)
         self.prebuffer = self.PREBUFFER_S
         self._gathering = True            # holding back until enough is here
         self._gather_since = 0.0
@@ -207,16 +208,21 @@ class PcmStreamPlayer:
         asking for audio 0.24 s after it is opened (0.97 s for the first one
         after launch, on this machine's MME output), and that delay used to
         come before every line (GW-08). Until fed, it plays silence."""
-        if self._stream is not None:
-            return
-        try:
-            self._stream = sd.RawOutputStream(
-                samplerate=self._rate, channels=1, dtype="int16",
-                blocksize=self._block, callback=self._callback,
-            )
-            self._stream.start()
-        except Exception:
-            self._stream = None
+        with self._open_lock:
+            if self._stream is not None:
+                return
+            try:
+                # latency="low": 0.1 s from buffer to speaker on the owner's PC
+                # against 0.2 s at sounddevice's default "high" (18 Oct 2026) -
+                # a tenth of a second off every first word (HP-05).
+                stream = sd.RawOutputStream(
+                    samplerate=self._rate, channels=1, dtype="int16",
+                    blocksize=self._block, callback=self._callback, latency="low",
+                )
+                stream.start()
+                self._stream = stream
+            except Exception:
+                self._stream = None
 
     @property
     def is_open(self) -> bool:

@@ -72,11 +72,13 @@ HARD_TOOL_ROUNDS = 10
 # Not a lone "#" or "*": "C#" and "item #3" are speech.
 _PLANNING_RE = re.compile(r"\*\*|(^|\s)\*\s|(^|\n)\s*#{1,6}\s|```")
 
-# Context compression. 16k is roughly forty spoken turns of history, far more
-# than any conversation refers back to, and it caps what every later turn
-# costs. Keeping 8k after a trim leaves several turns of real context.
-COMPRESSION_TRIGGER_TOKENS = 16_000
-COMPRESSION_TARGET_TOKENS = 8_000
+# Context compression: it caps what every later turn costs, and how long the
+# model takes to its first word. 16k was the cap until 18 Oct (CO-01): on
+# 11 Oct four turns ran 13,770 -> 17,464 tokens in, every turn near it, the
+# system prompt and tools ~3,800 of them. 12k, trimmed to 7k, still keeps
+# several turns of real context for "open that one".
+COMPRESSION_TRIGGER_TOKENS = 12_000
+COMPRESSION_TARGET_TOKENS = 7_000
 
 # How much trailing silence to stream so the server's VAD hears the question
 # end. Eight frames is 800 ms, which measured reliable; the loop exits early
@@ -727,7 +729,10 @@ class RealtimeConversation:
         it had lost the ability to do things. The resumption handle is the
         server's own way of saying "carry on where you were".
         """
-        await self.close()
+        # The speaker stays open across a reconnect (HP-04): a new output
+        # stream waits ~0.24 s before it plays anything, and sessions are
+        # replaced every few minutes (362 times on 1-17 Oct).
+        await self.close(keep_speaker=True)
         resume = self._resume_handle if system_prompt == self._system and not self._forget else None
         self._forget = False
         self._retiring = False
@@ -778,7 +783,10 @@ class RealtimeConversation:
         except Exception:  # noqa: BLE001 - a recap is a nicety, never a blocker
             _log.debug("could not re-seed the session", exc_info=True)
 
-    async def close(self) -> None:
+    async def close(self, keep_speaker: bool = False) -> None:
+        """Close the session. `keep_speaker`: a new one is about to open -
+        what the old one queued is dropped, but the output device stays
+        open, ready for the next answer."""
         pump, self._pump = self._pump, None
         if pump is not None:
             pump.cancel()
@@ -788,7 +796,10 @@ class RealtimeConversation:
                 await session.close()
             except Exception:
                 pass
-        self._player.stop()
+        if not keep_speaker:
+            self._player.stop()
+        elif session is not None:
+            self._player.clear()                # what the old session had queued
         self._speaking = False
 
     # ── Talking to it ────────────────────────────────────────────────────────
@@ -912,6 +923,13 @@ class RealtimeConversation:
         """Esc, or a new question. Same as a barge-in from our side."""
         self._player.clear()
         self._speaking = False
+
+    def open_speaker(self) -> None:
+        """Open the output device ahead of the first answer - the app calls
+        this at start-up, on a worker: the first output stream after launch
+        took 0.97 s to start playing (GW-08), and that wait used to fall on
+        the first word. Blocking."""
+        self._player.open()
 
     def interrupt(self) -> None:
         """The shortcut was pressed while she was still answering (the

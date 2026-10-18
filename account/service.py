@@ -587,6 +587,12 @@ class Account:
                 if body.get("standby") and reason == "not_in_plan":
                     # No standby on this plan: the voice opens on a question.
                     body = {"kind": "talk", "model": model, "new": True}
+                elif reason in ("passes", "window") and not pending and not body.get("standby"):
+                    # No question is waiting - a reconnect - and its window has
+                    # ended: wait in an uncounted standby window. Asking for
+                    # "new" here opened, and counted, a talk message nobody
+                    # asked (FX-02: 9 times on 6-9 Oct).
+                    body = {"kind": "talk", "model": model, "standby": True}
                 elif reason in ("passes", "window") and not body.get("new"):
                     # This window has just ended, or has had its passes: the next.
                     body = {**body, "new": True}
@@ -668,9 +674,12 @@ class Account:
         if kind not in ("talk", "dictation", "agent", "wake") or usage.get("used") is None \
                 or usage.get("reused"):
             return                        # standby windows and passes are not the user's use
-        _log.info("%s: %s of %s this month%s", _KIND_WORDS.get(kind, kind), usage["used"],
-                  "unlimited" if usage.get("limit") is None else usage["limit"],
-                  f" (window {usage['window']})" if usage.get("window") else "")
+        # A wake-word check every few seconds in a talkative room is noise at
+        # INFO (2,704 lines in two weeks, ST-05); the count still moves below.
+        _log.log(logging.DEBUG if kind == "wake" else logging.INFO,
+                 "%s: %s of %s this month%s", _KIND_WORDS.get(kind, kind), usage["used"],
+                 "unlimited" if usage.get("limit") is None else usage["limit"],
+                 f" (window {usage['window']})" if usage.get("window") else "")
         with self._lock:
             if self._summary is not None:
                 self._summary.setdefault("usage", {})[kind] = usage["used"]

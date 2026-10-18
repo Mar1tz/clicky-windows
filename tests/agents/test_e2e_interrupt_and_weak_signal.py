@@ -443,3 +443,17 @@ def test_the_first_launch_asks_whether_to_show_her_cursor(qapp, service, monkeyp
         assert not cfg.cursor_shown() and not overlay.cursor_shown()
     finally:
         overlay.set_cursor_shown(True)
+
+
+# -- a look waits for drawings only when there may be some (SC-05) -----------------------------------------------
+
+def test_a_look_waits_to_rub_out_drawings_only_when_there_are_some():
+    m = _manager(AppState.IDLE)
+    m._guide_runner = None
+    assert not m._drawings_on_screen(), "nothing drawn: no 0.1 s wait"
+    m._note_drawn({"kind": "arrow"})
+    assert m._drawings_on_screen()
+    m._drawn_at -= m.DRAWINGS_LAST_S + 1               # it has faded since
+    assert not m._drawings_on_screen()
+    m._guide_runner = SimpleNamespace(running=True)  # a walkthrough's drawings stay
+    assert m._drawings_on_screen()

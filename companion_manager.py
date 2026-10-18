@@ -428,6 +428,11 @@ class CompanionManager(QObject):
 
     def __init__(self):
         super().__init__()
+        # SC-05: whenever she puts something on screen, so a look knows
+        # whether there is anything to rub out before its picture.
+        for drew in (self.sig_draw, self.sig_point_at, self.sig_guide_point, self.sig_arrow,
+                     self.sig_circle, self.sig_underline, self.sig_label):
+            drew.connect(self._note_drawn)
         self._state: AppState = AppState.IDLE
         self._history: List[Message] = []
         self._current_model: Optional[str] = None
@@ -609,6 +614,7 @@ class CompanionManager(QObject):
         self._submit(self._warm_up())
         self._submit(self._account_warm_up())
         self._submit(self._realtime_connect())
+        self._submit(self._open_speaker())
         self._submit(self._keep_session_fresh())
         # Speed, measured (ai/speed.py): how late the loop wakes, and what
         # Tora costs the CPU while nobody talks to her.
@@ -656,6 +662,13 @@ class CompanionManager(QObject):
                     await self._realtime_connect()      # Pro / Max: open it now, as before
         except Exception as e:  # noqa: BLE001
             gemini.report_problem(e)
+
+    async def _open_speaker(self) -> None:
+        """Her speaker, opened at start-up rather than on her first word
+        (HP-04). On the loop, where the conversation is made - never two of
+        them - and the opening itself on a worker."""
+        if cfg.realtime() and cfg.has_key():
+            await asyncio.to_thread(self._get_realtime().open_speaker)
 
     async def _warm_up(self):
         try:
@@ -1194,7 +1207,7 @@ class CompanionManager(QObject):
                 or self._state != AppState.IDLE or not self._metered_talk()):
             return
         _log.info("metered plan: closing the idle voice session")
-        await conv.close()
+        await conv.close(keep_speaker=True)       # the speaker stays ready for the next answer
 
     async def _realtime_connect(self, on_demand: bool = False) -> bool:
         """Open the conversation before anyone asks anything.
@@ -3275,7 +3288,8 @@ class CompanionManager(QObject):
         # own stale move on the board - and it made a changed screen and an
         # unchanged one hard to tell apart.
         self.sig_clear_drawings.emit()
-        await asyncio.sleep(self.CLEAR_BEFORE_SHOT_S)
+        if self._drawings_on_screen():
+            await asyncio.sleep(self.CLEAR_BEFORE_SHOT_S)
         width = 1280 if careful else 1024
         if net_quality.slow():
             # A weak connection: about half the bytes. The fast look sees the
@@ -3343,7 +3357,7 @@ class CompanionManager(QObject):
 
         # UD-05: asked again about a screen that has not changed - the last
         # look's answer and drawing again, and no call.
-        sk = look_region.sketch(image)
+        sk = await asyncio.to_thread(look_region.sketch, image)      # a JPEG decode: off the loop
         again = self._reusable_look(question, sk, title)
         if again is not None:
             for tag in again["tags"]:
@@ -3498,6 +3512,21 @@ class CompanionManager(QObject):
     _last_look: Optional[dict] = None
     _LOOK_REUSE_S = 180.0
     CLEAR_BEFORE_SHOT_S = 0.1     # the overlay repaints, and Windows composes it, in this
+    # SC-05: the wait is only for drawings that may still be showing - one
+    # fades within ANNOTATION_TTL_S (14 s), one in a walkthrough stays.
+    # Every look used to pay the 0.1 s, drawings or not.
+    DRAWINGS_LAST_S = 15.0
+    _drawn_at = 0.0
+    _guide_runner = None                  # set in __init__; here for a manager built bare (tests)
+
+    def _note_drawn(self, *_args) -> None:
+        self._drawn_at = time.monotonic()
+
+    def _drawings_on_screen(self) -> bool:
+        guide = self._guide_runner
+        return (time.monotonic() - self._drawn_at < self.DRAWINGS_LAST_S
+                or (guide is not None and guide.running))
+
     # FS-01: on 9 Oct "Okay, I've done that. Where's my next best move?", "Okay,
     # look again" and "I've done that. Please do the next move." were all
     # answered from the look before - the old move, three times: "still stuck,
@@ -4341,14 +4370,18 @@ class CompanionManager(QObject):
         self._app_memory[ak] = history[-20:]
 
         if self._journal_enabled and not self._quiz_mode and question:
-            try:
-                journal.log_qa(
-                    question=question, answer=answer,
-                    app_key=ak, window_title=title,
-                    provider="gemini", model=Models.REALTIME,
-                )
-            except Exception:
-                pass
+            def write() -> None:
+                try:
+                    journal.log_qa(
+                        question=question, answer=answer,
+                        app_key=ak, window_title=title,
+                        provider="gemini", model=Models.REALTIME,
+                    )
+                except Exception:
+                    pass
+            # A disk write (SQLite, its own connection) - never on the loop
+            # that carries the voice (HP-12).
+            threading.Thread(target=write, name="journal", daemon=True).start()
 
         if self._recorder and self._recorder.is_recording:
             if question:
