@@ -46,6 +46,9 @@ openpyxl>=3.1.0
 # OCR — the pointing fallback for canvas apps (Figma, games) where UIA
 # exposes no tree.
 rapidocr-onnxruntime>=1.3.0
+# The wake word on this PC (audio/wake_local.py, HP-08): a keyword spotter with
+# its own onnxruntime, ~28 MB; the 5 MB model is in assets/wake.
+sherpa-onnx==1.13.8
 
 # OCR fallback for fine print (also needs Tesseract binary):
 #   https://github.com/UB-Mannheim/tesseract/wiki

@@ -584,6 +584,8 @@ class CompanionManager(QObject):
             device=cfg.mic_device(),         # by name: device numbers move (config.py)
             ambient=cfg.ambient_mic(),
             wake_transcriber=self._transcribe_blocking,
+            wake_local=self._local_wake(),
+            wake_mode=cfg.wake_engine(),
         )
 
         # Autonomous agent workforce (agents/). Built in start(), never here:
@@ -725,6 +727,17 @@ class CompanionManager(QObject):
     # asked again for this long - not every few seconds for the rest of the day.
     WAKE_REFUSED_PAUSE_S = 15 * 60
     _wake_refused_until = 0.0
+
+    @staticmethod
+    def _local_wake():
+        """The on-PC wake word (HP-08), unless the cloud is chosen."""
+        if cfg.wake_engine() == "cloud":
+            return None
+        try:
+            from audio.wake_local import LocalWake
+            return LocalWake()
+        except Exception:  # noqa: BLE001 - numpy missing or the like: the cloud check
+            return None
 
     def _transcribe_blocking(self, pcm: bytes) -> str:
         """Wake-word transcription, called from the listener's worker thread.
@@ -992,11 +1005,26 @@ class CompanionManager(QObject):
                 drift = now - last_tick - HEARTBEAT
                 last_tick = now
                 if drift > DRIFT_THRESHOLD:
-                    # System was sleeping — restart subsystems
-                    self._on_system_resume()
+                    # System was sleeping — restart subsystems (if Windows'
+                    # own resume message has not already, ST-06)
+                    self.on_power_resume()
 
         t = threading.Thread(target=_watch, daemon=True)
         t.start()
+
+    # ST-06: Windows says when it resumes (WM_POWERBROADCAST, main.py's
+    # _PowerEvents) - the mic and voice come back then, not when the 5 s
+    # heartbeat above notices the gap and a second more. Either way, once.
+    RESUME_ONCE_S = 30.0
+    _resumed_at = 0.0
+
+    def on_power_resume(self) -> None:
+        now = time.monotonic()
+        if now - self._resumed_at < self.RESUME_ONCE_S:
+            return
+        self._resumed_at = now
+        _log.info("the PC woke from sleep - the microphone and voice are reopened")
+        threading.Thread(target=self._on_system_resume, name="resume", daemon=True).start()
 
     def _on_system_resume(self):
         """Called automatically after the laptop wakes from sleep."""
@@ -2295,12 +2323,7 @@ class CompanionManager(QObject):
         """Each file to a PDF beside it (ai/convert_pdf.py), then a word on
         where it is - spoken if Tora is free, on the card if she is not."""
         started = time.monotonic()
-        made, failed = [], []
-        for path in files:
-            try:
-                made.append(await asyncio.to_thread(convert_pdf.to_pdf, path))
-            except convert_pdf.ConvertError as e:
-                failed.append(f"{os.path.basename(path)}: {e}")
+        made, failed = await asyncio.to_thread(convert_pdf.to_pdfs, files)
         _log.info("convert: %d made, %d failed in %.1fs", len(made), len(failed), time.monotonic() - started)
         if made and open_after:
             try:

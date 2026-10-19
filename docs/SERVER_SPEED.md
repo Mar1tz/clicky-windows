@@ -46,3 +46,23 @@ one's log line says where the time went:
 - `google` large: Google minting the token;
 - `total` small but the call slow: the trip there — a cold start of the
   function, or the network.
+
+### Measured from the PC, 19 Oct, 12:51–13:01
+
+Every ~14 s: an unsigned HEAD to the Supabase gateway (no function), a HEAD
+to Google, and the plan read (`GET /me`: the function, the sign-in check and
+one database call).
+
+| | gateway | Google | the function |
+| --- | --- | --- | --- |
+| 12:51–12:59 | ~300 ms | ~400 ms | 0.8–1.5 s, twice ~4 s |
+| 12:59:57 | 330 ms | 388 ms | 2.2 s |
+| **13:00:12** | **349 ms** | **384 ms** | **19.5 s** |
+| 13:00:45–13:01:01 | ~350 ms | ~400 ms | 3.0–4.4 s |
+
+So it is not the network or Google: the function's own work - the sign-in
+check (Supabase Auth, `getUser`) or the database - stalls on the hour. With
+AC-02 deployed and `HEYTORA_JWT_SECRET` set, the routes every question takes
+no longer ask Auth at all; if the stall is the database, the `window_pass` /
+`consume` / `usage` timings will show it. Meanwhile the local wake word
+(HP-08) keeps most wake checks off the server.

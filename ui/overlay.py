@@ -271,6 +271,12 @@ POINTER_PHRASES = (
 FLY_DURATION_MIN = 1.6
 FLY_DURATION_MAX = 2.8
 DWELL_SECONDS    = 4.0    # sits on the element while the LLM explains
+# UI-01: the clock. 60 a second while anything moves; at rest under a still
+# mouse - most of the day - 20 a second, which paints the glow's slow breath
+# just as it was (every third 60 Hz frame), with a third of the wake-ups.
+TICK_MS          = 16
+REST_TICK_MS     = 50
+REST_AFTER       = 30     # quiet frames (half a second) before slowing
 RETURN_DURATION  = 1.4
 
 # A walkthrough step's arrow is a signpost, not a lecture (LG-02). Teacher
@@ -682,6 +688,7 @@ class CursorOverlay(QWidget):
 
     def _begin_flight(self, start: QPointF, end: QPointF, phase: str,
                       duration: Optional[float] = None):
+        self._pace(TICK_MS)                 # a flight starts on the next 16 ms, not 50
         dx, dy = end.x() - start.x(), end.y() - start.y()
         dist = math.hypot(dx, dy)
         if duration is not None:
@@ -908,6 +915,7 @@ class CursorOverlay(QWidget):
                 else:  # RETURNING
                     self._release_lock()
             self._phase += 0.10
+            self._pace(TICK_MS)
             self._refresh()
             return
 
@@ -928,6 +936,7 @@ class CursorOverlay(QWidget):
                     # Fade bubble out during return
                     self._bubble_alpha = 0.0
             self._phase += 0.10
+            self._pace(TICK_MS)
             self._refresh()
             return
 
@@ -953,6 +962,7 @@ class CursorOverlay(QWidget):
             )
             self._vel = QPointF(0, 0)
             self._phase += 0.10
+            self._pace(TICK_MS)
             self._refresh()
             return
 
@@ -996,9 +1006,19 @@ class CursorOverlay(QWidget):
                  and not self._annotations and not self._caption.active() and not self._mist.active()
                  and self._island_alpha < 0.02 and self._locked_pos is None)
         self._rest_frames = self._rest_frames + 1 if quiet else 0
-        if self._rest_frames % 3:
-            return
+        if self._rest_frames > REST_AFTER:
+            self._pace(REST_TICK_MS)        # every frame painted: 20 a second
+        else:
+            self._pace(TICK_MS)
+            if self._rest_frames % 3:
+                return
         self._refresh()
+
+    def _pace(self, ms: int) -> None:
+        """The overlay's clock: fast while anything moves, slow at rest."""
+        timer = self._tick_timer
+        if timer.interval() != ms:
+            timer.setInterval(ms)
 
     # ── Painting ──────────────────────────────────────────────────────────────
 

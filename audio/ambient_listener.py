@@ -14,6 +14,12 @@ Gemini transcribe model everything else uses, which means that in AMBIENT
 mode short clips of speech near the machine are sent to Google to be checked
 for the wake word.
 
+Since 19 Oct (HP-08, audio/wake_local.py) a keyword spotter hears each
+segment on this PC first: "Hey Tora" wakes without anything being sent, a
+bare name or a near miss is still checked by Google, and speech with nothing
+like the name in it is never sent at all. TORA_WAKE_ENGINE=cloud restores
+sending every segment.
+
 The energy VAD in front of it still runs locally and is unchanged, so this
 is speech segments only — never a continuous upload, and nothing at all
 while the room is quiet. Hotkey mode (the default) does not open the
@@ -29,6 +35,8 @@ thread, and the manager owns the event loop that the API client lives on.
 Without one, wake-word detection is simply off.
 """
 
+import logging
+import queue
 import threading
 import time
 from enum import Enum, auto
@@ -38,6 +46,8 @@ import numpy as np
 import sounddevice as sd
 
 from audio.capture import resample_pcm, SAMPLE_RATE
+
+_log = logging.getLogger("tora.wake")
 
 
 class Mode(Enum):
@@ -104,10 +114,16 @@ class AmbientListener:
         device: Optional[int] = None,
         ambient: bool = True,
         wake_transcriber: Optional[Callable[[bytes], str]] = None,
+        wake_local=None,
+        wake_mode: str = "hybrid",
     ):
         self._on_level = on_level
         self._on_wake = on_wake
         self._wake_transcriber = wake_transcriber
+        # HP-08 (audio/wake_local.py): heard on this PC first; the cloud
+        # check only for a "maybe", or for everything in "cloud" mode.
+        self._wake_local = wake_local
+        self._wake_mode = wake_mode
         self._device = device       # None = system default input device
         self._stream_rate = SAMPLE_RATE   # actual rate the stream opens at
         # ambient=False → the mic stays closed until start_recording(). No
@@ -389,11 +405,32 @@ class AmbientListener:
         if self._wake_inflight:
             return
         self._wake_inflight = True
-        t = threading.Thread(target=self._check_wake, args=(pcm,), daemon=True)
-        t.start()
+        self._wake_jobs().put(pcm)
+
+    def _wake_jobs(self) -> "queue.SimpleQueue":
+        """ST-07: one worker for every wake check, made on the first. A new
+        thread per speech segment came and went all day."""
+        jobs = getattr(self, "_wake_queue", None)
+        if jobs is None:
+            jobs = self._wake_queue = queue.SimpleQueue()
+            threading.Thread(target=self._wake_worker, args=(jobs,), name="wake-check", daemon=True).start()
+        return jobs
+
+    def _wake_worker(self, jobs: "queue.SimpleQueue") -> None:
+        while True:
+            self._check_wake(jobs.get())
 
     def _check_wake(self, pcm: bytes):
         try:
+            local = self._wake_local
+            if local is not None and self._wake_mode != "cloud" and local.available:
+                heard = local.hears(pcm)
+                if heard == "wake":
+                    _log.info("wake word heard on this PC")
+                    self._on_wake()
+                    return
+                if heard is None or self._wake_mode == "local":
+                    return                       # nothing like "Tora": no check sent anywhere
             transcribe = self._wake_transcriber
             if transcribe is None:
                 return

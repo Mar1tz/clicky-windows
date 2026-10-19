@@ -42,7 +42,7 @@ _ensure_std_streams()
 from ai import speed  # noqa: E402 - first: it stamps when HeyTora started (ST-02)
 
 from PyQt6.QtWidgets import QApplication
-from PyQt6.QtCore import QObject, Qt, QTimer, pyqtSignal
+from PyQt6.QtCore import QAbstractNativeEventFilter, QObject, Qt, QTimer, pyqtSignal
 
 from config import cfg
 from ui.tray import TrayManager
@@ -68,6 +68,30 @@ class _Shortcuts(QObject):
     """Global shortcuts fire on the keyboard hook's thread; these signals
     bring them to Qt's, where the screen may be changed."""
     toggle_cursor = pyqtSignal()
+
+
+class _PowerEvents(QAbstractNativeEventFilter):
+    """ST-06: Windows' own word that the PC has woken from sleep, which every
+    top-level window is sent. The mic and the voice reopen then - not when a
+    heartbeat notices, up to 5 s and a second later."""
+    WM_POWERBROADCAST = 0x0218
+    RESUMED = (0x0007, 0x0012)                 # PBT_APMRESUMESUSPEND, PBT_APMRESUMEAUTOMATIC
+
+    def __init__(self, on_resume):
+        super().__init__()
+        self._on_resume = on_resume
+
+    def nativeEventFilter(self, event_type, message):
+        try:
+            if bytes(event_type) == b"windows_generic_MSG":
+                import ctypes
+                from ctypes import wintypes
+                msg = wintypes.MSG.from_address(int(message))
+                if msg.message == self.WM_POWERBROADCAST and msg.wParam in self.RESUMED:
+                    self._on_resume()
+        except Exception:  # noqa: BLE001 - a filter must never break Qt's events
+            pass
+        return False, 0
 
 
 def _setup_logging():
@@ -916,6 +940,9 @@ def main():
     # is not held up; wire its UI when it says it is ready.
     manager.sig_agents_ready.connect(lambda: _wire_agents(manager, tray))
     manager.start()        # begin ambient mic + wake-word scanning; brings up agents
+    power = _PowerEvents(manager.on_power_resume)
+    app.installNativeEventFilter(power)
+    app._power_events = power                   # kept alive with the app
     if door == "ok":
         sign_in_gate.check_in_background()   # still an account the server accepts?
 

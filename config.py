@@ -703,6 +703,15 @@ class Config:
         """True when the mic should stay open and scan for the wake word."""
         return self.mic_mode == "ambient"
 
+    @staticmethod
+    def wake_engine() -> str:
+        """How the wake word is heard (HP-08, audio/wake_local.py): "hybrid"
+        - on this PC, the cloud asked only when it might be the name -
+        "local" (never the cloud) or "cloud" (every speech segment, as
+        before 19 Oct)."""
+        mode = os.environ.get("TORA_WAKE_ENGINE", "hybrid").strip().lower()
+        return mode if mode in ("hybrid", "local", "cloud") else "hybrid"
+
     def set_mic_mode(self, mode: str) -> None:
         """Persisted switch between hotkey-only and always-listening."""
         mode = "ambient" if mode == "ambient" else "hotkey"
