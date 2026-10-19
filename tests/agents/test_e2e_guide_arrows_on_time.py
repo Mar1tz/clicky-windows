@@ -344,3 +344,32 @@ def test_anchors_resolve_again(monkeypatch):
     companion = CompanionManager.__new__(CompanionManager)
     companion._shot = lambda idx=1: None
     assert companion._resolve_anchor("Save") == (40.0, 10.0, 60.0, 30.0)
+
+
+# -- SC-12: OCR where it can help, its model ready there ----------------------------------------------------------
+
+def test_a_rich_tree_that_missed_skips_ocr_and_a_bare_one_keeps_it(monkeypatch):
+    seen = SimpleNamespace(x=5.0, y=6.0, label="Captions", via="vision")
+    companion, _calls = _companion(monkeypatch, local_s=0.0, vision=seen)
+    asked = []
+    monkeypatch.setattr(hybrid_pointer, "find_target", lambda query, **kw: asked.append(kw) or None)
+    companion._note_uia("Untitled - CapCut", 45)                    # a tree that names plenty
+    _timed(companion._resolve_point("Captions"))
+    assert asked[-1].get("skip_ocr") is True, "what a rich tree missed is not text"
+    companion._note_uia("Untitled - CapCut", 10)
+    _timed(companion._resolve_point("Captions"))
+    assert asked[-1].get("skip_ocr") is False
+    _timed(companion._resolve_point("Captions", vision=False))      # a look-ahead: local tiers only
+    companion._note_uia("Untitled - CapCut", 45)
+    _timed(companion._resolve_point("Captions", vision=False))
+    assert asked[-1].get("skip_ocr") is False, "with no model to ask, OCR is the last chance"
+
+
+def test_an_app_with_no_tree_loads_the_ocr_model_ahead(monkeypatch):
+    companion, _calls = _companion(monkeypatch)
+    loads = []
+    monkeypatch.setattr(hybrid_pointer, "preload_ocr", lambda: loads.append(1))
+    companion._note_uia("Untitled - CapCut", 40)
+    assert loads == []
+    companion._note_uia("Untitled - CapCut", 1)
+    assert loads == [1]

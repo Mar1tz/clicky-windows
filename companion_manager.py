@@ -2997,7 +2997,8 @@ class CompanionManager(QObject):
         # `context` is what the target is for - a walkthrough step's own
         # instruction. It breaks ties between same-named controls (LG-05).
         local = asyncio.ensure_future(asyncio.to_thread(
-            find_target, query, screenshot=shot, context=context))
+            find_target, query, screenshot=shot, context=context,
+            skip_ocr=bool(vision) and self._uia_rich()))
         local.add_done_callback(_retrieve)
         if not vision:
             # A look-ahead (LG-06): free tiers only, never a paid call.
@@ -3036,17 +3037,28 @@ class CompanionManager(QObject):
     # An app whose accessibility tree names this few controls has no tree
     # worth waiting for: CapCut's named 1.
     UIA_POOR_AT = 2
+    # SC-12: a tree naming this many controls had its chance - what it missed
+    # is not text, so OCR (0.6-1 s of every core, and a word matched in the
+    # wrong place) is skipped and the vision model has it alone.
+    UIA_RICH_AT = 30
     _uia_counts = None                  # app key -> controls its tree named
 
     def _note_uia(self, title: str, count: int) -> None:
         if self._uia_counts is None:
             self._uia_counts = {}
         self._uia_counts[app_key(title or "")] = int(count)
+        if count <= self.UIA_POOR_AT:
+            from ai.hybrid_pointer import preload_ocr
+            preload_ocr()                       # OCR is this app's local tier
 
     def _uia_poor(self) -> bool:
         """Does the app in front expose (next to) no controls at all?"""
         n = (self._uia_counts or {}).get(app_key(active_window_title() or ""))
         return n is not None and n <= self.UIA_POOR_AT
+
+    def _uia_rich(self) -> bool:
+        n = (self._uia_counts or {}).get(app_key(active_window_title() or ""))
+        return n is not None and n >= self.UIA_RICH_AT
 
     def _local_hit(self, task, shot, query: str):
         """A finished local lookup as logical pixels, or None."""

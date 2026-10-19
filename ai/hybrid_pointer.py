@@ -640,24 +640,37 @@ def _find_via_uia(
 
 _ocr_engine = None
 _ocr_warned = False          # the missing-OCR warning fired 14x per session
+_ocr_loading = threading.Lock()
 
 
 def _get_ocr():
     global _ocr_engine
     if _ocr_engine is None:
-        try:
-            from rapidocr_onnxruntime import RapidOCR
-            _ocr_engine = RapidOCR()
-        except ImportError:
-            global _ocr_warned
-            if not _ocr_warned:
-                _ocr_warned = True
-                log.warning("rapidocr-onnxruntime not installed — Tier 2 (OCR) disabled")
-            return None
-        except Exception as e:
-            log.warning("OCR engine init failed: %s", e)
-            return None
+        with _ocr_loading:                    # one model, whoever asks first
+            if _ocr_engine is not None:
+                return _ocr_engine
+            try:
+                from rapidocr_onnxruntime import RapidOCR
+                _ocr_engine = RapidOCR()
+            except ImportError:
+                global _ocr_warned
+                if not _ocr_warned:
+                    _ocr_warned = True
+                    log.warning("rapidocr-onnxruntime not installed — Tier 2 (OCR) disabled")
+                return None
+            except Exception as e:
+                log.warning("OCR engine init failed: %s", e)
+                return None
     return _ocr_engine
+
+
+def preload_ocr() -> None:
+    """Load the OCR model in the background, before it is asked for: 1.8 s
+    and 83 MB on 19 Oct, paid by the first point otherwise. For an app whose
+    tree names nothing - where OCR is the local tier that answers (SC-12) -
+    and only then: most days it is never needed."""
+    if _ocr_engine is None and not _ocr_warned:
+        threading.Thread(target=_get_ocr, name="ocr-load", daemon=True).start()
 
 
 def _monitors() -> list[dict]:
