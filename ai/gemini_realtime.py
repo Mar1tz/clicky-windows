@@ -56,6 +56,9 @@ _log = logging.getLogger("tora.realtime")
 # one. This is a belt-and-braces age limit so a long-idle session is replaced
 # in the background rather than discovered to be dead mid-question.
 MAX_SESSION_AGE_S = 8 * 60
+# A resumption handle lasts two hours after its session ends; one older is
+# not tried (a refused resume is a second connect, ~1-3 s, before a word).
+RESUME_FOR_S = 2 * 3600 - 300
 
 # A tool chain that never settles must not hang the conversation.
 MAX_TOOL_ROUNDS = 6
@@ -508,6 +511,7 @@ class RealtimeConversation:
         self._player = PcmStreamPlayer()
         self._connecting: Optional[asyncio.Task] = None
         self._resume_handle: Optional[str] = None
+        self._handle_at: Optional[float] = None     # when its session ended (None: not known)
         # FS-02: the conversation is over (forget): the next connect starts
         # blank, and an open session is replaced rather than continued.
         self._forget = False
@@ -583,6 +587,7 @@ class RealtimeConversation:
         forget, which ends it)."""
         if self._session is not None and self._session.resume_handle:
             self._resume_handle = self._session.resume_handle
+            self._handle_at = time.monotonic()
         self._retiring = True
 
     def forget(self) -> None:
@@ -734,22 +739,27 @@ class RealtimeConversation:
         # replaced every few minutes (362 times on 1-17 Oct).
         await self.close(keep_speaker=True)
         resume = self._resume_handle if system_prompt == self._system and not self._forget else None
+        if resume and self._handle_at is not None and time.monotonic() - self._handle_at > RESUME_FOR_S:
+            resume = None                       # expired: a fresh session and the recap
         self._forget = False
         self._retiring = False
         self._loop = asyncio.get_running_loop()
         session = LiveSession(Models.REALTIME, self._setup(system_prompt), resume_handle=resume)
         try:
             await session.connect()
-        except Exception:
+        except Exception as e:
             if not resume:
                 raise
             # A handle can expire or be refused; a fresh session is better
             # than no session, and the recap below carries the thread.
-            _log.info("could not resume the conversation; starting a new session")
-            self._resume_handle = None
+            _log.info("could not resume the conversation (%s); starting a new session",
+                      str(e)[:160] or type(e).__name__)
             session = LiveSession(Models.REALTIME, self._setup(system_prompt))
             await session.connect()
             resume = None
+        # Spent either way: the next connect resumes with the handle this
+        # session is given, or - given none - starts fresh with the recap.
+        self._resume_handle, self._handle_at = None, None
         self._session = session
         self._system = system_prompt
         self._opened_at = time.monotonic()
@@ -1110,7 +1120,8 @@ class RealtimeConversation:
 
         if session is self._session:
             # Keep the handle: the next connect resumes this conversation.
-            self._resume_handle = session.resume_handle or self._resume_handle
+            if session.resume_handle:
+                self._resume_handle, self._handle_at = session.resume_handle, time.monotonic()
             self._session = None
             self._speaking = False
             self._on_lost(reason)

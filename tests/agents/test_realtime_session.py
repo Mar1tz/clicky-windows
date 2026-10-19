@@ -115,6 +115,68 @@ def test_live_session_puts_the_handle_in_its_setup():
     assert fresh.resume_handle is None
 
 
+# -- FX-03: a handle is used once, and never past its life -----------------------------
+#
+# 66 refused resumes on 1-17 Oct, each a second connect before a word: a
+# session resumed with a handle reported that same handle as its own until
+# the server gave it a new one, so a short session handed back a spent one.
+
+def test_a_resumed_session_does_not_hand_back_the_handle_it_was_opened_with():
+    session = LiveSession("m", {"tools": []}, resume_handle="spent")
+    assert session.resume_handle is None, "only a handle this session is given"
+
+
+def test_an_empty_update_keeps_the_last_handle():
+    import json
+
+    class Socket:
+        def __init__(self, msgs):
+            self.msgs = [json.dumps(m) for m in msgs]
+
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            if not self.msgs:
+                raise StopAsyncIteration
+            return self.msgs.pop(0)
+
+    session = LiveSession("m", {"tools": []})
+    session._ws = Socket([{"sessionResumptionUpdate": {"newHandle": "h2", "resumable": True}},
+                          {"sessionResumptionUpdate": {"resumable": False}}])     # a turn under way
+
+    async def drain():
+        async for _ev in session.events():
+            pass
+    asyncio.run(drain())
+    assert session.resume_handle == "h2"
+
+
+def test_a_spent_handle_is_not_tried_again(realtime):
+    async def scenario():
+        await realtime.connect("PROMPT")
+        realtime._resume_handle = "handle-from-server"
+        realtime._session = None
+        await realtime.connect("PROMPT")                     # resumed: the handle is spent
+        assert realtime._resume_handle is None
+        realtime._session = None
+        await realtime.connect("PROMPT")                     # its session was given none
+        assert FakeSession.opened[-1].resume_handle_in is None, "fresh, not a refused resume"
+    asyncio.run(scenario())
+
+
+def test_an_expired_handle_is_not_tried(realtime, monkeypatch):
+    async def scenario():
+        await realtime.connect("PROMPT")
+        realtime._resume_handle = "old"
+        realtime._handle_at = rt.time.monotonic() - rt.RESUME_FOR_S - 1
+        realtime._session = None
+        await realtime.connect("PROMPT")
+        latest = FakeSession.opened[-1]
+        assert latest.resume_handle_in is None and latest.sent, "fresh, with the recap"
+    asyncio.run(scenario())
+
+
 # -- the tool budget is per request, not per session ----------------------------------
 
 class ScriptedSession(FakeSession):

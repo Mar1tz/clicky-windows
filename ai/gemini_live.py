@@ -154,7 +154,10 @@ class LiveSession:
         # starting again with no memory of anything said so far.
         self._setup["sessionResumption"] = {"handle": resume_handle} if resume_handle else {}
         self._ws = None
-        self._resume_handle: Optional[str] = resume_handle
+        # Only a handle THIS session is given: the one it was opened with is
+        # spent. Handed back again it was refused - 66 times on 1-17 Oct,
+        # after sessions too short to be given a new one (FX-03).
+        self._resume_handle: Optional[str] = None
         self._closed = False
 
     @property
@@ -314,9 +317,11 @@ class LiveSession:
                 )
 
                 if "sessionResumptionUpdate" in msg:
-                    self._resume_handle = (
-                        msg["sessionResumptionUpdate"].get("newHandle")
-                    )
+                    # Empty while it cannot be resumed (a turn under way):
+                    # the last handle given still resumes it.
+                    handle = msg["sessionResumptionUpdate"].get("newHandle")
+                    if handle:
+                        self._resume_handle = handle
                     continue
 
                 # Before the branches below: it can ride on any message,
