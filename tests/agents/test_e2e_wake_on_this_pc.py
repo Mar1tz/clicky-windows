@@ -97,3 +97,13 @@ def test_every_wake_check_runs_on_one_worker():
         while lis._wake_inflight and time.monotonic() < deadline:
             time.sleep(0.01)
     assert seen == ["wake-check"] * 3 and events["woke"] == 3
+
+
+def test_what_became_of_the_segments_is_said_every_half_hour(caplog):
+    import logging
+    lis, _events = _listener(None)
+    lis.WAKE_TALLY_S = 0.0
+    with caplog.at_level(logging.INFO, logger="tora.wake"):
+        lis._check_wake(b"\x00\x00" * 1600)
+    line = next(r.getMessage() for r in caplog.records if "speech segments" in r.getMessage())
+    assert "1 speech segments - 0 woke Tora here, 0 checked in the cloud, 1 never sent" in line

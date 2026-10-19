@@ -420,6 +420,22 @@ class AmbientListener:
         while True:
             self._check_wake(jobs.get())
 
+    # What became of the speech segments, said every WAKE_TALLY_S: how many
+    # woke Tora here, how many went to the cloud, how many were never sent.
+    WAKE_TALLY_S = 1800.0
+
+    def _tally(self, outcome: str) -> None:
+        tally = getattr(self, "_wake_tally", None)
+        if tally is None:
+            tally = self._wake_tally = {"since": time.monotonic()}
+        tally[outcome] = tally.get(outcome, 0) + 1
+        if time.monotonic() - tally["since"] >= self.WAKE_TALLY_S:
+            _log.info("wake word, last %d min: %d speech segments - %d woke Tora here, %d checked in the "
+                      "cloud, %d never sent", (time.monotonic() - tally["since"]) // 60,
+                      sum(v for k, v in tally.items() if k != "since"), tally.get("here", 0),
+                      tally.get("cloud", 0), tally.get("kept", 0))
+            self._wake_tally = {"since": time.monotonic()}
+
     def _check_wake(self, pcm: bytes):
         try:
             local = self._wake_local
@@ -427,13 +443,16 @@ class AmbientListener:
                 heard = local.hears(pcm)
                 if heard == "wake":
                     _log.info("wake word heard on this PC")
+                    self._tally("here")
                     self._on_wake()
                     return
                 if heard is None or self._wake_mode == "local":
+                    self._tally("kept")
                     return                       # nothing like "Tora": no check sent anywhere
             transcribe = self._wake_transcriber
             if transcribe is None:
                 return
+            self._tally("cloud")
             text = (transcribe(pcm) or "").lower().strip()
             if text and any(w in text for w in WAKE_WORDS):
                 self._on_wake()
