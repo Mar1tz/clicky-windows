@@ -62,3 +62,42 @@ def test_the_cached_tree_is_read_top_first_and_skips_what_is_off_screen(monkeypa
     root = SimpleNamespace(Element=SimpleNamespace(BuildUpdatedCache=lambda _req: tree))
     names = [n for _x, _y, n, _t in hp._cached_pointables(root, 10)]
     assert names == ["Top button", "Inner"], "breadth-first, nothing off screen"
+
+
+# ── SC-07: searching by name reads the same one-call tree ────────────────────
+
+def _cached(name, kind, rect=(0, 0, 100, 30), kids=()):
+    arr = SimpleNamespace(Length=len(kids), GetElement=lambda i: kids[i]) if kids else None
+    return SimpleNamespace(CachedName=name, CachedControlType=kind,
+                           CachedBoundingRectangle=SimpleNamespace(left=rect[0], top=rect[1], right=rect[2], bottom=rect[3]),
+                           GetCachedChildren=lambda: arr)
+
+
+def _takealot_in_opera():
+    return _cached("Takealot.com: Online Shopping - Opera", "Window", (0, 0, 1920, 1040), [
+        _cached("Address bar area", "Pane", (0, 30, 1920, 80),
+                [_cached("Search or enter address", "Edit", (200, 40, 900, 70))]),
+        _cached("Takealot.com: Online Shopping | SA's leading online store", "Document", (0, 80, 1920, 1040),
+                [_cached("Search products", "Edit", (400, 180, 1200, 220))])])
+
+
+def _search(monkeypatch, top, **kw):
+    kinds = {"Window": "WindowControl", "Pane": "PaneControl", "Edit": "EditControl", "Document": "DocumentControl"}
+    monkeypatch.setattr(hp, "_pointing_root", lambda hwnd=None: SimpleNamespace())
+    monkeypatch.setattr(hp, "named_controls", lambda root, **_k: hp._read_named(top, 40, kinds))
+    monkeypatch.setattr(hp, "_walked_controls", lambda *a, **k: (_ for _ in ()).throw(AssertionError("walked")))
+    return hp._find_via_uia("Search", **kw)
+
+
+def test_the_steps_own_words_still_pick_the_pages_search(monkeypatch):
+    assert _search(monkeypatch, _takealot_in_opera()) is None, "two close scores: no guess"
+    hit = _search(monkeypatch, _takealot_in_opera(),
+                  context="Click the search bar on Takealot, type laptops, and press Enter.")
+    assert hit is not None and hit.label == "Search products" and (hit.x, hit.y) == (800, 200)
+
+
+def test_the_trail_is_what_a_control_sits_inside_not_the_window():
+    trails = {name: trail for name, _k, _r, trail in hp._read_named(_takealot_in_opera(), 40, {})}
+    assert trails["Search products"] == " takealot com online shopping sa s leading online store"
+    assert trails["Search or enter address"] == " address bar area"
+    assert trails["Address bar area"] == "", "the window's title is everyone's: not counted"
