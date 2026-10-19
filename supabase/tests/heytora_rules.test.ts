@@ -41,8 +41,10 @@ test("a request is made safe or refused", () => {
   const small = checkGenerate({ contents: [], generationConfig: { maxOutputTokens: 512, temperature: 0.2 } });
   assert.ok(small.ok && (small.body.generationConfig as { maxOutputTokens: number }).maxOutputTokens === 512);
   assert.ok(checkGenerate({ tools: [{ functionDeclarations: [{ name: "point" }] }] }).ok, "the app's own tools");
+  assert.ok(checkGenerate({ tools: [{ google_search: {} }] }).ok, "Tora's web search (19 Oct)");
+  assert.ok(checkGenerate({ tools: [{ googleSearch: {} }] }).ok);
   for (const bad of [
-    { tools: [{ googleSearch: {} }] },
+    { tools: [{ googleSearch: {}, codeExecution: {} }] },
     { tools: [{ functionDeclarations: [], codeExecution: {} }] },
     { tools: [{ urlContext: {} }] },
     { cachedContent: "cachedContents/x" },
@@ -136,4 +138,18 @@ test("a billing refusal is told apart from an ordinary one", () => {
   assert.ok(!billingProblem(400, "Invalid JSON payload"));
   const body = alertBody("a voice pass", 429, "Your prepayment credits are depleted");
   assert.ok(body.text.includes("billing") && body.text === body.content);
+});
+
+
+// -- Google Search through the server, metered per search (19 Oct 2026) --------------------------------------------
+
+import { SEARCH_MICRO, searchesIn } from "../functions/heytora/rules.ts";
+
+test("each Google search an answer ran is counted", () => {
+  const answer = JSON.stringify({ candidates: [{ content: { parts: [{ text: "Verstappen" }] },
+    groundingMetadata: { webSearchQueries: ["f1 winner", "singapore gp 2026"] } }] });
+  assert.equal(searchesIn(answer), 2);
+  assert.equal(searchesIn(JSON.stringify({ candidates: [{ content: {} }] })), 0);
+  assert.equal(searchesIn("not json"), 0);
+  assert.equal(SEARCH_MICRO, 14_000, "$14 per 1,000");
 });

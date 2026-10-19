@@ -58,7 +58,7 @@ import { createClient } from "npm:@supabase/supabase-js@2";
 import { createRemoteJWKSet, jwtVerify } from "npm:jose@5.9.6";
 import {
   alertBody, billingProblem, checkGenerate, costMicro, estimateTokens, family, makeTicket, MAX_BODY_BYTES,
-  MAX_OUTPUT_TOKENS, omnirouteModels, prices, readTicket, signedInUser, UsageReader,
+  MAX_OUTPUT_TOKENS, omnirouteModels, prices, readTicket, SEARCH_MICRO, searchesIn, signedInUser, UsageReader,
 } from "./rules.ts";
 import { apiBase, hasLivePlan, paddleEnv, priceMap } from "../_shared/billing.ts";
 import { CHALLENGE, challengeOf, cleanCode, CODE, corsHeaders } from "../_shared/referrals.ts";
@@ -699,8 +699,8 @@ async function handle(req: Request, timed: Timed, serverTiming: () => string): P
 
     // What it cost: service role, after the answer is on its way.
     const admin = createClient(SUPABASE_URL, SERVICE_KEY, { auth: { persistSession: false } });
-    const record = async (input: number, output: number) => {
-      const micro = costMicro(PRICES, fam, input, output);
+    const record = async (input: number, output: number, extraMicro = 0) => {
+      const micro = costMicro(PRICES, fam, input, output) + extraMicro;
       if (!micro && !input && !output) return;
       const { error } = await admin.rpc("heytora_record_cost", {
         p_user: user.id, p_kind: kind, p_model: model, p_in: input, p_out: output, p_micro: micro,
@@ -747,7 +747,8 @@ async function handle(req: Request, timed: Timed, serverTiming: () => string): P
       const reader = new UsageReader();
       reader.push(text);
       const used = reader.used();
-      if (used) later(record(used.input, used.output));
+      const searches = searchesIn(text);            // Google Search, billed per search
+      if (used || searches) later(record(used?.input ?? 0, used?.output ?? 0, searches * SEARCH_MICRO));
     }
     return new Response(text, {
       status: upstream.status,

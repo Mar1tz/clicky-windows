@@ -12,6 +12,8 @@ repo and tested; **nothing is deployed** — the owner deploys.
 | Google refusing for billing (FX-06) | nobody told until users noticed (22 Sep, 6–9 Oct) | a `BILLING` line in the function's log, and a message to a webhook at most every 30 minutes |
 | Where a call's time went (AC-07) | `Server-Timing` on looks only | on every route; the app logs it beside any HeyTora call over 1 s |
 
+| Tora's web search (19 Oct) | refused (`Tool not forwarded: google_search`), so the app scrapes free engines: 2–7 s, once 22 s | Google Search through Gemini is forwarded: a short, dated answer in ~2 s. Each search is counted against the plan's ceiling at $0.014 (`SEARCH_MICRO`) — Google bills $14 per 1,000 past the first 5,000 a month |
+
 Not done: AC-04 (start the Google request while usage is being recorded).
 A modified app at its limit would make the server pay Google for calls it
 then refuses, for about 50 ms of gain.

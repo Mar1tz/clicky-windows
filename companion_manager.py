@@ -296,6 +296,15 @@ _FILES_RE = re.compile(r"\b(this|these|that|those|the|it|them|selected|open)\b.{
                        r"image|images|picture|pictures|folder)\b|\b(this|these|it|them)\b", re.IGNORECASE)
 
 
+def _sound_devices() -> tuple[str, str]:
+    """(speaker, microphone) as PortAudio sees the defaults now - for the log."""
+    try:
+        import sounddevice as sd
+        return (sd.query_devices(kind="output")["name"], sd.query_devices(kind="input")["name"])
+    except Exception:  # noqa: BLE001
+        return ("?", "?")
+
+
 def _files_meant(trace_readings, goal: str) -> list[str]:
     """The files a job is about, as paths: what they traced over this
     question, else - when the words point ("this document", "these files") -
@@ -635,6 +644,7 @@ class CompanionManager(QObject):
         self.open_voice_early()
         # Sleep/wake watchdog — restarts mic + loop after system resume
         self._start_sleep_watchdog()
+        self._watch_audio_devices()
         self._submit(self._keep_session_fresh())
         self._submit(self._keep_signed_in())
         # Speed, measured (ai/speed.py): how late the loop wakes, and what
@@ -706,6 +716,7 @@ class CompanionManager(QObject):
         them - and the opening itself on a worker."""
         if cfg.realtime() and cfg.has_key():
             await asyncio.to_thread(self._get_realtime().open_speaker)
+            _log.info("speaker: %s", _sound_devices()[0])
 
     async def _warm_up(self):
         try:
@@ -3966,11 +3977,15 @@ class CompanionManager(QObject):
             return {"error": "web search is switched off in the tray menu"}
         from ai.web_search import search
         self._activity("searching")
+        started = time.monotonic()
         try:
             results = await search(query)
         except Exception as e:
             return {"error": str(e)}
-        return {"results": (results or "")[:4000] or "nothing useful found"}
+        _log.info("web search took %.1fs (%d chars)", time.monotonic() - started, len(results or ""))
+        # Short: the voice spent 5-8 s reading a 4,000-character result
+        # before its first word (19 Oct). The search's own answer comes first.
+        return {"results": (results or "")[:1500] or "nothing useful found"}
 
     async def _tool_recall(self, args: dict) -> dict:
         query = str(args.get("query") or "").strip()
@@ -6239,11 +6254,75 @@ class CompanionManager(QObject):
             on_wake=self._handle_wake,
             device=cfg.mic_device(),
             ambient=cfg.ambient_mic(),
+            # Without these the new listener had no wake word at all.
+            wake_transcriber=self._transcribe_blocking,
+            wake_local=self._local_wake(),
+            wake_mode=cfg.wake_engine(),
         )
         try:
             self._listener.start()
         except Exception as e:
             self.sig_error.emit(f"Could not start mic: {e}")
+
+    # ── When Windows' speaker or microphone changes ─────────────────────────
+    #
+    # 19 Oct 2026, the owner: "I can't hear her." Headphones had become the
+    # default after HeyTora started, and she was still talking into the
+    # laptop's speakers: PortAudio lists the devices once, at start, and her
+    # output stays open for the whole run (HP-04). audio/endpoints.py asks
+    # Windows every 2 s; on a change the audio is reopened at the next quiet
+    # moment, on the new devices.
+    AUDIO_QUIET_WAIT_S = 120.0
+
+    def _watch_audio_devices(self) -> None:
+        try:
+            from audio.endpoints import DeviceWatch
+            DeviceWatch(self._audio_devices_changed).start()
+        except Exception:  # noqa: BLE001 - no watch: a restart still picks the new device
+            _log.debug("audio device watch not started", exc_info=True)
+
+    def _audio_devices_changed(self, _old, _new) -> None:
+        """On the watch's thread: wait for a quiet moment, then follow."""
+        deadline = time.monotonic() + self.AUDIO_QUIET_WAIT_S
+        while (self._state != AppState.IDLE or self._key_down) and time.monotonic() < deadline:
+            time.sleep(0.5)
+        self._reopen_audio()
+
+    def _reopen_audio(self) -> None:
+        """Close the mic and her speaker, have PortAudio list the devices
+        again, and open both on Windows' defaults (the chosen mic is found
+        again by its name: device numbers move)."""
+        import sounddevice as sd
+        from audio.playback import stop_audio
+        conv = self._realtime
+        player = getattr(conv, "_player", None) if conv is not None else None
+        try:
+            self._listener.stop()
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            if player is not None:
+                player.stop()
+            stop_audio()
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            sd._terminate()
+            sd._initialize()
+        except Exception:  # noqa: BLE001 - the old list stays; the reopen still helps a changed default
+            _log.warning("could not refresh the sound devices", exc_info=True)
+        self._listener._device = cfg.mic_device()
+        try:
+            self._listener.start()
+        except Exception as e:  # noqa: BLE001
+            self.sig_error.emit(f"Could not restart the microphone: {e}")
+        if player is not None:
+            try:
+                player.open()
+            except Exception:  # noqa: BLE001 - it opens on her next word
+                pass
+        speaker, mic = _sound_devices()
+        _log.info("Windows' sound devices changed - speaker: %s, microphone: %s", speaker, mic)
 
     def set_web_search(self, enabled: bool):
         self._web_search_enabled = bool(enabled)

@@ -78,6 +78,23 @@ export type Checked =
   | { ok: false; status: number; code: string; message: string };
 
 /** A generateContent / streamGenerateContent body: refused, or made safe. */
+export const SEARCH_TOOLS = new Set(["googleSearch", "google_search"]);
+// Google bills each search a Gemini 3 model runs: $14 per 1,000 past the
+// month's free 5,000. Counted against the plan's hidden ceiling as if none
+// were free - the ceiling is there to be safe, not exact.
+export const SEARCH_MICRO = 14_000;
+
+/** How many Google searches an answer ran (its groundingMetadata). */
+export function searchesIn(text: string): number {
+  try {
+    const data = JSON.parse(text) as { candidates?: Array<{ groundingMetadata?: { webSearchQueries?: unknown[] } }> };
+    return (data.candidates ?? []).reduce(
+      (n, c) => n + (Array.isArray(c.groundingMetadata?.webSearchQueries) ? c.groundingMetadata!.webSearchQueries!.length : 0), 0);
+  } catch {
+    return 0;
+  }
+}
+
 export function checkGenerate(body: unknown): Checked {
   if (!body || typeof body !== "object" || Array.isArray(body)) {
     return { ok: false, status: 400, code: "HEYTORA_REQUEST", message: "Not a model request." };
@@ -87,11 +104,12 @@ export function checkGenerate(body: unknown): Checked {
   if ("cachedContent" in b) {
     return { ok: false, status: 400, code: "HEYTORA_REQUEST", message: "Cached contents are not forwarded." };
   }
-  // Only the app's own tools: function declarations. Search grounding, URL
-  // context, code execution, maps... are billed on their own or reach out.
+  // The app's own tools (function declarations) and Google Search - Tora's
+  // web search, 2 s against 9-12 s scraping (19 Oct 2026), metered per
+  // search (searchesIn). URL context, code execution, maps... are not.
   for (const tool of (Array.isArray(b.tools) ? b.tools : [])) {
     const keys = Object.keys((tool ?? {}) as Record<string, unknown>);
-    if (keys.some((k) => k !== "functionDeclarations")) {
+    if (keys.some((k) => k !== "functionDeclarations" && !SEARCH_TOOLS.has(k))) {
       return { ok: false, status: 400, code: "HEYTORA_REQUEST", message: `Tool not forwarded: ${keys.join(", ")}` };
     }
   }
