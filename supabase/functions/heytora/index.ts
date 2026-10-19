@@ -83,7 +83,7 @@ const PADDLE_KEY = Deno.env.get("PADDLE_API_KEY") ?? "";
 const PADDLE_ENV = paddleEnv(Deno.env.get("PADDLE_ENV"));
 const PADDLE_PRICES = priceMap(Deno.env.get("PADDLE_PRICES"), PADDLE_ENV);
 // The website, for its two referral calls without a sign-in (CORS).
-const SITE_ORIGINS = (Deno.env.get("HEYTORA_SITE_ORIGINS") ?? "https://app.agentora.co.za,http://localhost:3500")
+const SITE_ORIGINS = (Deno.env.get("HEYTORA_SITE_ORIGINS") ?? "https://heytora.co.za,https://www.heytora.co.za,https://app.agentora.co.za,http://localhost:3500")
   .split(",").map((o) => o.trim()).filter(Boolean);
 
 /** One call to Paddle's API. Throws with Paddle's own words on a refusal. */
