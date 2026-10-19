@@ -835,6 +835,33 @@ class CompanionManager(QObject):
             self._say_when_idle(spoken)
         except Exception:
             _log.debug("agent event announcement failed", exc_info=True)
+            return
+        if ev.kind is EventKind.APPROVAL_REQUIRED:
+            try:
+                self._submit(self._remind_approval(task.id, f"{who} still needs your approval to {what}."))
+            except Exception:  # noqa: BLE001 - the first notice went out; a reminder is extra
+                _log.debug("approval reminder not set", exc_info=True)
+
+    # AG-10: 8 of 21 jobs were cancelled, some after sitting on an approval
+    # nobody heard about - Tora was busy when it came, so it was a toast only.
+    # Once more after APPROVAL_REMIND_S, said at the next quiet moment.
+    APPROVAL_REMIND_S = 120.0
+    REMIND_QUIET_WAIT_S = 180.0
+
+    async def _remind_approval(self, task_id: str, words: str) -> None:
+        from agents.core import TaskStatus
+        await asyncio.sleep(self.APPROVAL_REMIND_S)
+        deadline = time.monotonic() + self.REMIND_QUIET_WAIT_S
+        while True:
+            mgr = self._agents
+            task = mgr.get_task(task_id) if mgr is not None else None
+            if task is None or task.status is not TaskStatus.WAITING_APPROVAL:
+                return                           # answered, or gone
+            if self._state is AppState.IDLE or time.monotonic() > deadline:
+                break
+            await asyncio.sleep(5.0)
+        self.sig_agent_notice.emit("Still waiting", f"{task.title} is waiting for your approval.")
+        self._say_when_idle(words)
 
     def _say_when_idle(self, text: str) -> None:
         """Speak only if Tora is not mid-conversation; the toast covers the

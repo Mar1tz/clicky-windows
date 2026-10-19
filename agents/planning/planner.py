@@ -36,6 +36,25 @@ log = logging.getLogger("agents.planning")
 
 # -- shared helpers ----------------------------------------------------------
 
+# AG-07: a job that makes one thing needs no plan of steps. "make a basic
+# HTML page" and "Create an HTML file named index.html that displays ..."
+# were each planned - a model call of several seconds - into one step.
+_ONE_FILE = re.compile(r"[\w\-]+\.(?:html?|txt|md|py|js|css|json|csv|svg|png|jpe?g|pdf|docx|xlsx)\b", re.I)
+_ONE_THING = re.compile(r"\b(?:a|an|one)\s+(?:single|basic|simple|small|short)\s+\w+", re.I)
+_SEVERAL = re.compile(r"\b(?:and then|then|after that|also|as well as|followed by)\b|;|\n", re.I)
+_MAKE = re.compile(r"^\s*(?:please\s+)?(?:create|make|write|generate|draft|build)\b", re.I)
+
+
+def is_simple_job(ctx: AgentContext) -> bool:
+    """Making one thing, said in one breath, with no skill to follow."""
+    goal = (ctx.task.goal or "").strip()
+    if not goal or len(goal.split()) > 25 or _SEVERAL.search(goal) or not _MAKE.search(goal):
+        return False                           # several things, or not making one
+    if any(s for s in (ctx.extras or {}).get("skills") or []):
+        return False                           # a skill's own steps are the plan
+    return len(set(m.lower() for m in _ONE_FILE.findall(goal))) == 1 or bool(_ONE_THING.search(goal))
+
+
 def fallback_plan(ctx: AgentContext, rationale: str = "") -> Plan:
     """One LLM-driven step for goals no template understands."""
     goal = (ctx.task.goal or ctx.task.title or "").strip()
@@ -132,6 +151,8 @@ class ProviderPlanner(Planner):
     async def plan(self, ctx: AgentContext) -> Plan:
         if self.prefer_templates and isinstance(self.fallback, TemplatePlanner) and self.fallback.match(ctx):
             return await self.fallback.plan(ctx)
+        if is_simple_job(ctx):
+            return fallback_plan(ctx, "One file: one step - no planning call.")
         try:
             resp = await ctx.provider.complete(
                 [ProviderMessage(role="user", content=self._prompt(ctx))],

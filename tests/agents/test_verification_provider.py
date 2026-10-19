@@ -209,3 +209,42 @@ async def test_empty_file_is_caught_by_the_model(tmp_path):
         step, context(tmp_path, [step], say))
     assert judged.ok is False
     assert "empty" in judged.summary
+
+
+# -- AG-03: the output on disk is what the judge sees -------------------------------------------------------------
+
+async def test_a_pdf_written_into_a_busy_folder_is_shown_by_name_and_kind(tmp_path):
+    """Two PDF jobs failed because the judge saw only "(directory, 32 entries)"."""
+    import time as _time
+    docs = tmp_path / "Documents"
+    docs.mkdir()
+    for i in range(32):
+        (docs / f"old-{i}.txt").write_text("x", encoding="utf-8")
+        os.utime(docs / f"old-{i}.txt", (_time.time() - 3600, _time.time() - 3600))
+    (docs / "10 Mei 2026.docx").write_bytes(b"PK\x03\x04 a word document")
+    os.utime(docs / "10 Mei 2026.docx", (_time.time() - 3600, _time.time() - 3600))
+    pdf = docs / "10 Mei 2026.pdf"
+    pdf.write_bytes(b"%PDF-1.7\n" + b"\x00" * 4000)
+    command = (f'$w.Documents.Open("{docs / "10 Mei 2026.docx"}").SaveAs("{pdf}", 17)')
+    step = Step("Convert to PDF", status=StepStatus.DONE,
+                tool_calls=[ToolCall("run_command", {"command": command, "cwd": str(docs)})],
+                results=[ToolResult(call_id="c", tool_name="run_command", ok=True, output="",
+                                    data={"path": str(docs)})])
+    say = Say()
+    ctx = context(tmp_path, [step], say)
+    ctx.task.started_at = _time.time() - 60
+    await ProviderVerifier().verify_step(step, ctx)
+    prompt = say.prompts[0]
+    assert "10 Mei 2026.pdf  (4009 bytes, PDF document)" in prompt, "named in the command: found, sized, typed"
+    assert "changed during this job: 10 Mei 2026.pdf (4009 bytes, PDF document)" in prompt, "the folder, by name"
+    assert "old-3.txt" not in prompt and "%PDF" not in prompt, "only what changed; a PDF is never read as text"
+
+
+async def test_an_output_the_command_named_but_never_wrote_says_so(tmp_path):
+    missing = tmp_path / "report.pdf"
+    step = Step("Export", status=StepStatus.DONE,
+                tool_calls=[ToolCall("run_command", {"command": f'export --to "{missing}"'})],
+                results=[ToolResult(call_id="c", tool_name="run_command", ok=True, output="")])
+    say = Say()
+    await ProviderVerifier().verify_step(step, context(tmp_path, [step], say))
+    assert "report.pdf  (DOES NOT EXIST)" in say.prompts[0]

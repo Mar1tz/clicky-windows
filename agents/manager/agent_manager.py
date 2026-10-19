@@ -311,6 +311,9 @@ class AgentManager:
         self._store_unsub = self._events_unsub = None
         if self.store is not None:
             self.store.close()
+        close = getattr(self.memory, "close", None)
+        if callable(close):
+            close()                             # its log folded in (AG-09)
 
     def _close_providers(self, *, timeout: float = 3.0) -> None:
         """Shut a provider's HTTP pool down on the loop that opened it.

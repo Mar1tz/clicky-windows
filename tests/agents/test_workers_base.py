@@ -159,3 +159,43 @@ def test_default_workers_has_all_six_types():
 def test_worker_registry_unknown_falls_back_to_coding():
     reg = default_workers()
     assert reg.get("nonexistent").worker_type == "coding"
+
+
+# -- AG-05: a turn of reads runs side by side ---------------------------------
+
+class _SlowReads(FakeRegistry):
+    async def execute(self, call, ctx):
+        await asyncio.sleep(0.2)
+        self.executed.append(call)
+        return ToolResult.success(call, output=f"{call.tool_name} {call.arguments.get('path', '')}")
+
+
+def _turn(calls):
+    return MockProvider(script=[ProviderResponse(tool_calls=calls, finish_reason="tool_calls"),
+                                ProviderResponse(text="read them")])
+
+
+def test_three_reads_in_one_turn_take_one_reads_time_and_keep_their_order():
+    import time
+    reg = _SlowReads()
+    for name in ("read_file", "list_dir", "git_status"):
+        reg.add(name)
+    calls = [ToolCall("read_file", {"path": "a.py"}), ToolCall("list_dir", {"path": "src"}),
+             ToolCall("git_status")]
+    ctx = make_context(provider=_turn(calls), tools=reg)
+    started = time.monotonic()
+    out = asyncio.run(FileWorker().execute_step(Step("look around"), ctx))
+    assert time.monotonic() - started < 0.45, "side by side, not 0.6 s in a row"
+    assert [r.output for r in out.results] == ["read_file a.py", "list_dir src", "git_status "]
+
+
+def test_a_turn_that_writes_runs_in_order():
+    import time
+    reg = _SlowReads()
+    for name in ("read_file", "write_file"):
+        reg.add(name)
+    calls = [ToolCall("read_file", {"path": "a.py"}), ToolCall("write_file", {"path": "a.py"})]
+    ctx = make_context(provider=_turn(calls), tools=reg)
+    started = time.monotonic()
+    asyncio.run(FileWorker().execute_step(Step("edit"), ctx))
+    assert time.monotonic() - started >= 0.4 and [c.tool_name for c in reg.executed] == ["read_file", "write_file"]

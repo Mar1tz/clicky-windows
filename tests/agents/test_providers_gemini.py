@@ -247,3 +247,34 @@ async def test_live_gemini_calls_a_tool():
         assert r.tool_calls[0].tool_name == "create_folder"
     finally:
         await p.aclose()
+
+
+# -- AG-06: a request every model would refuse is refused once ---------------------------------------------------
+
+async def test_a_bad_tool_schema_is_one_failed_call_not_three():
+    """"Create Three Monkeys Ball poster": the same 400 from all three models."""
+    seen = []
+
+    def handler(request):
+        seen.append(request.url.path.split("/models/")[1].split(":")[0])
+        return httpx.Response(400, json={"error": {"code": 400, "status": "INVALID_ARGUMENT", "message":
+            "* GenerateContentRequest.tools[0].function_declarations[9].parameters.properties[rows].items: missing field."}})
+
+    p = gemini(handler, model="a", fallback_models=["b", "c"])
+    with pytest.raises(ProviderError, match="refused"):
+        await p.complete([ProviderMessage("user", "x")])
+    assert seen == ["a"] and p.health.usable("a"), "one call, and the model is not blamed"
+
+
+async def test_a_400_about_one_model_still_tries_the_next():
+    seen = []
+
+    def handler(request):
+        model = request.url.path.split("/models/")[1].split(":")[0]
+        seen.append(model)
+        if model == "a":
+            return httpx.Response(400, json={"error": {"message": "thinking is not supported for this model"}})
+        return text_response("fine")
+
+    p = gemini(handler, model="a", fallback_models=["b"])
+    assert (await p.complete([ProviderMessage("user", "x")])).text == "fine" and seen == ["a", "b"]

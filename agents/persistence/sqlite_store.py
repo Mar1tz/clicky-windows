@@ -69,6 +69,49 @@ def default_db_path() -> str:
     return os.path.join(base, "HeyTora", "agents.db")
 
 
+def _fold_wal(conn: sqlite3.Connection) -> None:
+    """Fold the write-ahead log into the database and empty it (AG-09).
+    SQLite only checkpoints as pages pile up, so a store written a little at
+    a time kept its log: agent_memory.db was 4 KB beside a 1 MB log that had
+    not been folded in since 11 Oct. At open and at close."""
+    try:
+        conn.execute("pragma wal_checkpoint(TRUNCATE)")
+    except sqlite3.Error:
+        pass                                   # busy, or :memory: - next time
+
+
+# AG-01: what a person needs of a step, not its bulk. "Help me respond to this
+# email" was a 1.39 MB record, two of its results 713 KB each - screenshots
+# as base64 and whole pages of text, rewritten on every status change and
+# parsed whenever the Agents page lists the jobs. The running task keeps
+# everything; the saved copy keeps a 2 KB head of any long text and a note
+# where a picture was. The goal and the result are kept whole.
+KEEP_CHARS = 2000
+_PICTURE_KEYS = ("image_b64", "images_b64", "screenshot_b64", "screenshot", "png_b64", "jpeg_b64")
+
+
+def lean(task: dict) -> dict:
+    out = dict(task)
+    if isinstance(out.get("steps"), list):
+        out["steps"] = [_lean(s) for s in out["steps"]]
+    return out
+
+
+def _lean(value, key: str = ""):
+    if isinstance(value, dict):
+        return {k: _lean(v, k) for k, v in value.items()}
+    if isinstance(value, list):
+        if key in _PICTURE_KEYS:
+            return [f"[{len(value)} pictures - not kept]"] if value else []
+        return [_lean(v) for v in value]
+    if isinstance(value, str):
+        if key in _PICTURE_KEYS and len(value) > 200:
+            return f"[picture, {len(value) * 3 // 4 // 1024} KB - not kept]"
+        if len(value) > KEEP_CHARS:
+            return value[:KEEP_CHARS] + f" [... {len(value) - KEEP_CHARS} more characters not kept]"
+    return value
+
+
 class SQLiteTaskStore(TaskStore):
     """TaskStore on one SQLite file (or ":memory:" for tests)."""
 
@@ -85,6 +128,7 @@ class SQLiteTaskStore(TaskStore):
             self._conn.execute("pragma synchronous=normal")
             self._conn.executescript(_SCHEMA)
             self._conn.commit()
+            _fold_wal(self._conn)
 
     # -- bus -----------------------------------------------------------------
 
@@ -101,7 +145,7 @@ class SQLiteTaskStore(TaskStore):
                 "insert or replace into tasks (id, status, kind, title, created_at, updated_at, json) "
                 "values (?, ?, ?, ?, ?, ?, ?)",
                 (task.id, task.status.value, task.kind.value, task.title,
-                 task.created_at, task.updated_at, _dumps(task.to_dict())),
+                 task.created_at, task.updated_at, _dumps(lean(task.to_dict()))),
             )
             self._conn.commit()
 
@@ -164,7 +208,7 @@ class SQLiteTaskStore(TaskStore):
                     "insert or ignore into events (id, task_id, agent_id, kind, level, ts, json) "
                     "values (?, ?, ?, ?, ?, ?, ?)",
                     (event.id, event.task_id, event.agent_id, event.kind.value, event.level,
-                     event.timestamp, _dumps(event.to_dict())),
+                     event.timestamp, _dumps(_lean(event.to_dict()))),     # AG-01: no bulk
                 )
                 self._conn.commit()
         except sqlite3.Error:
@@ -207,6 +251,7 @@ class SQLiteTaskStore(TaskStore):
 
     def close(self) -> None:
         with self._lock:
+            _fold_wal(self._conn)
             try:
                 self._conn.close()
             except sqlite3.Error:

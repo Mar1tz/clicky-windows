@@ -88,6 +88,23 @@ class _Health:
         return sorted(self._benched)
 
 
+# A 400 about the REQUEST - a tool schema, the messages' shape - is the same
+# on every route. A 400 about one route's account (Anthropic says "credit
+# balance is too low" with a 400) is not: the next route may answer.
+_REQUEST_FAULTS = ("input_schema", "JSON schema", "tools.", "tool_use", "tool_result", "messages.",
+                   "invalid json", "Invalid JSON")
+_ROUTE_FAULTS = ("credit", "balance", "billing", "quota", "rate limit", "overloaded", "not found")
+
+
+def request_is_wrong(exc: BaseException) -> bool:
+    response = getattr(exc, "response", None)
+    if getattr(response, "status_code", None) != 400:
+        return False
+    text = str(exc)
+    low = text.lower()
+    return any(k in text for k in _REQUEST_FAULTS) and not any(k in low for k in _ROUTE_FAULTS)
+
+
 class OpenAICompatibleProvider(AgentProvider):
     """Tool-calling against any `/chat/completions` endpoint."""
 
@@ -194,6 +211,11 @@ class OpenAICompatibleProvider(AgentProvider):
             try:
                 response = await self._post(payload)
             except Exception as exc:  # noqa: BLE001 - try the next route
+                if request_is_wrong(exc):
+                    # AG-06: a malformed request - a tool's schema, the
+                    # messages - is refused by every route alike. Said once.
+                    log.warning("the gateway refused the request itself (%s): %s", candidate, exc)
+                    raise ProviderError(f"the request was refused ({candidate}): {exc}") from exc
                 self.health.failed(candidate)
                 errors.append(f"{candidate}: {type(exc).__name__}: {exc}")
                 log.warning("model %s failed: %s", candidate, exc)

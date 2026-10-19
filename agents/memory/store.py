@@ -64,6 +64,17 @@ def _terms(text: str) -> list[str]:
     return [t for t in _WORD.findall(text.lower()) if t]
 
 
+def _fold_wal(conn: sqlite3.Connection) -> None:
+    """Fold the write-ahead log into the database and empty it (AG-09).
+    SQLite only checkpoints as pages pile up, so a store written a little at
+    a time kept its log: agent_memory.db was 4 KB beside a 1 MB log that had
+    not been folded in since 11 Oct. At open and at close."""
+    try:
+        conn.execute("pragma wal_checkpoint(TRUNCATE)")
+    except sqlite3.Error:
+        pass                                   # busy, or :memory: - next time
+
+
 class SQLiteMemoryStore(MemoryStore):
     def __init__(self, path: str = ":memory:") -> None:
         self.path = path
@@ -79,6 +90,7 @@ class SQLiteMemoryStore(MemoryStore):
             if self.fts:
                 self._conn.executescript(_FTS_SCHEMA)
             self._conn.commit()
+            _fold_wal(self._conn)
 
     # -- MemoryStore ---------------------------------------------------------
 
@@ -191,6 +203,7 @@ class SQLiteMemoryStore(MemoryStore):
 
     def close(self) -> None:
         with self._lock:
+            _fold_wal(self._conn)
             try:
                 self._conn.close()
             except sqlite3.Error:
