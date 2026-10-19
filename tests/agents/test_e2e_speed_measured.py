@@ -107,3 +107,44 @@ def test_a_finished_job_says_how_it_went():
     line = job_scorecard(task)
     assert line.startswith("failed, 'Convert to PDF' (terminal), 85s")
     assert "1 of 2 steps done, 5 tool calls - verification failed: no file" in line
+
+
+# -- ST-01: the voice opens while the windows are built -----------------------------------------------------------
+
+def _bare_hub(monkeypatch):
+    from types import SimpleNamespace
+    import companion_manager as cm
+    monkeypatch.setattr(cm.gemini, "_problem_listener", None)     # put back after: it is global
+    m = cm.CompanionManager.__new__(cm.CompanionManager)
+    m.submitted, m.said = [], []
+    m._submit = lambda coro: (m.submitted.append(coro.__name__), coro.close())
+    m._listener = SimpleNamespace(start=lambda: None)
+    m._start_agents = lambda: None
+    m._start_sleep_watchdog = lambda: None
+    m.sig_account_problem = SimpleNamespace(emit=lambda kind, words: m.said.append((kind, words)))
+    m.sig_error = SimpleNamespace(emit=lambda *_a: None)
+    return m
+
+
+def test_the_voice_is_opened_once_early_and_not_again_at_start(monkeypatch):
+    m = _bare_hub(monkeypatch)
+    m.open_voice_early()
+    assert {"_realtime_connect", "_account_warm_up", "_open_speaker", "_warm_up"} <= set(m.submitted)
+    before = list(m.submitted)
+    m.start()
+    assert m.submitted[:len(before)] == before
+    assert "_realtime_connect" not in m.submitted[len(before):], "one opening, not two"
+
+
+def test_a_problem_found_before_the_screen_was_listening_is_said_at_start(monkeypatch):
+    m = _bare_hub(monkeypatch)
+    m.open_voice_early()
+    m._problem_kind = "billing"                          # reported while the windows were built
+    m.start()
+    assert m.said and m.said[0][0] == "billing" and "credits" in m.said[0][1]
+
+
+def test_without_the_early_call_start_opens_it(monkeypatch):
+    m = _bare_hub(monkeypatch)
+    m.start()
+    assert "_realtime_connect" in m.submitted and m.said == []

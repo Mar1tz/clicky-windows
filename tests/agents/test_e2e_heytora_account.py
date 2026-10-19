@@ -768,3 +768,28 @@ def test_the_sign_in_is_refreshed_in_the_background_before_a_question_needs_it(h
 def test_no_background_refresh_when_signed_out(heytora):
     heytora.account.refresh_ahead()
     assert heytora.fake.calls == []
+
+
+def test_two_plan_reads_at_once_share_one(heytora):
+    """19 Oct: at start-up the warm-up and the window both read the plan, side by side."""
+    import threading
+    _signed_in(heytora)
+    gate = threading.Event()
+    real = heytora.fake.__call__
+
+    def slow(request):
+        if request.url.path.endswith("/heytora/me"):
+            gate.wait(2)
+        return real(request)
+    heytora.account._http()._transport = httpx.MockTransport(slow)
+    before = sum(1 for p in heytora.fake.paths() if p.endswith("/me"))
+    out = []
+    readers = [threading.Thread(target=lambda: out.append(heytora.account.summary(force=True))) for _ in range(2)]
+    for t in readers:
+        t.start()
+    time.sleep(0.2)
+    gate.set()
+    for t in readers:
+        t.join(5)
+    assert len(out) == 2 and out[0] == out[1]
+    assert sum(1 for p in heytora.fake.paths() if p.endswith("/me")) == before + 1, "one read, not two"

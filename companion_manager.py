@@ -597,24 +597,42 @@ class CompanionManager(QObject):
 
     # ── Lifecycle ─────────────────────────────────────────────────────────────
 
+    _voice_opening = False
+
+    def open_voice_early(self) -> None:
+        """ST-01: open the voice while the rest of the app is still being
+        built. On 19 Oct it was ready 12.9 s after launch: 7.9 s to get on
+        screen, and only then the voice pass (1.3 s) and Google's session
+        (2.1 s) - network waits that need nothing on the screen. main.py
+        calls this the moment the hub exists; start() does it otherwise."""
+        if self._voice_opening:
+            return
+        self._voice_opening = True
+        # Out of credit, or a refused key, from any request anywhere: shown,
+        # because it cannot be spoken - the voice uses the same account.
+        gemini.on_problem(self._account_problem)
+        # The HTTP pool, and the live conversation itself: the first question
+        # then costs exactly what the tenth does.
+        self._submit(self._warm_up())
+        self._submit(self._account_warm_up())
+        self._submit(self._realtime_connect())
+        self._submit(self._open_speaker())
+
     def start(self):
         try:
             self._listener.start()
         except Exception as e:
             self.sig_error.emit(f"Mic error: {e}")
         self._start_agents()
-        # Out of credit, or a refused key, from any request anywhere: shown,
-        # because it cannot be spoken - the voice uses the same account.
-        gemini.on_problem(self._account_problem)
+        if self._voice_opening and self._problem_kind:
+            # Found while the screen was still being built, with nothing
+            # listening for it: said again now.
+            kind = self._problem_kind
+            self.sig_account_problem.emit(
+                kind, self._problem_detail if kind == "plan" else self._PROBLEM_WORDS.get(kind, ""))
+        self.open_voice_early()
         # Sleep/wake watchdog — restarts mic + loop after system resume
         self._start_sleep_watchdog()
-        # Open everything now, while the user is still reading the startup
-        # toast: the HTTP pool, and the live conversation itself. The first
-        # question then costs exactly what the tenth does.
-        self._submit(self._warm_up())
-        self._submit(self._account_warm_up())
-        self._submit(self._realtime_connect())
-        self._submit(self._open_speaker())
         self._submit(self._keep_session_fresh())
         self._submit(self._keep_signed_in())
         # Speed, measured (ai/speed.py): how late the loop wakes, and what

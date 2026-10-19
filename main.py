@@ -383,6 +383,9 @@ def main():
 
     # ── Core components ───────────────────────────────────────────────────────
     manager = CompanionManager()
+    # The voice opens now, while the windows below are built (ST-01): the
+    # voice pass and Google's handshake are network waits, seconds of them.
+    manager.open_voice_early()
     panel   = CompanionPanel()
     overlay = CursorOverlay()
     tray    = TrayManager()

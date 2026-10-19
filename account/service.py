@@ -218,6 +218,7 @@ class Account:
         self._tickets: dict[str, tuple[str, float]] = {}   # kind -> (window ticket, ends)
         self._new_talk = False                              # the next talk window is a new question
         self._window_locks = {"talk": threading.Lock(), "agent": threading.Lock()}
+        self._summary_read = threading.Lock()         # one plan read at a time (summary)
         self._verifier: Optional[str] = None          # PKCE: the secret half of a link sign-in
 
     # -- state -------------------------------------------------------------------------------------------
@@ -457,17 +458,24 @@ class Account:
         with self._lock:
             if not force and self._summary is not None and time.time() - self._summary_at < SUMMARY_TTL_S:
                 return dict(self._summary)
-        try:
-            data = self._call("GET", "me")
-        except AccountError as e:
+        asked = time.time()
+        # Two reads at once share one: at start-up the warm-up and the window
+        # both asked, and the plan was read twice side by side (19 Oct).
+        with self._summary_read:
             with self._lock:
-                self._summary_error = str(e)
-            self._changed()
-            raise
-        self._clock(data)
-        with self._lock:
-            self._summary, self._summary_at, self._summary_error = data, time.time(), ""
-            self._remember()
+                if self._summary is not None and self._summary_at >= asked:
+                    return dict(self._summary)
+            try:
+                data = self._call("GET", "me")
+            except AccountError as e:
+                with self._lock:
+                    self._summary_error = str(e)
+                self._changed()
+                raise
+            self._clock(data)
+            with self._lock:
+                self._summary, self._summary_at, self._summary_error = data, time.time(), ""
+                self._remember()
         _log.info("plan: %s", short_status(data))
         self._changed()
         return dict(data)
