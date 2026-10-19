@@ -46,6 +46,7 @@ from account import settings, store
 _log = logging.getLogger("tora.account")
 
 REFRESH_EARLY_S = 90          # refresh a session this long before it expires
+REFRESH_AHEAD_S = 600         # ...and in the background, this long before (refresh_ahead)
 SUMMARY_TTL_S = 60            # the plan and usage are re-read at most this often
 ALERT_AT = (0.8, 1.0)         # tell the user at 80% and at 100% of an allowance, once a month each
 TICKET_SPARE_S = 30           # a window ticket this close to its end is asked for again
@@ -394,12 +395,24 @@ class Account:
 
     def token(self) -> str:
         """A current access token, refreshed when it is about to expire."""
+        return self._token(REFRESH_EARLY_S)
+
+    def refresh_ahead(self) -> None:
+        """Refresh the sign-in if it expires within REFRESH_AHEAD_S. Called
+        in the background every couple of minutes (AC-06, 18 Oct 2026), so
+        no question waits on /auth/v1/token: 57 refreshes in a fortnight,
+        each one sitting in front of whatever asked for the token - a voice
+        pass at the key press, as often as not."""
+        if self.signed_in():
+            self._token(REFRESH_AHEAD_S)
+
+    def _token(self, early_s: float) -> str:
         self._need_config()
         with self._lock:
             s = self._session
             if not s or not s.get("refresh_token"):
                 raise SignInNeeded()
-            if time.time() < float(s.get("expires_at") or 0) - REFRESH_EARLY_S:
+            if time.time() < float(s.get("expires_at") or 0) - early_s:
                 return s["access_token"]
             r = self._auth_post("token?grant_type=refresh_token", {"refresh_token": s["refresh_token"]})
             if r.status_code >= 400:

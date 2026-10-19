@@ -745,3 +745,26 @@ def test_the_plans_and_their_allowances():
     assert "security definer" in sql and "set search_path = public, pg_temp" in sql
     assert "grant execute on function public.heytora_consume(text, int, jsonb) to authenticated" in sql
     assert "from public, anon" in sql, "never callable without signing in"
+
+
+def test_the_sign_in_is_refreshed_in_the_background_before_a_question_needs_it(heytora):
+    """AC-06: no question waits on /auth/v1/token."""
+    heytora.fake.expires_in = 3600
+    _signed_in(heytora)
+    calls = len(heytora.fake.calls)
+    heytora.account.refresh_ahead()
+    assert len(heytora.fake.calls) == calls, "an hour left: nothing to do"
+    heytora.fake.expires_in = 500                        # inside REFRESH_AHEAD_S, outside the question's margin
+    _signed_in(heytora)
+    before = heytora.fake.issued
+    heytora.account.refresh_ahead()
+    assert heytora.fake.paths()[-1] == "/auth/v1/token" and heytora.fake.issued == before + 1
+    calls = len(heytora.fake.calls)
+    heytora.fake.expires_in = 3600
+    assert heytora.account.token() == f"at{before + 1}"
+    assert len(heytora.fake.calls) == calls, "the question's token was ready"
+
+
+def test_no_background_refresh_when_signed_out(heytora):
+    heytora.account.refresh_ahead()
+    assert heytora.fake.calls == []

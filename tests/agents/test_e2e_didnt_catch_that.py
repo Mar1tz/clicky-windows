@@ -72,5 +72,59 @@ def test_an_answer_ends_the_watch():
 
 
 def test_the_real_timings():
-    assert cm.CompanionManager._NOTHING_HEARD_S == 5.0 and cm.CompanionManager._HEARD_NO_ANSWER_S == 12.0
+    assert cm.CompanionManager._NOTHING_HEARD_S == 2.5 and cm.CompanionManager._HEARD_NO_ANSWER_S == 12.0
     assert cm.CompanionManager._TURN_WATCHDOG_MAX_S == 75.0
+
+
+# -- FX-01 (18 Oct 2026): an unanswered question is asked the slow way ----------------------------------------
+#
+# 18 "Sorry - I didn't catch that" in a fortnight; on 16 Oct a session that
+# had gone deaf heard nothing of five questions in a row.
+
+QUESTION = b"q" * 32000                                     # a second of it
+
+
+def _rescuing(heard=(), tool_running=False):
+    m = _manager(heard, tool_running)
+    m.asked = []
+
+    async def cascade(pcm):
+        m.asked.append((round(time.monotonic() - m.t0, 1), pcm))
+    m._cascade_turn = cascade
+    return m
+
+
+def _run_with(m, pcm=QUESTION):
+    m.t0 = time.monotonic()
+    asyncio.run(m._realtime_turn_watchdog(1, pcm))
+    return m
+
+
+def test_a_question_nobody_heard_is_asked_the_slow_way():
+    cm.net_quality.reset()
+    m = _run_with(_rescuing())
+    assert m.asked and m.asked[0][1] == QUESTION and m.asked[0][0] < 0.9
+    assert m.said == [], "an answer, not an apology"
+    assert m.dropped == [1], "a session that heard nothing of it is not kept"
+
+
+def test_heard_and_unanswered_is_asked_the_slow_way_too():
+    m = _run_with(_rescuing(heard=["what's the weather"]))
+    assert m.asked and 0.9 <= m.asked[0][0] < 1.5 and m.said == []
+    assert m.dropped == [1]
+
+
+def test_a_weak_connection_gets_longer_before_the_slow_way(monkeypatch):
+    monkeypatch.setattr(cm.net_quality, "slow", lambda: True)
+    m = _run_with(_rescuing())
+    assert 0.9 <= m.asked[0][0] < 1.5, "twice NOTHING_HEARD_S: the first word is slower to come back"
+
+
+def test_a_tool_that_runs_out_the_ceiling_is_not_asked_again():
+    m = _run_with(_rescuing(heard=["best move?"], tool_running=True))
+    assert m.asked == [] and "didn't catch that" in m.said[0][1]
+
+
+def test_a_press_with_nothing_kept_still_says_so():
+    m = _run_with(_rescuing(), pcm=b"")
+    assert m.asked == [] and "didn't catch that" in m.said[0][1]

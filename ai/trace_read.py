@@ -65,58 +65,94 @@ class Reading:
         return f"{self.focus.describe()} {what}"
 
 
-def _text_at(ctrl, x: int, y: int, unit: int, auto) -> str:
-    """The text at a point, from the nearest element up the tree that has it."""
-    node = ctrl
-    for _ in range(8):
-        if node is None:
-            return ""
-        try:
-            pattern = node.GetPattern(auto.PatternId.TextPattern)
-        except Exception:  # noqa: BLE001
-            pattern = None
-        if pattern is not None:
+def _text_pattern(node, auto):
+    try:
+        return node.GetPattern(auto.PatternId.TextPattern)
+    except Exception:  # noqa: BLE001
+        return None
+
+
+class _Texts:
+    """Where the words at a point come from: the nearest element up the tree
+    that gives text. On a web page that is the document, ~7 parents above
+    what is at the point - so once it is found for a focus it is kept, and
+    the next point on the same page asks it straight away (WR-02, 18 Oct
+    2026: a circle's 9 points climbed 68 parents, 190 ms of a 230 ms read).
+    A control with text of its own - a box on the page - still answers for
+    itself."""
+
+    def __init__(self, auto):
+        self.auto = auto
+        self.pattern = None
+        self.box: Optional[tuple] = None
+
+    def at(self, ctrl, x: int, y: int):
+        own = _text_pattern(ctrl, self.auto)
+        if own is not None:
+            return own
+        if self.pattern is not None and self.box is not None:
+            l, t, r, b = self.box
+            if l <= x < r and t <= y < b:
+                return self.pattern
+        node = ctrl
+        for _ in range(7):
             try:
-                rng = pattern.RangeFromPoint(x, y)
-                if rng is None:
-                    return ""
-                rng.ExpandToEnclosingUnit(unit, waitTime=0)
-                return " ".join((rng.GetText(_MAX_TEXT) or "").split())
-            except Exception:  # noqa: BLE001 - a provider that will not say
-                return ""
-        try:
-            node = node.GetParentControl()
-        except Exception:  # noqa: BLE001
+                node = node.GetParentControl()
+            except Exception:  # noqa: BLE001
+                return None
+            if node is None:
+                return None
+            pattern = _text_pattern(node, self.auto)
+            if pattern is not None:
+                try:
+                    r = node.BoundingRectangle
+                    self.pattern, self.box = pattern, (r.left, r.top, r.right, r.bottom)
+                except Exception:  # noqa: BLE001 - used for this point, not kept
+                    pass
+                return pattern
+        return None
+
+
+def _text_at(pattern, x: int, y: int, unit: int) -> str:
+    """The text at a point, widened to the word, line or paragraph."""
+    try:
+        rng = pattern.RangeFromPoint(x, y)
+        if rng is None:
             return ""
-    return ""
+        rng.ExpandToEnclosingUnit(unit, waitTime=0)
+        return " ".join((rng.GetText(_MAX_TEXT) or "").split())
+    except Exception:  # noqa: BLE001 - a provider that will not say
+        return ""
 
 
-def _text_between(ctrl, a: tuple, b: tuple, auto) -> str:
+def _text_between(pattern, a: tuple, b: tuple, auto) -> str:
     """The text from one point to another - everything inside a circle or a
     sweep, read as one span, where a few sample points miss most of it."""
-    node = ctrl
-    for _ in range(8):
-        if node is None:
+    try:
+        start, end = pattern.RangeFromPoint(*a), pattern.RangeFromPoint(*b)
+        if start is None or end is None:
             return ""
-        try:
-            pattern = node.GetPattern(auto.PatternId.TextPattern)
-        except Exception:  # noqa: BLE001
-            pattern = None
-        if pattern is not None:
-            try:
-                start, end = pattern.RangeFromPoint(*a), pattern.RangeFromPoint(*b)
-                if start is None or end is None:
-                    return ""
-                start.MoveEndpointByRange(auto.TextPatternRangeEndpoint.End, end,
-                                          auto.TextPatternRangeEndpoint.End, waitTime=0)
-                return " ".join((start.GetText(_MAX_TEXT) or "").split())
-            except Exception:  # noqa: BLE001
-                return ""
-        try:
-            node = node.GetParentControl()
-        except Exception:  # noqa: BLE001
-            return ""
-    return ""
+        start.MoveEndpointByRange(auto.TextPatternRangeEndpoint.End, end,
+                                  auto.TextPatternRangeEndpoint.End, waitTime=0)
+        return " ".join((start.GetText(_MAX_TEXT) or "").split())
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+def _window_at(x: float, y: float) -> str:
+    """The title of the window under a point - asked of Windows, not walked
+    up the accessibility tree (20 ms of parents)."""
+    from ai import screen_files
+    hwnd = screen_files.root_window_at(x, y)
+    if not hwnd:
+        return ""
+    try:
+        import ctypes
+        buf = ctypes.create_unicode_buffer(256)
+        ctypes.windll.user32.GetWindowTextW(hwnd, buf, 256)
+        return buf.value[:90]
+    except Exception:  # noqa: BLE001
+        return ""
 
 
 def _thing(ctrl) -> str:
@@ -141,6 +177,7 @@ def read(focuses: list[Focus], budget_s: float = READ_BUDGET_S) -> list[Reading]
     with uia_page.in_thread():
         for reading in out:
             unit = getattr(auto.TextUnit, _UNIT.get(reading.focus.kind, "Line"))
+            source = _Texts(auto)
             texts: list[str] = []
             names: list[str] = []                     # list items: in File Explorer, files
             for x, y in reading.focus.samples:
@@ -153,11 +190,7 @@ def read(focuses: list[Focus], budget_s: float = READ_BUDGET_S) -> list[Reading]
                 if ctrl is None or bool(getattr(ctrl, "IsPassword", False)):
                     continue                         # never a password field
                 if not reading.window:
-                    try:
-                        top = ctrl.GetTopLevelControl()
-                        reading.window = ((top.Name if top is not None else "") or "")[:90]
-                    except Exception:  # noqa: BLE001
-                        pass
+                    reading.window = _window_at(x, y)
                 thing = _thing(ctrl)
                 if thing and thing not in reading.things:
                     reading.things.append(thing)
@@ -166,7 +199,8 @@ def read(focuses: list[Focus], budget_s: float = READ_BUDGET_S) -> list[Reading]
                         if named is not None and named.ControlTypeName == "ListItemControl" and named.Name \
                                 and named.Name not in names:
                             names.append(named.Name)
-                text = _text_at(ctrl, int(x), int(y), unit, auto)
+                pattern = source.at(ctrl, int(x), int(y))
+                text = _text_at(pattern, int(x), int(y), unit) if pattern is not None else ""
                 if text and not any(text in t or t in text for t in texts):
                     texts.append(text)
             if reading.focus.kind in ("circle", "sweep") and time.monotonic() < deadline:
@@ -174,8 +208,9 @@ def read(focuses: list[Focus], budget_s: float = READ_BUDGET_S) -> list[Reading]
                 inset = 6
                 try:
                     corner = auto.ControlFromPoint(int(l + inset), int(t + inset))
-                    span = _text_between(corner, (int(l + inset), int(t + inset)),
-                                         (int(r - inset), int(b - inset)), auto) if corner is not None else ""
+                    pattern = source.at(corner, int(l + inset), int(t + inset)) if corner is not None else None
+                    span = _text_between(pattern, (int(l + inset), int(t + inset)),
+                                         (int(r - inset), int(b - inset)), auto) if pattern is not None else ""
                 except Exception:  # noqa: BLE001
                     span = ""
                 if len(span) > len(" ".join(texts)):

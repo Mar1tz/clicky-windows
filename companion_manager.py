@@ -616,6 +616,7 @@ class CompanionManager(QObject):
         self._submit(self._realtime_connect())
         self._submit(self._open_speaker())
         self._submit(self._keep_session_fresh())
+        self._submit(self._keep_signed_in())
         # Speed, measured (ai/speed.py): how late the loop wakes, and what
         # Tora costs the CPU while nobody talks to her.
         self._submit(speed.watch_loop(asyncio.sleep))
@@ -662,6 +663,22 @@ class CompanionManager(QObject):
                     await self._realtime_connect()      # Pro / Max: open it now, as before
         except Exception as e:  # noqa: BLE001
             gemini.report_problem(e)
+
+    SIGN_IN_CHECK_S = 120.0
+
+    async def _keep_signed_in(self) -> None:
+        """HeyTora account: the sign-in refreshed before it runs out, off any
+        question's path (AC-06). A lapsed one is said by the question that
+        needs it, as before."""
+        while True:
+            await asyncio.sleep(self.SIGN_IN_CHECK_S)
+            if gemini.own_key():
+                continue
+            try:
+                from account.service import account
+                await asyncio.to_thread(account().refresh_ahead)
+            except Exception:  # noqa: BLE001 - offline, or signed out: the next question says so
+                _log.debug("background sign-in refresh failed", exc_info=True)
 
     async def _open_speaker(self) -> None:
         """Her speaker, opened at start-up rather than on her first word
@@ -3917,6 +3934,8 @@ class CompanionManager(QObject):
 
     def _start_trace(self) -> None:
         self._trace = tracing.Trace()
+        self._trace_ahead = {}
+        self._trace_ahead_task = None
         self._trace_live = True
         self._mist("on")
         self._submit(self._record_trace(self._trace, self._hotkey_pressed_at))
@@ -3931,6 +3950,41 @@ class CompanionManager(QObject):
     _trace_task: Optional[asyncio.Task] = None
     _trace_readings: list = []
     TRACE_WAIT_S = 0.25        # the answer waits no longer than this for it
+    # WR-02: each stroke is read as soon as it ends - the mouse rests
+    # tracing.PAUSE_S - while the shortcut is still held. A circle took
+    # 0.2-0.4 s to read (once 1.3 s) against the answer's 0.25 s wait, and a
+    # late reading lost its words; read while they finish the question, it
+    # is there at the release.
+    _trace_ahead: Optional[dict] = None           # focus key -> Reading, for this trace
+    _trace_ahead_task: Optional[asyncio.Task] = None
+
+    @staticmethod
+    def _focus_key(f) -> tuple:
+        return f.kind, tuple(f.rect), f.t0, f.t1
+
+    def _private_now(self) -> bool:
+        return bool(self._privacy_guard and is_sensitive_window(active_window_title()))
+
+    def _read_ahead(self, trace) -> None:
+        """Read the strokes finished so far, one reading at a time."""
+        if self._trace_ahead is None:
+            self._trace_ahead = {}
+        before, ahead = self._trace_ahead_task, self._trace_ahead
+
+        async def read() -> None:
+            if before is not None:
+                await asyncio.gather(before, return_exceptions=True)
+            todo = [f for f in tracing.focuses(trace) if self._focus_key(f) not in ahead]
+            if not todo or self._trace is not trace or self._private_now():
+                return
+            for f, reading in zip(todo, await asyncio.to_thread(trace_read.read, todo)):
+                ahead[self._focus_key(f)] = reading
+        self._trace_ahead_task = asyncio.ensure_future(read())
+
+    def _shapes_with_what_was_read(self, focuses) -> list:
+        """Each focus's reading if it was read while held, else its shape and place."""
+        ahead = self._trace_ahead or {}
+        return [ahead.get(self._focus_key(f)) or trace_read.Reading(f) for f in focuses]
 
     async def _start_trace_read(self, trace) -> None:
         self._trace_task = asyncio.ensure_future(self._read_trace(trace))
@@ -3941,10 +3995,18 @@ class CompanionManager(QObject):
         if not focuses:
             return ""
         started = time.monotonic()
-        if self._privacy_guard and is_sensitive_window(active_window_title()):
+        if self._private_now():
             readings = [trace_read.Reading(f) for f in focuses]          # a place and a shape, nothing read
         else:
-            readings = await asyncio.to_thread(trace_read.read, focuses)
+            if self._trace_ahead_task is not None:                      # a stroke being read: it is nearly done
+                await asyncio.gather(self._trace_ahead_task, return_exceptions=True)
+            ahead = self._trace_ahead or {}
+            todo = [f for f in focuses if self._focus_key(f) not in ahead]
+            fresh = iter(await asyncio.to_thread(trace_read.read, todo) if todo else ())
+            readings = [ahead[self._focus_key(f)] if self._focus_key(f) in ahead else next(fresh)
+                        for f in focuses]
+            if len(todo) < len(focuses):
+                _log.info("trace: %d of %d read while the shortcut was held", len(focuses) - len(todo), len(focuses))
         self._trace_readings = readings
         _log.info("trace: %s - read %d of them in %.0f ms", ", ".join(f.kind for f in focuses),
                   sum(1 for r in readings if r.text or r.things), (time.monotonic() - started) * 1000)
@@ -3958,9 +4020,11 @@ class CompanionManager(QObject):
             return ""
         try:
             return await asyncio.wait_for(asyncio.shield(task), self.TRACE_WAIT_S)
-        except Exception:  # noqa: BLE001 - late or failed: its shape and place, at once
+        except Exception:  # noqa: BLE001 - late or failed: what was read while held, the rest its shape and place
             trace = self._trace
-            return trace_read.voice_line([trace_read.Reading(f) for f in tracing.focuses(trace)]) if trace else ""
+            if not trace or self._private_now():
+                return trace_read.voice_line([trace_read.Reading(f) for f in tracing.focuses(trace)]) if trace else ""
+            return trace_read.voice_line(self._shapes_with_what_was_read(tracing.focuses(trace)))
 
     async def _send_trace_line(self, conv) -> None:
         """Before the voice's turn ends: what they traced, in one line."""
@@ -3971,11 +4035,17 @@ class CompanionManager(QObject):
             _log.info("trace line sent %.2fs after the question", time.monotonic() - started)
 
     async def _record_trace(self, trace, since: float) -> None:
-        """Sample the mouse ~60 times a second until the shortcut comes up."""
+        """Sample the mouse ~60 times a second until the shortcut comes up -
+        and once it has rested a stroke's pause, read what it showed."""
+        read_at = 0                                   # the trace's points when it was last read
         while self._trace_live and self._trace is trace:
             pos = look_region.cursor_position()
             if pos is not None:
                 trace.add(time.monotonic() - since, *pos)
+            n = len(trace.points)
+            if n > read_at and time.monotonic() - since - trace.points[-1].t >= tracing.PAUSE_S and trace.moved:
+                read_at = n
+                self._read_ahead(trace)
             await asyncio.sleep(self.TRACE_EVERY_S)
 
     def _handle_wake(self):
@@ -4272,7 +4342,7 @@ class CompanionManager(QObject):
                 self._emit_state(AppState.THINKING)
             self._activity("understanding")
             self._turn_seq += 1
-            self._submit(self._realtime_turn_watchdog(self._turn_seq))
+            self._submit(self._realtime_turn_watchdog(self._turn_seq, pcm))
             return
 
         if len(pcm) < 3200:
@@ -4300,15 +4370,20 @@ class CompanionManager(QObject):
     # reconnect tripping a GeneratorExit — three failures from one slow tool.
     _TURN_WATCHDOG_MAX_S = 75.0
 
-    async def _realtime_turn_watchdog(self, seq: int) -> None:
-        """Guarantee a turn ends, even if the model never replies to it.
+    async def _realtime_turn_watchdog(self, seq: int, pcm: bytes = b"") -> None:
+        """Guarantee a turn is answered, even if the live model never replies.
 
-        The live session can be perfectly healthy and still produce nothing
+        The live session can look perfectly healthy and still produce nothing
         for a turn — no audio, no transcript, no turn_complete. The pump only
         reacts to events that arrive, and the socket never drops, so neither
         _on_realtime_turn_end nor _on_realtime_lost fires and the app sits on
         "Thinking…" forever. This is the backstop: if the same turn is still
-        pending when it expires, say so and go back to idle.
+        pending when it expires, the question - its audio, `pcm` - is asked
+        the slow way instead (FX-01, 18 Oct 2026). It used to say "Sorry - I
+        didn't catch that" (18 times in a fortnight), and on 16 Oct a session
+        that had gone deaf heard nothing of five questions in a row, 6 s of
+        speech among them: it is dropped now, and the next question has a
+        fresh one.
         """
         started = time.monotonic()
         # Poll on a short interval rather than one long sleep, so a normal
@@ -4336,12 +4411,21 @@ class CompanionManager(QObject):
             heard = bool(getattr(self, "_heard_buf", None)) or self._tool_done_at >= started
             if elapsed >= self._TURN_WATCHDOG_MAX_S:
                 break                   # hard ceiling, tool or no tool
-            if not busy and elapsed >= (self._HEARD_NO_ANSWER_S if heard else self._NOTHING_HEARD_S):
+            # On a weak connection the first word is slower to come back.
+            nothing_s = self._NOTHING_HEARD_S * (2 if net_quality.slow() else 1)
+            if not busy and elapsed >= (self._HEARD_NO_ANSWER_S if heard else nothing_s):
                 break                   # quiet long enough — really stuck
-        _log.warning("realtime turn produced no response in %.0fs (%s)", time.monotonic() - started,
-                     "words were heard" if heard else "no words were heard")
-        speed.finish("unanswered")
+        rescue = len(pcm) >= 3200 and not busy
+        _log.warning("realtime turn produced no response in %.1fs (%s)%s", time.monotonic() - started,
+                     "words were heard" if heard else "no words were heard",
+                     " - asking the slow way" if rescue else "")
         self._activity("")
+        if rescue:
+            self._drop_realtime()       # nothing more from it: it cannot answer twice
+            speed.route("slow")
+            await self._cascade_turn(pcm)
+            return
+        speed.finish("unanswered")
         self._emit_state(AppState.IDLE)
         if heard:
             # The model heard them and said nothing: the session is suspect —
@@ -4353,7 +4437,7 @@ class CompanionManager(QObject):
             "Sorry — I didn't catch that. Could you say it again?"
         )
 
-    _NOTHING_HEARD_S = 5.0          # FS-13
+    _NOTHING_HEARD_S = 2.5          # FX-01: the slow way after this (5 s before, FS-13)
     _HEARD_NO_ANSWER_S = 12.0       # FS-13 (one 22 s wait for everything, before)
 
     def _record_turn(self, question: str, answer: str) -> None:
