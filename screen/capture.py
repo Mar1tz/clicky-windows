@@ -174,14 +174,17 @@ def capture_region(left: int, top: int, width: int, height: int, max_width: int 
     return base64.b64encode(buf.getvalue()).decode("utf-8"), img.width, img.height
 
 
-def capture_primary() -> ScreenShot:
+def capture_primary(max_width: int = 1280) -> ScreenShot:
     """The main monitor's screenshot. Not screens[0]: mss lists monitors in
     its own order, and with three it was the right-hand one. The main
-    monitor is the one whose top-left corner is the desktop's origin."""
-    screens = capture_all_screens()
-    if not screens:
+    monitor is the one whose top-left corner is the desktop's origin. Only
+    it is grabbed (as looks do since FS-05): every monitor was grabbed and
+    encoded to keep one."""
+    frames = monitor_frames()
+    if not frames:
         return None
-    return next((s for s in screens if s.physical_left == 0 and s.physical_top == 0), screens[0])
+    frame = next((s for s in frames if s.physical_left == 0 and s.physical_top == 0), frames[0])
+    return grab_frame(frame, max_width)
 
 
 def screen_count() -> int:

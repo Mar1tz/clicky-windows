@@ -571,3 +571,21 @@ def test_on_a_plan_the_warm_up_is_an_unsigned_head_nothing_counted(monkeypatch):
     monkeypatch.setattr(service, "account", lambda: SimpleNamespace(proxy_root=lambda: "https://proj/heytora/v1beta"))
     assert asyncio.run(gemini.warm_up()) is True
     assert calls == [("https://proj/heytora/v1beta", None)], "no sign-in sent: the gateway turns it away"
+
+
+# -- AG-08: an agent's screenshot is the main monitor, at 768 px ----------------------------------------------
+
+def test_the_agents_screenshot_grabs_only_the_main_monitor_small(monkeypatch):
+    from screen import capture
+    from screen.capture import ScreenShot
+    frames = [ScreenShot(index=i + 1, width=1920, height=1080, base64_jpeg="", physical_width=1920,
+                         physical_height=1080, physical_left=x, physical_top=0, dpi_scale=1.0,
+                         logical_left=x, logical_top=0) for i, x in enumerate((1920, 0, -1920))]
+    grabbed = []
+    monkeypatch.setattr(capture, "monitor_frames", lambda: frames)
+    monkeypatch.setattr(capture, "grab_frame", lambda f, w: grabbed.append((f.physical_left, w)) or f)
+    monkeypatch.setattr(capture, "capture_all_screens", lambda *a: pytest.fail("every monitor grabbed"))
+    capture.capture_primary(768)
+    assert grabbed == [(0, 768)], "the monitor at the desktop's origin, once"
+    from agents.tools import computer_tools
+    assert computer_tools.SHOT_WIDTH == 768
