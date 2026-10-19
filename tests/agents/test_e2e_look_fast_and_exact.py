@@ -534,3 +534,40 @@ def test_a_recent_grab_is_reused_not_taken_again(monkeypatch):
     mgr, _asked, grabbed = _three_monitors(monkeypatch, pictures=True)
     shot = asyncio.run(mgr._one_shot(1024))
     assert shot.base64_jpeg == "recent" and grabbed == []
+
+
+# -- SC-09: the look's connection is opened while they talk -------------------------------------------------------
+
+def test_an_idle_pool_is_warmed_at_the_key_and_a_busy_one_left_alone(monkeypatch):
+    from ai import gemini
+    calls = []
+
+    class Client:
+        async def get(self, url, **kw):
+            calls.append(("GET", url))
+            return SimpleNamespace(status_code=200)
+
+        async def head(self, url, **kw):
+            calls.append(("HEAD", url))
+            return SimpleNamespace(status_code=401)
+    monkeypatch.setattr(gemini, "client", lambda: Client())
+    monkeypatch.setattr(gemini, "api_key", lambda: "k")
+    monkeypatch.setattr(gemini, "_last_call", 0.0)
+    assert asyncio.run(gemini.keep_warm()) is True and calls[-1][0] == "GET", "own key: the model's details, free"
+    assert asyncio.run(gemini.keep_warm()) is False and len(calls) == 1, "used a moment ago: left alone"
+
+
+def test_on_a_plan_the_warm_up_is_an_unsigned_head_nothing_counted(monkeypatch):
+    from ai import gemini
+    calls = []
+
+    class Client:
+        async def head(self, url, **kw):
+            calls.append((url, kw.get("headers")))
+            return SimpleNamespace(status_code=401)
+    monkeypatch.setattr(gemini, "client", lambda: Client())
+    monkeypatch.setattr(gemini, "own_key", lambda: False)
+    from account import service
+    monkeypatch.setattr(service, "account", lambda: SimpleNamespace(proxy_root=lambda: "https://proj/heytora/v1beta"))
+    assert asyncio.run(gemini.warm_up()) is True
+    assert calls == [("https://proj/heytora/v1beta", None)], "no sign-in sent: the gateway turns it away"

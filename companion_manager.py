@@ -3754,11 +3754,21 @@ class CompanionManager(QObject):
         if not guide and not started and guide.failure not in ("billing", "key", "network"):
             _log.info("fast plan unusable for %r — retrying with the pro model",
                       goal[:60])
-            guide = await gemini_planner.plan(
-                goal, screenshot_b64=shot, window_title=title,
-                controls=controls, fast=False,
-            )
+            # UI-06: one try, bounded. On 11 Oct the pro model was busy (503)
+            # and its retries ran step one to 78 s; nobody waits that long
+            # for a walkthrough. Past PLAN_FALLBACK_S it is said that it
+            # could not be planned.
+            try:
+                guide = await asyncio.wait_for(gemini_planner.plan(
+                    goal, screenshot_b64=shot, window_title=title,
+                    controls=controls, fast=False, busy_retries=False,
+                ), self.PLAN_FALLBACK_S)
+            except asyncio.TimeoutError:
+                _log.warning("the pro plan took over %.0fs - given up", self.PLAN_FALLBACK_S)
+                guide = gemini_planner.Guide(goal=goal, feasible=False)
         return guide
+
+    PLAN_FALLBACK_S = 20.0
 
     @staticmethod
     def _foreground_controls(title: str) -> list[str]:
@@ -4273,6 +4283,7 @@ class CompanionManager(QObject):
             self._emit_state(AppState.IDLE)
             return
         speed.mark("mic")
+        self._submit(gemini.keep_warm())        # SC-09: the look's connection, while they talk
         took = time.monotonic() - opened
         if took > 0.15:
             _log.info("the microphone took %.0f ms to open", took * 1000)
