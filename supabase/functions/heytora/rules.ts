@@ -211,3 +211,38 @@ export class UsageReader {
 export function estimateTokens(bytes: number): number {
   return Math.ceil(Math.max(0, bytes) / 4);
 }
+
+// -- the sign-in, read from the token itself (AC-02) -----------------------------------------------------------
+
+/** Who a VERIFIED token's claims say is signed in, or null when they are not
+ * a signed-in user's: the anon key, a service key, another project's token,
+ * or one past its time. Verifying the signature is the caller's (jose); this
+ * only reads what was verified. */
+export function signedInUser(
+  claims: Record<string, unknown>, issuer: string, now: number,
+): { id: string; email: string } | null {
+  if (claims.role !== "authenticated" || typeof claims.sub !== "string" || !claims.sub) return null;
+  if (claims.iss !== issuer) return null;
+  const aud = claims.aud;
+  if (!(aud === "authenticated" || (Array.isArray(aud) && aud.includes("authenticated")))) return null;
+  if (typeof claims.exp !== "number" || claims.exp <= now) return null;
+  return { id: claims.sub, email: typeof claims.email === "string" ? claims.email : "" };
+}
+
+// -- Google's billing, said to the owners (FX-06) --------------------------------------------------------------
+
+/** Is this Google refusal about the business account's billing - credits run
+ * out, billing off - rather than one request? 22 Sep and 6-9 Oct: "your
+ * prepayment credits are depleted", and nobody was told until users noticed. */
+export function billingProblem(status: number, text: string): boolean {
+  const t = (text || "").toLowerCase();
+  if (status !== 429 && status !== 403 && status !== 400 && status !== 1011) return false;
+  return /prepayment credits|credits are depleted|billing (is )?(not )?(enabled|disabled|account)|billing_disabled|exceeded your current quota.*billing/.test(t);
+}
+
+/** The alert's words, for a Slack- or Discord-style webhook (both keys). */
+export function alertBody(where: string, status: number, text: string): Record<string, string> {
+  const line = `HeyTora: Google refused ${where} for billing (${status}) - users are not being answered. `
+    + `${(text || "").replace(/\s+/g, " ").slice(0, 300)}`;
+  return { text: line, content: line };
+}

@@ -739,8 +739,11 @@ class Account:
             raise AccountError("Could not reach HeyTora - check the internet connection.") from e
         took = time.monotonic() - started
         if took > SLOW_CALL_S:
-            # In front of a voice session or an answer (ST-01, AC-07): said.
-            _log.info("HeyTora %s %s took %.1fs", method, path, took)
+            # In front of a voice session or an answer (ST-01, AC-07): said,
+            # with the server's own share - sign-in, database, Google - so a
+            # slow one says where it was slow (the rest is the trip there).
+            _log.info("HeyTora %s %s took %.1fs (server: %s)", method, path, took,
+                      r.headers.get("server-timing") or "no timing")
         if r.status_code == 401:
             # The server no longer accepts this sign-in (account deleted, signed
             # out everywhere): forget it here too, so the app asks again.

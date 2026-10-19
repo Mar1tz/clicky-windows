@@ -108,3 +108,32 @@ test("the agents may only reach the Claude models on OmniRoute", () => {
   assert.equal(allowed.has("gpt-5"), false);
   assert.deepEqual([...omnirouteModels(" a/x , b/y ")], ["a/x", "b/y"]);
 });
+
+// -- AC-02: the sign-in from the verified token -------------------------------------------------------------------
+
+import { alertBody, billingProblem, signedInUser } from "../functions/heytora/rules.ts";
+
+test("only a signed-in user's own, current token is a user", () => {
+  const iss = "https://proj.supabase.co/auth/v1";
+  const now = 1_800_000_000;
+  const user = { role: "authenticated", sub: "u-1", aud: "authenticated", iss, exp: now + 600, email: "amy@example.com" };
+  assert.deepEqual(signedInUser(user, iss, now), { id: "u-1", email: "amy@example.com" });
+  assert.equal(signedInUser({ ...user, role: "anon", sub: undefined }, iss, now), null, "the anon key");
+  assert.equal(signedInUser({ ...user, role: "service_role" }, iss, now), null, "a service key");
+  assert.equal(signedInUser({ ...user, iss: "https://other.supabase.co/auth/v1" }, iss, now), null);
+  assert.equal(signedInUser({ ...user, exp: now - 1 }, iss, now), null, "past its time");
+  assert.equal(signedInUser({ ...user, aud: ["authenticated", "x"] }, iss, now)?.id, "u-1");
+  assert.equal(signedInUser({ ...user, aud: "anon" }, iss, now), null);
+});
+
+// -- FX-06: billing refusals reach the owners --------------------------------------------------------------------
+
+test("a billing refusal is told apart from an ordinary one", () => {
+  assert.ok(billingProblem(429, '{"error":{"message":"Your prepayment credits are depleted. Please go to AI Studio"}}'));
+  assert.ok(billingProblem(403, "Billing is not enabled for this project"));
+  assert.ok(!billingProblem(429, "Resource has been exhausted (e.g. check quota)."), "a rate limit is not billing");
+  assert.ok(!billingProblem(500, "prepayment credits are depleted"), "only refusals");
+  assert.ok(!billingProblem(400, "Invalid JSON payload"));
+  const body = alertBody("a voice pass", 429, "Your prepayment credits are depleted");
+  assert.ok(body.text.includes("billing") && body.text === body.content);
+});
