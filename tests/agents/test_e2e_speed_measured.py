@@ -148,3 +148,30 @@ def test_without_the_early_call_start_opens_it(monkeypatch):
     m = _bare_hub(monkeypatch)
     m.start()
     assert "_realtime_connect" in m.submitted and m.said == []
+
+
+# -- a stalled loop says what it was doing ------------------------------------------------------------------------
+
+def test_a_stuck_loop_is_caught_in_the_act(monkeypatch, caplog):
+    """19 Oct: a 1.3 s stall, and nothing to say what it was."""
+    import asyncio
+    import logging
+    import time
+    from ai import speed
+    monkeypatch.setattr(speed, "STALL_AFTER_S", 0.3)
+    monkeypatch.setattr(speed, "STALL_CHECK_S", 0.05)
+    monkeypatch.setattr(speed, "LAG_EVERY_S", 0.05)
+
+    def blocking_disk_write():
+        time.sleep(0.8)                                  # what a sync call on the loop does
+
+    async def go():
+        watch = asyncio.ensure_future(speed.watch_loop(asyncio.sleep))
+        await asyncio.sleep(0.1)
+        blocking_disk_write()
+        await asyncio.sleep(0.1)
+        watch.cancel()
+    with caplog.at_level(logging.WARNING, logger="tora.speed"):
+        asyncio.run(go())
+    stuck = [r.getMessage() for r in caplog.records if "is stuck" in r.getMessage()]
+    assert stuck and "blocking_disk_write" in stuck[0], stuck

@@ -218,18 +218,67 @@ LAG_EVERY_S = 0.5
 LAG_WARN_MS = 100.0
 
 
+# What the loop was doing when it stalled - caught WHILE it is stuck, by a
+# thread of its own: the lag above is only known once the stall is over,
+# and on 19 Oct a 1.3 s stall left nothing to say what it was.
+STALL_AFTER_S = LAG_EVERY_S + 0.3
+STALL_CHECK_S = 0.2
+_beat = 0.0
+_loop_thread: Optional[int] = None
+_stall_watch: Optional[threading.Thread] = None
+
+
+def _stack_line(frame, depth: int = 8) -> str:
+    import traceback
+    frames = traceback.extract_stack(frame)[-depth:]
+    return " <- ".join(f"{f.name} ({f.filename.replace(chr(92), '/').split('/')[-1]}:{f.lineno})"
+                       for f in reversed(frames))
+
+
+def stall_report() -> str:
+    """The loop thread's stack, and every other thread's top frame."""
+    import sys
+    frames = sys._current_frames()
+    names = {t.ident: t.name for t in threading.enumerate()}
+    loop = frames.get(_loop_thread or -1)
+    parts = [f"loop: {_stack_line(loop) if loop is not None else '?'}"]
+    for ident, frame in frames.items():
+        if ident != _loop_thread and ident != threading.get_ident():
+            parts.append(f"{names.get(ident, ident)}: {_stack_line(frame, 2)}")
+    return " | ".join(parts)
+
+
+def _watch_stalls() -> None:
+    reported = 0.0
+    while True:
+        time.sleep(STALL_CHECK_S)
+        beat = _beat
+        if beat and time.perf_counter() - beat > STALL_AFTER_S and beat != reported:
+            reported = beat
+            _log.warning("the event loop is stuck (%.1fs): %s", time.perf_counter() - beat, stall_report())
+
+
 async def watch_loop(sleep) -> None:
     """Run on the companion's loop: how late does it wake? Anything that
     blocks the loop - disk, COM, a big encode - delays the voice, and shows
     here first. `sleep` is asyncio.sleep (passed in to keep this importable
     without a loop)."""
-    while True:
-        asked = time.perf_counter()
-        await sleep(LAG_EVERY_S)
-        late = (time.perf_counter() - asked - LAG_EVERY_S) * 1000
-        note_lag(max(0.0, late))
-        if late > LAG_WARN_MS:
-            _log.warning("the event loop was %d ms late - something blocked it", late)
+    global _beat, _loop_thread, _stall_watch
+    _loop_thread = threading.get_ident()
+    if _stall_watch is None:
+        _stall_watch = threading.Thread(target=_watch_stalls, name="stall-watch", daemon=True)
+        _stall_watch.start()
+    try:
+        while True:
+            asked = time.perf_counter()
+            _beat = asked
+            await sleep(LAG_EVERY_S)
+            late = (time.perf_counter() - asked - LAG_EVERY_S) * 1000
+            note_lag(max(0.0, late))
+            if late > LAG_WARN_MS:
+                _log.warning("the event loop was %d ms late - something blocked it", late)
+    finally:
+        _beat = 0.0                         # stopped, not stuck
 
 
 class _FileTime(ctypes.Structure):

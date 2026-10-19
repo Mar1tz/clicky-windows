@@ -385,3 +385,29 @@ def test_the_brake_says_so_in_the_log(monkeypatch, caplog):
         _run_script(monkeypatch, script)
     assert any("did not settle" in r.getMessage() for r in caplog.records), \
         "a brake that fires in silence is how this went unnoticed for a day"
+
+
+def test_every_session_shares_one_tls_context_built_off_the_loop(monkeypatch):
+    """~22 ms of a blocked loop per connection, every wake check (19 Oct)."""
+    import ai.gemini_live as gl
+    made, seen = [], []
+    monkeypatch.setattr(gl, "_TLS", None)
+    monkeypatch.setattr(gl.ssl, "create_default_context", lambda: made.append(1) or object())
+
+    class WS:
+        async def send(self, _m): pass
+        async def recv(self): return '{"setupComplete": {}}'
+
+    async def connect(address, **kw):
+        seen.append(kw.get("ssl"))
+        return WS()
+
+    monkeypatch.setattr(gl.websockets, "connect", connect)
+
+    async def go():
+        for _ in range(2):
+            s = LiveSession("m", {"tools": []})
+            s._address = lambda: asyncio.sleep(0, "wss://example.test/ws")
+            await s.connect()
+    asyncio.run(go())
+    assert len(made) == 1 and len(seen) == 2 and seen[0] is seen[1] is not None

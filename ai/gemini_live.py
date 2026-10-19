@@ -35,6 +35,7 @@ import asyncio
 import base64
 import json
 import logging
+import ssl
 from dataclasses import dataclass, field
 from typing import Any, AsyncIterator, Optional
 
@@ -142,6 +143,20 @@ class LiveEvent:
     #   closed            socket is gone
 
 
+# One TLS context for every session, built once and off the loop. Passed
+# none, the websockets library built a fresh one per connection - reading the
+# Windows certificate store, ~22 ms of a blocked loop each time (more on a
+# busy PC), for every voice session and every wake-word check (19 Oct).
+_TLS: Optional[ssl.SSLContext] = None
+
+
+async def _tls() -> ssl.SSLContext:
+    global _TLS
+    if _TLS is None:
+        _TLS = await asyncio.to_thread(ssl.create_default_context)
+    return _TLS
+
+
 class LiveSession:
     """One websocket to one Live model. Use as an async context manager."""
 
@@ -174,8 +189,9 @@ class LiveSession:
 
     async def connect(self, timeout: float = 20.0) -> None:
         address = await self._address()
+        tls = await _tls() if address.startswith("wss:") else None
         self._ws = await asyncio.wait_for(
-            websockets.connect(address, max_size=None),
+            websockets.connect(address, max_size=None, **({"ssl": tls} if tls else {})),
             timeout=timeout,
         )
         await self._send({"setup": self._setup})
