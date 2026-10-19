@@ -21,6 +21,12 @@ import pytest
 from ai import screen_files, trace as tracing, trace_read
 
 
+@pytest.fixture(autouse=True)
+def no_real_shell(monkeypatch):
+    """Never the PC's own File Explorer windows."""
+    monkeypatch.setattr(screen_files, "_explorer_view", lambda hwnd: None)
+
+
 @pytest.fixture
 def docs(tmp_path):
     folder = tmp_path / "Documents"
@@ -49,6 +55,29 @@ def test_names_in_an_explorer_window_are_its_files(docs, monkeypatch):
     monkeypatch.setattr(screen_files, "explorer_window", lambda hwnd: (str(docs), []))
     assert screen_files.files_at(["10 Mei 2026", "Budget"], 1234) == [str(docs / "10 Mei 2026.docx"),
                                                                      str(docs / "Budget.xlsx")]
+
+
+# WR-01 (18 Oct): "it isn't knowing what document I'm talking about".
+
+def test_two_files_of_one_name_are_told_apart_by_the_selection(docs, monkeypatch):
+    monkeypatch.setattr(screen_files, "explorer_window", lambda hwnd: (str(docs), [str(docs / "Report.pdf")]))
+    assert screen_files.files_at(["Report"], 1234) == [str(docs / "Report.pdf")]
+    assert screen_files.match(["Report"], [str(docs)]) == [], "and without a selection, still no guess"
+
+
+def test_a_library_or_a_search_is_read_by_what_it_shows(docs, monkeypatch):
+    """Quick access, a library, search results: the "folder" is no folder on disk."""
+    monkeypatch.setattr(screen_files, "explorer_window", lambda hwnd: ("::{031E4825-7B94-4DC3-B131}", []))
+    monkeypatch.setattr(screen_files, "shown_items",
+                        lambda hwnd: {"10 mei 2026": [str(docs / "10 Mei 2026.docx")],
+                                      "report": [str(docs / "Report.docx"), str(docs / "Report.pdf")]})
+    assert screen_files.files_at(["10 Mei 2026", "Report"], 1234) == [str(docs / "10 Mei 2026.docx")]
+
+
+def test_a_trace_that_placed_no_file_falls_back_to_the_selection(docs, monkeypatch):
+    monkeypatch.setattr(screen_files, "explorer_window", lambda hwnd: (str(docs), [str(docs / "Budget.xlsx")]))
+    monkeypatch.setattr(screen_files, "shown_items", lambda hwnd: {})
+    assert screen_files.files_at(["Name", "Date modified"], 1234) == [str(docs / "Budget.xlsx")]
 
 
 def test_names_on_the_desktop_are_its_files(docs, monkeypatch):

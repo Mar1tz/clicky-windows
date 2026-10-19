@@ -92,24 +92,50 @@ def _class_name(hwnd: int) -> str:
     return buf.value
 
 
-def explorer_window(hwnd: int) -> Optional[tuple[str, list[str]]]:
-    """(folder, selected paths) of the File Explorer window `hwnd`, or None."""
+def _explorer_view(hwnd: int):
+    """The shell's view of the File Explorer window `hwnd`, or None."""
     if not hwnd:
         return None
     _ready()
+    import comtypes.client
+    windows = comtypes.client.CreateObject("Shell.Application", dynamic=True).Windows()
+    for i in range(windows.Count):
+        w = windows.Item(i)
+        if w is not None and int(w.HWND) == int(hwnd):
+            return w.Document
+    return None
+
+
+def explorer_window(hwnd: int) -> Optional[tuple[str, list[str]]]:
+    """(folder, selected paths) of the File Explorer window `hwnd`, or None."""
     try:
-        import comtypes.client
-        windows = comtypes.client.CreateObject("Shell.Application", dynamic=True).Windows()
-        for i in range(windows.Count):
-            w = windows.Item(i)
-            if w is None or int(w.HWND) != int(hwnd):
-                continue
-            doc = w.Document
-            selected = doc.SelectedItems()
-            return str(doc.Folder.Self.Path), [str(selected.Item(j).Path) for j in range(selected.Count)]
+        doc = _explorer_view(hwnd)
+        if doc is None:
+            return None
+        selected = doc.SelectedItems()
+        return str(doc.Folder.Self.Path), [str(selected.Item(j).Path) for j in range(selected.Count)]
     except Exception as e:  # noqa: BLE001 - not a folder window, or the shell would not say
         _log.debug("explorer lookup failed: %s", e)
     return None
+
+
+def shown_items(hwnd: int) -> dict[str, list[str]]:
+    """What the File Explorer window `hwnd` lists, by the name it shows
+    (extension hidden or not, as Explorer shows it): {name: [paths]}. Where
+    the folder is not one folder on disk - a library, Quick access, search
+    results, Recent - this is the only way from a name to its file."""
+    out: dict[str, list[str]] = {}
+    try:
+        doc = _explorer_view(hwnd)
+        items = doc.Folder.Items() if doc is not None else None
+        for i in range(items.Count if items is not None else 0):
+            item = items.Item(i)
+            path = str(item.Path or "")
+            if path and os.path.exists(path):
+                out.setdefault(str(item.Name or "").strip().lower(), []).append(path)
+    except Exception as e:  # noqa: BLE001 - the shell would not say
+        _log.debug("explorer items failed: %s", e)
+    return out
 
 
 def desktop_folders() -> list[str]:
@@ -136,9 +162,11 @@ def office_document(hwnd: int) -> Optional[str]:
         return None
 
 
-def match(names: list[str], folders: list[str]) -> list[str]:
+def match(names: list[str], folders: list[str], prefer: list[str] = ()) -> list[str]:
     """Each name as shown (Explorer hides extensions) to the one file it is,
-    in these folders. A name matching no file, or two, gives nothing."""
+    in these folders. A name matching no file gives nothing; one matching
+    two - "Report" for Report.docx and Report.pdf - gives the one of them
+    that is selected (`prefer`), else nothing."""
     out: list[str] = []
     for name in names:
         name = (name or "").strip()
@@ -160,10 +188,18 @@ def match(names: list[str], folders: list[str]) -> list[str]:
         # A file before a folder of the same name: 11 Oct, "turn this into a
         # PDF" over "YUSUF" went to the folder YUSUF.
         exact = [f for f in files if os.path.basename(f).lower() == name.lower()]
-        hits = exact or files or dirs
-        if len(hits) == 1 and hits[0] not in out:
-            out.append(hits[0])
+        hits = _one_of(exact or files or dirs, prefer)
+        if hits and hits not in out:
+            out.append(hits)
     return out
+
+
+def _one_of(hits: list[str], prefer) -> Optional[str]:
+    """The one hit - or, of several, the one selected. Never a guess."""
+    if len(hits) == 1:
+        return hits[0]
+    chosen = [h for h in hits if os.path.normcase(h) in {os.path.normcase(p) for p in prefer}]
+    return chosen[0] if len(chosen) == 1 else None
 
 
 def files_at(names: list[str], hwnd: int) -> list[str]:
@@ -173,7 +209,20 @@ def files_at(names: list[str], hwnd: int) -> list[str]:
         return []
     explorer = explorer_window(hwnd)
     if explorer is not None:
-        return match(names, [explorer[0]])
+        # WR-01 (18 Oct 2026, the owner: "it isn't knowing what document I'm
+        # talking about"): the folder on disk first; then what the window
+        # lists by name, for a library, a search or Quick access, whose
+        # "folder" is no folder; and when the trace placed no file at all,
+        # what is selected in it.
+        folder, selected = explorer
+        found = match(names, [folder], prefer=selected) if os.path.isdir(folder) else []
+        if len(found) < len(names):
+            shown = shown_items(hwnd)
+            for name in names:
+                hit = _one_of(shown.get((name or "").strip().lower(), []), selected)
+                if hit and hit not in found:
+                    found.append(hit)
+        return found or list(selected)
     if _class_name(hwnd) in ("Progman", "WorkerW"):
         return match(names, desktop_folders())
     return []

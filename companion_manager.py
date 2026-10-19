@@ -1604,6 +1604,12 @@ class CompanionManager(QObject):
         self.sig_response_done.emit(words)
         return True
 
+    # HP-07: the audio thread wakes the pump as each block lands, rather than
+    # the pump looking every 20 ms - up to 20 ms on every block on its way
+    # to Google, and fifty wake-ups a second while listening.
+    _rt_wake: Optional[asyncio.Event] = None
+    RT_WAKE_MAX_S = 0.05            # still looks this often: the release, the screen line
+
     def _feed_realtime(self, block: bytes) -> None:
         """Audio-thread callback. Must be cheap and must never raise.
 
@@ -1613,6 +1619,12 @@ class CompanionManager(QObject):
         buffer clear, not a network call.
         """
         self._rt_audio.append(block)
+        wake, loop = self._rt_wake, getattr(self, "_loop", None)
+        if wake is not None and loop is not None:
+            try:
+                loop.call_soon_threadsafe(wake.set)      # HP-07: the pump sends it now
+            except RuntimeError:                         # the loop is closing
+                pass
         if self._last_rms > self._SPEECH_RMS:
             conv = self._realtime
             if conv is not None and conv.speaking:
@@ -1655,6 +1667,7 @@ class CompanionManager(QObject):
 
         held: list[bytes] = []
         quiet_since: Optional[float] = None
+        wake = self._rt_wake = asyncio.Event()
         while self._rt_streaming:
             if not sent and context.done():
                 await send_context()
@@ -1679,7 +1692,14 @@ class CompanionManager(QObject):
                             continue
                 await conv.push_audio(chunk)
             else:
-                await asyncio.sleep(0.02)
+                wake.clear()
+                if not self._rt_audio:                   # nothing landed since the look
+                    try:
+                        await asyncio.wait_for(wake.wait(), self.RT_WAKE_MAX_S)
+                    except asyncio.TimeoutError:
+                        pass
+        if self._rt_wake is wake:
+            self._rt_wake = None
         if self._rt_audio:
             chunk = b"".join(self._rt_audio)
             self._rt_audio.clear()
@@ -2854,6 +2874,21 @@ class CompanionManager(QObject):
             self._screens_at = time.monotonic()
         return screens
 
+    async def _one_shot(self, max_width: int = 1024):
+        """The active monitor's picture, and no other's (SC-11): a very recent
+        grab reused, else that monitor's numbers and ONE grab of it. Grabbing
+        and encoding all three of the owner's monitors to use one took 331 ms
+        (9 Oct); looks stopped doing it in FS-05, and now so do pointing by
+        vision, the walkthrough's planner and its step checks. None when the
+        screen cannot be captured."""
+        screens = await self._capture_shots(max_width=max_width, pixels=False)
+        if not screens:
+            return None
+        shot = self._active_shot(screens) or screens[0]
+        if shot.base64_jpeg:
+            return shot                  # a recent grab, with its pictures
+        return await asyncio.to_thread(grab_frame, shot, max_width)
+
     def _active_shot(self, screens=None):
         """The ScreenShot for the monitor the user's active window is on.
 
@@ -3025,10 +3060,9 @@ class CompanionManager(QObject):
             if shot is None:
                 if self._privacy_guard and is_sensitive_window(active_window_title()):
                     return None
-                screens = await self._capture_shots(max_width=1024)
-                if not screens:
+                shot = await self._one_shot(1024)
+                if shot is None:
                     return None
-                shot = self._active_shot(screens) or screens[0]
             found = await gemini_vision.locate(
                 query,
                 hint=context,
@@ -3798,10 +3832,8 @@ class CompanionManager(QObject):
         """The screenshot the planner sees, or "" for a sensitive window."""
         if self._privacy_guard and is_sensitive_window(active_window_title()):
             return ""
-        screens = await self._capture_shots(max_width=1024)
-        if not screens:
-            return ""
-        return (self._active_shot(screens) or screens[0]).base64_jpeg
+        shot = await self._one_shot(1024)
+        return shot.base64_jpeg if shot is not None else ""
 
     def _plan_written(self, partial, full, plan_s: float, goal: str) -> None:
         """The rest of a streamed plan has arrived: add it behind the steps
@@ -5535,10 +5567,9 @@ class CompanionManager(QObject):
         if self._privacy_guard and is_sensitive_window(active_window_title()):
             step._visual_verdict = False
             return False
-        screens = await self._capture_shots(max_width=1024)
-        if not screens:
+        active = await self._one_shot(1024)
+        if active is None:
             return getattr(step, "_visual_verdict", False)
-        active = self._active_shot(screens) or screens[0]
         verdict = await gemini_vision.confirm(cond.value, active.base64_jpeg)
         step._visual_verdict = bool(verdict)
         return step._visual_verdict

@@ -47,6 +47,7 @@ _log = logging.getLogger("tora.account")
 
 REFRESH_EARLY_S = 90          # refresh a session this long before it expires
 REFRESH_AHEAD_S = 600         # ...and in the background, this long before (refresh_ahead)
+SLOW_CALL_S = 1.0             # a server call slower than this is logged
 SUMMARY_TTL_S = 60            # the plan and usage are re-read at most this often
 ALERT_AT = (0.8, 1.0)         # tell the user at 80% and at 100% of an allowance, once a month each
 TICKET_SPARE_S = 30           # a window ticket this close to its end is asked for again
@@ -414,7 +415,9 @@ class Account:
                 raise SignInNeeded()
             if time.time() < float(s.get("expires_at") or 0) - early_s:
                 return s["access_token"]
+            started = time.monotonic()
             r = self._auth_post("token?grant_type=refresh_token", {"refresh_token": s["refresh_token"]})
+            _log.info("sign-in refreshed in %.1fs", time.monotonic() - started)
             if r.status_code >= 400:
                 if r.status_code in (400, 401, 403):
                     self._session = None
@@ -719,12 +722,17 @@ class Account:
 
     def _call(self, method: str, path: str, body: Optional[dict] = None) -> dict:
         token = self.token()
+        started = time.monotonic()
         try:
             r = self._http().request(method, settings.function_url(path), json=body,
                                      headers={**self._apikey(), "Authorization": f"Bearer {token}"})
         except httpx.HTTPError as e:
             # Offline, or HeyTora's server not answering: words, not a traceback.
             raise AccountError("Could not reach HeyTora - check the internet connection.") from e
+        took = time.monotonic() - started
+        if took > SLOW_CALL_S:
+            # In front of a voice session or an answer (ST-01, AC-07): said.
+            _log.info("HeyTora %s %s took %.1fs", method, path, took)
         if r.status_code == 401:
             # The server no longer accepts this sign-in (account deleted, signed
             # out everywhere): forget it here too, so the app asks again.

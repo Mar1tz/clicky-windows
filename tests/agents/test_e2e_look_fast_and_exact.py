@@ -490,3 +490,47 @@ def test_monitor_frames_have_numbers_and_no_pictures():
     from screen.capture import monitor_frames
     frames = monitor_frames()
     assert frames and all(f.base64_jpeg == "" and f.physical_width > 0 for f in frames)
+
+
+# -- SC-11: pointing by vision and the walkthrough grab one monitor too ------------------------------------------
+
+def _three_monitors(monkeypatch, pictures=False):
+    from screen.capture import ScreenShot
+    mgr = cm.CompanionManager.__new__(cm.CompanionManager)
+    frames = [ScreenShot(index=i + 1, width=1920, height=1080, base64_jpeg="recent" if pictures else "",
+                         physical_width=1920, physical_height=1080, physical_left=1920 * i, physical_top=0,
+                         dpi_scale=1.0, logical_left=1920 * i, logical_top=0) for i in range(3)]
+    asked = {}
+
+    async def capture(**kw):
+        asked.update(kw)
+        return frames
+    mgr._capture_shots = capture
+    mgr._active_shot = lambda screens=None: frames[2]
+    grabbed = []
+
+    def grab(frame, width):
+        from dataclasses import replace
+        grabbed.append((frame.index, width))
+        return replace(frame, base64_jpeg="monitor-3")
+    monkeypatch.setattr(cm, "grab_frame", grab)
+    return mgr, asked, grabbed
+
+
+def test_pointing_by_vision_grabs_only_the_monitor_in_front(monkeypatch):
+    mgr, asked, grabbed = _three_monitors(monkeypatch)
+    mgr._privacy_guard = False
+    sent = {}
+
+    async def locate(query, *, screenshot_jpeg_b64, **kw):
+        sent["image"] = screenshot_jpeg_b64
+        return None
+    monkeypatch.setattr(gemini_vision, "locate", locate)
+    asyncio.run(mgr._vision_point("the blue button"))
+    assert asked.get("pixels") is False and grabbed == [(3, 1024)] and sent["image"] == "monitor-3"
+
+
+def test_a_recent_grab_is_reused_not_taken_again(monkeypatch):
+    mgr, _asked, grabbed = _three_monitors(monkeypatch, pictures=True)
+    shot = asyncio.run(mgr._one_shot(1024))
+    assert shot.base64_jpeg == "recent" and grabbed == []
