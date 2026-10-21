@@ -151,9 +151,8 @@ limits, the cost ceiling) and `docs/REFERRALS.md` (Pro trial, free months).
       owners decided.
 
 **Local development (a pass of its own)**
-- [ ] A local Supabase for the owners to experiment on, as Stuurly has: the
-      database, the functions and the website running on the PC, nothing
-      real touched.
+- [ ] A local Supabase for the owners to experiment on: the database, the
+      functions and the website running on the PC, nothing real touched.
 - [ ] Database tests that run the migrations on it (voice booking, credits
       bought / spent / refused), not only read them.
 - [ ] One script to deploy when ready: migrations, both functions, secrets
