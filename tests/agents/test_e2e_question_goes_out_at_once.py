@@ -25,8 +25,11 @@ class Conv:
     async def push_audio(self, pcm):
         self.log.append(("audio", pcm, time.monotonic()))
 
-    async def end_user_audio(self):
+    async def end_user_audio(self, stop=None):
         self.log.append(("end", None, time.monotonic()))
+
+    def release_superseded(self):
+        pass
 
 
 def _run(context_s: float, speaking_s: float = 0.4):
@@ -67,3 +70,44 @@ def test_a_very_late_screen_line_is_not_waited_for():
     kinds = [k for k, _t in events]
     assert "context" not in kinds and kinds[-1] == "end"
     assert events[-1][1] < 0.4 + 0.3 + 0.2, "the answer goes ahead after CONTEXT_WAIT_S"
+
+
+def test_each_block_goes_out_the_moment_it_lands():
+    """HP-07: the audio thread wakes the pump; it no longer looks every 20 ms."""
+    import threading
+    m = cm.CompanionManager.__new__(cm.CompanionManager)
+    log = []
+    m._realtime = Conv(log)
+    m._rt_audio = cm.deque()
+    m._rt_streaming = True
+    m._last_rms = 0.0
+    m._key_down = False
+    m.RT_WAKE_MAX_S = 1.0                               # only the wake can be quick
+
+    async def screen_context():
+        return ""
+    m._screen_context = screen_context
+    fed = []
+
+    def mic():                                          # the audio thread
+        for i in range(5):
+            time.sleep(0.03)
+            fed.append(time.monotonic())
+            m._feed_realtime(b"block%d" % i)
+
+    async def go():
+        m._loop = asyncio.get_running_loop()
+        stream = asyncio.ensure_future(m._realtime_stream())
+        await asyncio.sleep(0.01)
+        t = threading.Thread(target=mic)
+        t.start()
+        while t.is_alive():
+            await asyncio.sleep(0.01)
+        await asyncio.sleep(0.05)
+        m._rt_streaming = False
+        await stream
+    asyncio.run(go())
+    sent = [at for kind, _pcm, at in log if kind == "audio"]
+    assert len(sent) >= 4
+    delays = [s - f for f, s in zip(fed, sent)]
+    assert max(delays) < 0.015, f"each block out within a few ms, not up to 20: {delays}"

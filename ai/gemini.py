@@ -35,6 +35,7 @@ import json
 import re
 import logging
 import os
+import time
 from typing import Any, AsyncIterator, Callable, Optional
 
 import httpx
@@ -253,21 +254,49 @@ async def aclose() -> None:
 async def warm_up() -> bool:
     """Open the TLS connection before the user's first question needs it.
 
-    Fired at startup. A cheap GET is enough — what matters is that the socket
-    and TLS session are established and pooled by the time someone speaks.
+    Fired at startup, and by keep_warm. A cheap request is enough — what
+    matters is that the socket and TLS session are established and pooled by
+    the time someone speaks. On the owner's PC that setup costs 1.0-1.5 s
+    (19 Oct), and a first look on a cold pool took 2.1 s against 1.3 s warm.
+    Own key: the fast model's details, free. A HeyTora plan: an unsigned HEAD
+    to the server, turned away by its gateway before the function runs -
+    nothing counted, and the connection is open (SC-09).
     """
-    if not own_key() or not api_key():
-        return False                     # account mode: the first call warms it
+    _note_call()
     try:
-        r = await client().get(
-            f"{API_ROOT}/models/{Models.VISION_FAST}",
-            params={"key": api_key()},
-            timeout=8.0,
-        )
-        return r.status_code == 200
+        if own_key() and api_key():
+            r = await client().get(
+                f"{API_ROOT}/models/{Models.VISION_FAST}",
+                params={"key": api_key()},
+                timeout=8.0,
+            )
+            return r.status_code == 200
+        from account.service import account
+        await client().head(account().proxy_root(), timeout=8.0)
+        return True
     except Exception:
         _log.debug("warm-up failed (harmless)", exc_info=True)
         return False
+
+
+# The pool's connections close after a few idle minutes, and questions are
+# often further apart than that. A key press that finds it idle opens it
+# again while the question is being asked - before a look needs it.
+WARM_IDLE_S = 60.0
+_last_call = 0.0
+
+
+def _note_call() -> None:
+    global _last_call
+    _last_call = time.monotonic()
+
+
+async def keep_warm() -> bool:
+    """warm_up, when the pool has carried nothing for WARM_IDLE_S. True if it
+    warmed."""
+    if time.monotonic() - _last_call < WARM_IDLE_S:
+        return False
+    return await warm_up()
 
 
 # ── REST ─────────────────────────────────────────────────────────────────────
@@ -411,6 +440,8 @@ BUSY_RETRY_DELAYS = (1.0, 2.0)
 
 
 async def _post(path: str, body: dict, timeout: float, busy_retries: bool = True) -> httpx.Response:
+    _note_call()
+
     async def once() -> httpx.Response:
         root, params, headers = await _route(answer=path.endswith(":generateContent"))
         extra = {"headers": headers} if headers else {}      # own key: exactly as before
@@ -677,6 +708,7 @@ async def _sse(model: str, body: dict, timeout: float) -> AsyncIterator[dict]:
     stale_left = 1
     ticket_left = 1
     busy_delays = list(BUSY_RETRY_DELAYS)
+    _note_call()
     while True:
         started = False
         try:

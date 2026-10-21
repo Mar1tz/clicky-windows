@@ -397,3 +397,35 @@ def test_live_agent_writes_a_real_file(tmp_path):
         assert written.read_text(encoding="utf-8").strip()
     finally:
         mgr.stop()
+
+
+# -- AG-06: a request every route would refuse is refused once ---------------------------------------------------
+
+async def test_a_bad_tool_schema_is_refused_once_but_a_low_credit_route_falls_through():
+    seen: list[str] = []
+
+    def handler(request):
+        model = json.loads(request.content)["model"]
+        seen.append(model)
+        if model == "a":
+            return httpx.Response(400, json={"error": {"type": "invalid_request_error",
+                                                       "message": "tools.9.custom.input_schema: JSON schema is invalid"}})
+        return stream_response(chunk(content="ok"), final())
+
+    p = provider(handler, model="a", fallback_models=["b"])
+    with pytest.raises(ProviderError, match="refused"):
+        await p.complete([ProviderMessage("user", "x")])
+    assert seen == ["a"]
+
+    seen.clear()
+
+    def low_credit(request):
+        model = json.loads(request.content)["model"]
+        seen.append(model)
+        if model == "a":
+            return httpx.Response(400, json={"error": {"type": "invalid_request_error", "message":
+                "Your credit balance is too low to access the Anthropic API (messages.create)"}})
+        return stream_response(chunk(content="ok"), final())
+
+    p = provider(low_credit, model="a", fallback_models=["b"])
+    assert (await p.complete([ProviderMessage("user", "x")])).text == "ok" and seen == ["a", "b"]

@@ -21,6 +21,7 @@ can press its own approval dialog is a loop waiting to happen.
 from __future__ import annotations
 
 import logging
+from collections import deque
 from typing import Any, Optional
 
 log = logging.getLogger("agents.control.uia")
@@ -60,10 +61,10 @@ def _window_control(window: str):
 def _walk(root, limit: int = MAX_NODES, depth: int = SEARCH_DEPTH):
     """Breadth-first over the control tree, bounded in both directions so a
     browser page full of text nodes cannot hang the call."""
-    queue = [(root, 0)]
+    queue = deque([(root, 0)])
     seen = 0
     while queue and seen < limit:
-        node, d = queue.pop(0)
+        node, d = queue.popleft()
         seen += 1
         yield node
         if d >= depth:
@@ -116,24 +117,118 @@ def _name(node) -> str:
         return ""
 
 
+class _Seen:
+    """A named control as one read of the tree saw it - and, only when it is
+    wanted, the live control behind it, to act on."""
+
+    def __init__(self, name: str, kind: str, *, element=None, control=None,
+                 enabled: Optional[bool] = None, actions: Optional[list] = None):
+        self.name, self.kind = name, kind              # kind: "ButtonControl"
+        self._element, self._control = element, control
+        self._enabled, self._actions = enabled, actions
+
+    @property
+    def control(self):
+        if self._control is None:
+            self._control = _auto().Control.CreateControlFromElement(self._element)
+        return self._control
+
+    @property
+    def actions(self) -> list[str]:
+        if self._actions is None:
+            self._actions = _patterns(self.control)
+        return self._actions
+
+    @property
+    def enabled(self) -> bool:
+        if self._enabled is None:
+            self._enabled = bool(self.control.IsEnabled)
+        return self._enabled
+
+
+# Read with every control in the one call, so choosing one costs nothing
+# more: what it is, and what it can be asked to do (UIA property ids).
+_CAN = (("invoke", 30031), ("toggle", 30041), ("select", 30036),
+        ("expand", 30028), ("set_value", 30043))
+_LEGACY, _DEFAULT_ACTION, _ENABLED = 30090, 30100, 30010
+_NAMED = None
+
+
+def _named(root, *, abilities: bool = True):
+    """Every named control in `root`, top first - read in ONE cross-process
+    call (SC-07, 18 Oct 2026): Windows builds the tree in the app's own
+    process with each control's name, type and abilities, and walking it is
+    then in memory. The walk below asked every node for each of those in
+    turn, a COM round trip apiece, and stopped at depth 12 - short of an
+    Electron app's controls. An app that will not build the cache is walked.
+
+    Without `abilities` only names and types are read - a search, which
+    asks the few controls it matches what they can do."""
+    auto = _auto()
+    try:
+        from uiautomation import uiautomation as _ua
+        global _NAMED
+        ui = _ua._AutomationClient.instance().IUIAutomation
+        P = auto.PropertyId
+        if _NAMED is None:
+            _NAMED = ui.CreateAndCondition(
+                ui.ControlViewCondition, ui.CreateNotCondition(ui.CreatePropertyCondition(P.NameProperty, "")))
+        request = ui.CreateCacheRequest()
+        extra = (_ENABLED, _LEGACY, _DEFAULT_ACTION, *(pid for _a, pid in _CAN)) if abilities else ()
+        for prop in (P.NameProperty, P.ControlTypeProperty, *extra):
+            request.AddProperty(prop)
+        request.TreeScope = 7                                   # TreeScope_Subtree
+        request.TreeFilter = _NAMED
+        top = root.Element.BuildUpdatedCache(request)
+    except Exception:  # noqa: BLE001 - an app that will not build the cache: walk it
+        log.debug("cached control read failed - walking", exc_info=True)
+        return (_Seen(_name(n), _kind(n), control=n) for n in _walk(root) if _name(n))
+    return _read(top, auto.ControlTypeNames, abilities)
+
+
+def _read(top, kinds: dict, abilities: bool):
+    queue = deque([top])
+    while queue:
+        el = queue.popleft()
+        name = (el.CachedName or "").strip()
+        if name and not abilities:
+            yield _Seen(name, kinds.get(el.CachedControlType, ""), element=el)
+        elif name:
+            value = el.GetCachedPropertyValue
+            can = [a for a, pid in _CAN if value(pid)]
+            if "invoke" not in can and value(_LEGACY) and value(_DEFAULT_ACTION):
+                can.insert(0, "invoke")           # legacy DoDefaultAction: how Electron answers
+            yield _Seen(name, kinds.get(el.CachedControlType, ""), element=el,
+                        enabled=bool(value(_ENABLED)), actions=can)
+        kids = el.GetCachedChildren()
+        if kids:
+            queue.extend(kids.GetElement(i) for i in range(kids.Length))
+
+
+def _kind(node) -> str:
+    try:
+        return node.ControlTypeName or ""
+    except Exception:  # noqa: BLE001
+        return ""
+
+
 def controls(window: str, *, limit: int = 40, query: str = "") -> list[dict[str, Any]]:
     """Named, actionable controls in a window - what the agent may ask for."""
     root, info = _window_control(window)
     q = query.strip().lower()
     out: list[dict[str, Any]] = []
-    for node in _walk(root):
-        name = _name(node)
-        if not name or (q and q not in name.lower()):
-            continue
-        actions = _patterns(node)
-        if not actions:
+    for seen in _named(root):
+        if q and q not in seen.name.lower():
             continue
         try:
-            kind = node.ControlTypeName.replace("Control", "")
-            enabled = bool(node.IsEnabled)
-        except Exception:  # noqa: BLE001
+            actions = seen.actions
+            if not actions or not seen.kind:
+                continue
+            enabled = seen.enabled
+        except Exception:  # noqa: BLE001 - a control can vanish mid-read
             continue
-        row = {"name": name, "type": kind, "actions": actions, "enabled": enabled}
+        row = {"name": seen.name, "type": seen.kind.replace("Control", ""),
+               "actions": actions, "enabled": enabled}
         if row not in out:
             out.append(row)
         if len(out) >= limit:
@@ -146,30 +241,27 @@ def _find(root, name: str, *, kind: str = ""):
     control that can act beats one that only shows text."""
     want, kind = name.strip().lower(), kind.strip().lower()
     exact, prefix, contains = [], [], []
-    for node in _walk(root):
-        got = _name(node).lower()
-        if not got:
+    for seen in _named(root, abilities=False):
+        got = seen.name.lower()
+        if kind and kind not in seen.kind.lower():
             continue
-        if kind:
-            try:
-                if kind not in node.ControlTypeName.lower():
-                    continue
-            except Exception:  # noqa: BLE001
-                continue
         if got == want:
-            exact.append(node)
+            exact.append(seen)
         elif got.startswith(want):
-            prefix.append(node)
+            prefix.append(seen)
         elif want in got:
-            contains.append(node)
+            contains.append(seen)
         if len(exact) > 2:
             break
     for pool in (exact, prefix, contains):
-        for node in pool:
-            if _patterns(node):
-                return node
+        for seen in pool:
+            try:
+                if seen.actions:
+                    return seen.control
+            except Exception:  # noqa: BLE001 - a control can vanish mid-read
+                continue
         if pool:
-            return pool[0]
+            return pool[0].control
     return None
 
 

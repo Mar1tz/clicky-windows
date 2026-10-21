@@ -46,6 +46,8 @@ from account import settings, store
 _log = logging.getLogger("tora.account")
 
 REFRESH_EARLY_S = 90          # refresh a session this long before it expires
+REFRESH_AHEAD_S = 600         # ...and in the background, this long before (refresh_ahead)
+SLOW_CALL_S = 1.0             # a server call slower than this is logged
 SUMMARY_TTL_S = 60            # the plan and usage are re-read at most this often
 ALERT_AT = (0.8, 1.0)         # tell the user at 80% and at 100% of an allowance, once a month each
 TICKET_SPARE_S = 30           # a window ticket this close to its end is asked for again
@@ -266,6 +268,8 @@ class VoicePass:
 class Account:
     def __init__(self, transport: Optional[httpx.BaseTransport] = None):
         self._transport = transport                 # tests give a fake one
+        self._client: Optional[httpx.Client] = None         # see _http
+        self._client_transport: Optional[httpx.BaseTransport] = None
         self._lock = threading.RLock()
         self._session: Optional[dict] = store.load()
         # The last plan read, kept with the sign-in: shown at once after a
@@ -280,6 +284,7 @@ class Account:
         self._tickets: dict[str, tuple[str, float]] = {}   # kind -> (window ticket, ends)
         self._new_talk = False                              # the next talk window is a new question
         self._window_locks = {"talk": threading.Lock(), "agent": threading.Lock()}
+        self._summary_read = threading.Lock()         # one plan read at a time (summary)
         self._verifier: Optional[str] = None          # PKCE: the secret half of a link sign-in
 
     # -- state -------------------------------------------------------------------------------------------
@@ -386,10 +391,9 @@ class Account:
         self._changed()
         if session and settings.configured():
             try:
-                with self._http() as http:
-                    http.post(f"{settings.supabase_url()}/auth/v1/logout",
-                              headers={**self._apikey(),
-                                       "Authorization": f"Bearer {session.get('access_token', '')}"})
+                self._http().post(f"{settings.supabase_url()}/auth/v1/logout",
+                                  headers={**self._apikey(),
+                                           "Authorization": f"Bearer {session.get('access_token', '')}"})
             except Exception:  # noqa: BLE001 - signed out here either way
                 pass
 
@@ -465,14 +469,28 @@ class Account:
 
     def token(self) -> str:
         """A current access token, refreshed when it is about to expire."""
+        return self._token(REFRESH_EARLY_S)
+
+    def refresh_ahead(self) -> None:
+        """Refresh the sign-in if it expires within REFRESH_AHEAD_S. Called
+        in the background every couple of minutes (AC-06, 18 Oct 2026), so
+        no question waits on /auth/v1/token: 57 refreshes in a fortnight,
+        each one sitting in front of whatever asked for the token - a voice
+        pass at the key press, as often as not."""
+        if self.signed_in():
+            self._token(REFRESH_AHEAD_S)
+
+    def _token(self, early_s: float) -> str:
         self._need_config()
         with self._lock:
             s = self._session
             if not s or not s.get("refresh_token"):
                 raise SignInNeeded()
-            if time.time() < float(s.get("expires_at") or 0) - REFRESH_EARLY_S:
+            if time.time() < float(s.get("expires_at") or 0) - early_s:
                 return s["access_token"]
+            started = time.monotonic()
             r = self._auth_post("token?grant_type=refresh_token", {"refresh_token": s["refresh_token"]})
+            _log.info("sign-in refreshed in %.1fs", time.monotonic() - started)
             if r.status_code >= 400:
                 if r.status_code in (400, 401, 403):
                     self._session = None
@@ -512,17 +530,24 @@ class Account:
         with self._lock:
             if not force and self._summary is not None and time.time() - self._summary_at < SUMMARY_TTL_S:
                 return dict(self._summary)
-        try:
-            data = self._call("GET", "me")
-        except AccountError as e:
+        asked = time.time()
+        # Two reads at once share one: at start-up the warm-up and the window
+        # both asked, and the plan was read twice side by side (19 Oct).
+        with self._summary_read:
             with self._lock:
-                self._summary_error = str(e)
-            self._changed()
-            raise
-        self._clock(data)
-        with self._lock:
-            self._summary, self._summary_at, self._summary_error = data, time.time(), ""
-            self._remember()
+                if self._summary is not None and self._summary_at >= asked:
+                    return dict(self._summary)
+            try:
+                data = self._call("GET", "me")
+            except AccountError as e:
+                with self._lock:
+                    self._summary_error = str(e)
+                self._changed()
+                raise
+            self._clock(data)
+            with self._lock:
+                self._summary, self._summary_at, self._summary_error = data, time.time(), ""
+                self._remember()
         _log.info("plan: %s", short_status(data))
         self._changed()
         return dict(data)
@@ -658,6 +683,12 @@ class Account:
                 if body.get("standby") and reason == "not_in_plan":
                     # No standby on this plan: the voice opens on a question.
                     body = {"kind": "talk", "model": model, "new": True}
+                elif reason in ("passes", "window") and not pending and not body.get("standby"):
+                    # No question is waiting - a reconnect - and its window has
+                    # ended: wait in an uncounted standby window. Asking for
+                    # "new" here opened, and counted, a talk message nobody
+                    # asked (FX-02: 9 times on 6-9 Oct).
+                    body = {"kind": "talk", "model": model, "standby": True}
                 elif reason in ("passes", "window") and not body.get("new"):
                     # This window has just ended, or has had its passes: the next.
                     body = {**body, "new": True}
@@ -759,9 +790,12 @@ class Account:
         if kind not in ("talk", "dictation", "agent", "wake") or usage.get("used") is None \
                 or usage.get("reused"):
             return                        # standby windows and passes are not the user's use
-        _log.info("%s: %s of %s this month%s", _KIND_WORDS.get(kind, kind), usage["used"],
-                  "unlimited" if usage.get("limit") is None else usage["limit"],
-                  f" (window {usage['window']})" if usage.get("window") else "")
+        # A wake-word check every few seconds in a talkative room is noise at
+        # INFO (2,704 lines in two weeks, ST-05); the count still moves below.
+        _log.log(logging.DEBUG if kind == "wake" else logging.INFO,
+                 "%s: %s of %s this month%s", _KIND_WORDS.get(kind, kind), usage["used"],
+                 "unlimited" if usage.get("limit") is None else usage["limit"],
+                 f" (window {usage['window']})" if usage.get("window") else "")
         with self._lock:
             if self._summary is not None:
                 self._summary.setdefault("usage", {})[kind] = usage["used"]
@@ -788,13 +822,20 @@ class Account:
 
     def _call(self, method: str, path: str, body: Optional[dict] = None) -> dict:
         token = self.token()
+        started = time.monotonic()
         try:
-            with self._http() as http:
-                r = http.request(method, settings.function_url(path), json=body,
-                                 headers={**self._apikey(), "Authorization": f"Bearer {token}"})
+            r = self._http().request(method, settings.function_url(path), json=body,
+                                     headers={**self._apikey(), "Authorization": f"Bearer {token}"})
         except httpx.HTTPError as e:
             # Offline, or HeyTora's server not answering: words, not a traceback.
             raise AccountError("Could not reach HeyTora - check the internet connection.") from e
+        took = time.monotonic() - started
+        if took > SLOW_CALL_S:
+            # In front of a voice session or an answer (ST-01, AC-07): said,
+            # with the server's own share - sign-in, database, Google - so a
+            # slow one says where it was slow (the rest is the trip there).
+            _log.info("HeyTora %s %s took %.1fs (server: %s)", method, path, took,
+                      r.headers.get("server-timing") or "no timing")
         if r.status_code == 401:
             # The server no longer accepts this sign-in (account deleted, signed
             # out everywhere): forget it here too, so the app asks again.
@@ -820,13 +861,26 @@ class Account:
         return {"apikey": settings.anon_key()}
 
     def _http(self) -> httpx.Client:
-        return httpx.Client(timeout=httpx.Timeout(15.0, connect=8.0), transport=self._transport)
+        """One pooled client for every call to HeyTora's server, kept for the
+        life of the app (httpx.Client is thread-safe). A new client per call
+        meant a new TCP and TLS handshake per call - 1,101 voice passes, 103
+        tickets, 70 plan reads and 57 token refreshes in two weeks on the
+        owner's PC (18 Oct 2026) - and on a weak or distant connection a
+        handshake is several round trips in front of every voice session.
+        Idle connections are let go before servers typically drop them."""
+        with self._lock:
+            # A transport swapped in later (the tests' fakes) gets its own client.
+            if self._client is None or self._client_transport is not self._transport:
+                self._client = httpx.Client(
+                    timeout=httpx.Timeout(15.0, connect=8.0), transport=self._transport,
+                    limits=httpx.Limits(max_keepalive_connections=4, keepalive_expiry=50.0))
+                self._client_transport = self._transport
+            return self._client
 
     def _auth_post(self, path: str, body: dict) -> httpx.Response:
         try:
-            with self._http() as http:
-                return http.post(f"{settings.supabase_url()}/auth/v1/{path}", json=body,
-                                 headers=self._apikey())
+            return self._http().post(f"{settings.supabase_url()}/auth/v1/{path}", json=body,
+                                     headers=self._apikey())
         except httpx.HTTPError as e:
             raise AccountError("Could not reach HeyTora - check the internet connection.") from e
 

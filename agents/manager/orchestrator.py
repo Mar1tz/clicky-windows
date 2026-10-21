@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 import traceback
 from typing import Optional
 
@@ -117,7 +118,11 @@ class Orchestrator:
         task = ctx.task
         self._set_status(ctx, TaskStatus.PLANNING)
         ctx.progress("Planning", 0.0)
+        started = time.monotonic()
         plan = await self.planner.plan(ctx)
+        # AG-07: how long a job waits on its plan, which nothing said before.
+        log.info("plan ready in %.1fs: %d step(s) for %r", time.monotonic() - started,
+                 len(plan.steps), (task.title or task.goal)[:60])
         self._adopt_plan(ctx, plan, revised=False)
 
         if self.require_plan_approval:

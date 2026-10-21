@@ -78,6 +78,23 @@ export type Checked =
   | { ok: false; status: number; code: string; message: string };
 
 /** A generateContent / streamGenerateContent body: refused, or made safe. */
+export const SEARCH_TOOLS = new Set(["googleSearch", "google_search"]);
+// Google bills each search a Gemini 3 model runs: $14 per 1,000 past the
+// month's free 5,000. Counted against the plan's hidden ceiling as if none
+// were free - the ceiling is there to be safe, not exact.
+export const SEARCH_MICRO = 14_000;
+
+/** How many Google searches an answer ran (its groundingMetadata). */
+export function searchesIn(text: string): number {
+  try {
+    const data = JSON.parse(text) as { candidates?: Array<{ groundingMetadata?: { webSearchQueries?: unknown[] } }> };
+    return (data.candidates ?? []).reduce(
+      (n, c) => n + (Array.isArray(c.groundingMetadata?.webSearchQueries) ? c.groundingMetadata!.webSearchQueries!.length : 0), 0);
+  } catch {
+    return 0;
+  }
+}
+
 export function checkGenerate(body: unknown): Checked {
   if (!body || typeof body !== "object" || Array.isArray(body)) {
     return { ok: false, status: 400, code: "HEYTORA_REQUEST", message: "Not a model request." };
@@ -87,11 +104,12 @@ export function checkGenerate(body: unknown): Checked {
   if ("cachedContent" in b) {
     return { ok: false, status: 400, code: "HEYTORA_REQUEST", message: "Cached contents are not forwarded." };
   }
-  // Only the app's own tools: function declarations. Search grounding, URL
-  // context, code execution, maps... are billed on their own or reach out.
+  // The app's own tools (function declarations) and Google Search - Tora's
+  // web search, 2 s against 9-12 s scraping (19 Oct 2026), metered per
+  // search (searchesIn). URL context, code execution, maps... are not.
   for (const tool of (Array.isArray(b.tools) ? b.tools : [])) {
     const keys = Object.keys((tool ?? {}) as Record<string, unknown>);
-    if (keys.some((k) => k !== "functionDeclarations")) {
+    if (keys.some((k) => k !== "functionDeclarations" && !SEARCH_TOOLS.has(k))) {
       return { ok: false, status: 400, code: "HEYTORA_REQUEST", message: `Tool not forwarded: ${keys.join(", ")}` };
     }
   }
@@ -260,4 +278,39 @@ export function liveCostMicro(usage: unknown): LiveCost {
   for (const [m, n] of Object.entries(outs)) micro += n * (LIVE_PRICES.out[m] ?? topOut);
   const sum = (o: Record<string, number>) => Object.values(o).reduce((a, b) => a + b, 0);
   return { micro: Math.ceil(micro), input: sum(ins), output: sum(outs) };
+}
+
+// -- the sign-in, read from the token itself (AC-02) -----------------------------------------------------------
+
+/** Who a VERIFIED token's claims say is signed in, or null when they are not
+ * a signed-in user's: the anon key, a service key, another project's token,
+ * or one past its time. Verifying the signature is the caller's (jose); this
+ * only reads what was verified. */
+export function signedInUser(
+  claims: Record<string, unknown>, issuer: string, now: number,
+): { id: string; email: string } | null {
+  if (claims.role !== "authenticated" || typeof claims.sub !== "string" || !claims.sub) return null;
+  if (claims.iss !== issuer) return null;
+  const aud = claims.aud;
+  if (!(aud === "authenticated" || (Array.isArray(aud) && aud.includes("authenticated")))) return null;
+  if (typeof claims.exp !== "number" || claims.exp <= now) return null;
+  return { id: claims.sub, email: typeof claims.email === "string" ? claims.email : "" };
+}
+
+// -- Google's billing, said to the owners (FX-06) --------------------------------------------------------------
+
+/** Is this Google refusal about the business account's billing - credits run
+ * out, billing off - rather than one request? 22 Sep and 6-9 Oct: "your
+ * prepayment credits are depleted", and nobody was told until users noticed. */
+export function billingProblem(status: number, text: string): boolean {
+  const t = (text || "").toLowerCase();
+  if (status !== 429 && status !== 403 && status !== 400 && status !== 1011) return false;
+  return /prepayment credits|credits are depleted|billing (is )?(not )?(enabled|disabled|account)|billing_disabled|exceeded your current quota.*billing/.test(t);
+}
+
+/** The alert's words, for a Slack- or Discord-style webhook (both keys). */
+export function alertBody(where: string, status: number, text: string): Record<string, string> {
+  const line = `HeyTora: Google refused ${where} for billing (${status}) - users are not being answered. `
+    + `${(text || "").replace(/\s+/g, " ").slice(0, 300)}`;
+  return { text: line, content: line };
 }

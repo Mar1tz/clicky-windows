@@ -12,14 +12,15 @@ anywhere. It is what lets the guide advance on its own (M4) without asking
 the user "are you there yet?", and what lets M3 tell the user "that doesn't
 look done" when they say next too early.
 
-read_state() does the one expensive thing (a bounded UIA walk) once; evaluate
-is then pure. Both are blocking — call read_state in a thread.
+read_state() does the one expensive thing (one UIA call for the window's
+controls) once; evaluate is then pure. Both are blocking — call read_state in a thread.
 """
 
 from __future__ import annotations
 
 import logging
 import time
+from collections import deque
 from dataclasses import dataclass, field
 
 from tutor import active_window_title
@@ -58,11 +59,15 @@ def _read_url() -> str:
         return ""
     if root is None:
         return ""
+    try:
+        return _cached_url(root)
+    except Exception:  # noqa: BLE001 - an app that will not search for us: walk it
+        _log.debug("address bar search failed - walking", exc_info=True)
 
-    queue = [(root, 0)]
+    queue = deque([(root, 0)])
     visited = 0
     while queue and visited < 900:
-        node, depth = queue.pop(0)
+        node, depth = queue.popleft()
         visited += 1
         try:
             ct = node.ControlTypeName or ""
@@ -81,6 +86,29 @@ def _read_url() -> str:
                 queue.extend((c, depth + 1) for c in node.GetChildren())
             except Exception:
                 continue
+    return ""
+
+
+def _cached_url(root) -> str:
+    """The address bar's text in one call (SC-07): Windows finds the
+    window's edit boxes and reads each one's name and text together, where
+    the walk asked for them node by node, up to 900 COM round trips."""
+    import uiautomation as auto
+    from uiautomation import uiautomation as _ua
+    ui = _ua._AutomationClient.instance().IUIAutomation
+    P = auto.PropertyId
+    request = ui.CreateCacheRequest()
+    for prop in (P.NameProperty, P.ValueValueProperty):
+        request.AddProperty(prop)
+    edits = ui.CreatePropertyCondition(P.ControlTypeProperty, auto.ControlType.EditControl)
+    found = root.Element.FindAllBuildCache(4, edits, request)    # TreeScope_Descendants
+    for i in range(found.Length if found else 0):
+        el = found.GetElement(i)
+        name = (el.CachedName or "").lower()
+        if "address" in name or "search" in name or "url" in name:
+            val = el.GetCachedPropertyValue(P.ValueValueProperty)
+            if val:
+                return str(val)
     return ""
 
 
@@ -148,17 +176,29 @@ def control_exists(
     if root is None:
         return False
 
+    # Every named control in one call (SC-07): an absent control - the
+    # usual case while a step is outstanding - no longer pays a walk of the
+    # whole tree. ONLY "the wanted name appears in this control's name"; see
+    # the walk below for why not the reverse.
+    try:
+        from ai.hybrid_pointer import named_controls
+        return any(target in name.strip().lower()
+                   for name, _kind, (l, t, r, b), _trail in named_controls(root, max_depth=max_depth)
+                   if r - l > 0 and b - t > 0)
+    except Exception:  # noqa: BLE001 - an app that will not build the cache: walk it
+        _log.debug("cached control search failed - walking", exc_info=True)
+
     # A TIME budget as well as a node one. Tree shape varies wildly — an
     # Electron window needs depth ~30 to reach its menu bar, while a shallow
     # node cap just burns the budget on nesting and misses it. The deadline
     # bounds the worst case (an absent control) no matter the shape.
     deadline = time.monotonic() + max_seconds
-    queue = [(root, 0)]
+    queue = deque([(root, 0)])
     visited = 0
     while queue and visited < max_nodes:
         if visited % 64 == 0 and time.monotonic() > deadline:
             break
-        node, depth = queue.pop(0)
+        node, depth = queue.popleft()
         visited += 1
         try:
             nm = (node.Name or "").strip().lower()

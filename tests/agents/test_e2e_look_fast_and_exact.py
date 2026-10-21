@@ -490,3 +490,102 @@ def test_monitor_frames_have_numbers_and_no_pictures():
     from screen.capture import monitor_frames
     frames = monitor_frames()
     assert frames and all(f.base64_jpeg == "" and f.physical_width > 0 for f in frames)
+
+
+# -- SC-11: pointing by vision and the walkthrough grab one monitor too ------------------------------------------
+
+def _three_monitors(monkeypatch, pictures=False):
+    from screen.capture import ScreenShot
+    mgr = cm.CompanionManager.__new__(cm.CompanionManager)
+    frames = [ScreenShot(index=i + 1, width=1920, height=1080, base64_jpeg="recent" if pictures else "",
+                         physical_width=1920, physical_height=1080, physical_left=1920 * i, physical_top=0,
+                         dpi_scale=1.0, logical_left=1920 * i, logical_top=0) for i in range(3)]
+    asked = {}
+
+    async def capture(**kw):
+        asked.update(kw)
+        return frames
+    mgr._capture_shots = capture
+    mgr._active_shot = lambda screens=None: frames[2]
+    grabbed = []
+
+    def grab(frame, width):
+        from dataclasses import replace
+        grabbed.append((frame.index, width))
+        return replace(frame, base64_jpeg="monitor-3")
+    monkeypatch.setattr(cm, "grab_frame", grab)
+    return mgr, asked, grabbed
+
+
+def test_pointing_by_vision_grabs_only_the_monitor_in_front(monkeypatch):
+    mgr, asked, grabbed = _three_monitors(monkeypatch)
+    mgr._privacy_guard = False
+    sent = {}
+
+    async def locate(query, *, screenshot_jpeg_b64, **kw):
+        sent["image"] = screenshot_jpeg_b64
+        return None
+    monkeypatch.setattr(gemini_vision, "locate", locate)
+    asyncio.run(mgr._vision_point("the blue button"))
+    assert asked.get("pixels") is False and grabbed == [(3, 1024)] and sent["image"] == "monitor-3"
+
+
+def test_a_recent_grab_is_reused_not_taken_again(monkeypatch):
+    mgr, _asked, grabbed = _three_monitors(monkeypatch, pictures=True)
+    shot = asyncio.run(mgr._one_shot(1024))
+    assert shot.base64_jpeg == "recent" and grabbed == []
+
+
+# -- SC-09: the look's connection is opened while they talk -------------------------------------------------------
+
+def test_an_idle_pool_is_warmed_at_the_key_and_a_busy_one_left_alone(monkeypatch):
+    from ai import gemini
+    calls = []
+
+    class Client:
+        async def get(self, url, **kw):
+            calls.append(("GET", url))
+            return SimpleNamespace(status_code=200)
+
+        async def head(self, url, **kw):
+            calls.append(("HEAD", url))
+            return SimpleNamespace(status_code=401)
+    monkeypatch.setattr(gemini, "client", lambda: Client())
+    monkeypatch.setattr(gemini, "api_key", lambda: "k")
+    monkeypatch.setattr(gemini, "_last_call", 0.0)
+    assert asyncio.run(gemini.keep_warm()) is True and calls[-1][0] == "GET", "own key: the model's details, free"
+    assert asyncio.run(gemini.keep_warm()) is False and len(calls) == 1, "used a moment ago: left alone"
+
+
+def test_on_a_plan_the_warm_up_is_an_unsigned_head_nothing_counted(monkeypatch):
+    from ai import gemini
+    calls = []
+
+    class Client:
+        async def head(self, url, **kw):
+            calls.append((url, kw.get("headers")))
+            return SimpleNamespace(status_code=401)
+    monkeypatch.setattr(gemini, "client", lambda: Client())
+    monkeypatch.setattr(gemini, "own_key", lambda: False)
+    from account import service
+    monkeypatch.setattr(service, "account", lambda: SimpleNamespace(proxy_root=lambda: "https://proj/heytora/v1beta"))
+    assert asyncio.run(gemini.warm_up()) is True
+    assert calls == [("https://proj/heytora/v1beta", None)], "no sign-in sent: the gateway turns it away"
+
+
+# -- AG-08: an agent's screenshot is the main monitor, at 768 px ----------------------------------------------
+
+def test_the_agents_screenshot_grabs_only_the_main_monitor_small(monkeypatch):
+    from screen import capture
+    from screen.capture import ScreenShot
+    frames = [ScreenShot(index=i + 1, width=1920, height=1080, base64_jpeg="", physical_width=1920,
+                         physical_height=1080, physical_left=x, physical_top=0, dpi_scale=1.0,
+                         logical_left=x, logical_top=0) for i, x in enumerate((1920, 0, -1920))]
+    grabbed = []
+    monkeypatch.setattr(capture, "monitor_frames", lambda: frames)
+    monkeypatch.setattr(capture, "grab_frame", lambda f, w: grabbed.append((f.physical_left, w)) or f)
+    monkeypatch.setattr(capture, "capture_all_screens", lambda *a: pytest.fail("every monitor grabbed"))
+    capture.capture_primary(768)
+    assert grabbed == [(0, 768)], "the monitor at the desktop's origin, once"
+    from agents.tools import computer_tools
+    assert computer_tools.SHOT_WIDTH == 768

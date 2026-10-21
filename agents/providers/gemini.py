@@ -61,6 +61,20 @@ def api_key_from_env() -> str:
         return ""
 
 
+# What a 400 says when the request itself is wrong - the same for every model
+# in the chain. A 400 about the model ("not supported for this model") is not.
+_REQUEST_FAULTS = ("function_declarations", "GenerateContentRequest", "Invalid JSON payload",
+                   "Invalid value at", "response_schema")
+
+
+def request_is_wrong(exc: BaseException) -> bool:
+    response = getattr(exc, "response", None)
+    if getattr(response, "status_code", None) != 400:
+        return False
+    text = str(exc)
+    return any(k in text for k in _REQUEST_FAULTS) and "not supported" not in text.lower()
+
+
 class GeminiAgentProvider(AgentProvider):
     name = "gemini"
 
@@ -155,6 +169,13 @@ class GeminiAgentProvider(AgentProvider):
                         f"HTTP {r.status_code}: {r.text[:300]}", request=r.request, response=r)
                 response = self.decode_response(r.json())
             except Exception as exc:  # noqa: BLE001 - try the next model
+                if request_is_wrong(exc):
+                    # AG-06: the REQUEST is wrong - a tool schema, the JSON -
+                    # and every model would say the same: "Create Three
+                    # Monkeys Ball poster" failed three times over one schema.
+                    # Said once; the model is not to blame.
+                    log.warning("gemini refused the request itself (%s): %s", candidate, exc)
+                    raise ProviderError(f"the request was refused ({candidate}): {exc}") from exc
                 self.health.failed(candidate)
                 errors.append(f"{candidate}: {type(exc).__name__}: {exc}")
                 log.warning("gemini model %s failed: %s", candidate, exc)

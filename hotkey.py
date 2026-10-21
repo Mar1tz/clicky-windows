@@ -183,6 +183,35 @@ class GlobalHotkeyMonitor:
         keyboard.unhook_all()
 
 
+class KeyShortcut:
+    """One global shortcut that runs `callback` when pressed - Win + Alt + H
+    shows or hides Tora's cursor. Not suppressed: the app in front still
+    gets the keys. The callback runs on the keyboard hook's thread, so
+    anything it changes on screen goes to Qt's through a signal."""
+
+    def __init__(self, key: str, callback: Callable[[], None]):
+        self._key = key
+        self._callback = callback
+        self._handle = None
+
+    def start(self) -> None:
+        self._handle = keyboard.add_hotkey(self._key, self._fire, suppress=False)
+
+    def stop(self) -> None:
+        if self._handle is not None:
+            try:
+                keyboard.remove_hotkey(self._handle)
+            except Exception:
+                pass
+            self._handle = None
+
+    def _fire(self) -> None:
+        try:
+            self._callback()
+        except Exception:
+            pass  # never let a callback error kill the keyboard hook
+
+
 class StopHotkey:
     """A global key that cancels the current generation (default: Esc).
 

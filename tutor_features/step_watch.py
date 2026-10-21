@@ -250,8 +250,12 @@ def grab_screen(max_width: int = 1280, *, jpeg: bool = True) -> tuple[str, bytes
     # Thumbnail first, from the full frame, with the caption strip cut off so
     # Tora's own island appearing at the top does not read as the user acting.
     w, h = img.size
-    top = int(h * THUMB_SKIP_TOP)
-    thumb = img.crop((0, top, w, h)).convert("L").resize(
+    # Shrunk first (a box average, in C): the crop, grey and resize then work
+    # on 1/64 of the pixels - 6.4 ms down to 1.9, for the same 48x27 (UI-07).
+    small = img.reduce(8) if w >= THUMB_W * 8 and h >= THUMB_H * 8 else img
+    sw, sh = small.size
+    top = int(sh * THUMB_SKIP_TOP)
+    thumb = small.crop((0, top, sw, sh)).convert("L").resize(
         (THUMB_W, THUMB_H), Image.Resampling.BILINEAR)
     thumb_bytes = thumb.tobytes()
 

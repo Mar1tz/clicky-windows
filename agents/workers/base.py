@@ -195,10 +195,11 @@ class Worker(BaseWorker):
             messages.append(ProviderMessage(
                 role="assistant", content=resp.text, tool_calls=list(resp.tool_calls),
             ))
+            ahead = await self._read_side_by_side(resp.tool_calls, ctx, tctx)
             for call in resp.tool_calls:
                 await ctx.control.checkpoint()
                 ctx.progress(describe_call(call))
-                result = await ctx.tools.execute(call, tctx)
+                result = ahead.get(call.id) or await ctx.tools.execute(call, tctx)
                 step.tool_calls.append(call)
                 step.results.append(result)
                 collect_outcomes(ctx, result)
@@ -225,6 +226,22 @@ class Worker(BaseWorker):
 
         step.status = StepStatus.FAILED
         step.error = f"max iterations ({self.max_iterations}) reached without completing"
+
+    # AG-05: what one turn may run side by side - reads of files, git and
+    # workbooks, which change nothing and touch neither the screen nor an
+    # app. A turn of three reads takes the longest read's time, not the sum;
+    # anything else in the turn and they all run in order, as before.
+    PARALLEL_SAFE = frozenset({"read_file", "list_dir", "git_status", "git_diff", "git_log",
+                               "read_workbook", "check_formulas"})
+
+    async def _read_side_by_side(self, calls, ctx: AgentContext, tctx) -> dict:
+        """{call id: result} for a turn of only safe reads, run together."""
+        calls = list(calls)
+        if len(calls) < 2 or any(c.tool_name not in self.PARALLEL_SAFE for c in calls):
+            return {}
+        await ctx.control.checkpoint()
+        results = await asyncio.gather(*(ctx.tools.execute(c, tctx) for c in calls))
+        return {c.id: r for c, r in zip(calls, results)}
 
     async def on_tool_result(self, step: Step, call, result, ctx: AgentContext):
         """Hook after every tool call in the ReAct loop. Return a string to

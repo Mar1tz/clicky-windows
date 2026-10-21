@@ -16,11 +16,14 @@ font or picture gets it if the PC is online.
 """
 from __future__ import annotations
 
+import asyncio
 import base64
 import io
 import os
 import re
+import shutil
 import tempfile
+import time
 from typing import Any, Optional
 
 from agents.core import RiskLevel, ToolContext, ToolResult
@@ -180,31 +183,77 @@ async def render(html_path: str, out: str, width: int, height: int, *, scale: in
                  browser: Optional[str] = None, timeout: float = RENDER_TIMEOUT) -> dict[str, Any]:
     """Render an HTML file to `out` (.png/.jpg/.jpeg/.pdf). A PDF also gets a
     PNG look for the preview. Returns look() of the picture plus the path.
-    Raises RenderError with a reason the model can act on."""
+    Raises RenderError with a reason the model can act on.
+
+    Edge 155 (19 Oct 2026) hands a headless job to a browser that keeps
+    running after the command returns: the launcher exits in 0.06 s, the
+    picture is written ~1 s later and the browser leaves ~3 s after that.
+    Checked at once, there was "no picture" on every render. So the file is
+    waited for, written to a scratch name first (an older file at `out` is
+    never mistaken for the new one), and the browser is let go of its
+    profile before the PDF pass and before the profile is removed."""
     browser = browser or find_browser()
     if not browser:
         raise RenderError("no Edge or Chrome on this PC to render the design with")
     url = "file:///" + os.path.abspath(html_path).replace("\\", "/")
     folder = os.path.dirname(os.path.abspath(out))
-    with tempfile.TemporaryDirectory(prefix="tora-render-") as tmp:
-        shot = out if out.lower().endswith(".png") else os.path.join(tmp, "shot.png")
-        args = browser_args(browser, os.path.join(tmp, "profile")) + [
+    with tempfile.TemporaryDirectory(prefix="tora-render-", ignore_cleanup_errors=True) as tmp:
+        profile = os.path.join(tmp, "profile")
+        shot = os.path.join(tmp, "shot.png")
+        args = browser_args(browser, profile) + [
             f"--window-size={width},{height}", f"--force-device-scale-factor={max(1, min(3, int(scale)))}",
             f"--screenshot={shot}", url]
+        started = time.monotonic()
         done = await run_process(args, cwd=folder, timeout=timeout)
-        if not os.path.isfile(shot):
+        if not await _written(shot, timeout - (time.monotonic() - started)):
+            await _let_go(profile)
             raise RenderError(f"the browser made no picture ({(done.stderr or done.stdout).strip()[-300:]})")
         seen = look(shot)
-        if out.lower().endswith((".jpg", ".jpeg")):
+        if out.lower().endswith(".png"):
+            shutil.copyfile(shot, out)
+        elif out.lower().endswith((".jpg", ".jpeg")):
             image = _pil()
             with image.open(shot) as im:
                 im.convert("RGB").save(out, "JPEG", quality=92)
         elif pdf:
-            done = await run_process(browser_args(browser, os.path.join(tmp, "profile")) + [
-                "--no-pdf-header-footer", f"--print-to-pdf={out}", url], cwd=folder, timeout=timeout)
-            if not os.path.isfile(out):
+            await _let_go(profile)            # or the PDF job is handed to the browser still running
+            paper = os.path.join(tmp, "print.pdf")
+            started = time.monotonic()
+            done = await run_process(browser_args(browser, profile) + [
+                "--no-pdf-header-footer", f"--print-to-pdf={paper}", url], cwd=folder, timeout=timeout)
+            if not await _written(paper, timeout - (time.monotonic() - started)):
+                await _let_go(profile)
                 raise RenderError(f"the browser made no PDF ({(done.stderr or done.stdout).strip()[-300:]})")
+            shutil.copyfile(paper, out)
+        await _let_go(profile)
     return {**seen, "path": out}
+
+
+async def _written(path: str, seconds: float) -> bool:
+    """The file exists and has stopped growing - or `seconds` ran out."""
+    deadline = time.monotonic() + max(1.0, seconds)
+    last = -1
+    while True:
+        size = os.path.getsize(path) if os.path.isfile(path) else -1
+        if size > 0 and size == last:
+            return True
+        if time.monotonic() > deadline:
+            return size > 0
+        last = size
+        await asyncio.sleep(0.1)
+
+
+async def _let_go(profile: str, seconds: float = 10.0) -> None:
+    """Wait for the browser running on `profile` to leave it: it holds the
+    profile's lockfile open until it exits."""
+    lock = os.path.join(profile, "lockfile")
+    deadline = time.monotonic() + seconds
+    while os.path.exists(lock) and time.monotonic() < deadline:
+        try:
+            os.remove(lock)
+            return
+        except OSError:                       # still open: still running
+            await asyncio.sleep(0.1)
 
 
 # -- the tool -------------------------------------------------------------------------------------------------

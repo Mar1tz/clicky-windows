@@ -108,15 +108,38 @@ def test_free_has_no_standby_so_its_voice_opens_on_a_question(heytora):
 
 
 @pytest.mark.parametrize("reason", ["passes", "window"])
-def test_a_used_up_window_starts_the_next(heytora, reason):
+def test_a_reconnect_after_its_window_ended_waits_in_standby(heytora, reason):
+    """FX-02 (the speed review, 17 Oct 2026): a reconnect with no question
+    waiting found its window ended, asked for "new", and opened - and
+    counted - a talk message nobody asked (9 times on 6-9 Oct). It waits in
+    an uncounted standby window now."""
+    acc = heytora.account
+    _signed_in(heytora)
+    _pro(heytora)
+    acc.new_talk()
+    acc.voice_pass("talk", "gemini-3.8-live")                 # the question: its window
+    heytora.fake.pass_refusal = reason
+    acc.voice_pass("talk", "gemini-3.8-live")                 # a reconnect: that window has ended
+    passes = [(b.get("new"), b.get("standby")) for _m, p, _h, b in heytora.fake.calls
+              if p.endswith("/voice-pass")]
+    assert passes == [(True, None), (False, None), (None, True)]
+    assert heytora.fake.opened["talk"] == 1 and heytora.fake.standby == 1, "no talk message for it"
+
+
+@pytest.mark.parametrize("reason", ["passes", "window"])
+def test_on_free_a_reconnect_after_its_window_ended_waits_for_the_next_question(heytora, reason):
+    from account.service import LimitReached
     acc = heytora.account
     _signed_in(heytora)
     acc.new_talk()
     acc.voice_pass("talk", "gemini-3.8-live")
     heytora.fake.pass_refusal = reason
+    with pytest.raises(LimitReached):
+        acc.voice_pass("talk", "gemini-3.8-live")             # Free has no standby
+    assert heytora.fake.opened["talk"] == 1, "not counted"
+    acc.new_talk()                                            # they ask something: that opens one
     acc.voice_pass("talk", "gemini-3.8-live")
-    passes = [b.get("new") for _m, p, _h, b in heytora.fake.calls if p.endswith("/voice-pass")]
-    assert passes == [True, False, True] and heytora.fake.opened["talk"] == 2
+    assert heytora.fake.opened["talk"] == 2
 
 
 def test_an_ending_window_is_asked_for_again_and_never_stretched(heytora):
@@ -333,3 +356,36 @@ def test_the_database_keeps_the_rules():
     assert "revoke all on function public._heytora_spend(uuid, text, int, jsonb)      " \
            "from public, anon, authenticated" in sql
     assert sql.count("security definer") >= 6 and sql.count("set search_path = public, pg_temp") >= 6
+
+
+# -- the server, faster (docs/SERVER_SPEED.md: AC-02, AC-03, FX-06, AC-07) ---------------------------------------
+
+def test_the_server_says_where_every_call_spent_its_time():
+    fn = (ROOT / "supabase/functions/heytora/index.ts").read_text(encoding="utf-8")
+    assert 'res.headers.set("server-timing", serverTiming())' in fn, "every route, not only looks"
+    for part in ('timed("window_pass"', 'timed("google"', 'timed("usage"', 'timed("auth_local"'):
+        assert part in fn, part
+
+
+def test_a_talk_pass_is_one_database_call_and_works_before_the_migration():
+    fn = (ROOT / "supabase/functions/heytora/index.ts").read_text(encoding="utf-8")
+    assert 'db.rpc("heytora_talk_pass"' in fn and '"PGRST202"' in fn, "the two calls until 0011 is applied"
+    sql = (ROOT / "supabase/migrations/0013_heytora_talk_pass.sql").read_text(encoding="utf-8")
+    assert "security invoker" in sql, "the two it calls keep deciding"
+    assert "public.heytora_window(p_kind, p_new)" in sql and "public.heytora_pass(" in sql
+    assert "revoke all on function public.heytora_talk_pass(text, boolean, text) from public, anon" in sql
+    assert "grant execute on function public.heytora_talk_pass(text, boolean, text) to authenticated" in sql
+
+
+def test_the_sign_in_is_checked_locally_only_where_nothing_changes_an_account():
+    fn = (ROOT / "supabase/functions/heytora/index.ts").read_text(encoding="utf-8")
+    assert 'HOT_PATHS = new Set(["voice-pass", "ticket", "agent-ticket", "me"])' in fn
+    assert "signedInUser(" in fn and "db.auth.getUser(jwt)" in fn, "the auth service for everything else"
+    for never in ('"account"', '"checkout"', '"billing"', '"referrals'):
+        assert never not in fn.split("HOT_PATHS = new Set(")[1].split(")")[0], never
+
+
+def test_a_billing_refusal_is_said_to_the_owners():
+    fn = (ROOT / "supabase/functions/heytora/index.ts").read_text(encoding="utf-8")
+    assert fn.count("noteRefusal(") >= 3, "voice passes and forwarded calls"
+    assert "HEYTORA_ALERT_WEBHOOK" in fn and "ALERT_EVERY_MS" in fn

@@ -74,19 +74,23 @@ def test_the_resting_buddy_repaints_its_own_few_pixels_not_the_monitor(overlay):
     assert _painted(overlay) < _monitors(overlay) / 20
 
 
-def test_a_still_buddy_is_painted_every_third_frame(overlay, monkeypatch):
+def test_a_still_buddy_is_painted_20_times_a_second_on_a_slower_clock(overlay, monkeypatch):
+    """UI-01: at rest the clock itself slows to 20 a second - every tick
+    painted - where it woke 60 times a second to paint every third."""
+    from ui import overlay as ov_mod
     for _ in range(90):
         overlay._tick()
     calls = []
     monkeypatch.setattr(overlay, "_refresh", lambda force=False: calls.append(force))
     for _ in range(30):
         overlay._tick()
-    assert 9 <= len(calls) <= 11, "the slow breath shows just as well at 20 fps"
+    assert overlay._tick_timer.interval() == ov_mod.REST_TICK_MS == 50, "20 wake-ups a second, not 60"
+    assert len(calls) == 30, "the slow breath shows just as well at 20 fps"
     overlay.set_mode("listening")          # the voice bars move with the voice: every frame
     calls.clear()
     for _ in range(30):
         overlay._tick()
-    assert len(calls) == 30
+    assert len(calls) == 30 and overlay._tick_timer.interval() == ov_mod.TICK_MS, "fast again"
 
 
 def test_what_was_drawn_is_rubbed_out_where_it_was(overlay):

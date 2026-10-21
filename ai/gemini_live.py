@@ -35,6 +35,7 @@ import asyncio
 import base64
 import json
 import logging
+import ssl
 from dataclasses import dataclass, field
 from typing import Any, AsyncIterator, Optional
 
@@ -133,12 +134,27 @@ class LiveEvent:
     #   audio             spoken audio, PCM16 @ sample_rate
     #   text              text response (TEXT-modality sessions)
     #   tool_call         model wants a tool run; answer with send_tool_response
+    #   tool_cancel       those tool calls are void (raw["toolCallCancellation"]["ids"])
     #   turn_complete     model finished a turn
     #   interrupted       the user talked over the model; drop queued audio
     #   voice_activity    server VAD: text is ACTIVITY_START or ACTIVITY_END
     #   go_away           server is about to close this session
     #   usage             raw is the server's usageMetadata (SP-03)
     #   closed            socket is gone
+
+
+# One TLS context for every session, built once and off the loop. Passed
+# none, the websockets library built a fresh one per connection - reading the
+# Windows certificate store, ~22 ms of a blocked loop each time (more on a
+# busy PC), for every voice session and every wake-word check (19 Oct).
+_TLS: Optional[ssl.SSLContext] = None
+
+
+async def _tls() -> ssl.SSLContext:
+    global _TLS
+    if _TLS is None:
+        _TLS = await asyncio.to_thread(ssl.create_default_context)
+    return _TLS
 
 
 class LiveSession:
@@ -153,7 +169,10 @@ class LiveSession:
         # starting again with no memory of anything said so far.
         self._setup["sessionResumption"] = {"handle": resume_handle} if resume_handle else {}
         self._ws = None
-        self._resume_handle: Optional[str] = resume_handle
+        # Only a handle THIS session is given: the one it was opened with is
+        # spent. Handed back again it was refused - 66 times on 1-17 Oct,
+        # after sessions too short to be given a new one (FX-03).
+        self._resume_handle: Optional[str] = None
         self._closed = False
 
     @property
@@ -170,8 +189,9 @@ class LiveSession:
 
     async def connect(self, timeout: float = 20.0) -> None:
         address = await self._address()
+        tls = await _tls() if address.startswith("wss:") else None
         self._ws = await asyncio.wait_for(
-            websockets.connect(address, max_size=None),
+            websockets.connect(address, max_size=None, **({"ssl": tls} if tls else {})),
             timeout=timeout,
         )
         await self._send({"setup": self._setup})
@@ -220,6 +240,15 @@ class LiveSession:
     @property
     def is_open(self) -> bool:
         return self._ws is not None and not self._closed
+
+    def backlog_bytes(self) -> int:
+        """Bytes handed to the socket and not yet sent. On a weak connection
+        the upload falls behind the microphone and this grows (net_quality)."""
+        ws = self._ws
+        try:
+            return int(ws.transport.get_write_buffer_size()) if ws is not None else 0
+        except Exception:  # noqa: BLE001 - no transport to ask: say nothing
+            return 0
 
     # ── Sending ──────────────────────────────────────────────────────────────
 
@@ -304,9 +333,11 @@ class LiveSession:
                 )
 
                 if "sessionResumptionUpdate" in msg:
-                    self._resume_handle = (
-                        msg["sessionResumptionUpdate"].get("newHandle")
-                    )
+                    # Empty while it cannot be resumed (a turn under way):
+                    # the last handle given still resumes it.
+                    handle = msg["sessionResumptionUpdate"].get("newHandle")
+                    if handle:
+                        self._resume_handle = handle
                     continue
 
                 # Before the branches below: it can ride on any message,
@@ -316,6 +347,12 @@ class LiveSession:
 
                 if "goAway" in msg:
                     yield LiveEvent(kind="go_away", raw=msg)
+                    continue
+
+                # The user spoke over a tool call: the server will not use
+                # its answer. The ids say which calls to stop.
+                if "toolCallCancellation" in msg:
+                    yield LiveEvent(kind="tool_cancel", raw=msg)
                     continue
 
                 if "toolCall" in msg:

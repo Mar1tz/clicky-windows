@@ -149,6 +149,16 @@ def _int(value: str, default: int) -> int:
         return default
 
 
+_KEY_NAMES = {"windows": "Win", "win": "Win", "ctrl": "Ctrl", "control": "Ctrl",
+              "alt": "Alt", "shift": "Shift"}
+
+
+def pretty_keys(combo: str) -> str:
+    """A shortcut as people read it: "windows+alt+h" -> "Win + Alt + H"."""
+    return " + ".join(_KEY_NAMES.get(p.strip().lower(), p.strip().capitalize())
+                      for p in (combo or "").split("+") if p.strip())
+
+
 DEFAULT_SYSTEM_PROMPT = """You are Tora, a VISUAL AI tutor running on Windows. You live
 next to the user's cursor. Your job is to *show*, not just tell.
 
@@ -636,6 +646,22 @@ class Config:
         os.environ["TORA_CURSOR_COLOUR"] = key
         self._write_env("TORA_CURSOR_COLOUR", key)
 
+    def cursor_shown(self) -> bool:
+        """Tora's cursor beside the mouse. Hidden, only her bar shows; she
+        still appears where she points (ui/overlay.set_cursor_shown)."""
+        return os.environ.get("TORA_CURSOR", "").strip().lower() != "hidden"
+
+    def set_cursor_shown(self, on: bool) -> None:
+        value = "shown" if on else "hidden"
+        os.environ["TORA_CURSOR"] = value
+        self._write_env("TORA_CURSOR", value)
+
+    def cursor_hotkey(self) -> str:
+        """The shortcut that shows or hides her cursor. Win + Alt + H: free
+        in Windows unless its voice typing is open, and no Ctrl, so it can
+        never start the Ctrl + Win talk shortcut."""
+        return os.environ.get("TORA_CURSOR_HOTKEY", "").strip().lower() or "windows+alt+h"
+
     def set_hotkey(self, combo: str) -> None:
         """The push-to-talk shortcut ("ctrl+win", "ctrl+alt+space"), kept."""
         combo = "+".join(p.strip().lower() for p in combo.split("+") if p.strip())
@@ -676,6 +702,15 @@ class Config:
     def ambient_mic(self) -> bool:
         """True when the mic should stay open and scan for the wake word."""
         return self.mic_mode == "ambient"
+
+    @staticmethod
+    def wake_engine() -> str:
+        """How the wake word is heard (HP-08, audio/wake_local.py): "hybrid"
+        - on this PC, the cloud asked only when it might be the name -
+        "local" (never the cloud) or "cloud" (every speech segment, as
+        before 19 Oct)."""
+        mode = os.environ.get("TORA_WAKE_ENGINE", "hybrid").strip().lower()
+        return mode if mode in ("hybrid", "local", "cloud") else "hybrid"
 
     def set_mic_mode(self, mode: str) -> None:
         """Persisted switch between hotkey-only and always-listening."""

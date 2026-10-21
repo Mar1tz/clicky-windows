@@ -9,8 +9,8 @@ the wrong button.
 
 This module is the local half of a three-tier resolver:
 
-  Tier 1  Windows UI Automation (UIA)     <1 s, capped at ~1.2 s   pixel-perfect
-          Walks the OS accessibility tree, finds elements by name/role.
+  Tier 1  Windows UI Automation (UIA)     ~0.05-0.4 s, one call    pixel-perfect
+          Reads the OS accessibility tree, finds elements by name/role.
           Works in every standard UI: Chrome/Edge/Firefox, VS Code, IDEs,
           Office, Electron apps, native Win32, WinUI/UWP, Settings, etc.
 
@@ -41,6 +41,7 @@ import logging
 import re
 import threading
 import time
+from collections import deque
 from dataclasses import dataclass
 from typing import Optional, List, Tuple
 
@@ -227,23 +228,28 @@ def _pointing_root(hwnd: Optional[int] = None):
 
 
 def list_pointables(
-    limit: int = 40, *, max_nodes: int = 1400, max_depth: int = 16,
+    limit: int = 120, *, max_nodes: int = 1400, max_depth: int = 16,
     hwnd: Optional[int] = None,
 ) -> List[Tuple[int, int, str, str]]:
     """Named, on-screen controls from the foreground window.
 
-    Returns (center_x, center_y, name, control_type) in PHYSICAL pixels. This
-    is walked once per turn and the result feeds both the control-name list
-    the model is told about and directional coreference ("the one to its
-    left"), so neither pays for a second tree walk — repeated UIA walks are
-    the slow part in Electron apps like VS Code.
+    Returns (center_x, center_y, name, control_type) in PHYSICAL pixels, top
+    of the window first. This is read once per turn and feeds both the
+    control-name list the model is told about and the in-memory matching of
+    point_at (_match_snapshot) and of "the one to its left" - so none of
+    them pays for a second look at the tree.
 
-    Bounded on purpose: the useful controls (menus, toolbars, tabs) sit near
-    the top of the tree, and an unbounded walk of a deep Electron tree can
-    take many seconds. Names only — never values, never anything typed.
+    SC-06 (the speed review, 17 Oct 2026): ONE cross-process call - Windows
+    builds the whole tree of named, pointable controls in the app and hands
+    it back cached - instead of walking it here node by node, four COM round
+    trips a node. The screen line took 0.8 s at the median (p90 1.8 s); on
+    18 Oct a browser window took 221 ms walked and 20 ms cached, Spotify
+    185 ms and 51 ms, and VS Code, whose walk found nothing in its first
+    1,400 nodes, gave up 630 controls in 181 ms. The walk stays as the
+    fallback. Names only - never values, never anything typed.
     """
     try:
-        import uiautomation as auto
+        import uiautomation as auto  # noqa: F401
     except ImportError:
         return []
     try:
@@ -252,13 +258,90 @@ def list_pointables(
         return []
     if root is None:
         return []
+    try:
+        return _cached_pointables(root, limit)
+    except Exception:  # noqa: BLE001 - an app that will not build the cache: walk it
+        log.debug("cached control list failed - walking the tree", exc_info=True)
+        return _walk_pointables(root, limit, max_nodes, max_depth)
 
+
+def _pointable(name: str, ctrl_type: str, rect, seen: set) -> Optional[Tuple[int, int, str, str]]:
+    """(cx, cy, name, type) when this control can be pointed at by name."""
+    if not (name and ctrl_type in _NAMEABLE_TYPES and 1 < len(name) <= 40):
+        return None
+    left, top, right, bottom = rect
+    if right - left <= 0 or bottom - top <= 0:
+        return None
+    key = name.lower()
+    if key in seen or _is_chrome(name):
+        return None
+    seen.add(key)
+    return int((left + right) // 2), int((top + bottom) // 2), name, ctrl_type
+
+
+_FILTER = None            # the cache request's tree filter, made once per process
+_NAMED = None             # ...and the one for searching by name: every named control
+
+
+def _cached_tree(root, tree_filter, props):
+    """`root` and everything under it that passes `tree_filter`, with `props`
+    read - built by Windows in the app's own process and handed back in ONE
+    cross-process call. Walking it afterwards (GetCachedChildren, Cached*)
+    is in memory. Raises when the app will not build it."""
+    from uiautomation import uiautomation as _ua
+    ui = _ua._AutomationClient.instance().IUIAutomation
+    request = ui.CreateCacheRequest()
+    for prop in props:
+        request.AddProperty(prop)
+    request.TreeScope = 7                                   # TreeScope_Subtree
+    request.TreeFilter = tree_filter
+    return root.Element.BuildUpdatedCache(request)
+
+
+def _cached_pointables(root, limit: int) -> List[Tuple[int, int, str, str]]:
+    import uiautomation as auto
+    from uiautomation import uiautomation as _ua
+    global _FILTER
+    ui = _ua._AutomationClient.instance().IUIAutomation
+    P = auto.PropertyId
+    if _FILTER is None:
+        kinds = None
+        for t in _NAMEABLE_TYPES:
+            if not t.endswith("Control"):
+                continue
+            cond = ui.CreatePropertyCondition(P.ControlTypeProperty, getattr(auto.ControlType, t))
+            kinds = cond if kinds is None else ui.CreateOrCondition(kinds, cond)
+        named = ui.CreateNotCondition(ui.CreatePropertyCondition(P.NameProperty, ""))
+        _FILTER = ui.CreateAndCondition(ui.CreateAndCondition(ui.ControlViewCondition, named), kinds)
+    top = _cached_tree(root, _FILTER, (P.NameProperty, P.ControlTypeProperty,
+                                       P.BoundingRectangleProperty, P.IsOffscreenProperty))
     out: List[Tuple[int, int, str, str]] = []
-    seen = set()
-    queue: List[Tuple["auto.Control", int]] = [(root, 0)]
+    seen: set = set()
+    queue = deque([top])
+    while queue and len(out) < limit:                       # breadth-first: the top of the window first
+        el = queue.popleft()
+        if not el.CachedIsOffscreen:
+            r = el.CachedBoundingRectangle
+            hit = _pointable((el.CachedName or "").strip(), auto.ControlTypeNames.get(el.CachedControlType, ""),
+                             (r.left, r.top, r.right, r.bottom), seen)
+            if hit is not None:
+                out.append(hit)
+        kids = el.GetCachedChildren()
+        if kids:
+            queue.extend(kids.GetElement(i) for i in range(kids.Length))
+    return out
+
+
+def _walk_pointables(root, limit: int, max_nodes: int, max_depth: int) -> List[Tuple[int, int, str, str]]:
+    """The old walk, node by node - bounded on purpose: the useful controls
+    sit near the top, and an unbounded walk of a deep Electron tree can take
+    many seconds."""
+    out: List[Tuple[int, int, str, str]] = []
+    seen: set = set()
+    queue = deque([(root, 0)])
     visited = 0
     while queue and visited < max_nodes and len(out) < limit:
-        node, depth = queue.pop(0)
+        node, depth = queue.popleft()
         visited += 1
         try:
             name = (node.Name or "").strip()
@@ -266,23 +349,83 @@ def list_pointables(
             rect = node.BoundingRectangle
         except Exception:
             continue
-
-        if (name and ctrl_type in _NAMEABLE_TYPES
-                and rect and rect.width() > 0 and rect.height() > 0
-                and 1 < len(name) <= 40):
-            key = name.lower()
-            if key not in seen and not _is_chrome(name):
-                seen.add(key)
-                cx = int((rect.left + rect.right) // 2)
-                cy = int((rect.top + rect.bottom) // 2)
-                out.append((cx, cy, name, ctrl_type))
-
+        if rect:
+            hit = _pointable(name, ctrl_type, (rect.left, rect.top, rect.right, rect.bottom), seen)
+            if hit is not None:
+                out.append(hit)
         if depth < max_depth:
             try:
                 queue.extend((c, depth + 1) for c in node.GetChildren())
             except Exception:
                 continue
     return out
+
+
+def named_controls(root, *, max_depth: int = 40):
+    """Every named control in `root`'s window, top of the window first:
+    (name, control type, (left, top, right, bottom), trail) - the trail being
+    the names of what it sits inside, below the window itself.
+
+    One cross-process call (SC-07, 18 Oct 2026). Searching by walking took a
+    COM round trip per node: 0.4-1.2 s in a browser or Spotify, and VS Code
+    ran out the 1.2 s deadline before the walk reached its sidebar. Built by
+    Windows in one call it is 40-75 ms there and ~0.35 s for VS Code's 2,600
+    named controls, every one of them seen. Raises when the app will not
+    build it; the callers walk instead."""
+    import uiautomation as auto
+    from uiautomation import uiautomation as _ua
+    global _NAMED
+    P = auto.PropertyId
+    if _NAMED is None:
+        ui = _ua._AutomationClient.instance().IUIAutomation
+        _NAMED = ui.CreateAndCondition(
+            ui.ControlViewCondition, ui.CreateNotCondition(ui.CreatePropertyCondition(P.NameProperty, "")))
+    top = _cached_tree(root, _NAMED, (P.NameProperty, P.ControlTypeProperty, P.BoundingRectangleProperty))
+    return _read_named(top, max_depth, auto.ControlTypeNames)
+
+
+def _read_named(top, max_depth: int, kinds: dict):
+    queue = deque([(top, 0, "")])
+    while queue:
+        el, depth, trail = queue.popleft()
+        name = el.CachedName or ""
+        r = el.CachedBoundingRectangle
+        yield name, kinds.get(el.CachedControlType, ""), (r.left, r.top, r.right, r.bottom), trail
+        if depth < max_depth:
+            kids = el.GetCachedChildren()
+            if kids:
+                here = trail if depth == 0 else (trail + " " + _normalize(name))[-240:]
+                queue.extend((kids.GetElement(i), depth + 1, here) for i in range(kids.Length))
+
+
+def _walked_controls(root, deadline: float, *, max_nodes: int = 3500, max_depth: int = 40):
+    """named_controls the old way, node by node, for an app that will not
+    build the cache: bounded by TIME as well as nodes - every node is a COM
+    round trip, and the unbounded walk measured 25 s on an Electron window.
+    The clock is read before every node, not every 32nd: an app busy drawing
+    (CapCut rendering captions) answers each slowly (APP-23)."""
+    queue = deque([(root, 0, "")])
+    visited = 0
+    while queue and visited < max_nodes:
+        if time.monotonic() > deadline:
+            log.debug("UIA walk hit its deadline after %d nodes", visited)
+            return
+        node, depth, trail = queue.popleft()
+        visited += 1
+        try:
+            name = node.Name or ""
+            ctrl_type = node.ControlTypeName or ""
+            rect = node.BoundingRectangle
+        except Exception:
+            continue
+        if rect:
+            yield name, ctrl_type, (rect.left, rect.top, rect.right, rect.bottom), trail
+        if depth < max_depth:
+            here = trail if depth == 0 else (trail + " " + _normalize(name))[-240:]
+            try:
+                queue.extend((c, depth + 1, here) for c in node.GetChildren())
+            except Exception:
+                continue
 
 
 def pointable_names(limit: int = 28, *, hwnd: Optional[int] = None) -> List[str]:
@@ -403,17 +546,15 @@ def _find_via_uia(
     query: str, min_score: float = 0.5, *, max_seconds: float = 1.2,
     hwnd: Optional[int] = None, context: str = "",
 ) -> Optional[Target]:
-    """Walk the UIA tree for the foreground window, find the best match.
+    """The best match by name in the foreground window's controls.
 
-    Bounded by TIME, and it stops the moment it finds a clear winner. Both
-    matter enormously: every node touched here is a COM round trip, and the
-    unbounded version measured **25 seconds** on an Electron window — which
-    blocked the point_at tool, so the assistant went silent for 25 s before it
-    could say a word. A near-exact match ends the walk immediately, and the
-    deadline caps the worst case.
+    One cross-process call reads every named control (named_controls); the
+    scoring is then in memory. An app that will not build the cache is
+    walked instead, bounded by `max_seconds`, stopping the moment it finds a
+    clear winner (_walked_controls).
     """
     try:
-        import uiautomation as auto
+        import uiautomation as auto  # noqa: F401 - only to know it is there
     except ImportError:
         log.warning("uiautomation not installed — Tier 1 (UIA) disabled")
         return None
@@ -426,79 +567,52 @@ def _find_via_uia(
         log.debug("UIA root lookup failed: %s", e)
         return None
 
-    best: Optional[Tuple[float, "auto.Control"]] = None
+    try:
+        controls = named_controls(root)
+    except Exception:  # noqa: BLE001 - an app that will not build the cache: walk it
+        log.debug("cached search failed - walking the tree", exc_info=True)
+        controls = _walked_controls(root, time.monotonic() + max_seconds)
+
+    best: Optional[Tuple[float, str, str, tuple]] = None
     second: float = 0.0            # runner-up score, for the ambiguity check
     ctx = _context_words(context, query)
-    # Bounded walk — UIA trees can be huge in Chrome/Electron. Each entry
-    # carries the names of its ancestors BELOW the root: the root is the
-    # window, whose title every control would otherwise share.
-    queue: List[Tuple["auto.Control", int, str]] = [(root, 0, "")]
     visited = 0
-    MAX_NODES = 3500
-    MAX_DEPTH = 40
-
-    deadline = time.monotonic() + max_seconds
-    while queue and visited < MAX_NODES:
-        # Every node, not every 32nd: a node is four COM calls into the app,
-        # and an app busy drawing (CapCut rendering captions) answers each
-        # slowly - 32 of them ran the 1.2 s walk for many seconds (APP-23).
-        # A clock read is nothing next to one COM call.
-        if time.monotonic() > deadline:
-            log.debug("UIA walk hit its %.1fs deadline for %r", max_seconds, query)
-            break
-        node, depth, trail = queue.pop(0)
+    for name, ctrl_type, rect, trail in controls:
         visited += 1
-        try:
-            name = node.Name or ""
-            ctrl_type = node.ControlTypeName or ""
-            rect = node.BoundingRectangle  # mss/uia returns Rect
-        except Exception:
+        left, top, right, bottom = rect
+        if right - left <= 0 or bottom - top <= 0:           # off-screen / zero-size
             continue
-        # Skip off-screen / zero-size
-        if not rect or rect.width() <= 0 or rect.height() <= 0:
-            pass
-        else:
-            # Name only. Reading AutomationId here cost another COM round
-            # trip on nearly every node for a signal that almost never decided
-            # the match — pure latency.
-            score = _score_match(query, name, ctrl_type)
-            # WHERE it is, not what it is called: the names of what it sits
-            # inside. "Press Enter" must not favour a box called "Search or
-            # enter address".
-            if score and ctx and any(f" {w} " in f" {trail} " for w in ctx):
-                score = min(1.0, score + CONTEXT_BONUS)
-            if score >= 0.92 and _is_actionable(ctrl_type):
-                # A clear winner: stop walking. There is nothing better to
-                # find, and every further node is another COM call.
-                best = (score, node)
-                break
-            if score >= 0.92:
-                # An exact name on something you cannot click — a status-bar
-                # readout, a label, a tooltip. The field log has the arrow
-                # landing on a "google.com" TextControl in the corner of the
-                # screen while the real link sat in the middle. Keep it as the
-                # answer if nothing better turns up, but keep looking.
-                score -= 0.06
-            if score >= min_score:
-                if best is None or score > best[0]:
-                    second = best[0] if best is not None else second
-                    best = (score, node)
-                elif score > second:
-                    second = score
-
-        if depth < MAX_DEPTH:
-            here = trail if depth == 0 else (trail + " " + _normalize(name))[-240:]
-            try:
-                for child in node.GetChildren():
-                    queue.append((child, depth + 1, here))
-            except Exception:
-                continue
+        # Name only. Reading AutomationId as well cost another COM round
+        # trip per node for a signal that almost never decided the match.
+        score = _score_match(query, name, ctrl_type)
+        # WHERE it is, not what it is called: the names of what it sits
+        # inside. "Press Enter" must not favour a box called "Search or
+        # enter address".
+        if score and ctx and any(f" {w} " in f" {trail} " for w in ctx):
+            score = min(1.0, score + CONTEXT_BONUS)
+        if score >= 0.92 and _is_actionable(ctrl_type):
+            # A clear winner: there is nothing better to find.
+            best = (score, name, ctrl_type, rect)
+            break
+        if score >= 0.92:
+            # An exact name on something you cannot click — a status-bar
+            # readout, a label, a tooltip. The field log has the arrow
+            # landing on a "google.com" TextControl in the corner of the
+            # screen while the real link sat in the middle. Keep it as the
+            # answer if nothing better turns up, but keep looking.
+            score -= 0.06
+        if score >= min_score:
+            if best is None or score > best[0]:
+                second = best[0] if best is not None else second
+                best = (score, name, ctrl_type, rect)
+            elif score > second:
+                second = score
 
     if not best:
         log.debug("UIA: no match for %r (scanned %d nodes)", query, visited)
         return None
 
-    score, node = best
+    score, name, ctrl_type, (left, top, right, bottom) = best
     # Ambiguity guard: if a second control scored almost as high, we cannot
     # tell which the user meant — pointing at the first-in-tree one is a
     # coin-flip. Unless the winner is a strong, near-exact match, hand the
@@ -507,15 +621,14 @@ def _find_via_uia(
         log.info("UIA ambiguous for %r (best=%.2f second=%.2f) — deferring",
                  query, score, second)
         return None
-    r = node.BoundingRectangle
-    cx = int((r.left + r.right) // 2)
-    cy = int((r.top + r.bottom) // 2)
+    cx = int((left + right) // 2)
+    cy = int((top + bottom) // 2)
     log.info("UIA hit: %r -> %s [%s] @ (%d,%d) score=%.2f",
-             query, node.Name, node.ControlTypeName, cx, cy, score)
+             query, name, ctrl_type, cx, cy, score)
     return Target(
         x=cx, y=cy,
-        bbox=(int(r.left), int(r.top), int(r.right), int(r.bottom)),
-        label=node.Name or node.ControlTypeName,
+        bbox=(int(left), int(top), int(right), int(bottom)),
+        label=name or ctrl_type,
         source="uia",
         confidence=score,
     )
@@ -527,24 +640,37 @@ def _find_via_uia(
 
 _ocr_engine = None
 _ocr_warned = False          # the missing-OCR warning fired 14x per session
+_ocr_loading = threading.Lock()
 
 
 def _get_ocr():
     global _ocr_engine
     if _ocr_engine is None:
-        try:
-            from rapidocr_onnxruntime import RapidOCR
-            _ocr_engine = RapidOCR()
-        except ImportError:
-            global _ocr_warned
-            if not _ocr_warned:
-                _ocr_warned = True
-                log.warning("rapidocr-onnxruntime not installed — Tier 2 (OCR) disabled")
-            return None
-        except Exception as e:
-            log.warning("OCR engine init failed: %s", e)
-            return None
+        with _ocr_loading:                    # one model, whoever asks first
+            if _ocr_engine is not None:
+                return _ocr_engine
+            try:
+                from rapidocr_onnxruntime import RapidOCR
+                _ocr_engine = RapidOCR()
+            except ImportError:
+                global _ocr_warned
+                if not _ocr_warned:
+                    _ocr_warned = True
+                    log.warning("rapidocr-onnxruntime not installed — Tier 2 (OCR) disabled")
+                return None
+            except Exception as e:
+                log.warning("OCR engine init failed: %s", e)
+                return None
     return _ocr_engine
+
+
+def preload_ocr() -> None:
+    """Load the OCR model in the background, before it is asked for: 1.8 s
+    and 83 MB on 19 Oct, paid by the first point otherwise. For an app whose
+    tree names nothing - where OCR is the local tier that answers (SC-12) -
+    and only then: most days it is never needed."""
+    if _ocr_engine is None and not _ocr_warned:
+        threading.Thread(target=_get_ocr, name="ocr-load", daemon=True).start()
 
 
 def _monitors() -> list[dict]:

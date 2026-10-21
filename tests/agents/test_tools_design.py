@@ -157,3 +157,32 @@ def test_the_file_agent_can_make_pictures():
     assert "render_design" in FileWorker.default_tools
     assert "render_design" in FileWorker().system_prompt(type("C", (), {
         "agent": type("A", (), {"name": "File Agent"})(), "workspace": "W"})())
+
+
+async def test_a_browser_that_writes_after_it_returns_is_waited_for(tmp_path, monkeypatch):
+    """Edge 155 (19 Oct): the launcher returns at once; the picture lands ~1 s later.
+    And an older file at the same path is never taken for the new one."""
+    import asyncio as _asyncio
+
+    async def late_run(args, *, cwd, timeout=60, env=None):
+        flags = {a.split("=", 1)[0]: (a.split("=", 1)[1] if "=" in a else "") for a in args if a.startswith("--")}
+        target = flags.get("--screenshot") or flags.get("--print-to-pdf")
+
+        async def later():
+            await _asyncio.sleep(0.4)
+            if target.endswith(".png"):
+                PIL.new("RGB", (320, 200), (20, 33, 61)).save(target)
+            else:
+                open(target, "wb").write(b"%PDF-1.4 stand-in")
+        _asyncio.ensure_future(later())
+        return CommandOutput(exit_code=0, command=" ".join(args), cwd=cwd)
+
+    monkeypatch.setattr(design_tools, "run_process", late_run)
+    monkeypatch.setattr(design_tools, "find_browser", lambda: r"C:\Edge\msedge.exe")
+    old = tmp_path / "poster.png"
+    PIL.new("RGB", (10, 10), "white").save(old)                  # yesterday's
+    (tmp_path / "p.html").write_text("<p>Sale</p>", encoding="utf-8")
+    seen = await design_tools.render(str(tmp_path / "p.html"), str(old), 320, 200)
+    assert seen["path"] == str(old) and PIL.open(old).size == (320, 200), "the new picture, not the old one"
+    pdf = await design_tools.render(str(tmp_path / "p.html"), str(tmp_path / "flyer.pdf"), 320, 200, pdf=True)
+    assert (tmp_path / "flyer.pdf").read_bytes().startswith(b"%PDF") and pdf["path"].endswith("flyer.pdf")

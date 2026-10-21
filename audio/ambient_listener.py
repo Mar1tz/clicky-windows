@@ -14,6 +14,12 @@ Gemini transcribe model everything else uses, which means that in AMBIENT
 mode short clips of speech near the machine are sent to Google to be checked
 for the wake word.
 
+Since 19 Oct (HP-08, audio/wake_local.py) a keyword spotter hears each
+segment on this PC first: "Hey Tora" wakes without anything being sent, a
+bare name or a near miss is still checked by Google, and speech with nothing
+like the name in it is never sent at all. TORA_WAKE_ENGINE=cloud restores
+sending every segment.
+
 The energy VAD in front of it still runs locally and is unchanged, so this
 is speech segments only — never a continuous upload, and nothing at all
 while the room is quiet. Hotkey mode (the default) does not open the
@@ -29,6 +35,8 @@ thread, and the manager owns the event loop that the API client lives on.
 Without one, wake-word detection is simply off.
 """
 
+import logging
+import queue
 import threading
 import time
 from enum import Enum, auto
@@ -38,6 +46,8 @@ import numpy as np
 import sounddevice as sd
 
 from audio.capture import resample_pcm, SAMPLE_RATE
+
+_log = logging.getLogger("tora.wake")
 
 
 class Mode(Enum):
@@ -104,10 +114,16 @@ class AmbientListener:
         device: Optional[int] = None,
         ambient: bool = True,
         wake_transcriber: Optional[Callable[[bytes], str]] = None,
+        wake_local=None,
+        wake_mode: str = "hybrid",
     ):
         self._on_level = on_level
         self._on_wake = on_wake
         self._wake_transcriber = wake_transcriber
+        # HP-08 (audio/wake_local.py): heard on this PC first; the cloud
+        # check only for a "maybe", or for everything in "cloud" mode.
+        self._wake_local = wake_local
+        self._wake_mode = wake_mode
         self._device = device       # None = system default input device
         self._stream_rate = SAMPLE_RATE   # actual rate the stream opens at
         # ambient=False → the mic stays closed until start_recording(). No
@@ -118,6 +134,9 @@ class AmbientListener:
         self._mode: Mode = Mode.STANDBY
         self._stream: Optional[sd.InputStream] = None
         self._running = False
+        # PortAudio does not promise two streams can be opened at once from
+        # two threads: the start-up warm-up and a press take turns.
+        self._open_lock = threading.Lock()
 
         # Rolling pre-roll ring buffer (small)
         self._preroll: list[np.ndarray] = []
@@ -155,35 +174,66 @@ class AmbientListener:
         self._running = True
         if self._ambient:
             self._open_stream()
+        else:
+            self.warm_up()
+
+    def warm_up(self) -> None:
+        """Make the first press after launch as quick as every other.
+
+        Windows' first opening of a microphone in a process is slow: 0.2-1 s
+        on the owner's PC (18 Oct 2026, MME) against ~50 ms afterwards - and
+        in hotkey mode the device is opened on the press, so the start of
+        the first question went unheard. Creating a stream and closing it
+        unstarted, in the background, pays that once; nothing is recorded.
+        """
+        if self._ambient:
+            return                      # ambient mode keeps its stream open
+
+        def run() -> None:
+            with self._open_lock:
+                if self._stream is not None:
+                    return              # a press got there first
+                try:
+                    sd.InputStream(samplerate=SAMPLE_RATE, channels=1, dtype="int16",
+                                   blocksize=FRAMES_PER_BLOCK, device=self._device).close()
+                except Exception:
+                    pass                # the press reports a real problem
+
+        threading.Thread(target=run, name="mic-warm-up", daemon=True).start()
 
     def _open_stream(self):
-        if self._stream is not None:
-            return
-        try:
-            self._stream = sd.InputStream(
-                samplerate=SAMPLE_RATE,
-                channels=1,
-                dtype="int16",
-                blocksize=FRAMES_PER_BLOCK,
-                callback=self._callback,
-                device=self._device,
-            )
-            self._stream_rate = SAMPLE_RATE
-        except Exception:
-            # Device doesn't support 16kHz directly — open at its native
-            # rate and resample every block to the 16kHz the API expects.
-            info = sd.query_devices(self._device, "input")
-            native_rate = int(info["default_samplerate"])
-            self._stream_rate = native_rate
-            self._stream = sd.InputStream(
-                samplerate=native_rate,
-                channels=1,
-                dtype="int16",
-                blocksize=int(native_rate * BLOCK_MS / 1000),
-                callback=self._callback,
-                device=self._device,
-            )
-        self._stream.start()
+        with self._open_lock:
+            if self._stream is not None:
+                return
+            # latency="low": the device's shortest buffer - the words reach
+            # the model sooner. sounddevice's default is "high".
+            try:
+                self._stream = sd.InputStream(
+                    samplerate=SAMPLE_RATE,
+                    channels=1,
+                    dtype="int16",
+                    blocksize=FRAMES_PER_BLOCK,
+                    callback=self._callback,
+                    device=self._device,
+                    latency="low",
+                )
+                self._stream_rate = SAMPLE_RATE
+            except Exception:
+                # Device doesn't support 16kHz directly — open at its native
+                # rate and resample every block to the 16kHz the API expects.
+                info = sd.query_devices(self._device, "input")
+                native_rate = int(info["default_samplerate"])
+                self._stream_rate = native_rate
+                self._stream = sd.InputStream(
+                    samplerate=native_rate,
+                    channels=1,
+                    dtype="int16",
+                    blocksize=int(native_rate * BLOCK_MS / 1000),
+                    callback=self._callback,
+                    device=self._device,
+                    latency="low",
+                )
+            self._stream.start()
 
     def stop(self):
         self._running = False
@@ -355,14 +405,54 @@ class AmbientListener:
         if self._wake_inflight:
             return
         self._wake_inflight = True
-        t = threading.Thread(target=self._check_wake, args=(pcm,), daemon=True)
-        t.start()
+        self._wake_jobs().put(pcm)
+
+    def _wake_jobs(self) -> "queue.SimpleQueue":
+        """ST-07: one worker for every wake check, made on the first. A new
+        thread per speech segment came and went all day."""
+        jobs = getattr(self, "_wake_queue", None)
+        if jobs is None:
+            jobs = self._wake_queue = queue.SimpleQueue()
+            threading.Thread(target=self._wake_worker, args=(jobs,), name="wake-check", daemon=True).start()
+        return jobs
+
+    def _wake_worker(self, jobs: "queue.SimpleQueue") -> None:
+        while True:
+            self._check_wake(jobs.get())
+
+    # What became of the speech segments, said every WAKE_TALLY_S: how many
+    # woke Tora here, how many went to the cloud, how many were never sent.
+    WAKE_TALLY_S = 1800.0
+
+    def _tally(self, outcome: str) -> None:
+        tally = getattr(self, "_wake_tally", None)
+        if tally is None:
+            tally = self._wake_tally = {"since": time.monotonic()}
+        tally[outcome] = tally.get(outcome, 0) + 1
+        if time.monotonic() - tally["since"] >= self.WAKE_TALLY_S:
+            _log.info("wake word, last %d min: %d speech segments - %d woke Tora here, %d checked in the "
+                      "cloud, %d never sent", (time.monotonic() - tally["since"]) // 60,
+                      sum(v for k, v in tally.items() if k != "since"), tally.get("here", 0),
+                      tally.get("cloud", 0), tally.get("kept", 0))
+            self._wake_tally = {"since": time.monotonic()}
 
     def _check_wake(self, pcm: bytes):
         try:
+            local = self._wake_local
+            if local is not None and self._wake_mode != "cloud" and local.available:
+                heard = local.hears(pcm)
+                if heard == "wake":
+                    _log.info("wake word heard on this PC")
+                    self._tally("here")
+                    self._on_wake()
+                    return
+                if heard is None or self._wake_mode == "local":
+                    self._tally("kept")
+                    return                       # nothing like "Tora": no check sent anywhere
             transcribe = self._wake_transcriber
             if transcribe is None:
                 return
+            self._tally("cloud")
             text = (transcribe(pcm) or "").lower().strip()
             if text and any(w in text for w in WAKE_WORDS):
                 self._on_wake()

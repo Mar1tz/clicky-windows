@@ -41,8 +41,10 @@ test("a request is made safe or refused", () => {
   const small = checkGenerate({ contents: [], generationConfig: { maxOutputTokens: 512, temperature: 0.2 } });
   assert.ok(small.ok && (small.body.generationConfig as { maxOutputTokens: number }).maxOutputTokens === 512);
   assert.ok(checkGenerate({ tools: [{ functionDeclarations: [{ name: "point" }] }] }).ok, "the app's own tools");
+  assert.ok(checkGenerate({ tools: [{ google_search: {} }] }).ok, "Tora's web search (19 Oct)");
+  assert.ok(checkGenerate({ tools: [{ googleSearch: {} }] }).ok);
   for (const bad of [
-    { tools: [{ googleSearch: {} }] },
+    { tools: [{ googleSearch: {}, codeExecution: {} }] },
     { tools: [{ functionDeclarations: [], codeExecution: {} }] },
     { tools: [{ urlContext: {} }] },
     { cachedContent: "cachedContents/x" },
@@ -122,4 +124,47 @@ test("an answer's live voice is priced from Google's own counts, as the app pric
   for (const junk of [null, undefined, "x", [], { promptTokenCount: -5 }, { promptTokenCount: "lots" }]) {
     assert.equal(liveCostMicro(junk).micro, 0, String(junk));
   }
+});
+
+// -- AC-02: the sign-in from the verified token -------------------------------------------------------------------
+
+import { alertBody, billingProblem, signedInUser } from "../functions/heytora/rules.ts";
+
+test("only a signed-in user's own, current token is a user", () => {
+  const iss = "https://proj.supabase.co/auth/v1";
+  const now = 1_800_000_000;
+  const user = { role: "authenticated", sub: "u-1", aud: "authenticated", iss, exp: now + 600, email: "amy@example.com" };
+  assert.deepEqual(signedInUser(user, iss, now), { id: "u-1", email: "amy@example.com" });
+  assert.equal(signedInUser({ ...user, role: "anon", sub: undefined }, iss, now), null, "the anon key");
+  assert.equal(signedInUser({ ...user, role: "service_role" }, iss, now), null, "a service key");
+  assert.equal(signedInUser({ ...user, iss: "https://other.supabase.co/auth/v1" }, iss, now), null);
+  assert.equal(signedInUser({ ...user, exp: now - 1 }, iss, now), null, "past its time");
+  assert.equal(signedInUser({ ...user, aud: ["authenticated", "x"] }, iss, now)?.id, "u-1");
+  assert.equal(signedInUser({ ...user, aud: "anon" }, iss, now), null);
+});
+
+// -- FX-06: billing refusals reach the owners --------------------------------------------------------------------
+
+test("a billing refusal is told apart from an ordinary one", () => {
+  assert.ok(billingProblem(429, '{"error":{"message":"Your prepayment credits are depleted. Please go to AI Studio"}}'));
+  assert.ok(billingProblem(403, "Billing is not enabled for this project"));
+  assert.ok(!billingProblem(429, "Resource has been exhausted (e.g. check quota)."), "a rate limit is not billing");
+  assert.ok(!billingProblem(500, "prepayment credits are depleted"), "only refusals");
+  assert.ok(!billingProblem(400, "Invalid JSON payload"));
+  const body = alertBody("a voice pass", 429, "Your prepayment credits are depleted");
+  assert.ok(body.text.includes("billing") && body.text === body.content);
+});
+
+
+// -- Google Search through the server, metered per search (19 Oct 2026) --------------------------------------------
+
+import { SEARCH_MICRO, searchesIn } from "../functions/heytora/rules.ts";
+
+test("each Google search an answer ran is counted", () => {
+  const answer = JSON.stringify({ candidates: [{ content: { parts: [{ text: "Verstappen" }] },
+    groundingMetadata: { webSearchQueries: ["f1 winner", "singapore gp 2026"] } }] });
+  assert.equal(searchesIn(answer), 2);
+  assert.equal(searchesIn(JSON.stringify({ candidates: [{ content: {} }] })), 0);
+  assert.equal(searchesIn("not json"), 0);
+  assert.equal(SEARCH_MICRO, 14_000, "$14 per 1,000");
 });

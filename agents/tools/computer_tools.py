@@ -369,6 +369,9 @@ class KeyPress(_ComputerTool):
         return self.ok("pressed " + "+".join(keys), keys=keys)
 
 
+SHOT_WIDTH = 768
+
+
 class Screenshot(Tool):
     """Read-only capture into the workspace. SAFE: it changes nothing."""
     spec = make_spec(
@@ -386,7 +389,9 @@ class Screenshot(Tool):
             import base64
 
             from screen.capture import capture_primary
-            shot = await asyncio.to_thread(capture_primary)
+            # AG-08: 768 px - enough to see what is on screen, a fraction of
+            # the bytes and tokens; the second computer job stored 1.4 MB.
+            shot = await asyncio.to_thread(capture_primary, SHOT_WIDTH)
             os.makedirs(os.path.dirname(target) or ".", exist_ok=True)
             # ScreenShot carries the downscaled frame as base64 JPEG - the
             # same bytes the vision model sees, which is what an agent

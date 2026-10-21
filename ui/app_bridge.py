@@ -306,6 +306,27 @@ class AppBridge(QObject):
         except Exception:  # noqa: BLE001 - no overlay (a window on its own)
             pass
 
+    def cursor_shown(self) -> bool:
+        """Her cursor beside the mouse; off, only her bar shows."""
+        from config import cfg
+        return cfg.cursor_shown()
+
+    def set_cursor_shown(self, on: bool) -> None:
+        """Save it and show it on the next frame (ui/overlay.set_cursor_shown)."""
+        from config import cfg
+        cfg.set_cursor_shown(on)
+        try:
+            from ui.overlay import set_cursor_shown
+            set_cursor_shown(on)
+        except Exception:  # noqa: BLE001 - no overlay (a window on its own)
+            pass
+        self.changed.emit("cursor")
+
+    def cursor_hotkey(self) -> str:
+        """The shortcut that shows or hides her cursor, as people read it."""
+        from config import cfg, pretty_keys
+        return pretty_keys(cfg.cursor_hotkey())
+
     def listen_sound(self) -> str:
         from config import cfg
         return cfg.listen_sound()

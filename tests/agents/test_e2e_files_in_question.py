@@ -21,6 +21,12 @@ import pytest
 from ai import screen_files, trace as tracing, trace_read
 
 
+@pytest.fixture(autouse=True)
+def no_real_shell(monkeypatch):
+    """Never the PC's own File Explorer windows."""
+    monkeypatch.setattr(screen_files, "_explorer_view", lambda hwnd: None)
+
+
 @pytest.fixture
 def docs(tmp_path):
     folder = tmp_path / "Documents"
@@ -49,6 +55,29 @@ def test_names_in_an_explorer_window_are_its_files(docs, monkeypatch):
     monkeypatch.setattr(screen_files, "explorer_window", lambda hwnd: (str(docs), []))
     assert screen_files.files_at(["10 Mei 2026", "Budget"], 1234) == [str(docs / "10 Mei 2026.docx"),
                                                                      str(docs / "Budget.xlsx")]
+
+
+# WR-01 (18 Oct): "it isn't knowing what document I'm talking about".
+
+def test_two_files_of_one_name_are_told_apart_by_the_selection(docs, monkeypatch):
+    monkeypatch.setattr(screen_files, "explorer_window", lambda hwnd: (str(docs), [str(docs / "Report.pdf")]))
+    assert screen_files.files_at(["Report"], 1234) == [str(docs / "Report.pdf")]
+    assert screen_files.match(["Report"], [str(docs)]) == [], "and without a selection, still no guess"
+
+
+def test_a_library_or_a_search_is_read_by_what_it_shows(docs, monkeypatch):
+    """Quick access, a library, search results: the "folder" is no folder on disk."""
+    monkeypatch.setattr(screen_files, "explorer_window", lambda hwnd: ("::{031E4825-7B94-4DC3-B131}", []))
+    monkeypatch.setattr(screen_files, "shown_items",
+                        lambda hwnd: {"10 mei 2026": [str(docs / "10 Mei 2026.docx")],
+                                      "report": [str(docs / "Report.docx"), str(docs / "Report.pdf")]})
+    assert screen_files.files_at(["10 Mei 2026", "Report"], 1234) == [str(docs / "10 Mei 2026.docx")]
+
+
+def test_a_trace_that_placed_no_file_falls_back_to_the_selection(docs, monkeypatch):
+    monkeypatch.setattr(screen_files, "explorer_window", lambda hwnd: (str(docs), [str(docs / "Budget.xlsx")]))
+    monkeypatch.setattr(screen_files, "shown_items", lambda hwnd: {})
+    assert screen_files.files_at(["Name", "Date modified"], 1234) == [str(docs / "Budget.xlsx")]
 
 
 def test_names_on_the_desktop_are_its_files(docs, monkeypatch):
@@ -126,27 +155,48 @@ class _Voice:
     def __init__(self, manager, readings=()):
         self._agents = manager
         self._trace_readings = list(readings)
+        self.converted = []
+
+    async def _convert_in_background(self, files, open_after):
+        self.converted.append((list(files), open_after))
 
 
-def test_the_traced_document_goes_to_the_agent_as_its_path(workforce, docs):
+def _converting(voice, goal):
+    async def go():
+        out = await voice._tool_delegate_task({"goal": goal, "kind": "file"})
+        await asyncio.sleep(0)                      # the background conversion is started
+        return out
+    return asyncio.run(go())
+
+
+def test_the_traced_document_is_converted_in_the_background(workforce, docs):
+    """'Make sure it converts it in the background' (11 Oct): no agent, no window."""
     path = str(docs / "10 Mei 2026.docx")
     reading = trace_read.Reading(tracing.Focus("sweep", (0, 0, 10, 10), 0, 1, []), files=[path])
+    voice = _Voice(workforce, [reading])
+    out = _converting(voice, "Convert the selected Word document to PDF format.")
+    assert out["ok"] and "background" in out["result"]
+    assert voice.converted == [([path], False)], "the file traced over, by its path"
+    assert workforce.list_tasks() == [], "no agent job for it"
+
+
+def test_the_selection_in_explorer_is_what_is_converted(workforce, docs, monkeypatch):
+    path = str(docs / "Budget.xlsx")
+    monkeypatch.setattr(screen_files, "in_view", lambda hwnd=None: [path])
+    voice = _Voice(workforce)
+    _converting(voice, "turn this spreadsheet into a PDF")
+    assert voice.converted == [([path], False)]
+
+
+def test_another_job_on_a_file_goes_to_the_agent_with_its_path(workforce, docs):
+    path = str(docs / "Report.docx")
+    reading = trace_read.Reading(tracing.Focus("sweep", (0, 0, 10, 10), 0, 1, []), files=[path])
     out = asyncio.run(_Voice(workforce, [reading])._tool_delegate_task(
-        {"goal": "Convert the selected Word document to PDF format.", "kind": "file"}))
+        {"goal": "Rename the selected document to Q3 Report", "kind": "file"}))
     assert out["ok"]
     task = workforce.get_task(out["task_id"])
     assert path in task.goal and task.metadata["files"] == [path]
     assert Path(task.workspace) == docs, "it works where the file is, not in Tora Projects"
-    assert task.worker_type == "terminal", "converting needs PowerShell: the file agent cannot run anything"
-    assert task.metadata.get("skill") == "convert-to-pdf"
-
-
-def test_the_selection_in_explorer_goes_with_the_job(workforce, docs, monkeypatch):
-    path = str(docs / "Budget.xlsx")
-    monkeypatch.setattr(screen_files, "in_view", lambda hwnd=None: [path])
-    out = asyncio.run(_Voice(workforce)._tool_delegate_task({"goal": "turn this spreadsheet into a PDF"}))
-    task = workforce.get_task(out["task_id"])
-    assert path in task.goal and Path(task.workspace) == docs
 
 
 def test_a_job_about_no_file_is_as_before(workforce, monkeypatch):

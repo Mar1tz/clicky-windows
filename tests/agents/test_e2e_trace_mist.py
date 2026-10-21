@@ -317,6 +317,8 @@ def _fake_uia(monkeypatch, at):
                            TextUnit=SimpleNamespace(Word=2, Line=3, Paragraph=4),
                            InitializeUIAutomationInCurrentThread=lambda: None)
     monkeypatch.setitem(sys.modules, "uiautomation", fake)
+    from ai import trace_read
+    monkeypatch.setattr(trace_read, "_window_at", lambda x, y: "Report.docx - Word")   # asked of Windows
 
 
 def test_an_underline_is_read_word_for_word(monkeypatch):
@@ -469,8 +471,11 @@ class _LiveConv:
     async def send_context(self, line):
         self.log.append(("context", line))
 
-    async def end_user_audio(self):
+    async def end_user_audio(self, stop=None):
         self.log.append(("end",))
+
+    def release_superseded(self):
+        pass
 
 
 def _streaming_manager(monkeypatch):
@@ -603,3 +608,57 @@ def test_a_traced_question_looks_at_the_traced_area(monkeypatch):
     assert seen["image"] == "CROP", "the traced area, not the whole window"
     assert grabbed and grabbed[-1][0] < 800 and grabbed[-1][0] + grabbed[-1][2] > 1100
     assert "traced over this area" in seen["context"]
+
+
+# -- WR-02: each stroke is read while the shortcut is still held ------------------------------------------------
+
+def test_a_stroke_is_read_while_held_and_not_again_at_the_release(monkeypatch):
+    import companion_manager as cm
+    from ai import trace_read
+    mgr, _sent = _manager(monkeypatch)
+    mgr._privacy_guard = False
+    monkeypatch.setattr(cm, "active_window_title", lambda: "Report.docx - Word")
+    read = []
+
+    def reader(focuses, budget_s=0.3):
+        read.append([f.kind for f in focuses])
+        return [trace_read.Reading(f, text="Total due within 30 days.") for f in focuses]
+    monkeypatch.setattr(cm.trace_read, "read", reader)
+    path = [(100.0 + 8 * i, 300.0) for i in range(30)]          # a line under some words, then a rest
+    started = cm.time.monotonic()
+
+    def cursor():
+        if path:
+            return path.pop(0)
+        if cm.time.monotonic() - started > 0.9:
+            mgr._trace_live = False                          # the shortcut comes up
+        return (332.0, 300.0)
+    monkeypatch.setattr(cm.look_region, "cursor_position", cursor)
+    monkeypatch.setattr(mgr, "TRACE_EVERY_S", 0.01)
+
+    async def go():
+        mgr._start_trace()                                   # its own sampler is not run: this one is
+        await mgr._record_trace(mgr._trace, started)
+        assert read == [["underline"]], "read once the mouse rested, before the release"
+        return await mgr._read_trace(mgr._trace)
+    line = asyncio.run(go())
+    assert read == [["underline"]], "nothing read twice"
+    assert 'underlined "Total due within 30 days."' in line
+
+
+def test_a_late_reading_keeps_what_was_read_while_held(monkeypatch):
+    mgr, cm = _bare(monkeypatch)
+    monkeypatch.setattr(mgr, "TRACE_WAIT_S", 0.05)
+    (focus,) = tracing.focuses(mgr._trace)
+    mgr._trace_ahead = {mgr._focus_key(focus): cm.trace_read.Reading(focus, text="Total due within 30 days.")}
+    conv = _Conv()
+
+    async def never(_trace):
+        await asyncio.sleep(10)
+    monkeypatch.setattr(mgr, "_read_trace", never)
+
+    async def go():
+        await mgr._start_trace_read(mgr._trace)
+        await mgr._send_trace_line(conv)
+    asyncio.run(go())
+    assert conv.sent and 'underlined "Total due within 30 days."' in conv.sent[0]

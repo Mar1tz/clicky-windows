@@ -27,6 +27,9 @@ tray item it replaces.
 
 from __future__ import annotations
 
+import logging
+import time
+
 from PyQt6.QtCore import QPoint, Qt, QTimer, pyqtSignal
 from PyQt6.QtWidgets import (
     QAbstractButton, QButtonGroup, QFrame, QHBoxLayout, QStackedWidget,
@@ -39,6 +42,18 @@ from ui.app_pages import PAGES
 from ui.app_shell import BrandRow, IconButton, NavItem, Sidebar, WindowButton
 from ui.app_widgets import Dot, label
 from ui.window_frame import NativeFrame
+
+_log = logging.getLogger("tora.app")
+
+# AP-01 (the speed review, 17 Oct 2026): a page that takes longer than this to
+# build or redraw is named in the log, so "the window feels slow" has a number.
+SLOW_PAGE_MS = 80
+
+
+def _timed(what: str, key: str, started: float) -> None:
+    ms = (time.perf_counter() - started) * 1000
+    if ms > SLOW_PAGE_MS:
+        _log.info("app window: %s the %s page in %.0f ms", what, key, ms)
 
 
 class ToraApp(QWidget):
@@ -315,6 +330,7 @@ class ToraApp(QWidget):
                 # from the page's right edge, measured once it is laid out.
                 QTimer.singleShot(0, lambda: page.open_job(task_id))
             return
+        started = time.perf_counter()
         if key not in self._pages:
             for k, _text, _place, cls in PAGES:
                 if k == key:
@@ -326,6 +342,7 @@ class ToraApp(QWidget):
                     # their size hints were measured at the default 13px.
                     # Re-applying the sheet re-polishes the new subtree.
                     self.setStyleSheet(T.qss())
+                    _timed("built", key, started)
                     break
             else:
                 return
@@ -333,6 +350,7 @@ class ToraApp(QWidget):
             # Shown again: a live page shows what is true now, not what was
             # true the last time someone looked.
             self._pages[key].refresh()
+            _timed("refreshed", key, started)
         self._stack.setCurrentWidget(self._pages[key])
         button = self._buttons.get(key)
         if button is not None and not button.isChecked():
@@ -398,10 +416,12 @@ class ToraApp(QWidget):
                 # A page that can redraw just what changed (the plan, an
                 # update) does; anything else is rebuilt.
                 partial = getattr(page, "refresh_topics", None)
+                started = time.perf_counter()
                 if partial is not None:
                     partial(topics)
                 else:
                     page.refresh()
+                _timed("redrew (" + ", ".join(sorted(topics)) + ")", type(page).__name__, started)
 
     def showEvent(self, event) -> None:
         """Back on screen after being closed: the page shows what is true now,

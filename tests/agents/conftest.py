@@ -58,6 +58,17 @@ def _own_key_by_default(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _no_ocr_model(monkeypatch):
+    """The OCR model is loaded in the background for an app with no tree
+    (SC-12): 1.8 s and 83 MB a time. Tests that want OCR fake it."""
+    try:
+        from ai import hybrid_pointer
+        monkeypatch.setattr(hybrid_pointer, "preload_ocr", lambda: None)
+    except Exception:  # noqa: BLE001
+        pass
+
+
+@pytest.fixture(autouse=True)
 def _no_real_monitors(monkeypatch):
     """screen.monitors reads the machine's real monitors - three of them, at
     100% and 125%, on the PC this was written on - so a test's pixels would

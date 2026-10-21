@@ -115,6 +115,68 @@ def test_live_session_puts_the_handle_in_its_setup():
     assert fresh.resume_handle is None
 
 
+# -- FX-03: a handle is used once, and never past its life -----------------------------
+#
+# 66 refused resumes on 1-17 Oct, each a second connect before a word: a
+# session resumed with a handle reported that same handle as its own until
+# the server gave it a new one, so a short session handed back a spent one.
+
+def test_a_resumed_session_does_not_hand_back_the_handle_it_was_opened_with():
+    session = LiveSession("m", {"tools": []}, resume_handle="spent")
+    assert session.resume_handle is None, "only a handle this session is given"
+
+
+def test_an_empty_update_keeps_the_last_handle():
+    import json
+
+    class Socket:
+        def __init__(self, msgs):
+            self.msgs = [json.dumps(m) for m in msgs]
+
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            if not self.msgs:
+                raise StopAsyncIteration
+            return self.msgs.pop(0)
+
+    session = LiveSession("m", {"tools": []})
+    session._ws = Socket([{"sessionResumptionUpdate": {"newHandle": "h2", "resumable": True}},
+                          {"sessionResumptionUpdate": {"resumable": False}}])     # a turn under way
+
+    async def drain():
+        async for _ev in session.events():
+            pass
+    asyncio.run(drain())
+    assert session.resume_handle == "h2"
+
+
+def test_a_spent_handle_is_not_tried_again(realtime):
+    async def scenario():
+        await realtime.connect("PROMPT")
+        realtime._resume_handle = "handle-from-server"
+        realtime._session = None
+        await realtime.connect("PROMPT")                     # resumed: the handle is spent
+        assert realtime._resume_handle is None
+        realtime._session = None
+        await realtime.connect("PROMPT")                     # its session was given none
+        assert FakeSession.opened[-1].resume_handle_in is None, "fresh, not a refused resume"
+    asyncio.run(scenario())
+
+
+def test_an_expired_handle_is_not_tried(realtime, monkeypatch):
+    async def scenario():
+        await realtime.connect("PROMPT")
+        realtime._resume_handle = "old"
+        realtime._handle_at = rt.time.monotonic() - rt.RESUME_FOR_S - 1
+        realtime._session = None
+        await realtime.connect("PROMPT")
+        latest = FakeSession.opened[-1]
+        assert latest.resume_handle_in is None and latest.sent, "fresh, with the recap"
+    asyncio.run(scenario())
+
+
 # -- the tool budget is per request, not per session ----------------------------------
 
 class ScriptedSession(FakeSession):
@@ -323,3 +385,29 @@ def test_the_brake_says_so_in_the_log(monkeypatch, caplog):
         _run_script(monkeypatch, script)
     assert any("did not settle" in r.getMessage() for r in caplog.records), \
         "a brake that fires in silence is how this went unnoticed for a day"
+
+
+def test_every_session_shares_one_tls_context_built_off_the_loop(monkeypatch):
+    """~22 ms of a blocked loop per connection, every wake check (19 Oct)."""
+    import ai.gemini_live as gl
+    made, seen = [], []
+    monkeypatch.setattr(gl, "_TLS", None)
+    monkeypatch.setattr(gl.ssl, "create_default_context", lambda: made.append(1) or object())
+
+    class WS:
+        async def send(self, _m): pass
+        async def recv(self): return '{"setupComplete": {}}'
+
+    async def connect(address, **kw):
+        seen.append(kw.get("ssl"))
+        return WS()
+
+    monkeypatch.setattr(gl.websockets, "connect", connect)
+
+    async def go():
+        for _ in range(2):
+            s = LiveSession("m", {"tools": []})
+            s._address = lambda: asyncio.sleep(0, "wss://example.test/ws")
+            await s.connect()
+    asyncio.run(go())
+    assert len(made) == 1 and len(seen) == 2 and seen[0] is seen[1] is not None

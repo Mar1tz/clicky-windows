@@ -5,6 +5,7 @@ Boots Qt, spawns overlay+panel+tray, starts ambient mic listener, binds hotkey.
 
 import os
 import sys
+import time
 from pathlib import Path
 
 
@@ -38,8 +39,10 @@ def _ensure_std_streams() -> None:
 
 _ensure_std_streams()
 
+from ai import speed  # noqa: E402 - first: it stamps when HeyTora started (ST-02)
+
 from PyQt6.QtWidgets import QApplication
-from PyQt6.QtCore import Qt, QTimer
+from PyQt6.QtCore import QAbstractNativeEventFilter, QObject, Qt, QTimer, pyqtSignal
 
 from config import cfg
 from ui.tray import TrayManager
@@ -48,7 +51,7 @@ from ui.overlay import (
     CursorOverlay, MODE_IDLE, MODE_LISTENING, MODE_THINKING, MODE_SPEAKING
 )
 from ui.flow_bar import FlowBar
-from hotkey import GlobalHotkeyMonitor, StopHotkey
+from hotkey import GlobalHotkeyMonitor, KeyShortcut, StopHotkey
 from companion_manager import CompanionManager
 from ui import sign_in_gate
 
@@ -59,6 +62,36 @@ STATE_TO_CURSOR_MODE = {
     AppState.THINKING:  MODE_THINKING,
     AppState.SPEAKING:  MODE_SPEAKING,
 }
+
+
+class _Shortcuts(QObject):
+    """Global shortcuts fire on the keyboard hook's thread; these signals
+    bring them to Qt's, where the screen may be changed."""
+    toggle_cursor = pyqtSignal()
+
+
+class _PowerEvents(QAbstractNativeEventFilter):
+    """ST-06: Windows' own word that the PC has woken from sleep, which every
+    top-level window is sent. The mic and the voice reopen then - not when a
+    heartbeat notices, up to 5 s and a second later."""
+    WM_POWERBROADCAST = 0x0218
+    RESUMED = (0x0007, 0x0012)                 # PBT_APMRESUMESUSPEND, PBT_APMRESUMEAUTOMATIC
+
+    def __init__(self, on_resume):
+        super().__init__()
+        self._on_resume = on_resume
+
+    def nativeEventFilter(self, event_type, message):
+        try:
+            if bytes(event_type) == b"windows_generic_MSG":
+                import ctypes
+                from ctypes import wintypes
+                msg = wintypes.MSG.from_address(int(message))
+                if msg.message == self.WM_POWERBROADCAST and msg.wParam in self.RESUMED:
+                    self._on_resume()
+        except Exception:  # noqa: BLE001 - a filter must never break Qt's events
+            pass
+        return False, 0
 
 
 def _setup_logging():
@@ -83,8 +116,10 @@ def _setup_logging():
     except Exception:
         pass
     try:
+        # ST-05: five files of 1 MB keep two weeks or more; one request line
+        # per HTTP call (httpx) filled a third of the log on its own.
         handler = RotatingFileHandler(
-            log_dir / "tora.log", maxBytes=1_000_000, backupCount=2,
+            log_dir / "tora.log", maxBytes=1_000_000, backupCount=5,
             encoding="utf-8",
         )
         handler.setFormatter(logging.Formatter(
@@ -93,6 +128,7 @@ def _setup_logging():
         root = logging.getLogger()
         root.setLevel(logging.INFO)
         root.addHandler(handler)
+        logging.getLogger("httpx").setLevel(logging.WARNING)
         logsafe.install(root)
         logging.getLogger("tora").info(
             "=== HeyTora starting (python %s) ===", sys.version.split()[0]
@@ -323,8 +359,9 @@ def main():
     from ui import app_theme, tokens
     app.setFont(tokens.app_font())
     app_theme.apply(tokens.resolve(cfg.theme()))
-    from ui.overlay import set_cursor_colour
+    from ui.overlay import set_cursor_colour, set_cursor_shown
     set_cursor_colour(tokens.cursor_hex(cfg.cursor_colour()))   # Make Tora yours
+    set_cursor_shown(cfg.cursor_shown())                        # or only her bar
     from ui import app_icon
     try:
         app.setWindowIcon(app_icon.qicon())    # every window's title bar and taskbar button
@@ -370,6 +407,9 @@ def main():
 
     # ── Core components ───────────────────────────────────────────────────────
     manager = CompanionManager()
+    # The voice opens now, while the windows below are built (ST-01): the
+    # voice pass and Google's handshake are network waits, seconds of them.
+    manager.open_voice_early()
     panel   = CompanionPanel()
     overlay = CursorOverlay()
     tray    = TrayManager()
@@ -847,6 +887,14 @@ def main():
     def _show_panel(on: bool):
         (panel.show if on else panel.hide)()
 
+    def _show_cursor(on: bool):
+        """Her cursor beside the mouse, or only her bar - saved, shown on
+        the next frame, and the app window's switch follows."""
+        cfg.set_cursor_shown(on)
+        set_cursor_shown(on)
+        if "w" in app_window:
+            app_window["w"].bridge.changed.emit("cursor")
+
     from types import SimpleNamespace
     live = SimpleNamespace(
         claim_hotkey=_claim_hotkey,
@@ -869,14 +917,32 @@ def main():
     stop_key = StopHotkey(on_stop=_esc, key="esc")
     stop_key.start()
 
+    # Win + Alt + H: show or hide her cursor, leaving only her bar. The hook
+    # fires on the keyboard thread; the signal does the switch on Qt's.
+    shortcuts = _Shortcuts(app)
+    shortcuts.toggle_cursor.connect(lambda: _show_cursor(not cfg.cursor_shown()))
+    cursor_key = KeyShortcut(cfg.cursor_hotkey(), shortcuts.toggle_cursor.emit)
+    try:
+        cursor_key.start()
+    except Exception:  # noqa: BLE001 - a bad saved shortcut must not stop HeyTora
+        import logging as _lg
+        _lg.getLogger("tora").warning("could not set the cursor shortcut %r", cfg.cursor_hotkey(),
+                                      exc_info=True)
+
     # ── Show UI + start listener ──────────────────────────────────────────────
     overlay.show()        # persistent overlay (cursor follow)
     flow.show()           # Tora at the edge of the screen
+    import logging as _lg
+    _lg.getLogger("tora").info("on screen %.1fs after HeyTora started - the voice follows",
+                               time.monotonic() - speed.STARTED)
     # Panel is hidden by default — user can open it from the tray menu if needed
     # The workforce builds on a worker thread (~650 ms) so the tray icon
     # is not held up; wire its UI when it says it is ready.
     manager.sig_agents_ready.connect(lambda: _wire_agents(manager, tray))
     manager.start()        # begin ambient mic + wake-word scanning; brings up agents
+    power = _PowerEvents(manager.on_power_resume)
+    app.installNativeEventFilter(power)
+    app._power_events = power                   # kept alive with the app
     if door == "ok":
         sign_in_gate.check_in_background()   # still an account the server accepts?
 

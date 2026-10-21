@@ -45,6 +45,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Awaitable, Callable, Optional
 
+from ai import net_quality, speed
 from ai.gemini import Models
 from ai.gemini_live import CHUNK_BYTES, LiveSession, ToolCall, add_usage
 from audio.playback import PcmStreamPlayer
@@ -55,6 +56,9 @@ _log = logging.getLogger("tora.realtime")
 # one. This is a belt-and-braces age limit so a long-idle session is replaced
 # in the background rather than discovered to be dead mid-question.
 MAX_SESSION_AGE_S = 8 * 60
+# A resumption handle lasts two hours after its session ends; one older is
+# not tried (a refused resume is a second connect, ~1-3 s, before a word).
+RESUME_FOR_S = 2 * 3600 - 300
 
 # A tool chain that never settles must not hang the conversation.
 MAX_TOOL_ROUNDS = 6
@@ -71,11 +75,13 @@ HARD_TOOL_ROUNDS = 10
 # Not a lone "#" or "*": "C#" and "item #3" are speech.
 _PLANNING_RE = re.compile(r"\*\*|(^|\s)\*\s|(^|\n)\s*#{1,6}\s|```")
 
-# Context compression. 16k is roughly forty spoken turns of history, far more
-# than any conversation refers back to, and it caps what every later turn
-# costs. Keeping 8k after a trim leaves several turns of real context.
-COMPRESSION_TRIGGER_TOKENS = 16_000
-COMPRESSION_TARGET_TOKENS = 8_000
+# Context compression: it caps what every later turn costs, and how long the
+# model takes to its first word. 16k was the cap until 18 Oct (CO-01): on
+# 11 Oct four turns ran 13,770 -> 17,464 tokens in, every turn near it, the
+# system prompt and tools ~3,800 of them. 12k, trimmed to 7k, still keeps
+# several turns of real context for "open that one".
+COMPRESSION_TRIGGER_TOKENS = 12_000
+COMPRESSION_TARGET_TOKENS = 7_000
 
 # How much trailing silence to stream so the server's VAD hears the question
 # end. Eight frames is 800 ms, which measured reliable; the loop exits early
@@ -85,6 +91,9 @@ TAIL_SILENCE_FRAMES = 8
 
 
 ToolHandler = Callable[[dict], Awaitable[dict]]
+
+# A tool's answer when the user started a new question before it finished.
+_STOPPED = {"error": "Stopped: the user started a new question. Answer that one instead."}
 
 
 def _outcome_of(result: dict) -> str:
@@ -502,6 +511,7 @@ class RealtimeConversation:
         self._player = PcmStreamPlayer()
         self._connecting: Optional[asyncio.Task] = None
         self._resume_handle: Optional[str] = None
+        self._handle_at: Optional[float] = None     # when its session ended (None: not known)
         # FS-02: the conversation is over (forget): the next connect starts
         # blank, and an open session is replaced rather than continued.
         self._forget = False
@@ -534,11 +544,22 @@ class RealtimeConversation:
         # papered over by resetting on every turn_complete, disabling the
         # runaway brake entirely.
         self._awaiting_user = True
+        # The tool handlers running now, by call id - so a new question
+        # (interrupt) or the server (tool_cancel) can stop them.
+        self._tool_tasks: dict[str, asyncio.Task] = {}
+        # The user cut the answer off with a new question. Whatever is still
+        # on its way for the old one - audio already sent, a tool's answer -
+        # is neither played, shown nor acted on until the new question is
+        # heard (release_superseded).
+        self._superseded = False
+        self._loop: Optional[asyncio.AbstractEventLoop] = None
 
     # ── Session ──────────────────────────────────────────────────────────────
 
     _forget = False
     _retiring = False
+    _superseded = False
+    _loop: Optional[asyncio.AbstractEventLoop] = None
 
     @property
     def ready(self) -> bool:
@@ -566,6 +587,7 @@ class RealtimeConversation:
         forget, which ends it)."""
         if self._session is not None and self._session.resume_handle:
             self._resume_handle = self._session.resume_handle
+            self._handle_at = time.monotonic()
         self._retiring = True
 
     def forget(self) -> None:
@@ -712,23 +734,32 @@ class RealtimeConversation:
         it had lost the ability to do things. The resumption handle is the
         server's own way of saying "carry on where you were".
         """
-        await self.close()
+        # The speaker stays open across a reconnect (HP-04): a new output
+        # stream waits ~0.24 s before it plays anything, and sessions are
+        # replaced every few minutes (362 times on 1-17 Oct).
+        await self.close(keep_speaker=True)
         resume = self._resume_handle if system_prompt == self._system and not self._forget else None
+        if resume and self._handle_at is not None and time.monotonic() - self._handle_at > RESUME_FOR_S:
+            resume = None                       # expired: a fresh session and the recap
         self._forget = False
         self._retiring = False
+        self._loop = asyncio.get_running_loop()
         session = LiveSession(Models.REALTIME, self._setup(system_prompt), resume_handle=resume)
         try:
             await session.connect()
-        except Exception:
+        except Exception as e:
             if not resume:
                 raise
             # A handle can expire or be refused; a fresh session is better
             # than no session, and the recap below carries the thread.
-            _log.info("could not resume the conversation; starting a new session")
-            self._resume_handle = None
+            _log.info("could not resume the conversation (%s); starting a new session",
+                      str(e)[:160] or type(e).__name__)
             session = LiveSession(Models.REALTIME, self._setup(system_prompt))
             await session.connect()
             resume = None
+        # Spent either way: the next connect resumes with the handle this
+        # session is given, or - given none - starts fresh with the recap.
+        self._resume_handle, self._handle_at = None, None
         self._session = session
         self._system = system_prompt
         self._opened_at = time.monotonic()
@@ -737,6 +768,7 @@ class RealtimeConversation:
         self._pump = asyncio.ensure_future(self._run_pump(session))
         _log.info("realtime session open (%s)%s", Models.REALTIME,
                   " - resumed" if resume else "")
+        speed.note_session()
         from ai import gemini
         gemini.report_ok()           # an account problem, if any, is over
         if not resume:
@@ -761,7 +793,10 @@ class RealtimeConversation:
         except Exception:  # noqa: BLE001 - a recap is a nicety, never a blocker
             _log.debug("could not re-seed the session", exc_info=True)
 
-    async def close(self) -> None:
+    async def close(self, keep_speaker: bool = False) -> None:
+        """Close the session. `keep_speaker`: a new one is about to open -
+        what the old one queued is dropped, but the output device stays
+        open, ready for the next answer."""
         pump, self._pump = self._pump, None
         if pump is not None:
             pump.cancel()
@@ -771,7 +806,10 @@ class RealtimeConversation:
                 await session.close()
             except Exception:
                 pass
-        self._player.stop()
+        if not keep_speaker:
+            self._player.stop()
+        elif session is not None:
+            self._player.clear()                # what the old session had queued
         self._speaking = False
 
     # ── Talking to it ────────────────────────────────────────────────────────
@@ -809,6 +847,7 @@ class RealtimeConversation:
             return False
         # A volunteered turn is a request of its own; whatever it does with
         # tools must not be charged to whatever came before it.
+        self.release_superseded()
         self._tool_rounds = 0
         self._awaiting_user = False
         try:
@@ -829,11 +868,19 @@ class RealtimeConversation:
         if self.ready:
             try:
                 await self._session.send_audio(pcm16)
+                # A live piece of the question, not a question held back while
+                # the session opened (that one arrives whole, all at once).
+                if len(pcm16) <= 3 * CHUNK_BYTES:
+                    backlog = self._session.backlog_bytes()
+                    if backlog > net_quality.SLOW_BACKLOG_BYTES:
+                        net_quality.note_slow(f"the voice upload is {backlog // 1000} KB behind")
             except Exception:
                 _log.debug("push_audio failed", exc_info=True)
 
-    async def end_user_audio(self) -> None:
+    async def end_user_audio(self, stop: Optional[Callable[[], bool]] = None) -> None:
         """Close the question by letting the server HEAR the silence after it.
+        `stop`: true once a newer question has begun - its audio must not
+        have this one's silence threaded through it.
 
         This is the single most important detail in the whole realtime path,
         and it is entirely counter-intuitive: the trailing silence is not
@@ -866,8 +913,8 @@ class RealtimeConversation:
             for _ in range(TAIL_SILENCE_FRAMES):
                 await self._session.send_audio(frame)
                 await asyncio.sleep(0.1)    # real-time pace, deliberately
-                if self._speaking:
-                    break                   # already answering — stop early
+                if self._speaking or (stop is not None and stop()):
+                    break                   # already answering, or a new question has begun
         except Exception:
             _log.debug("end_user_audio failed", exc_info=True)
 
@@ -887,6 +934,46 @@ class RealtimeConversation:
         self._player.clear()
         self._speaking = False
 
+    def open_speaker(self) -> None:
+        """Open the output device ahead of the first answer - the app calls
+        this at start-up, on a worker: the first output stream after launch
+        took 0.97 s to start playing (GW-08), and that wait used to fall on
+        the first word. Blocking."""
+        self._player.open()
+
+    def interrupt(self) -> None:
+        """The shortcut was pressed while she was still answering (the
+        owner's choice, 18 Oct 2026: she stops and listens at once).
+
+        Her voice stops now, the tools running for the old question are
+        cancelled, and what the server still sends for it is dropped until
+        the new question is heard (release_superseded). Safe from any
+        thread: the keyboard hook calls it."""
+        self._superseded = True
+        self._player.clear()
+        self._speaking = False
+        self._turn.interrupted = True
+        loop = self._loop
+        if loop is not None and not loop.is_closed():
+            loop.call_soon_threadsafe(self._cancel_tools)
+
+    def release_superseded(self) -> None:
+        """The new question is under way: what the server sends now is its
+        answer. Called on the user's first words (input transcript), on the
+        server's own "interrupted", and when the new question has been sent
+        - so an answer can never be held back for good."""
+        if self._superseded:
+            self._superseded = False
+            self._turn = Turn(usage=self._turn.usage)
+            self._planning_cut = False
+            self._tool_rounds = 0
+
+    def _cancel_tools(self, ids: Optional[list] = None) -> None:
+        """Stop the tool handlers still running - these ids, or all."""
+        for call_id, task in list(self._tool_tasks.items()):
+            if ids is None or call_id in ids:
+                task.cancel()
+
     # ── The pump ─────────────────────────────────────────────────────────────
 
     async def _run_pump(self, session: LiveSession) -> None:
@@ -898,6 +985,7 @@ class RealtimeConversation:
                     return                      # superseded by a reconnect
 
                 if ev.kind == "input_transcript":
+                    self.release_superseded()           # the new question is heard
                     if self._awaiting_user:
                         # The user speaking after a turn boundary is a new
                         # request, and only a new request refills the tool
@@ -908,8 +996,8 @@ class RealtimeConversation:
                     self._on_heard(ev.text)
 
                 elif ev.kind == "output_transcript":
-                    if self._planning_cut:
-                        continue                    # the rest of a generation that was cut
+                    if self._planning_cut or self._superseded:
+                        continue                    # a generation that was cut, or one the user talked over
                     if _PLANNING_RE.search(ev.text):
                         # SP-18: its own planning, about to be spoken. The
                         # words come with the audio, a little ahead of it,
@@ -925,7 +1013,7 @@ class RealtimeConversation:
                     self._on_said(ev.text)
 
                 elif ev.kind == "audio":
-                    if self._planning_cut:
+                    if self._planning_cut or self._superseded:
                         continue
                     if not self._speaking:
                         if self._player.queued_seconds <= 0.05:
@@ -938,6 +1026,17 @@ class RealtimeConversation:
                 elif ev.kind == "interrupted":
                     self._player.clear()
                     self._turn.interrupted = True
+                    self.release_superseded()           # the server heard the new question
+
+                elif ev.kind == "tool_cancel":
+                    ids = (ev.raw.get("toolCallCancellation") or {}).get("ids") or []
+                    self._cancel_tools(list(ids))
+
+                elif ev.kind == "tool_call" and self._superseded:
+                    # Asked for by the answer the user cut off: not run.
+                    _log.info("tool call for an interrupted answer, not run: %s",
+                              ", ".join(c.name for c in ev.calls))
+                    await session.send_tool_response([(c, dict(_STOPPED)) for c in ev.calls])
 
                 elif ev.kind == "tool_call":
                     _log.info("tool call: %s", ", ".join(c.name for c in ev.calls))
@@ -969,6 +1068,15 @@ class RealtimeConversation:
                 elif ev.kind == "usage":
                     self._gen_usage = ev.raw
 
+                elif ev.kind == "turn_complete" and self._superseded:
+                    # The end of the answer the user cut off: nothing to report,
+                    # but what it was billed stays in the next turn's cost line.
+                    self._planning_cut = False
+                    self._awaiting_user = True
+                    if self._gen_usage:
+                        self._turn.usage = add_usage(self._turn.usage, self._gen_usage)
+                        self._gen_usage = {}
+
                 elif ev.kind == "turn_complete":
                     self._planning_cut = False
                     # A turn that produced only tool calls is not the answer;
@@ -989,6 +1097,12 @@ class RealtimeConversation:
                         self._gen_usage = {}
                     if not ev.produced_output:
                         continue
+                    # All of this answer's audio is here: the player plays out
+                    # the rest without gathering (bad reception, playback.py).
+                    # The benches' silent player has no such method.
+                    arrived = getattr(self._player, "end_of_answer", None)
+                    if arrived is not None:
+                        arrived()
                     self._finish_turn()
 
                 elif ev.kind == "go_away":
@@ -1006,7 +1120,8 @@ class RealtimeConversation:
 
         if session is self._session:
             # Keep the handle: the next connect resumes this conversation.
-            self._resume_handle = session.resume_handle or self._resume_handle
+            if session.resume_handle:
+                self._resume_handle, self._handle_at = session.resume_handle, time.monotonic()
             self._session = None
             self._speaking = False
             self._on_lost(reason)
@@ -1024,12 +1139,26 @@ class RealtimeConversation:
         if handler is None:
             _log.warning("tool %s is not registered in this session", call.name)
             return {"error": f"unknown tool {call.name}"}
+        # Its own task, so a new question (interrupt) or the server
+        # (tool_cancel) can stop it without stopping the pump.
+        task = asyncio.ensure_future(handler(call.args or {}))
+        key = call.id or f"{call.name}-{id(task)}"
+        self._tool_tasks[key] = task
         try:
-            out = await handler(call.args or {})
-            result = out if isinstance(out, dict) else {"result": out}
-        except Exception as e:
-            _log.exception("tool %s failed", call.name)
-            return {"error": str(e)}
+            await asyncio.wait({task})
+        except asyncio.CancelledError:
+            task.cancel()                       # the pump itself is going
+            raise
+        finally:
+            self._tool_tasks.pop(key, None)
+        if task.cancelled():
+            _log.info("tool %s stopped: the user started a new question", call.name)
+            return dict(_STOPPED)
+        if task.exception() is not None:
+            _log.error("tool %s failed", call.name, exc_info=task.exception())
+            return {"error": str(task.exception())}
+        out = task.result()
+        result = out if isinstance(out, dict) else {"result": out}
         # Logged at INFO on purpose: "it stopped doing things" is otherwise
         # invisible in tora.log, which is the first place anyone looks.
         _log.info("tool %s -> %s", call.name, _outcome_of(result))

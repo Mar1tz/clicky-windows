@@ -21,6 +21,7 @@ lesson steps, collab, recording — is shared by both.
 """
 
 import asyncio
+import contextvars
 import logging
 import math
 import os
@@ -41,7 +42,7 @@ from ai.gemini import Models
 from audio.ambient_listener import AmbientListener
 from screen import monitors
 from screen.capture import capture_all_screens, capture_region, grab_frame, monitor_frames
-from ai import convert_pdf, email_reply, look_board, look_chess, look_region, screen_files, trace as tracing, trace_read, write_for_me
+from ai import convert_pdf, email_reply, look_board, look_chess, look_region, net_quality, screen_files, speed, trace as tracing, trace_read, write_for_me
 from ui.panel import AppState
 from tutor import (
     active_window_title, app_key,
@@ -56,6 +57,11 @@ from tutor_features import (
 import skills as skills_pkg
 
 _log = logging.getLogger("tora.manager")
+
+# Which question the code running now is answering (0: none in particular).
+# Set by the slow route for its own task, so a state change it makes after
+# the user has asked something new is ignored (CompanionManager._emit_state).
+_ANSWERING: contextvars.ContextVar[int] = contextvars.ContextVar("tora_answering", default=0)
 
 # How many turns the screen context may say "same screen" before it is
 # spelled out again. Context compression can drop the turn that carried
@@ -290,6 +296,15 @@ _FILES_RE = re.compile(r"\b(this|these|that|those|the|it|them|selected|open)\b.{
                        r"image|images|picture|pictures|folder)\b|\b(this|these|it|them)\b", re.IGNORECASE)
 
 
+def _sound_devices() -> tuple[str, str]:
+    """(speaker, microphone) as PortAudio sees the defaults now - for the log."""
+    try:
+        import sounddevice as sd
+        return (sd.query_devices(kind="output")["name"], sd.query_devices(kind="input")["name"])
+    except Exception:  # noqa: BLE001
+        return ("?", "?")
+
+
 def _files_meant(trace_readings, goal: str) -> list[str]:
     """The files a job is about, as paths: what they traced over this
     question, else - when the words point ("this document", "these files") -
@@ -422,6 +437,11 @@ class CompanionManager(QObject):
 
     def __init__(self):
         super().__init__()
+        # SC-05: whenever she puts something on screen, so a look knows
+        # whether there is anything to rub out before its picture.
+        for drew in (self.sig_draw, self.sig_point_at, self.sig_guide_point, self.sig_arrow,
+                     self.sig_circle, self.sig_underline, self.sig_label):
+            drew.connect(self._note_drawn)
         self._state: AppState = AppState.IDLE
         self._history: List[Message] = []
         self._current_model: Optional[str] = None
@@ -573,6 +593,8 @@ class CompanionManager(QObject):
             device=cfg.mic_device(),         # by name: device numbers move (config.py)
             ambient=cfg.ambient_mic(),
             wake_transcriber=self._transcribe_blocking,
+            wake_local=self._local_wake(),
+            wake_mode=cfg.wake_engine(),
         )
 
         # Autonomous agent workforce (agents/). Built in start(), never here:
@@ -586,24 +608,49 @@ class CompanionManager(QObject):
 
     # ── Lifecycle ─────────────────────────────────────────────────────────────
 
+    _voice_opening = False
+
+    def open_voice_early(self) -> None:
+        """ST-01: open the voice while the rest of the app is still being
+        built. On 19 Oct it was ready 12.9 s after launch: 7.9 s to get on
+        screen, and only then the voice pass (1.3 s) and Google's session
+        (2.1 s) - network waits that need nothing on the screen. main.py
+        calls this the moment the hub exists; start() does it otherwise."""
+        if self._voice_opening:
+            return
+        self._voice_opening = True
+        # Out of credit, or a refused key, from any request anywhere: shown,
+        # because it cannot be spoken - the voice uses the same account.
+        gemini.on_problem(self._account_problem)
+        # The HTTP pool, and the live conversation itself: the first question
+        # then costs exactly what the tenth does.
+        self._submit(self._warm_up())
+        self._submit(self._account_warm_up())
+        self._submit(self._realtime_connect())
+        self._submit(self._open_speaker())
+
     def start(self):
         try:
             self._listener.start()
         except Exception as e:
             self.sig_error.emit(f"Mic error: {e}")
         self._start_agents()
-        # Out of credit, or a refused key, from any request anywhere: shown,
-        # because it cannot be spoken - the voice uses the same account.
-        gemini.on_problem(self._account_problem)
+        if self._voice_opening and self._problem_kind:
+            # Found while the screen was still being built, with nothing
+            # listening for it: said again now.
+            kind = self._problem_kind
+            self.sig_account_problem.emit(
+                kind, self._problem_detail if kind == "plan" else self._PROBLEM_WORDS.get(kind, ""))
+        self.open_voice_early()
         # Sleep/wake watchdog — restarts mic + loop after system resume
         self._start_sleep_watchdog()
-        # Open everything now, while the user is still reading the startup
-        # toast: the HTTP pool, and the live conversation itself. The first
-        # question then costs exactly what the tenth does.
-        self._submit(self._warm_up())
-        self._submit(self._account_warm_up())
-        self._submit(self._realtime_connect())
+        self._watch_audio_devices()
         self._submit(self._keep_session_fresh())
+        self._submit(self._keep_signed_in())
+        # Speed, measured (ai/speed.py): how late the loop wakes, and what
+        # Tora costs the CPU while nobody talks to her.
+        self._submit(speed.watch_loop(asyncio.sleep))
+        self._submit(speed.watch_cpu(asyncio.sleep, lambda: self._state == AppState.IDLE))
         # Refresh a stale model cache in the background (weekly at most).
         self._submit(self._refresh_stale_models())
 
@@ -647,6 +694,30 @@ class CompanionManager(QObject):
         except Exception as e:  # noqa: BLE001
             gemini.report_problem(e)
 
+    SIGN_IN_CHECK_S = 120.0
+
+    async def _keep_signed_in(self) -> None:
+        """HeyTora account: the sign-in refreshed before it runs out, off any
+        question's path (AC-06). A lapsed one is said by the question that
+        needs it, as before."""
+        while True:
+            await asyncio.sleep(self.SIGN_IN_CHECK_S)
+            if gemini.own_key():
+                continue
+            try:
+                from account.service import account
+                await asyncio.to_thread(account().refresh_ahead)
+            except Exception:  # noqa: BLE001 - offline, or signed out: the next question says so
+                _log.debug("background sign-in refresh failed", exc_info=True)
+
+    async def _open_speaker(self) -> None:
+        """Her speaker, opened at start-up rather than on her first word
+        (HP-04). On the loop, where the conversation is made - never two of
+        them - and the opening itself on a worker."""
+        if cfg.realtime() and cfg.has_key():
+            await asyncio.to_thread(self._get_realtime().open_speaker)
+            _log.info("speaker: %s", _sound_devices()[0])
+
     async def _warm_up(self):
         try:
             await gemini.warm_up()
@@ -667,6 +738,17 @@ class CompanionManager(QObject):
     # asked again for this long - not every few seconds for the rest of the day.
     WAKE_REFUSED_PAUSE_S = 15 * 60
     _wake_refused_until = 0.0
+
+    @staticmethod
+    def _local_wake():
+        """The on-PC wake word (HP-08), unless the cloud is chosen."""
+        if cfg.wake_engine() == "cloud":
+            return None
+        try:
+            from audio.wake_local import LocalWake
+            return LocalWake()
+        except Exception:  # noqa: BLE001 - numpy missing or the like: the cloud check
+            return None
 
     def _transcribe_blocking(self, pcm: bytes) -> str:
         """Wake-word transcription, called from the listener's worker thread.
@@ -777,6 +859,33 @@ class CompanionManager(QObject):
             self._say_when_idle(spoken)
         except Exception:
             _log.debug("agent event announcement failed", exc_info=True)
+            return
+        if ev.kind is EventKind.APPROVAL_REQUIRED:
+            try:
+                self._submit(self._remind_approval(task.id, f"{who} still needs your approval to {what}."))
+            except Exception:  # noqa: BLE001 - the first notice went out; a reminder is extra
+                _log.debug("approval reminder not set", exc_info=True)
+
+    # AG-10: 8 of 21 jobs were cancelled, some after sitting on an approval
+    # nobody heard about - Tora was busy when it came, so it was a toast only.
+    # Once more after APPROVAL_REMIND_S, said at the next quiet moment.
+    APPROVAL_REMIND_S = 120.0
+    REMIND_QUIET_WAIT_S = 180.0
+
+    async def _remind_approval(self, task_id: str, words: str) -> None:
+        from agents.core import TaskStatus
+        await asyncio.sleep(self.APPROVAL_REMIND_S)
+        deadline = time.monotonic() + self.REMIND_QUIET_WAIT_S
+        while True:
+            mgr = self._agents
+            task = mgr.get_task(task_id) if mgr is not None else None
+            if task is None or task.status is not TaskStatus.WAITING_APPROVAL:
+                return                           # answered, or gone
+            if self._state is AppState.IDLE or time.monotonic() > deadline:
+                break
+            await asyncio.sleep(5.0)
+        self.sig_agent_notice.emit("Still waiting", f"{task.title} is waiting for your approval.")
+        self._say_when_idle(words)
 
     def _say_when_idle(self, text: str) -> None:
         """Speak only if Tora is not mid-conversation; the toast covers the
@@ -846,6 +955,7 @@ class CompanionManager(QObject):
         return self._agents
 
     def shutdown(self):
+        speed.log_scorecard()
         # Kill any audio that was playing when the user clicked Quit
         try:
             from audio.playback import stop_audio
@@ -906,11 +1016,26 @@ class CompanionManager(QObject):
                 drift = now - last_tick - HEARTBEAT
                 last_tick = now
                 if drift > DRIFT_THRESHOLD:
-                    # System was sleeping — restart subsystems
-                    self._on_system_resume()
+                    # System was sleeping — restart subsystems (if Windows'
+                    # own resume message has not already, ST-06)
+                    self.on_power_resume()
 
         t = threading.Thread(target=_watch, daemon=True)
         t.start()
+
+    # ST-06: Windows says when it resumes (WM_POWERBROADCAST, main.py's
+    # _PowerEvents) - the mic and voice come back then, not when the 5 s
+    # heartbeat above notices the gap and a second more. Either way, once.
+    RESUME_ONCE_S = 30.0
+    _resumed_at = 0.0
+
+    def on_power_resume(self) -> None:
+        now = time.monotonic()
+        if now - self._resumed_at < self.RESUME_ONCE_S:
+            return
+        self._resumed_at = now
+        _log.info("the PC woke from sleep - the microphone and voice are reopened")
+        threading.Thread(target=self._on_system_resume, name="resume", daemon=True).start()
 
     def _on_system_resume(self):
         """Called automatically after the laptop wakes from sleep."""
@@ -948,6 +1073,8 @@ class CompanionManager(QObject):
         fut = asyncio.run_coroutine_threadsafe(coro, self._loop)
 
         def _observe(f):
+            if f.cancelled():
+                return                  # stopped on purpose (a new question): not a failure
             try:
                 f.result()
             except Exception as e:
@@ -1181,7 +1308,7 @@ class CompanionManager(QObject):
                 or self._state != AppState.IDLE or not self._metered_talk()):
             return
         _log.info("metered plan: closing the idle voice session")
-        await conv.close()
+        await conv.close(keep_speaker=True)       # the speaker stays ready for the next answer
 
     async def _realtime_connect(self, on_demand: bool = False) -> bool:
         """Open the conversation before anyone asks anything.
@@ -1376,6 +1503,7 @@ class CompanionManager(QObject):
             return None
 
     def _on_realtime_speaking(self) -> None:
+        speed.mark("audio")
         self._mark_answer("audio")
         if self._ans is not None and "tool" in self._ans:
             self._mark_answer("answer")          # the first word after the look
@@ -1417,6 +1545,7 @@ class CompanionManager(QObject):
         except Exception:  # noqa: BLE001 - measuring must never break an answer
             _log.debug("answer timeline failed", exc_info=True)
         self._heard_buf = []
+        speed.finish("answered")
         self._emit_state(AppState.IDLE)
         if self._metered_talk():
             # Metered plan: the next question takes a new voice pass.
@@ -1445,7 +1574,11 @@ class CompanionManager(QObject):
         """The session dropped. Reconnect quietly, in the background - while
         they are talking to her, or a walkthrough needs her voice."""
         _log.info("realtime session lost: %s", reason)
-        if self._state != AppState.IDLE:
+        if self._state in (AppState.THINKING, AppState.SPEAKING):
+            # Its answer is gone with it. Not while they are still talking:
+            # the end of the question finds no session and takes the slow
+            # route with the whole recording - a weak signal dropping the
+            # socket mid-sentence used to throw the question away.
             self._emit_state(AppState.IDLE)
         guide = getattr(self, "_guide_runner", None)
         if self._idle_s() > self.IDLE_FRESH_S and not (guide is not None and guide.running):
@@ -1559,6 +1692,12 @@ class CompanionManager(QObject):
         self.sig_response_done.emit(words)
         return True
 
+    # HP-07: the audio thread wakes the pump as each block lands, rather than
+    # the pump looking every 20 ms - up to 20 ms on every block on its way
+    # to Google, and fifty wake-ups a second while listening.
+    _rt_wake: Optional[asyncio.Event] = None
+    RT_WAKE_MAX_S = 0.05            # still looks this often: the release, the screen line
+
     def _feed_realtime(self, block: bytes) -> None:
         """Audio-thread callback. Must be cheap and must never raise.
 
@@ -1568,6 +1707,12 @@ class CompanionManager(QObject):
         buffer clear, not a network call.
         """
         self._rt_audio.append(block)
+        wake, loop = self._rt_wake, getattr(self, "_loop", None)
+        if wake is not None and loop is not None:
+            try:
+                loop.call_soon_threadsafe(wake.set)      # HP-07: the pump sends it now
+            except RuntimeError:                         # the loop is closing
+                pass
         if self._last_rms > self._SPEECH_RMS:
             conv = self._realtime
             if conv is not None and conv.speaking:
@@ -1583,17 +1728,9 @@ class CompanionManager(QObject):
         conv = self._realtime
         if conv is None:
             return
-        if not conv.ready:
-            # Opened on the question (a metered plan) also asks HeyTora's
-            # server for the voice pass first, so it is given longer.
-            deadline = time.monotonic() + (8.0 if getattr(self, "_rt_on_demand", False) else 3.0)
-            while (not conv.ready and self._rt_streaming
-                   and time.monotonic() < deadline):
-                await asyncio.sleep(0.05)
-            if not conv.ready:
-                _log.info("live session not ready in time — cascade takes this one")
-                self._rt_streaming = False
-                return
+        question = self._question_no
+        if not conv.ready and not await self._await_session(conv):
+            return
         # FS-04: the question goes out at once. The screen line is an
         # accessibility walk - 0.2-0.5 s on the owner's PC (9 Oct), seconds
         # on a slow one with a busy browser - and the audio used to wait for
@@ -1618,6 +1755,7 @@ class CompanionManager(QObject):
 
         held: list[bytes] = []
         quiet_since: Optional[float] = None
+        wake = self._rt_wake = asyncio.Event()
         while self._rt_streaming:
             if not sent and context.done():
                 await send_context()
@@ -1642,7 +1780,14 @@ class CompanionManager(QObject):
                             continue
                 await conv.push_audio(chunk)
             else:
-                await asyncio.sleep(0.02)
+                wake.clear()
+                if not self._rt_audio:                   # nothing landed since the look
+                    try:
+                        await asyncio.wait_for(wake.wait(), self.RT_WAKE_MAX_S)
+                    except asyncio.TimeoutError:
+                        pass
+        if self._rt_wake is wake:
+            self._rt_wake = None
         if self._rt_audio:
             chunk = b"".join(self._rt_audio)
             self._rt_audio.clear()
@@ -1661,15 +1806,76 @@ class CompanionManager(QObject):
                 _log.info("screen line not ready %.1fs after the question - answered without it",
                           time.monotonic() - started)
 
+        if question != self._question_no:
+            # A new question began while this one was being finished off: its
+            # trace and its trailing silence would land in the middle of it.
+            return
+
         # What they traced while asking (TF-05): the trace is only whole now.
         await self._send_trace_line(conv)
 
         # Let the server hear the question end. See end_user_audio — this is
         # what makes the first word arrive immediately rather than a second
         # and a half later.
-        await conv.end_user_audio()
+        speed.mark("sent")
+        await conv.end_user_audio(stop=lambda: question != self._question_no)
+        if question == self._question_no and self._rt_said_nothing != question:
+            # The new question has been sent whole: whatever comes now is its
+            # answer, even if the server sent no transcript of it. (A press
+            # that said nothing leaves the answer it cut off silenced.)
+            conv.release_superseded()
 
     CONTEXT_WAIT_S = 1.0        # FS-04: how long a finished question waits for the screen line
+
+    # A session still opening is waited for, the question buffered meanwhile
+    # and sent whole once it opens. On a slow connection opening takes
+    # several seconds, and the slow route - transcribe, think, then speak,
+    # every step its own upload - is slower still there; it used to take any
+    # question whose session was not open within 3 s (17 times, 1-17 Oct).
+    # Only a session that fails to open sends the question the slow way.
+    SESSION_WAIT_S = 15.0       # the handshake itself allows 20 s
+    _rt_awaiting = 0            # the question waiting for its session (0: none)
+    _rt_said_nothing = 0        # the last question that ended with nothing said
+    _rt_question_pcm: Optional[bytes] = None    # its audio, kept for the slow route
+
+    async def _await_session(self, conv) -> bool:
+        """Wait for the live session to open; True when it has. False: this
+        question goes the slow way - at the release if the user is still
+        talking, from here if they have finished - or it was abandoned."""
+        question = self._question_no
+        started = time.monotonic()
+        self._rt_awaiting = question
+        try:
+            while not conv.ready and time.monotonic() - started < self.SESSION_WAIT_S:
+                if question != self._question_no or self._rt_said_nothing == question:
+                    return False                 # a newer question, or nothing to send
+                if not conv.connecting and time.monotonic() - started > 0.5:
+                    break                        # nothing is opening it: it failed
+                await asyncio.sleep(0.05)
+        finally:
+            if self._rt_awaiting == question:
+                self._rt_awaiting = 0
+        if question != self._question_no:
+            return False                         # its audio is the new question's now
+        if conv.ready:
+            waited = time.monotonic() - started
+            if waited > 0.3:
+                speed.mark("session", waited=f"{waited:.1f}s for the session")
+            if waited > 1.0:
+                _log.info("waited %.1fs for the live session to open", waited)
+            if waited > net_quality.SLOW_OPEN_S:
+                net_quality.note_slow(f"the voice took {waited:.0f}s to open")
+            return True
+        _log.info("the live session did not open - this question goes the slow way")
+        speed.route("slow")
+        if self._rt_streaming:
+            self._rt_streaming = False           # still talking: the release takes the slow route
+            return False
+        pcm, self._rt_question_pcm = self._rt_question_pcm, None
+        if pcm:
+            self._turn_seq += 1                  # the live route's watchdog stands down
+            await self._cascade_turn(pcm)
+        return False
 
     LESSON_STALE_S = 600.0
     _lesson_key = None                    # (the lesson, its step) as last seen
@@ -2132,12 +2338,7 @@ class CompanionManager(QObject):
         """Each file to a PDF beside it (ai/convert_pdf.py), then a word on
         where it is - spoken if Tora is free, on the card if she is not."""
         started = time.monotonic()
-        made, failed = [], []
-        for path in files:
-            try:
-                made.append(await asyncio.to_thread(convert_pdf.to_pdf, path))
-            except convert_pdf.ConvertError as e:
-                failed.append(f"{os.path.basename(path)}: {e}")
+        made, failed = await asyncio.to_thread(convert_pdf.to_pdfs, files)
         _log.info("convert: %d made, %d failed in %.1fs", len(made), len(failed), time.monotonic() - started)
         if made and open_after:
             try:
@@ -2756,6 +2957,21 @@ class CompanionManager(QObject):
             self._screens_at = time.monotonic()
         return screens
 
+    async def _one_shot(self, max_width: int = 1024):
+        """The active monitor's picture, and no other's (SC-11): a very recent
+        grab reused, else that monitor's numbers and ONE grab of it. Grabbing
+        and encoding all three of the owner's monitors to use one took 331 ms
+        (9 Oct); looks stopped doing it in FS-05, and now so do pointing by
+        vision, the walkthrough's planner and its step checks. None when the
+        screen cannot be captured."""
+        screens = await self._capture_shots(max_width=max_width, pixels=False)
+        if not screens:
+            return None
+        shot = self._active_shot(screens) or screens[0]
+        if shot.base64_jpeg:
+            return shot                  # a recent grab, with its pictures
+        return await asyncio.to_thread(grab_frame, shot, max_width)
+
     def _active_shot(self, screens=None):
         """The ScreenShot for the monitor the user's active window is on.
 
@@ -2846,7 +3062,8 @@ class CompanionManager(QObject):
         # `context` is what the target is for - a walkthrough step's own
         # instruction. It breaks ties between same-named controls (LG-05).
         local = asyncio.ensure_future(asyncio.to_thread(
-            find_target, query, screenshot=shot, context=context))
+            find_target, query, screenshot=shot, context=context,
+            skip_ocr=bool(vision) and self._uia_rich()))
         local.add_done_callback(_retrieve)
         if not vision:
             # A look-ahead (LG-06): free tiers only, never a paid call.
@@ -2885,17 +3102,28 @@ class CompanionManager(QObject):
     # An app whose accessibility tree names this few controls has no tree
     # worth waiting for: CapCut's named 1.
     UIA_POOR_AT = 2
+    # SC-12: a tree naming this many controls had its chance - what it missed
+    # is not text, so OCR (0.6-1 s of every core, and a word matched in the
+    # wrong place) is skipped and the vision model has it alone.
+    UIA_RICH_AT = 30
     _uia_counts = None                  # app key -> controls its tree named
 
     def _note_uia(self, title: str, count: int) -> None:
         if self._uia_counts is None:
             self._uia_counts = {}
         self._uia_counts[app_key(title or "")] = int(count)
+        if count <= self.UIA_POOR_AT:
+            from ai.hybrid_pointer import preload_ocr
+            preload_ocr()                       # OCR is this app's local tier
 
     def _uia_poor(self) -> bool:
         """Does the app in front expose (next to) no controls at all?"""
         n = (self._uia_counts or {}).get(app_key(active_window_title() or ""))
         return n is not None and n <= self.UIA_POOR_AT
+
+    def _uia_rich(self) -> bool:
+        n = (self._uia_counts or {}).get(app_key(active_window_title() or ""))
+        return n is not None and n >= self.UIA_RICH_AT
 
     def _local_hit(self, task, shot, query: str):
         """A finished local lookup as logical pixels, or None."""
@@ -2927,10 +3155,9 @@ class CompanionManager(QObject):
             if shot is None:
                 if self._privacy_guard and is_sensitive_window(active_window_title()):
                     return None
-                screens = await self._capture_shots(max_width=1024)
-                if not screens:
+                shot = await self._one_shot(1024)
+                if shot is None:
                     return None
-                shot = self._active_shot(screens) or screens[0]
             found = await gemini_vision.locate(
                 query,
                 hint=context,
@@ -3207,8 +3434,13 @@ class CompanionManager(QObject):
         # own stale move on the board - and it made a changed screen and an
         # unchanged one hard to tell apart.
         self.sig_clear_drawings.emit()
-        await asyncio.sleep(self.CLEAR_BEFORE_SHOT_S)
+        if self._drawings_on_screen():
+            await asyncio.sleep(self.CLEAR_BEFORE_SHOT_S)
         width = 1280 if careful else 1024
+        if net_quality.slow():
+            # A weak connection: about half the bytes. The fast look sees the
+            # picture at "medium" anyway (gemini_vision._FAST_RESOLUTION).
+            width = 960 if careful else 768
         shot_t0 = time.monotonic()
         screens = await self._capture_shots(max_width=width, reuse=not careful, pixels=False)
         if not screens:
@@ -3271,7 +3503,7 @@ class CompanionManager(QObject):
 
         # UD-05: asked again about a screen that has not changed - the last
         # look's answer and drawing again, and no call.
-        sk = look_region.sketch(image)
+        sk = await asyncio.to_thread(look_region.sketch, image)      # a JPEG decode: off the loop
         again = self._reusable_look(question, sk, title)
         if again is not None:
             for tag in again["tags"]:
@@ -3348,6 +3580,7 @@ class CompanionManager(QObject):
         if snapped:
             detail += f", {snapped} snapped to the real control"
         self._mark_answer("look", detail)
+        speed.mark("look")
         drawn = []
         for action in actions[:4]:
             sh = self._shape_from_tag(action.as_tag())
@@ -3425,6 +3658,21 @@ class CompanionManager(QObject):
     _last_look: Optional[dict] = None
     _LOOK_REUSE_S = 180.0
     CLEAR_BEFORE_SHOT_S = 0.1     # the overlay repaints, and Windows composes it, in this
+    # SC-05: the wait is only for drawings that may still be showing - one
+    # fades within ANNOTATION_TTL_S (14 s), one in a walkthrough stays.
+    # Every look used to pay the 0.1 s, drawings or not.
+    DRAWINGS_LAST_S = 15.0
+    _drawn_at = 0.0
+    _guide_runner = None                  # set in __init__; here for a manager built bare (tests)
+
+    def _note_drawn(self, *_args) -> None:
+        self._drawn_at = time.monotonic()
+
+    def _drawings_on_screen(self) -> bool:
+        guide = self._guide_runner
+        return (time.monotonic() - self._drawn_at < self.DRAWINGS_LAST_S
+                or (guide is not None and guide.running))
+
     # FS-01: on 9 Oct "Okay, I've done that. Where's my next best move?", "Okay,
     # look again" and "I've done that. Please do the next move." were all
     # answered from the look before - the old move, three times: "still stuck,
@@ -3571,11 +3819,21 @@ class CompanionManager(QObject):
         if not guide and not started and guide.failure not in ("billing", "key", "network"):
             _log.info("fast plan unusable for %r — retrying with the pro model",
                       goal[:60])
-            guide = await gemini_planner.plan(
-                goal, screenshot_b64=shot, window_title=title,
-                controls=controls, fast=False,
-            )
+            # UI-06: one try, bounded. On 11 Oct the pro model was busy (503)
+            # and its retries ran step one to 78 s; nobody waits that long
+            # for a walkthrough. Past PLAN_FALLBACK_S it is said that it
+            # could not be planned.
+            try:
+                guide = await asyncio.wait_for(gemini_planner.plan(
+                    goal, screenshot_b64=shot, window_title=title,
+                    controls=controls, fast=False, busy_retries=False,
+                ), self.PLAN_FALLBACK_S)
+            except asyncio.TimeoutError:
+                _log.warning("the pro plan took over %.0fs - given up", self.PLAN_FALLBACK_S)
+                guide = gemini_planner.Guide(goal=goal, feasible=False)
         return guide
+
+    PLAN_FALLBACK_S = 20.0
 
     @staticmethod
     def _foreground_controls(title: str) -> list[str]:
@@ -3679,10 +3937,8 @@ class CompanionManager(QObject):
         """The screenshot the planner sees, or "" for a sensitive window."""
         if self._privacy_guard and is_sensitive_window(active_window_title()):
             return ""
-        screens = await self._capture_shots(max_width=1024)
-        if not screens:
-            return ""
-        return (self._active_shot(screens) or screens[0]).base64_jpeg
+        shot = await self._one_shot(1024)
+        return shot.base64_jpeg if shot is not None else ""
 
     def _plan_written(self, partial, full, plan_s: float, goal: str) -> None:
         """The rest of a streamed plan has arrived: add it behind the steps
@@ -3725,11 +3981,15 @@ class CompanionManager(QObject):
             return {"error": "web search is switched off in the tray menu"}
         from ai.web_search import search
         self._activity("searching")
+        started = time.monotonic()
         try:
             results = await search(query)
         except Exception as e:
             return {"error": str(e)}
-        return {"results": (results or "")[:4000] or "nothing useful found"}
+        _log.info("web search took %.1fs (%d chars)", time.monotonic() - started, len(results or ""))
+        # Short: the voice spent 5-8 s reading a 4,000-character result
+        # before its first word (19 Oct). The search's own answer comes first.
+        return {"results": (results or "")[:1500] or "nothing useful found"}
 
     async def _tool_recall(self, args: dict) -> dict:
         query = str(args.get("query") or "").strip()
@@ -3815,6 +4075,8 @@ class CompanionManager(QObject):
 
     def _start_trace(self) -> None:
         self._trace = tracing.Trace()
+        self._trace_ahead = {}
+        self._trace_ahead_task = None
         self._trace_live = True
         self._mist("on")
         self._submit(self._record_trace(self._trace, self._hotkey_pressed_at))
@@ -3829,6 +4091,41 @@ class CompanionManager(QObject):
     _trace_task: Optional[asyncio.Task] = None
     _trace_readings: list = []
     TRACE_WAIT_S = 0.25        # the answer waits no longer than this for it
+    # WR-02: each stroke is read as soon as it ends - the mouse rests
+    # tracing.PAUSE_S - while the shortcut is still held. A circle took
+    # 0.2-0.4 s to read (once 1.3 s) against the answer's 0.25 s wait, and a
+    # late reading lost its words; read while they finish the question, it
+    # is there at the release.
+    _trace_ahead: Optional[dict] = None           # focus key -> Reading, for this trace
+    _trace_ahead_task: Optional[asyncio.Task] = None
+
+    @staticmethod
+    def _focus_key(f) -> tuple:
+        return f.kind, tuple(f.rect), f.t0, f.t1
+
+    def _private_now(self) -> bool:
+        return bool(self._privacy_guard and is_sensitive_window(active_window_title()))
+
+    def _read_ahead(self, trace) -> None:
+        """Read the strokes finished so far, one reading at a time."""
+        if self._trace_ahead is None:
+            self._trace_ahead = {}
+        before, ahead = self._trace_ahead_task, self._trace_ahead
+
+        async def read() -> None:
+            if before is not None:
+                await asyncio.gather(before, return_exceptions=True)
+            todo = [f for f in tracing.focuses(trace) if self._focus_key(f) not in ahead]
+            if not todo or self._trace is not trace or self._private_now():
+                return
+            for f, reading in zip(todo, await asyncio.to_thread(trace_read.read, todo)):
+                ahead[self._focus_key(f)] = reading
+        self._trace_ahead_task = asyncio.ensure_future(read())
+
+    def _shapes_with_what_was_read(self, focuses) -> list:
+        """Each focus's reading if it was read while held, else its shape and place."""
+        ahead = self._trace_ahead or {}
+        return [ahead.get(self._focus_key(f)) or trace_read.Reading(f) for f in focuses]
 
     async def _start_trace_read(self, trace) -> None:
         self._trace_task = asyncio.ensure_future(self._read_trace(trace))
@@ -3839,10 +4136,18 @@ class CompanionManager(QObject):
         if not focuses:
             return ""
         started = time.monotonic()
-        if self._privacy_guard and is_sensitive_window(active_window_title()):
+        if self._private_now():
             readings = [trace_read.Reading(f) for f in focuses]          # a place and a shape, nothing read
         else:
-            readings = await asyncio.to_thread(trace_read.read, focuses)
+            if self._trace_ahead_task is not None:                      # a stroke being read: it is nearly done
+                await asyncio.gather(self._trace_ahead_task, return_exceptions=True)
+            ahead = self._trace_ahead or {}
+            todo = [f for f in focuses if self._focus_key(f) not in ahead]
+            fresh = iter(await asyncio.to_thread(trace_read.read, todo) if todo else ())
+            readings = [ahead[self._focus_key(f)] if self._focus_key(f) in ahead else next(fresh)
+                        for f in focuses]
+            if len(todo) < len(focuses):
+                _log.info("trace: %d of %d read while the shortcut was held", len(focuses) - len(todo), len(focuses))
         self._trace_readings = readings
         _log.info("trace: %s - read %d of them in %.0f ms", ", ".join(f.kind for f in focuses),
                   sum(1 for r in readings if r.text or r.things), (time.monotonic() - started) * 1000)
@@ -3856,9 +4161,11 @@ class CompanionManager(QObject):
             return ""
         try:
             return await asyncio.wait_for(asyncio.shield(task), self.TRACE_WAIT_S)
-        except Exception:  # noqa: BLE001 - late or failed: its shape and place, at once
+        except Exception:  # noqa: BLE001 - late or failed: what was read while held, the rest its shape and place
             trace = self._trace
-            return trace_read.voice_line([trace_read.Reading(f) for f in tracing.focuses(trace)]) if trace else ""
+            if not trace or self._private_now():
+                return trace_read.voice_line([trace_read.Reading(f) for f in tracing.focuses(trace)]) if trace else ""
+            return trace_read.voice_line(self._shapes_with_what_was_read(tracing.focuses(trace)))
 
     async def _send_trace_line(self, conv) -> None:
         """Before the voice's turn ends: what they traced, in one line."""
@@ -3869,11 +4176,17 @@ class CompanionManager(QObject):
             _log.info("trace line sent %.2fs after the question", time.monotonic() - started)
 
     async def _record_trace(self, trace, since: float) -> None:
-        """Sample the mouse ~60 times a second until the shortcut comes up."""
+        """Sample the mouse ~60 times a second until the shortcut comes up -
+        and once it has rested a stroke's pause, read what it showed."""
+        read_at = 0                                   # the trace's points when it was last read
         while self._trace_live and self._trace is trace:
             pos = look_region.cursor_position()
             if pos is not None:
                 trace.add(time.monotonic() - since, *pos)
+            n = len(trace.points)
+            if n > read_at and time.monotonic() - since - trace.points[-1].t >= tracing.PAUSE_S and trace.moved:
+                read_at = n
+                self._read_ahead(trace)
             await asyncio.sleep(self.TRACE_EVERY_S)
 
     def _handle_wake(self):
@@ -3936,12 +4249,47 @@ class CompanionManager(QObject):
 
         Sets LISTENING inside the lock so a second caller on another thread
         cannot also observe IDLE and start a parallel capture.
+
+        A press while she is thinking or answering used to do nothing until
+        she had finished. Now she stops and listens (the owner's choice,
+        18 Oct 2026): see _interrupt_answer.
         """
         with self._begin_lock:
-            if self._state != AppState.IDLE:
+            if self._state == AppState.LISTENING:
                 return False
+            busy = self._state != AppState.IDLE
             self._state = AppState.LISTENING
-            return True
+            # Before anything else: from here the last answer's code can no
+            # longer set the state (_emit_state, _ANSWERING).
+            self._question_no += 1
+        if busy:
+            self._interrupt_answer()
+        return True
+
+    # The question being answered on the slow route (_cascade_turn), so a
+    # new question can stop it; None on the live route, where the session
+    # stops its own answer (RealtimeConversation.interrupt).
+    _answer_task: Optional[asyncio.Task] = None
+    # Counts questions. An answer still finishing for an older one must not
+    # set the state of the new one (_cascade_turn).
+    _question_no = 0
+
+    def _interrupt_answer(self) -> None:
+        """Stop everything the last question set going - her voice, a look,
+        typing, a tool, the slow route - because a new one has begun. Runs
+        on the keyboard hook's thread: it flips flags and hands the rest to
+        the loop. A walkthrough, an agent job and a PDF being made carry on:
+        they are not an answer, and have their own stop."""
+        _log.info("a new question while she was answering - she stops and listens")
+        conv = self._realtime
+        if conv is not None:
+            conv.interrupt()
+        task, loop = self._answer_task, self._loop
+        if task is not None and loop is not None and loop.is_running():
+            loop.call_soon_threadsafe(task.cancel)
+        if self._pointing_held:
+            self._pointing_held = False
+            self.sig_point_release.emit()
 
     def _claim_end(self) -> bool:
         """Exactly one of {hotkey release, silence watchdog} ends a capture."""
@@ -3983,6 +4331,12 @@ class CompanionManager(QObject):
         # request" - a guide move, for one - is measured against this.
         self._request_serial += 1
         self._trace_readings = []           # a trace belongs to the question it was drawn for
+        self._rt_question_pcm = None
+        speed.begin()
+        # Shown before the microphone opens, not after: the press is answered
+        # on screen (and by her sound) at once.
+        self._emit_state(AppState.LISTENING)
+        opened = time.monotonic()
         try:
             # The sink has to be attached BEFORE the first block is captured,
             # or the opening syllable of the question is only in the buffer
@@ -3997,7 +4351,11 @@ class CompanionManager(QObject):
             )
             self._emit_state(AppState.IDLE)
             return
-        self._emit_state(AppState.LISTENING)
+        speed.mark("mic")
+        self._submit(gemini.keep_warm())        # SC-09: the look's connection, while they talk
+        took = time.monotonic() - opened
+        if took > 0.15:
+            _log.info("the microphone took %.0f ms to open", took * 1000)
 
         # The session is already open, so there is nothing to wait for —
         # audio starts flowing to the model on the next 30 ms block.
@@ -4039,6 +4397,7 @@ class CompanionManager(QObject):
         else:
             # No live session: the cascade handles this one, and a reconnect
             # is started so the next question is fast again.
+            speed.route("slow")
             self._submit(self._realtime_connect())
 
     # End-of-speech tuning. SPEECH_RMS matches the ambient listener's VAD
@@ -4092,9 +4451,13 @@ class CompanionManager(QObject):
 
     async def _end_capture_and_process(self):
         """The hotkey came up. Answer through whichever route is live."""
+        speed.mark("release")
         was_realtime, self._rt_streaming = self._rt_streaming, False
         conv = self._realtime
-        if was_realtime and (conv is None or not conv.ready):
+        # Still waiting for its session to open (_await_session): it stays on
+        # the live route, and is sent the moment the session is there.
+        awaiting = bool(self._rt_awaiting) and self._rt_awaiting == self._question_no
+        if was_realtime and not awaiting and (conv is None or not conv.ready):
             was_realtime = False    # never opened; the cascade has the full pcm
         try:
             pcm = self._listener.stop_recording()
@@ -4107,8 +4470,12 @@ class CompanionManager(QObject):
 
         if was_realtime:
             if len(pcm) < 3200:            # nothing was said
+                self._rt_said_nothing = self._question_no
+                speed.finish("nothing said")
                 self._emit_state(AppState.IDLE)
                 return
+            if awaiting:
+                self._rt_question_pcm = pcm      # the slow way, if the session never opens
             # Nothing further to do. The server heard the question as it was
             # spoken, decided for itself that it finished, and the answer is
             # already on its way in through the pump — which will move the
@@ -4117,12 +4484,14 @@ class CompanionManager(QObject):
                 self._emit_state(AppState.THINKING)
             self._activity("understanding")
             self._turn_seq += 1
-            self._submit(self._realtime_turn_watchdog(self._turn_seq))
+            self._submit(self._realtime_turn_watchdog(self._turn_seq, pcm))
             return
 
         if len(pcm) < 3200:
+            speed.finish("nothing said")
             self._emit_state(AppState.IDLE)
             return
+        speed.route("slow")
         if not gemini.own_key() and self._problem_kind in ("plan", "signin", "service"):
             # The voice pass was refused: this month's talk is used up, or
             # the sign-in has lapsed. The slower route would only spend the
@@ -4143,15 +4512,20 @@ class CompanionManager(QObject):
     # reconnect tripping a GeneratorExit — three failures from one slow tool.
     _TURN_WATCHDOG_MAX_S = 75.0
 
-    async def _realtime_turn_watchdog(self, seq: int) -> None:
-        """Guarantee a turn ends, even if the model never replies to it.
+    async def _realtime_turn_watchdog(self, seq: int, pcm: bytes = b"") -> None:
+        """Guarantee a turn is answered, even if the live model never replies.
 
-        The live session can be perfectly healthy and still produce nothing
+        The live session can look perfectly healthy and still produce nothing
         for a turn — no audio, no transcript, no turn_complete. The pump only
         reacts to events that arrive, and the socket never drops, so neither
         _on_realtime_turn_end nor _on_realtime_lost fires and the app sits on
         "Thinking…" forever. This is the backstop: if the same turn is still
-        pending when it expires, say so and go back to idle.
+        pending when it expires, the question - its audio, `pcm` - is asked
+        the slow way instead (FX-01, 18 Oct 2026). It used to say "Sorry - I
+        didn't catch that" (18 times in a fortnight), and on 16 Oct a session
+        that had gone deaf heard nothing of five questions in a row, 6 s of
+        speech among them: it is dropped now, and the next question has a
+        fresh one.
         """
         started = time.monotonic()
         # Poll on a short interval rather than one long sleep, so a normal
@@ -4171,16 +4545,29 @@ class CompanionManager(QObject):
             if self._state != AppState.THINKING:
                 return                  # it answered, or moved on
             now = time.monotonic()
+            if self._rt_awaiting:
+                started = now           # not sent yet (_await_session): nothing to hear
+                continue
             elapsed = now - started
             busy = self._tools_in_flight > 0 or now - self._tool_done_at < 6.0
             heard = bool(getattr(self, "_heard_buf", None)) or self._tool_done_at >= started
             if elapsed >= self._TURN_WATCHDOG_MAX_S:
                 break                   # hard ceiling, tool or no tool
-            if not busy and elapsed >= (self._HEARD_NO_ANSWER_S if heard else self._NOTHING_HEARD_S):
+            # On a weak connection the first word is slower to come back.
+            nothing_s = self._NOTHING_HEARD_S * (2 if net_quality.slow() else 1)
+            if not busy and elapsed >= (self._HEARD_NO_ANSWER_S if heard else nothing_s):
                 break                   # quiet long enough — really stuck
-        _log.warning("realtime turn produced no response in %.0fs (%s)", time.monotonic() - started,
-                     "words were heard" if heard else "no words were heard")
+        rescue = len(pcm) >= 3200 and not busy
+        _log.warning("realtime turn produced no response in %.1fs (%s)%s", time.monotonic() - started,
+                     "words were heard" if heard else "no words were heard",
+                     " - asking the slow way" if rescue else "")
         self._activity("")
+        if rescue:
+            self._drop_realtime()       # nothing more from it: it cannot answer twice
+            speed.route("slow")
+            await self._cascade_turn(pcm)
+            return
+        speed.finish("unanswered")
         self._emit_state(AppState.IDLE)
         if heard:
             # The model heard them and said nothing: the session is suspect —
@@ -4192,7 +4579,7 @@ class CompanionManager(QObject):
             "Sorry — I didn't catch that. Could you say it again?"
         )
 
-    _NOTHING_HEARD_S = 5.0          # FS-13
+    _NOTHING_HEARD_S = 2.5          # FX-01: the slow way after this (5 s before, FS-13)
     _HEARD_NO_ANSWER_S = 12.0       # FS-13 (one 22 s wait for everything, before)
 
     def _record_turn(self, question: str, answer: str) -> None:
@@ -4209,14 +4596,18 @@ class CompanionManager(QObject):
         self._app_memory[ak] = history[-20:]
 
         if self._journal_enabled and not self._quiz_mode and question:
-            try:
-                journal.log_qa(
-                    question=question, answer=answer,
-                    app_key=ak, window_title=title,
-                    provider="gemini", model=Models.REALTIME,
-                )
-            except Exception:
-                pass
+            def write() -> None:
+                try:
+                    journal.log_qa(
+                        question=question, answer=answer,
+                        app_key=ak, window_title=title,
+                        provider="gemini", model=Models.REALTIME,
+                    )
+                except Exception:
+                    pass
+            # A disk write (SQLite, its own connection) - never on the loop
+            # that carries the voice (HP-12).
+            threading.Thread(target=write, name="journal", daemon=True).start()
 
         if self._recorder and self._recorder.is_recording:
             if question:
@@ -4232,6 +4623,10 @@ class CompanionManager(QObject):
         """Transcribe, think, speak — the fallback route."""
         # 32000 bytes == 1s of 16 kHz mono int16.
         audio_seconds = len(pcm) / 32000.0
+        # A new question cancels this one (_interrupt_answer); its last
+        # moments must then leave the new one's state alone (_emit_state).
+        _ANSWERING.set(self._question_no)
+        self._answer_task = asyncio.current_task()
 
         self._emit_state(AppState.THINKING)
         pointing_held = False  # track whether we told overlay to hold dwell
@@ -4352,7 +4747,8 @@ class CompanionManager(QObject):
                 # loop that is 50-150 ms during which nothing else starts.
                 # reuse=False: a fresh question deserves a fresh grab, and this
                 # also stamps the cache so any drawing this turn reuses it.
-                screenshots = await self._capture_shots(max_width=1280, reuse=False)
+                screenshots = await self._capture_shots(
+                    max_width=960 if net_quality.slow() else 1280, reuse=False)
                 # Only the ACTIVE monitor goes to the model — sending all three
                 # and hardcoding "screen1" in the prompt made it point on the
                 # wrong screen. One image, one coordinate space.
@@ -4571,6 +4967,7 @@ class CompanionManager(QObject):
             if self._cancel_flag:
                 return
             self._emit_state(AppState.SPEAKING)
+            speed.mark("audio")
             try:
                 await self._play_lesson(full_response, clean)
             except asyncio.CancelledError:
@@ -4589,7 +4986,11 @@ class CompanionManager(QObject):
         finally:
             if pointing_held:
                 self.sig_point_release.emit()
-            self._emit_state(AppState.IDLE)
+            if self._answer_task is asyncio.current_task():
+                self._answer_task = None
+            if _ANSWERING.get() == self._question_no:
+                speed.finish("answered")          # a cut-off one is closed by the next question
+            self._emit_state(AppState.IDLE)       # not if a new question has begun (_ANSWERING)
 
     async def _reply_local(self, msg: str, *, shown: str = ""):
         """Show + speak a message that doesn't need an LLM round-trip.
@@ -5276,10 +5677,9 @@ class CompanionManager(QObject):
         if self._privacy_guard and is_sensitive_window(active_window_title()):
             step._visual_verdict = False
             return False
-        screens = await self._capture_shots(max_width=1024)
-        if not screens:
+        active = await self._one_shot(1024)
+        if active is None:
             return getattr(step, "_visual_verdict", False)
-        active = self._active_shot(screens) or screens[0]
         verdict = await gemini_vision.confirm(cond.value, active.base64_jpeg)
         step._visual_verdict = bool(verdict)
         return step._visual_verdict
@@ -5725,9 +6125,14 @@ class CompanionManager(QObject):
             pass
 
     def _emit_state(self, state: AppState):
+        asked = _ANSWERING.get()
+        if asked and asked != self._question_no:
+            # An answer the user talked over (_interrupt_answer), in its last
+            # moments: the state belongs to the question asked since.
+            return
         self._state = state
-        # Wake-word scanning only means anything while Tora is idle: a wake
-        # word during THINKING or SPEAKING is refused by _claim_begin. Left
+        # Wake-word scanning only means anything while Tora is idle: while
+        # she thinks or speaks, a press is the way in (_claim_begin). Left
         # running, it paid to transcribe Tora's own answer coming back
         # through the microphone.
         try:
@@ -5853,11 +6258,75 @@ class CompanionManager(QObject):
             on_wake=self._handle_wake,
             device=cfg.mic_device(),
             ambient=cfg.ambient_mic(),
+            # Without these the new listener had no wake word at all.
+            wake_transcriber=self._transcribe_blocking,
+            wake_local=self._local_wake(),
+            wake_mode=cfg.wake_engine(),
         )
         try:
             self._listener.start()
         except Exception as e:
             self.sig_error.emit(f"Could not start mic: {e}")
+
+    # ── When Windows' speaker or microphone changes ─────────────────────────
+    #
+    # 19 Oct 2026, the owner: "I can't hear her." Headphones had become the
+    # default after HeyTora started, and she was still talking into the
+    # laptop's speakers: PortAudio lists the devices once, at start, and her
+    # output stays open for the whole run (HP-04). audio/endpoints.py asks
+    # Windows every 2 s; on a change the audio is reopened at the next quiet
+    # moment, on the new devices.
+    AUDIO_QUIET_WAIT_S = 120.0
+
+    def _watch_audio_devices(self) -> None:
+        try:
+            from audio.endpoints import DeviceWatch
+            DeviceWatch(self._audio_devices_changed).start()
+        except Exception:  # noqa: BLE001 - no watch: a restart still picks the new device
+            _log.debug("audio device watch not started", exc_info=True)
+
+    def _audio_devices_changed(self, _old, _new) -> None:
+        """On the watch's thread: wait for a quiet moment, then follow."""
+        deadline = time.monotonic() + self.AUDIO_QUIET_WAIT_S
+        while (self._state != AppState.IDLE or self._key_down) and time.monotonic() < deadline:
+            time.sleep(0.5)
+        self._reopen_audio()
+
+    def _reopen_audio(self) -> None:
+        """Close the mic and her speaker, have PortAudio list the devices
+        again, and open both on Windows' defaults (the chosen mic is found
+        again by its name: device numbers move)."""
+        import sounddevice as sd
+        from audio.playback import stop_audio
+        conv = self._realtime
+        player = getattr(conv, "_player", None) if conv is not None else None
+        try:
+            self._listener.stop()
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            if player is not None:
+                player.stop()
+            stop_audio()
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            sd._terminate()
+            sd._initialize()
+        except Exception:  # noqa: BLE001 - the old list stays; the reopen still helps a changed default
+            _log.warning("could not refresh the sound devices", exc_info=True)
+        self._listener._device = cfg.mic_device()
+        try:
+            self._listener.start()
+        except Exception as e:  # noqa: BLE001
+            self.sig_error.emit(f"Could not restart the microphone: {e}")
+        if player is not None:
+            try:
+                player.open()
+            except Exception:  # noqa: BLE001 - it opens on her next word
+                pass
+        speaker, mic = _sound_devices()
+        _log.info("Windows' sound devices changed - speaker: %s, microphone: %s", speaker, mic)
 
     def set_web_search(self, enabled: bool):
         self._web_search_enabled = bool(enabled)

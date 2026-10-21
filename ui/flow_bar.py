@@ -269,9 +269,11 @@ class _Pill(QWidget):
     # ── input ──
     def enterEvent(self, _e) -> None:
         self.bar._hover = True
+        self.bar._wake()
 
     def leaveEvent(self, _e) -> None:
         self.bar._hover = False
+        self.bar._wake()
 
     def mousePressEvent(self, e) -> None:
         if e.button() == Qt.MouseButton.LeftButton:
@@ -329,9 +331,11 @@ class _Card(QWidget):
 
     def enterEvent(self, _e) -> None:
         self.bar._card_hover = True
+        self.bar._wake()
 
     def leaveEvent(self, _e) -> None:
         self.bar._card_hover = False
+        self.bar._wake()
 
     def mouseMoveEvent(self, e) -> None:
         pos = QPointF(e.position())
@@ -390,6 +394,7 @@ class FlowBar(QObject):
         self._clock: Optional[Callable[[], Optional[tuple[float, float]]]] = None
         self._last = time.monotonic()
         self._painted: tuple = ()        # what the pill looked like when last painted
+        self._card_painted: tuple = ()   # and the card (UI-03)
         self._avoid: list[tuple[float, QRectF]] = []   # (when, where) Tora drew - the card keeps off
         # SP-12: what is drawn now, asked of the overlay (watch); None: the notes alone.
         self.drawn_now: Optional[Callable[[], list[QRectF]]] = None
@@ -413,6 +418,14 @@ class FlowBar(QObject):
         self._timer.stop()
         self.pill.hide()
         self.card.hide()
+
+    def _wake(self) -> None:
+        """Something may change: tick again. The timer stops itself once
+        the bar is at rest (UI-02, the speed review of 17 Oct 2026) - it
+        used to wake 60 times a second all day for a pill that never moved."""
+        if not self._timer.isActive() and self.pill.isVisible():
+            self._last = time.monotonic()
+            self._timer.start()
 
     def close(self) -> None:
         self.hide()
@@ -472,6 +485,7 @@ class FlowBar(QObject):
         self._text += text
         self._finished_at = 0.0
         self._card_want = True
+        self._wake()
 
     def finish_answer(self, text: str = "") -> None:
         if text and len(text.strip()) > len(self._text.strip()):
@@ -480,13 +494,16 @@ class FlowBar(QObject):
         self._finished_at = time.monotonic()
         if self._text.strip():
             self._card_want = True
+        self._wake()
 
     def close_card(self) -> None:
         self._card_want = False
+        self._wake()
 
     def copy_answer(self) -> None:
         QGuiApplication.clipboard().setText(self._text.strip())
         self._copied_at = time.monotonic()
+        self._wake()
 
     # ── layout ──────────────────────────────────────────────────────────────────
     def _fit_window(self) -> None:
@@ -553,6 +570,7 @@ class FlowBar(QObject):
         to = QPoint(int(round(x - PAD)), int(round(y - PAD)))
         if glide and self.card.isVisible() and self.card.pos() != to:
             self._card_glide = (QPoint(self.card.pos()), to, now)
+            self._wake()
         else:
             self._card_glide = None
             self.card.move(to)
@@ -581,6 +599,7 @@ class FlowBar(QObject):
         self._dragging = True
         self._snap = None
         self.card.hide()                  # back beside the pill once it has landed
+        self._wake()
 
     def _drag_to(self, g: QPoint) -> None:
         screen = QGuiApplication.screenAt(g) or self._screen()
@@ -602,6 +621,7 @@ class FlowBar(QObject):
         self.pill.move(start)
         self._snap = (start, self._home(), time.monotonic())
         self.dock_changed.emit(self.dock())
+        self._wake()
 
     def _click(self, pos: QPointF) -> None:
         cancel, done = self.pill._buttons()
@@ -624,6 +644,7 @@ class FlowBar(QObject):
         want = SIZES[self._look()]
         if want != self._size_to:
             self._size_from, self._size_to, self._size_t0 = self._size, want, time.monotonic()
+            self._wake()
 
     def _tick(self) -> None:
         now = time.monotonic()
@@ -667,6 +688,12 @@ class FlowBar(QObject):
         if look not in ("idle", "hover") or key != self._painted or self._snap is not None:
             self._painted = key
             self.pill.update()
+        # At rest - idle or hovered, its size reached, nothing moving or
+        # showing - nothing changes until something happens (_wake).
+        if (look in ("idle", "hover") and now - self._size_t0 >= 0.3 and self._snap is None
+                and self._card_glide is None and not self.card.isVisible()
+                and self._buttons_a < 0.01 and self._level < 0.005):
+            self._timer.stop()
 
     def _voice_level(self, now: float) -> float:
         """Her voice, for the bars: lively while it plays (no level is given
@@ -691,9 +718,16 @@ class FlowBar(QObject):
             if not self.card.isVisible():
                 self._place_card()
                 self.card.show()
-            self.card.update()
+            # Only when what it shows has changed (UI-03): laying the words
+            # out 60 times a second for a card that sat still was waste.
+            key = (round(self._card_a, 2), self._state == "speaking" and not self._sealed,
+                   int(self._shown), len(self._text), now - self._copied_at < 1.6)
+            if key != self._card_painted:
+                self._card_painted = key
+                self.card.update()
         elif self.card.isVisible():
             self.card.hide()
+            self._card_painted = ()
 
     # ── painting the pill ───────────────────────────────────────────────────────
     def _paint_pill(self, p: QPainter, r: QRectF) -> None:

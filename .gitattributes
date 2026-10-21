@@ -10,3 +10,5 @@
 *.jpg binary
 *.mp3 binary
 *.wav binary
+*.onnx binary
+*.wav binary

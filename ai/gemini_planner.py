@@ -394,6 +394,7 @@ async def plan(
     timeout: float = 60.0,
     fast: bool = True,
     on_first_step: Optional[Callable[[Guide], None]] = None,
+    busy_retries: bool = True,
 ) -> Guide:
     """Break `goal` into steps. Returns an empty Guide when it cannot.
 
@@ -456,6 +457,7 @@ async def plan(
                 # gemini_vision._DEEP_THINK for the same defect and fix).
                 think=0 if fast else 2048,
                 timeout=timeout,
+                busy_retries=busy_retries,
             )
     except Exception as e:
         # str(TimeoutError()) is '' — the log said 'planner failed: ' and

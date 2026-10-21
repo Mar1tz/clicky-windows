@@ -1,6 +1,20 @@
 """
 Real-time web search for Tora — tutor-grade grounding layer.
 
+19 Oct 2026, the owner: "it's still very slow". Every question that searched
+took 12-17 s to its first word: the free search below took 9-12 s (one
+search engine after another, most of them answering nothing from this PC),
+and the voice then spent 5-8 s on a 4,000-character result. Now, in order:
+
+  1. Google Search through Gemini (the fast model with the google_search
+     tool): a short, dated answer with its sources, 1.9-2.3 s measured.
+     On a HeyTora plan the server must allow it (docs/SERVER_SPEED.md);
+     refused once, it is not asked again this run.
+  2. The free engines all at once, the first with results wins, capped at
+     QUICK_BUDGET_S, from their own snippets - no pages fetched.
+  3. What follows below, the old deep search, only when both gave nothing -
+     and given DEEP_BUDGET_S at most: it once took 15 s on its own.
+
 Strategy (free path, no API key required):
   1. Expand the user's question into 1-2 focused sub-queries.
   2. Hit DuckDuckGo HTML search for each to collect top result URLs.
@@ -92,7 +106,97 @@ async def search(query: str, max_results: int = MAX_PAGES) -> str:
         except Exception:
             pass  # fall through to free path
 
-    return await _free_deep_search(query, max_results)
+    found = await _google(query)
+    if found:
+        return found
+    found = await _quick(query)
+    if found:
+        return found
+    try:
+        return await asyncio.wait_for(_free_deep_search(query, max_results), DEEP_BUDGET_S)
+    except asyncio.TimeoutError:
+        return ""
+
+
+# ── 1. Google Search, through Gemini ──────────────────────────────────────────
+
+GOOGLE_TIMEOUT_S = 8.0
+_google_refused = False          # the plan's server does not forward it (yet): not asked again
+
+
+async def _google(query: str) -> str:
+    global _google_refused
+    if _google_refused:
+        return ""
+    from datetime import date
+    from ai import gemini
+    ask = (f"Today is {date.today():%A %d %B %Y}. Search the web and answer in at most three short "
+           f"sentences, with the date of anything that changes (prices, scores, weather, news). "
+           f"Question: {query}")
+    body = {"contents": [{"role": "user", "parts": [{"text": ask}]}],
+            "tools": [{"google_search": {}}],
+            "generationConfig": {"maxOutputTokens": 400, "temperature": 0.2}}
+    try:
+        r = await asyncio.wait_for(gemini._post(gemini._url(gemini.Models.VISION_FAST, "generateContent"),
+                                                body, GOOGLE_TIMEOUT_S, busy_retries=False), GOOGLE_TIMEOUT_S)
+    except Exception:  # noqa: BLE001 - slow or offline: the free engines
+        return ""
+    if r.status_code != 200:
+        if r.status_code in (400, 403) and ("not forwarded" in r.text or "google_search" in r.text):
+            _google_refused = True
+        return ""
+    data = r.json()
+    text = gemini.first_text(data).strip()
+    if not text:
+        return ""
+    meta = (data.get("candidates") or [{}])[0].get("groundingMetadata") or {}
+    sources = []
+    for chunk in (meta.get("groundingChunks") or [])[:3]:
+        web = chunk.get("web") or {}
+        if web.get("title"):
+            sources.append(web["title"])
+    return text + (("\nSources: " + "; ".join(sources)) if sources else "")
+
+
+# ── 2. The free engines, together ─────────────────────────────────────────────
+
+QUICK_BUDGET_S = 7.0             # Bing, the one that answers most, took up to 6.7 s (19 Oct)
+DEEP_BUDGET_S = 5.0              # the old deep search, last: it took 15 s on its own
+QUICK_BACKENDS = ("bing", "yahoo", "duckduckgo", "brave", "google", "mojeek")
+QUICK_CHARS = 1500
+
+
+async def _quick(query: str) -> str:
+    """The first engine with results, from their snippets; "" past the budget."""
+    try:
+        from ddgs import DDGS
+    except ImportError:
+        return ""
+
+    def one(backend: str) -> list:
+        try:
+            return list(DDGS(timeout=QUICK_BUDGET_S).text(query, max_results=5, region="us-en", backend=backend))
+        except Exception:  # noqa: BLE001 - most engines answer nothing from some PCs
+            return []
+
+    loop = asyncio.get_running_loop()
+    pending = {loop.run_in_executor(None, one, b) for b in QUICK_BACKENDS}
+    deadline = loop.time() + QUICK_BUDGET_S
+    hits: list = []
+    while pending and not hits and loop.time() < deadline:
+        done, pending = await asyncio.wait(pending, timeout=deadline - loop.time(),
+                                           return_when=asyncio.FIRST_COMPLETED)
+        for f in done:
+            if not hits and f.result():
+                hits = f.result()
+    parts = []
+    for i, hit in enumerate(hits[:4], 1):
+        title = (hit.get("title") or "").strip()
+        body = " ".join((hit.get("body") or "").split())
+        url = (hit.get("href") or hit.get("url") or "").strip()
+        if title or body:
+            parts.append(f"[{i}] {title} - {body} ({url})")
+    return _truncate("\n".join(parts), QUICK_CHARS)
 
 
 def build_search_context(results: str) -> str:

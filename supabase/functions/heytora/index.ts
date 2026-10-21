@@ -51,17 +51,22 @@
 //                      against the plan's hidden monthly ceiling.
 //
 // The rules are in migration 0004 (heytora_window / heytora_pass /
-// heytora_consume) and rules.ts. Secrets: GEMINI_API_KEY,
-// HEYTORA_TICKET_SECRET. Optional: HEYTORA_TALK_MODELS,
-// HEYTORA_DICTATION_MODELS, HEYTORA_PRICES. Paid plans: PADDLE_API_KEY, and
-// PADDLE_ENV / PADDLE_PRICES (supabase/functions/_shared/billing.ts).
+// heytora_consume, and 0013's heytora_talk_pass) and rules.ts. Secrets:
+// GEMINI_API_KEY, HEYTORA_TICKET_SECRET. Optional: HEYTORA_TALK_MODELS,
+// HEYTORA_DICTATION_MODELS, HEYTORA_PRICES; HEYTORA_JWT_SECRET (the project's
+// JWT secret: sign-ins checked here, not by a call - AC-02) and
+// HEYTORA_ALERT_WEBHOOK (a Slack or Discord webhook told when Google refuses
+// for billing - FX-06). Paid plans: PADDLE_API_KEY, and PADDLE_ENV /
+// PADDLE_PRICES (supabase/functions/_shared/billing.ts). docs/SERVER_SPEED.md.
 //
 // Deploy:  supabase functions deploy heytora --use-api   (JWT verification on)
 
 import { createClient } from "npm:@supabase/supabase-js@2";
+import { createRemoteJWKSet, jwtVerify } from "npm:jose@5.9.6";
 import {
-  checkGenerate, costMicro, estimateTokens, family, liveCostMicro, makeTicket, MAX_BODY_BYTES, MAX_OUTPUT_TOKENS,
-  omnirouteModels, prices, readTicket, UsageReader,
+  alertBody, billingProblem, checkGenerate, costMicro, estimateTokens, family, liveCostMicro, makeTicket,
+  MAX_BODY_BYTES, MAX_OUTPUT_TOKENS, omnirouteModels, prices, readTicket, SEARCH_MICRO, searchesIn, signedInUser,
+  UsageReader,
 } from "./rules.ts";
 import { apiBase, creditsSource, hasLivePlan, type Pack, packsFrom, paddleEnv, priceMap } from "../_shared/billing.ts";
 import { CHALLENGE, challengeOf, cleanCode, CODE, corsHeaders } from "../_shared/referrals.ts";
@@ -109,6 +114,49 @@ async function creditPacks(): Promise<Pack[]> {
   const list = await paddle("GET", `/prices?product_id=${encodeURIComponent(creditsProduct)}&status=active&per_page=50`);
   packsCache = { at: Date.now(), packs: packsFrom(list) };
   return packsCache.packs;
+}
+
+// -- the sign-in, checked here (AC-02) ------------------------------------------------------------------------
+//
+// Asking the auth service who a token belongs to was a network call in front
+// of every voice pass, ticket and look. On the routes every question takes,
+// the token's signature is checked here instead: with the project's JWT
+// secret (HS256, the project's tokens today), or its published keys once it
+// moves to signing keys. Either missing, it is asked as before. A token stays
+// good here until it runs out (an hour at most) even after a sign-out; the
+// routes that change an account or money always ask.
+const JWT_SECRET = Deno.env.get("HEYTORA_JWT_SECRET") ?? "";
+const ISSUER = `${SUPABASE_URL}/auth/v1`;
+const JWKS = SUPABASE_URL ? createRemoteJWKSet(new URL(`${ISSUER}/.well-known/jwks.json`)) : null;
+const HOT_PATHS = new Set(["voice-pass", "ticket", "agent-ticket", "me"]);
+
+async function localUser(jwt: string): Promise<{ id: string; email: string } | null> {
+  try {
+    const head = JSON.parse(atob(jwt.split(".")[0].replace(/-/g, "+").replace(/_/g, "/")));
+    if (head.alg === "HS256" && !JWT_SECRET) return null;
+    const { payload } = head.alg === "HS256"
+      ? await jwtVerify(jwt, new TextEncoder().encode(JWT_SECRET), { algorithms: ["HS256"] })
+      : await jwtVerify(jwt, JWKS!, { algorithms: ["ES256", "RS256", "EdDSA"] });
+    return signedInUser(payload as Record<string, unknown>, ISSUER, Date.now() / 1000);
+  } catch {
+    return null;                               // not verifiable here: the auth service decides
+  }
+}
+
+// -- Google's billing, said to the owners (FX-06) ----------------------------------------------------------
+const ALERT_WEBHOOK = Deno.env.get("HEYTORA_ALERT_WEBHOOK") ?? "";
+const ALERT_EVERY_MS = 30 * 60_000;
+let alertedAt = 0;
+
+function noteRefusal(where: string, status: number, text: string): void {
+  if (!billingProblem(status, text)) return;
+  console.error(`heytora: BILLING - Google refused ${where} (${status}): ${text.slice(0, 300)}`);
+  if (!ALERT_WEBHOOK || Date.now() - alertedAt < ALERT_EVERY_MS) return;
+  alertedAt = Date.now();
+  later(fetch(ALERT_WEBHOOK, {
+    method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify(alertBody(where, status, text)),
+  }));
 }
 
 /** One call to Paddle's API. Throws with Paddle's own words on a refusal. */
@@ -252,6 +300,7 @@ async function mintPass(model: string, endsAt: number): Promise<{ token: string;
       }
     }
     lastError = `${r.status} ${text.slice(0, 300)}`;
+    noteRefusal("a voice pass", r.status, text);
     if (r.status !== 400 && r.status !== 404) break; // only a wrong shape is worth another try
   }
   throw new Error(`Google refused the voice pass: ${lastError}`);
@@ -259,18 +308,35 @@ async function mintPass(model: string, endsAt: number): Promise<{ token: string;
 
 // -- the function -------------------------------------------------------------------------------------------
 
+type Timed = (name: string, since: number) => void;
+
 Deno.serve(async (req: Request): Promise<Response> => {
+  // FS-06 (docs/FAST_AND_RIGHT.md): where a call's time goes. A look through
+  // here took a median 4.7 s on 7-9 Oct against 2.2 s straight to Google.
+  // On every route since 19 Oct (AC-07): about twice an hour a voice pass
+  // took ~10 s, and the app's log could not say whether it was the sign-in,
+  // the database, Google or the trip there. The app logs this header.
+  const started = performance.now();
+  const timing: string[] = [];
+  const timed: Timed = (name, since) => {
+    timing.push(`${name};dur=${Math.round(performance.now() - since)}`);
+  };
+  const serverTiming = () => [...timing, `total;dur=${Math.round(performance.now() - started)}`].join(", ");
+  const res = await handle(req, timed, serverTiming);
+  if (!res.headers.has("server-timing")) {
+    try {
+      res.headers.set("server-timing", serverTiming());
+    } catch {
+      // a response whose headers are fixed: it goes without
+    }
+  }
+  return res;
+});
+
+async function handle(req: Request, timed: Timed, serverTiming: () => string): Promise<Response> {
   if (!KEY || !TICKET_SECRET || !SERVICE_KEY) {
     return refuse(500, "HEYTORA_SETUP", "The server is missing its secrets.");
   }
-
-  // FS-06 (docs/FAST_AND_RIGHT.md): where a forwarded answer's time goes.
-  // A look through here took a median 4.7 s on 7-9 Oct against 2.2 s
-  // straight to Google; the app logs this header beside each look.
-  const started = performance.now();
-  const timing: string[] = [];
-  const timed = (name: string, since: number) => timing.push(`${name};dur=${Math.round(performance.now() - since)}`);
-  const serverTiming = () => [...timing, `total;dur=${Math.round(performance.now() - started)}`].join(", ");
 
   const url = new URL(req.url);
   const path = url.pathname.replace(/^.*?\/heytora\/?/, "");
@@ -311,9 +377,15 @@ Deno.serve(async (req: Request): Promise<Response> => {
   // Who is asking - with their own token, so the database's rules apply.
   const db = createClient(SUPABASE_URL, ANON_KEY, { global: { headers: { Authorization: auth } } });
   const authStarted = performance.now();
-  const { data: who } = await db.auth.getUser(jwt);
-  timed("auth", authStarted);
-  const user = who?.user;
+  const hot = HOT_PATHS.has(path) || REST_PATH.test(path) || path.startsWith("omniroute/");
+  let user = hot ? await localUser(jwt) : null;
+  if (user) {
+    timed("auth_local", authStarted);
+  } else {
+    const { data: who } = await db.auth.getUser(jwt);
+    timed("auth", authStarted);
+    user = who?.user ? { id: who.user.id, email: who.user.email ?? "" } : null;
+  }
   if (!user) return refuse(401, "HEYTORA_SIGNIN", "Sign in to HeyTora to keep talking.");
 
   const rpc = async (fn: string, args: Record<string, unknown>) => {
@@ -345,7 +417,9 @@ Deno.serve(async (req: Request): Promise<Response> => {
 
   try {
     if (path === "me" && req.method === "GET") {
+      const usageStarted = performance.now();
       const summary = await rpc("get_usage_summary", {});
+      timed("usage", usageStarted);
       // A paid plan sees the packs it can buy (0012); Paddle being slow
       // never holds up the plan itself.
       if ((summary.credits as { can_buy?: boolean } | null)?.can_buy) {
@@ -521,7 +595,9 @@ Deno.serve(async (req: Request): Promise<Response> => {
     if ((path === "ticket" || path === "agent-ticket") && req.method === "POST") {
       const body = await req.json().catch(() => ({}));
       const kind = path === "agent-ticket" ? "agent" : body?.kind === "agent" ? "agent" : "talk";
+      const windowStarted = performance.now();
       const w = await rpc("heytora_window", { p_kind: kind, p_new: body?.new === true });
+      timed("window", windowStarted);
       if (!w.ok) return await refused(w);
       return json(200, { ...(await ticketFor(kind, w)), kind, usage: w });
     }
@@ -535,12 +611,16 @@ Deno.serve(async (req: Request): Promise<Response> => {
       }
       if (kind !== "talk") {
         // A dictation, or a wake-word check: one pass each, counted apart.
+        const consumeStarted = performance.now();
         const usage = await rpc("heytora_consume", { p_kind: kind, p_quantity: 1, p_meta: { model } });
+        timed("consume", consumeStarted);
         if (!usage.ok) return await refused(usage);
         const minutes = Number((usage.limits as Record<string, unknown>)?.[`${kind}_minutes`] ??
           (kind === "wake" ? 1 : 10));
         const endsAt = Date.now() / 1000 + Math.min(Math.max(minutes, 1), 120) * 60;
+        const mintStarted = performance.now();
         const pass = await mintPass(model, endsAt);
+        timed("google", mintStarted);
         delete usage.limits;
         return json(200, { ...pass, expires_at: endsAt, now: Date.now() / 1000, usage });
       }
@@ -549,13 +629,31 @@ Deno.serve(async (req: Request): Promise<Response> => {
       // standby pass (the voice waiting for a question) lives in a "voice"
       // window instead: not a talk message, and no ticket for answers.
       const standby = body?.standby === true;
-      const w = await rpc("heytora_window", standby
+      const windowArgs = standby
         ? { p_kind: "voice", p_new: body?.new === true }
-        : { p_kind: "talk", p_new: body?.new !== false });
+        : { p_kind: "talk", p_new: body?.new !== false };
+      // AC-03: the window and the pass in one round trip (0013). Until that
+      // migration is applied, the two calls as before.
+      const dbStarted = performance.now();
+      let w: Record<string, unknown>;
+      let p: Record<string, unknown> | null = null;
+      const both = await db.rpc("heytora_talk_pass", { ...windowArgs, p_model: model });
+      if (!both.error) {
+        const d = both.data as { window: Record<string, unknown>; pass: Record<string, unknown> | null };
+        w = d.window;
+        p = d.pass;
+      } else if (both.error.code === "PGRST202") {
+        w = await rpc("heytora_window", windowArgs);
+        if (w.ok) p = await rpc("heytora_pass", { p_window: Number(w.window), p_model: model });
+      } else {
+        throw new Error(`heytora_talk_pass: ${both.error.message}`);
+      }
+      timed("window_pass", dbStarted);
       if (!w.ok) return await refused(w);
-      const p = await rpc("heytora_pass", { p_window: Number(w.window), p_model: model });
-      if (!p.ok) return await refused({ ...p, plan: w.plan });
+      if (!p?.ok) return await refused({ ...(p ?? { ok: false, reason: "window", kind: "talk" }), plan: w.plan });
+      const mintStarted = performance.now();
       const pass = await mintPass(model, Number(p.expires_at));
+      timed("google", mintStarted);
       if (standby) {
         return json(200, {
           ...pass, expires_at: Number(p.expires_at), now: Date.now() / 1000, standby: true, usage: w,
@@ -722,8 +820,8 @@ Deno.serve(async (req: Request): Promise<Response> => {
 
     // What it cost: service role, after the answer is on its way.
     const admin = createClient(SUPABASE_URL, SERVICE_KEY, { auth: { persistSession: false } });
-    const record = async (input: number, output: number) => {
-      const micro = costMicro(PRICES, fam, input, output);
+    const record = async (input: number, output: number, extraMicro = 0) => {
+      const micro = costMicro(PRICES, fam, input, output) + extraMicro;
       if (!micro && !input && !output) return;
       const { error } = await admin.rpc("heytora_record_cost", {
         p_user: user.id, p_kind: kind, p_model: model, p_in: input, p_out: output, p_micro: micro,
@@ -740,7 +838,10 @@ Deno.serve(async (req: Request): Promise<Response> => {
       return json(upstream.status, data);
     }
     if (!upstream.ok || !upstream.body) {
-      return new Response(upstream.body, { status: upstream.status, headers: { "content-type": type } });
+      // A refusal is small: read, checked for billing (FX-06), passed on.
+      const text = await upstream.text();
+      noteRefusal(`a ${fam} call`, upstream.status, text);
+      return new Response(text, { status: upstream.status, headers: { "content-type": type } });
     }
     if (method === "embedContent" || method === "batchEmbedContents") {
       const bytes = typeof payload === "string" ? payload.length : (payload?.byteLength ?? 0);
@@ -767,7 +868,8 @@ Deno.serve(async (req: Request): Promise<Response> => {
       const reader = new UsageReader();
       reader.push(text);
       const used = reader.used();
-      if (used) later(record(used.input, used.output));
+      const searches = searchesIn(text);            // Google Search, billed per search
+      if (used || searches) later(record(used?.input ?? 0, used?.output ?? 0, searches * SEARCH_MICRO));
     }
     return new Response(text, {
       status: upstream.status,
@@ -777,4 +879,4 @@ Deno.serve(async (req: Request): Promise<Response> => {
     console.error("heytora:", e);
     return refuse(502, "HEYTORA_SERVER", "HeyTora's server had a problem - try again.");
   }
-});
+}

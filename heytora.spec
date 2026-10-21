@@ -92,6 +92,7 @@ for pkg in (
     "uiautomation",             # UIA tree walker (needs its bundled DLL)
     "rapidocr_onnxruntime",     # offline OCR — ships ONNX models as data
     "onnxruntime",
+    "sherpa_onnx",              # the wake word on the PC (audio/wake_local.py) - its own DLLs
     "cv2",                      # figure detection for teaching drawings
     # Web search + misc runtime deps
     "ddgs",
@@ -112,7 +113,44 @@ for pkg in (
         pass  # package not installed — that path is optional anyway
 
 hiddenimports += hidden
-hiddenimports += collect_submodules("PyQt6")
+# ST-04: the Qt HeyTora uses, not all of it. collect_submodules("PyQt6") took
+# every module - Quick, QML, 3D, Designer, PDF, Bluetooth... - and with them
+# 137 MB of Qt DLLs (the 14 Oct build: 654 MB unpacked, a 204 MB installer).
+QT_USED = ["PyQt6.QtCore", "PyQt6.QtGui", "PyQt6.QtWidgets", "PyQt6.QtSvg",
+           "PyQt6.QtNetwork",            # ui/single_instance.py
+           "PyQt6.QtMultimedia",         # ui/sounds.py (QSoundEffect)
+           "PyQt6.sip"]
+hiddenimports += QT_USED
+QT_UNUSED = ["PyQt6." + m for m in (
+    "QtQuick", "QtQuick3D", "QtQuickWidgets", "QtQml", "QtDesigner", "QtHelp", "QtPdf",
+    "QtPdfWidgets", "QtBluetooth", "QtNfc", "QtPositioning", "QtWebChannel", "QtWebSockets",
+    "QtSensors", "QtSerialPort", "QtSpatialAudio", "QtTest", "QtSql", "QtTextToSpeech",
+    "QtRemoteObjects", "QtOpenGL", "QtOpenGLWidgets", "QtPrintSupport", "QtDBus", "QtXml",
+    "QtMultimediaWidgets", "QtStateMachine", "QtSvgWidgets")]
+# Qt DLLs and folders no module above loads (what Quick/QML pulled in
+# beside them), and opengl32sw.dll - Mesa's software OpenGL, 20 MB, for
+# Qt Quick on a PC without a GPU driver; Widgets paint without OpenGL.
+_QT_DROP = ("Qt6Quick", "Qt6Qml", "Qt6Pdf", "Qt6Designer", "Qt6Help", "Qt6Bluetooth",
+            "Qt6Nfc", "Qt6Positioning", "Qt6Sensors", "Qt6SerialPort", "Qt6Test", "Qt6Sql",
+            "Qt6WebChannel", "Qt6WebSockets", "Qt6SpatialAudio", "Qt6TextToSpeech",
+            "Qt6RemoteObjects", "Qt6ShaderTools", "Qt6LabsAnimation", "Qt6LabsFolderListModel",
+            "Qt6LabsQmlModels", "Qt6LabsSettings", "Qt6LabsSharedImage", "Qt6LabsWavefrontMesh",
+            "Qt6MultimediaQuick", "Qt6MultimediaWidgets", "Qt6OpenGL", "opengl32sw",
+            "qpdf")                     # the PDF image plugin: it needs Qt6Pdf
+
+
+def _qt_kept(entries):
+    """(dest, src, kind) entries without the Qt parts HeyTora never loads."""
+    out = []
+    for entry in entries:
+        dest = str(entry[0]).replace("\\", "/")
+        name = dest.rsplit("/", 1)[-1]
+        if "/Qt6/qml/" in dest or dest.startswith("PyQt6/Qt6/qml"):
+            continue
+        if "PyQt6" in dest and name.startswith(_QT_DROP):
+            continue
+        out.append(entry)
+    return out
 
 import glob as _glob
 # The starter skills (agents/skills reads them from here): text, not code.
@@ -128,6 +166,8 @@ for _wav in _glob.glob(os.path.join("assets", "sounds", "*.wav")):
         datas.append((_wav, os.path.join("assets", "sounds")))
 # Tora's voices saying hello, for Make Tora yours (assets/voices/make_voices.py).
 datas.append((os.path.join("assets", "voices"), os.path.join("assets", "voices")))
+# The wake word's model and keywords (audio/wake_local.py, HP-08).
+datas.append((os.path.join("assets", "wake"), os.path.join("assets", "wake")))
 
 
 a = Analysis(
@@ -154,9 +194,12 @@ a = Analysis(
         # `pip install playwright` when it is missing. It is imported inside
         # functions, which PyInstaller still follows - so it got bundled.
         "playwright",
-    ],
+    ] + QT_UNUSED,
     noarchive=False,
 )
+
+a.binaries = _qt_kept(a.binaries)
+a.datas = _qt_kept(a.datas)
 
 pyz = PYZ(a.pure)
 

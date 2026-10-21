@@ -127,4 +127,4 @@ def test_a_question_a_few_minutes_later_is_the_same_conversation(monkeypatch):
     m = _manager(4 * 60)
     _capture(m, conv)
     assert forgot == [] and m._app_memory, "\"that one\" still means what it meant"
-    assert m._submitted == ["_realtime_stream"]
+    assert [n for n in m._submitted if n != "keep_warm"] == ["_realtime_stream"], "no new session"

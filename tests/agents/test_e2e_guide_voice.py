@@ -72,6 +72,9 @@ class _Player:
     def feed(self, pcm):
         _Player.fed.append(len(pcm))
 
+    def end_of_answer(self):
+        pass
+
     def clear(self):
         pass
 

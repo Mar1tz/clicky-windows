@@ -435,6 +435,9 @@ class _Player:
     def feed(self, pcm):
         _Player.events.append(("feed", len(pcm)))
 
+    def end_of_answer(self):
+        pass
+
     def clear(self):
         _Player.events.append("clear")
 
@@ -782,3 +785,25 @@ def test_the_panel_shows_step_n_alone_while_the_plan_is_written():
     assert label.text == "Guide · 2/4"
     CompanionPanel.set_guide_progress(panel, 0, 0)
     assert label.visible is False
+
+
+def test_a_busy_careful_planner_is_given_up_not_waited_out(monkeypatch):
+    """UI-06: 11 Oct, the pro model was busy (503) and step one came 78 s after the ask."""
+    import time
+    import companion_manager as cm
+
+    mgr = _bare(monkeypatch)
+    monkeypatch.setattr(mgr, "PLAN_FALLBACK_S", 0.2)
+    asked = []
+
+    async def plan(goal, *, fast=True, on_first_step=None, **kw):
+        asked.append((fast, kw.get("busy_retries", True)))
+        if not fast:
+            await asyncio.sleep(10)                     # busy, retrying
+        return Guide(goal=goal, feasible=False)
+
+    monkeypatch.setattr(cm.gemini_planner, "plan", plan)
+    started = time.monotonic()
+    guide = asyncio.run(mgr._plan_guide("g", "", "Calculator", [], on_first_step=lambda g: None))
+    assert time.monotonic() - started < 1.0 and not guide
+    assert asked == [(True, True), (False, False)], "one careful try, no busy retries"
