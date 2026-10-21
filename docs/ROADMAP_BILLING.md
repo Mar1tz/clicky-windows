@@ -45,27 +45,31 @@ limits, the cost ceiling) and `docs/REFERRALS.md` (Pro trial, free months).
 - [ ] Prices current: `rules.ts` `DEFAULT_PRICES` and `ai/gemini_live.py`
       `LIVE_PRICES` against Google's list; Claude against what OmniRoute bills;
       Paddle's fee against our Paddle account.
-- [ ] Measure voice with `tools/voice_eval.py`: one question, a three-answer
-      follow-up, a 30-minute talk window, a 30-minute standby window.
+- [x] Measure voice with `tools/voice_eval.py` (21 Oct): $0.0099 a spoken
+      answer on average; small talk $0.0046, two actions $0.0155.
 
 **One cost ceiling for everything**
-- [ ] Migration `0011`: each talk, standby and dictation pass records an
-      **estimated** cost in `usage_costs` (kind `voice`), from new
-      `plans.limits` keys set from the measurements.
-- [ ] The ceiling is checked for **every** kind — talk window, voice pass,
-      dictation, agent window — not only forwarded calls. At the ceiling,
-      nothing new opens.
-- [ ] `POST /voice-usage {window, usage}`: the app sends the window's raw
-      `usageMetadata`; the server prices it itself and adds only what's
-      **above** the estimate, capped per window, once per window.
-- [ ] App: send it when a window ends (`companion_manager._note_voice`
-      already sums it).
-- [ ] Tests: a Free account at its ceiling on voice alone can't open a talk
-      window; `heytora_admin_usage()` shows voice in `cost_usd`.
-- [ ] Set `budget_usd` for Free, Pro, Max and `pro_trial` from the margin
-      target; a user at the daily limit every day should reach the ceiling
-      no sooner than about day 20.
-- [ ] Update the tables in `ACCOUNTS.md` and `REFERRALS.md`.
+- [x] Migration `0011`: each question, dictation and wake-word check is
+      booked as it opens (`voice_estimates`: $0.01 / $0.005 / $0.0005).
+- [x] The ceiling is checked for **every** kind before it opens, not only
+      forwarded calls.
+- [x] `POST /voice-usage {window, usage}`: the server prices Google's
+      `usageMetadata` itself and adds only what's above the booking
+      (at most $0.25 an answer, $5 a question). Deployed 21 Oct.
+- [x] App: `Account.report_voice` after every answer
+      (`companion_manager._note_voice`), in the background.
+- [x] Tests: `test_e2e_voice_cost.py`, `heytora_rules.test.ts`.
+- [x] `budget_usd`: Pro $9, Max $47 (50%); Free stays $2.
+- [ ] **Apply `0011`** in the Supabase SQL editor.
+- [ ] Ship the app with `report_voice` (until then, only the bookings count).
+- [ ] Check live: ask one question, then `heytora_admin_usage()` shows its
+      voice in `cost_usd`.
+- [ ] Dictation and the wake word: report their real cost too (bookings only
+      for now; a 30-minute dictation is worth far more than $0.005).
+- [ ] Website: Pro's "up to 300 asks a day" — the $9 ceiling is about 650
+      questions a month (~22 a day) at today's prices. Change the wording,
+      the price, or the ceiling.
+- [x] `ACCOUNTS.md` updated. `REFERRALS.md` follows the Pro trial decision.
 
 **Confirm before a plan change**
 - [ ] Server: `POST /checkout {plan}` for someone already paying returns a

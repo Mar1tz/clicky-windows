@@ -6,7 +6,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
-  checkGenerate, costMicro, DEFAULT_PRICES, estimateTokens, family, makeTicket, MAX_OUTPUT_TOKENS,
+  checkGenerate, costMicro, DEFAULT_PRICES, estimateTokens, family, liveCostMicro, makeTicket, MAX_OUTPUT_TOKENS,
   omnirouteModels, prices, readTicket, UsageReader,
 } from "../functions/heytora/rules.ts";
 
@@ -107,4 +107,19 @@ test("the agents may only reach the Claude models on OmniRoute", () => {
   assert.ok(allowed.has("claude/claude-sonnet-4-6") && allowed.has("cc/claude-sonnet-4-6"));
   assert.equal(allowed.has("gpt-5"), false);
   assert.deepEqual([...omnirouteModels(" a/x , b/y ")], ["a/x", "b/y"]);
+});
+
+test("an answer's live voice is priced from Google's own counts, as the app prices it", () => {
+  // In: 3,500 text + 300 audio listed, 200 unlisted (priced as text) = 3,700 x 0.75 + 300 x 3.
+  // Out: 120 audio x 12, 50 thinking as text x 4.5. Same answer as ai/gemini_live.live_cost_usd.
+  const usage = {
+    promptTokenCount: 4000, responseTokenCount: 120, thoughtsTokenCount: 50,
+    promptTokensDetails: [{ modality: "TEXT", tokenCount: 3500 }, { modality: "AUDIO", tokenCount: 300 }],
+  };
+  assert.deepEqual(liveCostMicro(usage), { micro: 2775 + 900 + 1440 + 225, input: 4000, output: 170 });
+  assert.equal(liveCostMicro({ promptTokenCount: 1000, promptTokensDetails: [{ modality: "DOCUMENT", tokenCount: 1000 }] }).micro,
+    3000, "an unknown modality at the dearest rate");
+  for (const junk of [null, undefined, "x", [], { promptTokenCount: -5 }, { promptTokenCount: "lots" }]) {
+    assert.equal(liveCostMicro(junk).micro, 0, String(junk));
+  }
 });

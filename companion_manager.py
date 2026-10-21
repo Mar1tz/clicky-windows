@@ -1244,6 +1244,10 @@ class CompanionManager(QObject):
             return
         from ai.gemini_live import live_cost_usd
         cost = live_cost_usd(usage)
+        if not gemini.own_key():
+            # On the plan, the voice is our bill: it goes into the month's use (0011).
+            from account.service import account
+            account().report_voice(usage)
         st = self._answer_stats()
         st["voice_cost"] = st.get("voice_cost", 0.0) + cost
         a = self._ans

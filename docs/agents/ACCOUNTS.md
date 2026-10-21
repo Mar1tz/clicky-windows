@@ -43,7 +43,7 @@ user buys is counted as a *window* the server opens and closes:
 | Agent messages / month | 25 | 150 | 1,000 |
 | *A talk message lasts at most* | *10 min* | *30 min* | *30 min* |
 | *Hidden: daily fair use (talk / dictation / agent)* | *25 / 100 / 10* | *300 / 500 / 50* | *600 / 1,000 / 200* |
-| *Hidden: monthly cost ceiling (what Google charges you)* | *$2* | *$12* | *$60* |
+| *Hidden: monthly cost ceiling (what Google charges you, voice included)* | *$2* | *$9* | *$47* |
 | *Hidden: requests / month* | *1,500* | *30,000* | *150,000* |
 
 - **Talk message** — every time the user talks, on every plan, counted the
@@ -69,8 +69,16 @@ user buys is counted as a *window* the server opens and closes:
   own `usageMetadata`) are priced and recorded in `usage_costs`; once a
   month's total reaches the plan's `budget_usd`, forwarded calls stop until
   the 1st. Prices are on the high side of Google's list (`rules.ts`); set the
-  `HEYTORA_PRICES` secret to change them. Live voice isn't in this total
-  (it goes straight to Google) — it is held by the passes and windows above.
+  `HEYTORA_PRICES` secret to change them.
+- **The voice is in the ceiling too** (migration 0011, 21 Oct 2026). It goes
+  straight to Google, so each question, dictation and wake-word check is
+  **booked** as it opens at `voice_estimates`' price (a question $0.01, from
+  `tools/voice_eval.py`). After every answer the app sends Google's
+  `usageMetadata` (`POST /voice-usage`); the server prices it
+  (`rules.ts liveCostMicro`) and adds whatever is above the booking — never
+  less. The ceiling is checked before **any** use opens. Ceilings are 50% of
+  what a plan leaves after Paddle's fee (the owners, 21 Oct): Pro $9, Max $47.
+  Edit `voice_estimates` to change a booking; no release needed.
 - **Per-minute brake** on every plan, and a lapsed or cancelled subscription
   (`plan_status` not `active`/`trialing`) counts as Free.
 - All of these numbers are in `public.plans.limits` — change them any time,

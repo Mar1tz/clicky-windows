@@ -211,3 +211,53 @@ export class UsageReader {
 export function estimateTokens(bytes: number): number {
   return Math.ceil(Math.max(0, bytes) / 4);
 }
+
+// -- what an answer's live voice cost (migration 0011) ---------------------------------------------------
+//
+// The voice goes straight to Google, so the app sends Google's usageMetadata
+// for each answer and the price is worked out here - never taken from the
+// app. Same table and rules as ai/gemini_live.py (gemini-3.8-live, Google's
+// list, checked 6 Oct 2026): US dollars per million tokens, by modality.
+
+export const LIVE_PRICES = {
+  in: { TEXT: 0.75, AUDIO: 3.0, IMAGE: 1.0, VIDEO: 1.0 } as Record<string, number>,
+  out: { TEXT: 4.5, AUDIO: 12.0 } as Record<string, number>,
+};
+
+const count = (v: unknown): number => {
+  const n = Number(v);
+  return Number.isFinite(n) && n > 0 ? Math.min(Math.floor(n), 10_000_000) : 0;
+};
+
+/** Tokens by modality; what the breakdown misses is priced at `fallback`. */
+function byModality(details: unknown, total: unknown, fallback: string): Record<string, number> {
+  const out: Record<string, number> = {};
+  for (const d of Array.isArray(details) ? details : []) {
+    const m = String((d as { modality?: unknown })?.modality ?? fallback);
+    out[m] = (out[m] ?? 0) + count((d as { tokenCount?: unknown })?.tokenCount);
+  }
+  const gap = count(total) - Object.values(out).reduce((a, b) => a + b, 0);
+  if (gap > 0) out[fallback] = (out[fallback] ?? 0) + gap;
+  return out;
+}
+
+export type LiveCost = { micro: number; input: number; output: number };
+
+/** One answer's usageMetadata (or several summed) in millionths of a dollar.
+ *  Thinking is billed as text out; an unknown modality at the dearest rate. */
+export function liveCostMicro(usage: unknown): LiveCost {
+  const u = (usage && typeof usage === "object" ? usage : {}) as Record<string, unknown>;
+  const ins = byModality(u.promptTokensDetails, u.promptTokenCount, "TEXT");
+  for (const [m, n] of Object.entries(byModality(u.toolUsePromptTokensDetails, u.toolUsePromptTokenCount, "TEXT"))) {
+    ins[m] = (ins[m] ?? 0) + n;
+  }
+  const outs = byModality(u.responseTokensDetails, u.responseTokenCount, "AUDIO");
+  outs.TEXT = (outs.TEXT ?? 0) + count(u.thoughtsTokenCount);
+  const topIn = Math.max(...Object.values(LIVE_PRICES.in));
+  const topOut = Math.max(...Object.values(LIVE_PRICES.out));
+  let micro = 0;
+  for (const [m, n] of Object.entries(ins)) micro += n * (LIVE_PRICES.in[m] ?? topIn);
+  for (const [m, n] of Object.entries(outs)) micro += n * (LIVE_PRICES.out[m] ?? topOut);
+  const sum = (o: Record<string, number>) => Object.values(o).reduce((a, b) => a + b, 0);
+  return { micro: Math.ceil(micro), input: sum(ins), output: sum(outs) };
+}

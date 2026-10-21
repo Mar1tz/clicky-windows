@@ -15,6 +15,10 @@
 //                      the next question) the pass lives in an uncounted
 //                      "voice" window and comes with no ticket (0007).
 //                      The app then talks straight to Google.
+//   POST /voice-usage  {window, usage}  what Google billed for an answer's
+//                      voice (its usageMetadata), against that question's
+//                      talk window. Priced here; only what is above the
+//                      window's booked estimate is added (migration 0011).
 //   POST /agent-ticket the agent window's ticket (older apps).
 //   GET  /me           the plan, its allowances and this month's use.
 //   DELETE /account    {confirm: email}  close the account and delete its
@@ -53,7 +57,7 @@
 
 import { createClient } from "npm:@supabase/supabase-js@2";
 import {
-  checkGenerate, costMicro, estimateTokens, family, makeTicket, MAX_BODY_BYTES, MAX_OUTPUT_TOKENS,
+  checkGenerate, costMicro, estimateTokens, family, liveCostMicro, makeTicket, MAX_BODY_BYTES, MAX_OUTPUT_TOKENS,
   omnirouteModels, prices, readTicket, UsageReader,
 } from "./rules.ts";
 import { apiBase, hasLivePlan, paddleEnv, priceMap } from "../_shared/billing.ts";
@@ -470,6 +474,26 @@ Deno.serve(async (req: Request): Promise<Response> => {
         ...pass, expires_at: Number(p.expires_at), ticket: t.ticket, ticket_expires_at: t.expires_at,
         now: t.now, usage: w,
       });
+    }
+
+    if (path === "voice-usage" && req.method === "POST") {
+      // The voice went straight to Google; this is its bill, from the app.
+      // Only ever adds to what the question booked, so a report that is
+      // missing or low costs us nothing the booking didn't already cover.
+      const body = await req.json().catch(() => ({}));
+      const window = Number(body?.window);
+      if (!Number.isSafeInteger(window) || window <= 0) {
+        return refuse(400, "HEYTORA_REQUEST", "Not a talk window.");
+      }
+      const cost = liveCostMicro(body?.usage);
+      if (!cost.micro) return json(200, { ok: true, added: 0 });
+      const admin = createClient(SUPABASE_URL, SERVICE_KEY, { auth: { persistSession: false } });
+      const { data, error } = await admin.rpc("heytora_voice_report", {
+        p_user: user.id, p_window: window, p_micro: cost.micro, p_in: cost.input, p_out: cost.output,
+        p_model: String(body?.model ?? "").slice(0, 80),
+      });
+      if (error) throw new Error(`heytora_voice_report: ${error.message}`);
+      return json(200, data);
     }
 
     if (path === "omniroute/v1/models" && req.method === "GET") {

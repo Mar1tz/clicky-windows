@@ -63,6 +63,7 @@ class FakeHeyTora:
         self.referral = {"code": "AMY1234", "friends": [], "months_waiting": 0, "months_used": 0,
                          "new_account": True, "referred_by": None, "trial_until": None}
         self.deleted = False
+        self.voice_reports: list[dict] = []     # POST /voice-usage bodies (0011)
 
     def window(self, kind: str, new: bool) -> tuple[int, float, bool]:
         held = self.windows.get(kind)
@@ -151,6 +152,9 @@ class FakeHeyTora:
                 return httpx.Response(200, json={"ok": True, "same": True} if same
                                       else {"ok": True, "changed": True, "plan": plan})
             return httpx.Response(200, json={"ok": True, "url": "https://heytora.example/pay?_ptxn=txn_1"})
+        if path.endswith("/heytora/voice-usage"):
+            self.voice_reports.append(body)
+            return httpx.Response(200, json={"ok": True, "added": 0})
         if path.endswith("/heytora/billing"):
             if not self.paying:
                 return httpx.Response(404, json={"error": {"code": 404, "status": "HEYTORA_BILLING",

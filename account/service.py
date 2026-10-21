@@ -643,6 +643,26 @@ class Account:
     async def aticket(self, kind: str = "talk") -> str:
         return await asyncio.to_thread(self.ticket, kind)
 
+    def report_voice(self, usage: Optional[dict]) -> None:
+        """What Google billed for an answer's voice (its usageMetadata), sent
+        against this question's talk window (migration 0011). The server
+        prices it and adds only what is above the question's booked estimate.
+        In the background, once: a report that fails is dropped - the
+        estimate stands - and never holds up an answer."""
+        with self._lock:
+            held = self._tickets.get("talk")
+        parts = held[0].split(".") if held else []
+        if not usage or len(parts) != 4 or not parts[1].isdigit() or not self.signed_in():
+            return
+
+        def send() -> None:
+            try:
+                self._call("POST", "voice-usage", {"window": int(parts[1]), "usage": usage})
+            except Exception:  # noqa: BLE001 - the booking already covers it
+                _log.debug("voice usage report failed", exc_info=True)
+
+        threading.Thread(target=send, name="heytora-voice-usage", daemon=True).start()
+
     def _held(self, kind: str) -> bool:
         """A ticket for `kind` with some life left in it? (Call with _lock held.)"""
         held = self._tickets.get(kind)
