@@ -45,12 +45,15 @@ limits, the cost ceiling) and `docs/REFERRALS.md` (Pro trial, free months).
 - [ ] Prices current: `rules.ts` `DEFAULT_PRICES` and `ai/gemini_live.py`
       `LIVE_PRICES` against Google's list; Claude against what OmniRoute bills;
       Paddle's fee against our Paddle account.
-- [x] Measure voice with `tools/voice_eval.py` (21 Oct): $0.0099 a spoken
-      answer on average; small talk $0.0046, two actions $0.0155.
+- [x] Measure voice with `tools/voice_eval.py` (21 Oct): $0.0099 a fresh
+      answer (small talk $0.0046, two actions $0.0155); **$0.0147** an answer
+      deep in a long session (`--conversation`, $0.0084 – $0.0252). Google
+      bills per answer, not per minute: an idle session costs nothing.
 
 **One cost ceiling for everything**
 - [x] Migration `0011`: each question, dictation and wake-word check is
-      booked as it opens (`voice_estimates`: $0.01 / $0.005 / $0.0005).
+      booked as it opens (`direct_cost_estimates`: $0.015 / $0.005 /
+      $0.0005); reports are rows of `usage_costs`, one ledger.
 - [x] The ceiling is checked for **every** kind before it opens, not only
       forwarded calls.
 - [x] `POST /voice-usage {window, usage}`: the server prices Google's
@@ -66,9 +69,12 @@ limits, the cost ceiling) and `docs/REFERRALS.md` (Pro trial, free months).
       voice in `cost_usd`.
 - [ ] Dictation and the wake word: report their real cost too (bookings only
       for now; a 30-minute dictation is worth far more than $0.005).
-- [ ] Website: Pro's "up to 300 asks a day" — the $9 ceiling is about 650
-      questions a month (~22 a day) at today's prices. Change the wording,
-      the price, or the ceiling.
+- [ ] Website: Pro's "up to 300 asks a day" — the $9 ceiling is about 490
+      questions a month (~16 a day) at $0.0185 a question (voice $0.015 +
+      the look $0.0035). Change the wording, the price, or the ceiling.
+- [ ] Daily check (see Alarms): an account with many standby windows and few
+      questions is an app changed to talk without opening questions — the
+      one way round the booking.
 - [x] `ACCOUNTS.md` updated. `REFERRALS.md` follows the Pro trial decision.
 
 **Confirm before a plan change**

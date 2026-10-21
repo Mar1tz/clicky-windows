@@ -2,9 +2,11 @@
 
 The live voice, dictation and the wake word go straight from the app to
 Google, so the plan's monthly cost ceiling never saw them: a Pro user on the
-daily limit could cost ~$90 a month on $20. Now each use is booked as it
-opens, the app reports what Google billed for every answer, the server adds
-what is above the booking, and the ceiling is checked before anything opens.
+daily limit could cost ~$90 a month on $20. Google bills per answer, not per
+minute, and every question opens a talk window - so each question is booked
+as it opens, the app reports what Google billed for every answer, the server
+adds what is above the booking, and the ceiling is checked before anything
+opens.
 
 The app's side is tested against the fake server; the server's pricing with
 Node (heytora_rules.test.ts, run by test_e2e_heytora_metering); the
@@ -103,21 +105,58 @@ def test_every_kind_is_held_by_the_ceiling():
 
 
 def test_a_direct_use_is_booked_as_it_opens():
-    spend = SQL[SQL.index("function public._heytora_spend("):SQL.index("function public.heytora_voice_report(")]
-    assert "from public.voice_estimates v where v.kind = p_kind" in spend
-    assert "values (p_uid, p_kind, 'estimate'" in spend and "v_id);" in spend
-    for line in ("('talk',      0.010,", "('dictation', 0.005,", "('wake',      0.0005,"):
+    book = SQL[SQL.index("function public._heytora_book("):SQL.index("function public._heytora_spend(")]
+    assert "from public.direct_cost_estimates d where d.kind = p_kind" in book
+    assert "c.model = 'estimate'" in book and "return;" in book, "once per question, however it opens"
+    spend = SQL[SQL.index("function public._heytora_spend("):SQL.index("function public.heytora_pass(")]
+    assert "perform public._heytora_book(p_uid, p_kind, v_id, p_quantity);" in spend
+    # a question at the long-session average, measured 21 Oct ($0.0147)
+    for line in ("('talk',      0.015,", "('dictation', 0.005,", "('wake',      0.0005,"):
         assert line in SQL, line
     assert "on conflict (kind) do nothing" in SQL, "edited estimates are kept"
 
 
+def test_only_a_question_the_live_voice_answers_is_booked():
+    """The cascade (transcribe -> Gemini -> TTS) goes through this server and
+    is priced call by call already; booking it as well would charge it twice."""
+    spend = SQL[SQL.index("function public._heytora_spend("):SQL.index("function public.heytora_pass(")]
+    assert "p_kind in ('dictation', 'wake') or (p_kind = 'talk' and public._heytora_live_open(p_uid))" in spend
+    live = SQL[SQL.index("function public._heytora_live_open("):SQL.index("function public._heytora_book(")]
+    assert "p.kind = 'pass'" in live and "w.kind in ('talk', 'voice')" in live, \
+        "talk and standby passes are the live voice; the cascade's transcriber is a dictation"
+    assert "> now())" in live, "only a pass whose window hasn't ended"
+    pass_ = SQL[SQL.index("function public.heytora_pass("):SQL.index("function public.heytora_voice_report(")]
+    assert "if v_kind = 'talk' then\n        perform public._heytora_book(v_uid, 'talk', p_window);" in pass_, \
+        "a live pass opened for a question books it (Free, or after a silence)"
+    assert "grant execute on function public.heytora_pass(bigint, text)           to authenticated;" in SQL
+
+
 def test_a_report_only_ever_adds():
     rep = SQL[SQL.index("function public.heytora_voice_report("):]
-    assert "v_add := greatest(v_total - v_booked, 0);" in rep
+    # the question's cost becomes max(booking, answers' total): one ledger
+    assert "v_reported := least(v_reported + p_micro, 5000000);" in rep, "one question: at most $5"
+    assert "v_add := greatest(v_reported - v_charged, 0);" in rep
     assert "p_micro := least(greatest(coalesce(p_micro, 0), 0), 250000);" in rep, "one answer: at most $0.25"
-    assert "least(public.voice_reports.reported_micro + excluded.reported_micro, 5000000)" in rep
     assert "e.id = p_window and e.user_id = p_user" in rep, "only your own question"
     assert "v_kind <> 'talk'" in rep and "interval '3 hours'" in rep
+    assert "voice_reports" not in SQL, "the report is a row of usage_costs, not a table of its own"
+
+
+def _cost_of_a_question(booking: int, answers: list[int]) -> int:
+    """heytora_voice_report's arithmetic, row by row, as the ledger sums it."""
+    charged, reported = booking, 0
+    for micro in answers:
+        reported = min(reported + min(max(micro, 0), 250_000), 5_000_000)
+        charged += max(reported - charged, 0)
+    return charged
+
+
+def test_what_a_question_ends_up_costing():
+    assert _cost_of_a_question(15_000, []) == 15_000, "no report (an older app): the booking"
+    assert _cost_of_a_question(15_000, [9_000]) == 15_000, "a cheap answer never lowers it"
+    assert _cost_of_a_question(15_000, [9_000, 9_000]) == 18_000, "two answers past the booking"
+    assert _cost_of_a_question(15_000, [25_200]) == 25_200, "a dear answer, in full"
+    assert _cost_of_a_question(15_000, [10**9] * 30) == 5_000_000, "a broken report stops at $5"
 
 
 def test_only_the_server_function_may_report():

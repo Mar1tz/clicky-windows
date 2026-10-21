@@ -71,14 +71,18 @@ user buys is counted as a *window* the server opens and closes:
   the 1st. Prices are on the high side of Google's list (`rules.ts`); set the
   `HEYTORA_PRICES` secret to change them.
 - **The voice is in the ceiling too** (migration 0011, 21 Oct 2026). It goes
-  straight to Google, so each question, dictation and wake-word check is
-  **booked** as it opens at `voice_estimates`' price (a question $0.01, from
-  `tools/voice_eval.py`). After every answer the app sends Google's
-  `usageMetadata` (`POST /voice-usage`); the server prices it
-  (`rules.ts liveCostMicro`) and adds whatever is above the booking — never
-  less. The ceiling is checked before **any** use opens. Ceilings are 50% of
-  what a plan leaves after Paddle's fee (the owners, 21 Oct): Pro $9, Max $47.
-  Edit `voice_estimates` to change a booking; no release needed.
+  straight to Google, which bills per answer, not per minute. Each question
+  the **live** voice answers, each dictation and wake-word check is
+  **booked** as it opens (a question on the other route — transcribe, Gemini,
+  TTS through this server — is priced call by call already, so it isn't) at
+  `direct_cost_estimates`' price (a question $0.015: an answer deep in a long
+  session, `tools/voice_eval.py --conversation`). After every answer the app
+  sends Google's `usageMetadata` (`POST /voice-usage`); the server prices it
+  (`rules.ts liveCostMicro`), so a question costs the larger of its booking
+  and its answers — never less. The ceiling is checked before **any** use
+  opens. Ceilings are 50% of what a plan leaves after Paddle's fee (the
+  owners, 21 Oct): Pro $9, Max $47. Edit `direct_cost_estimates` to change a
+  booking; no release needed.
 - **Per-minute brake** on every plan, and a lapsed or cancelled subscription
   (`plan_status` not `active`/`trialing`) counts as Free.
 - All of these numbers are in `public.plans.limits` — change them any time,
