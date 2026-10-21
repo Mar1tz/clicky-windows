@@ -88,18 +88,57 @@ class LimitReached(AccountError):
 
 
 _KIND_WORDS = {"talk": "talk messages", "dictation": "dictations", "agent": "agent messages",
-               "calls": "requests"}
+               "calls": "requests", "wake": "wake-word checks"}
+
+PLAN_NAMES = {"free": "Free", "pro": "Pro", "max": "Max", "pro_trial": "Pro trial"}
+
+
+def plan_name(plan: str) -> str:
+    return PLAN_NAMES.get(plan or "", (plan or "").capitalize())
+
+
+def where_more(plan: str) -> str:
+    """Where more comes from - plans are bought in the app, and there is
+    nothing above Max. The same words as the server's (heytora/index.ts)."""
+    return {"free": " Upgrade in Settings → Plans & billing.",
+            "pro_trial": " Choose a plan in Settings → Plans & billing.",
+            "pro": " Or move to Max in Settings → Plans & billing."}.get(plan or "", "")
+
+
+def credits_more(plan: str) -> str:
+    """Out of credits: a paid plan can add some (0012), Pro can also move up."""
+    return {"pro": " Add credits or move to Max in Settings → Plans & billing.",
+            "max": " Add credits in Settings → Plans & billing."}.get(plan or "", where_more(plan))
+
+
+def _again(iso) -> str:
+    """"on 6 Nov" - when the plan's month starts again, from the server; a
+    paid plan's month starts on its renewal day, not the 1st."""
+    when = resets_on({"period_end": iso}) if iso else ""
+    return f"on {when}" if when and when != "the 1st" else "next month"
 
 
 def limit_words(info: dict, website: str = "") -> str:
+    """What a refusal says - the same words as the server's own (heytora/index.ts)."""
     kind = _KIND_WORDS.get(info.get("kind", ""), "allowance")
-    if info.get("reason") == "rate":
+    reason, key = info.get("reason"), info.get("plan") or ""
+    plan, more, when = plan_name(key), where_more(key), _again(info.get("resets_at"))
+    if reason == "rate":
         return "That's a lot at once - give it a minute and try again."
-    limit, plan = info.get("limit"), (info.get("plan") or "").capitalize()
+    if reason == "day":
+        return f"That's today's fair use of {kind} on the {plan} plan - more tomorrow."
+    if reason == "budget":
+        if key == "free":
+            return f"You've used this month's free credits. They come back {when}.{more}"
+        return f"You've used this month's credits on the {plan} plan. They come back {when}.{credits_more(key)}"
+    if reason in ("passes", "window"):
+        return "That conversation has ended - ask again."
+    if reason == "not_in_plan":
+        return f"Your {plan} plan doesn't include {kind}.{more}"
+    limit = info.get("limit")
     head = (f"You've used all {limit} {kind} on the {plan} plan this month."
             if limit is not None else f"You've used this month's {kind}.")
-    where = f" at {website}" if website else " on the HeyTora website"
-    return f"{head} Upgrade{where}, or switch to your own Gemini key in Settings."
+    return f"{head} They come back {when}.{more}"
 
 
 _UNITS = {"talk": ("talk message", "talk messages"), "agent": ("agent message", "agent messages"),
@@ -122,6 +161,26 @@ def resets_on(summary: dict) -> str:
         return "the 1st"
 
 
+def credits_words(summary: dict) -> str:
+    """"640 of 900 credits left this month · 675 added" - "" on a plan
+    without credits (0012). 1 credit = 1 cent of what Tora costs."""
+    c = (summary or {}).get("credits") or {}
+    if not isinstance(c.get("month"), int):
+        return ""
+    words = f"{int(c.get('month_left') or 0):,} of {c['month']:,} credits left this month"
+    if c.get("bought_left"):
+        words += f" · {int(c['bought_left']):,} added"
+    return words
+
+
+def credits_left(summary: dict) -> Optional[int]:
+    """The month's credits and the added ones together; None without credits."""
+    c = (summary or {}).get("credits") or {}
+    if not isinstance(c.get("month"), int):
+        return None
+    return int(c.get("month_left") or 0) + int(c.get("bought_left") or 0)
+
+
 def short_status(summary: dict) -> str:
     """One line for the tray and the log: "Free plan - 18 talk messages left"."""
     if not summary:
@@ -130,7 +189,10 @@ def short_status(summary: dict) -> str:
     limits, usage = summary.get("limits") or {}, summary.get("usage") or {}
     blocked = summary.get("blocked") or {}
     if blocked.get("all") == "budget":
-        return f"{plan} plan - this month's use is up (resets {resets_on(summary)})"
+        return f"{plan} plan - this month's credits are used up (back {resets_on(summary)})"
+    left = credits_left(summary)
+    if left is not None:
+        return f"{plan} plan - {left:,} credits left"
     today = summary.get("today") or {}
     parts = []
     for kind in ("talk", "agent"):
@@ -153,7 +215,8 @@ def alerts(summary: dict) -> list[tuple[str, str]]:
     if not summary:
         return []
     month = str(summary.get("period_start") or "")[:7]
-    plan = summary.get("plan_name") or (summary.get("plan") or "").capitalize()
+    plan = summary.get("plan_name") or plan_name(summary.get("plan") or "")
+    more = where_more(summary.get("plan") or "")
     limits, usage = summary.get("limits") or {}, summary.get("usage") or {}
     blocked = summary.get("blocked") or {}
     when = resets_on(summary)
@@ -166,23 +229,26 @@ def alerts(summary: dict) -> list[tuple[str, str]]:
                             f"That's today's fair use of {_UNITS[kind][1]} on the {plan} plan - "
                             "more tomorrow."))
             continue
+        # Credits are the limit people see (0012); a count is a hidden brake,
+        # said only on the day it actually refuses.
         used = int(usage.get(kind) or 0)
         limit = int(limit)
         if limit and used >= limit:
             out.append((f"{month}:{kind}:100",
                         f"You've used all {_count(limit, kind)} on the {plan} plan this month. "
-                        f"They come back on {when} - or upgrade on the HeyTora website."))
-        elif limit and used >= ALERT_AT[0] * limit:
-            out.append((f"{month}:{kind}:80",
-                        f"{_count(limit - used, kind)} left this month on the {plan} plan "
-                        f"({used} of {limit} used). More on {when}."))
+                        f"They come back on {when}.{more}"))
     fair = summary.get("fair_use")
+    credits = summary.get("credits") or {}
     if blocked.get("all") == "budget":
-        out.append((f"{month}:all:100", f"This month's HeyTora use on the {plan} plan is used up. "
-                                        f"It starts again on {when} - or upgrade on the HeyTora website."))
+        out.append((f"{month}:all:100", f"This month's credits on the {plan} plan are used up. "
+                                        f"They come back on {when}.{credits_more(summary.get('plan') or '')}"))
     elif isinstance(fair, (int, float)) and fair >= ALERT_AT[0]:
-        out.append((f"{month}:all:80", f"You've used most of this month's HeyTora use on the {plan} plan. "
-                                       f"It starts again on {when}."))
+        left = credits.get("month_left")
+        head = (f"{left} of this month's credits left on the {plan} plan."
+                if isinstance(left, int) else f"You've used most of this month's credits on the {plan} plan.")
+        extra = int(credits.get("bought_left") or 0)
+        tail = f" Then your {extra} added credits." if extra else f" More on {when}."
+        out.append((f"{month}:all:80", head + tail))
     return out
 
 
@@ -337,6 +403,12 @@ class Account:
         if data.get("changed"):
             self.refresh_soon(0)
         return data
+
+    def buy_credits(self, price: str) -> dict:
+        """A pack of credits (0012) - one of summary["credit_packs"], by its
+        Paddle price: {"url": Paddle's checkout to open, "credits": n}.
+        They're added when Paddle tells the server it's paid."""
+        return self._call("POST", "credits", {"price": price})
 
     def billing_portal(self) -> str:
         """Paddle's page for this account's card, invoices and cancelling."""

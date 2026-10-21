@@ -23,6 +23,46 @@ export const LIVE_PRICES: Record<string, string> = {
   max: "pri_01m496kctf4c4jxgzfzncrktny",
 };
 export const PLANS = ["pro", "max"] as const;
+
+// Bought credits (migration 0012): the packs are the active one-off prices
+// of one Paddle product, "HeyTora credits", each with custom data
+// {"credits": n} - so a pack is added, changed or retired in Paddle, with no
+// release. 1 credit = 1 US cent of what Tora costs us; the packs keep about
+// 25% margin after Paddle's fee (the owners, 21 Oct 2026). Per Paddle
+// account, the product is found from any one of its packs (its prices know
+// their product); PADDLE_CREDITS_PRODUCT names the product outright. Empty:
+// not made in that account yet - buying credits says so.
+// (Sandbox, 21 Oct 2026: 675/$10 pri_01m5g1j3j5crwascanyj3vec7c,
+// 1,750/$25 pri_01m5g1x4jw6bm8ts8a27f08c3n, 3,500/$50 pri_01m5g1yaaz39xzp0rfqdhawf5t.)
+export const SANDBOX_CREDITS = { product: "", anyPack: "pri_01m5g1j3j5crwascanyj3vec7c" };
+export const LIVE_CREDITS = { product: "", anyPack: "" };
+
+export function creditsSource(value: string | undefined, env: Env): { product: string; anyPack: string } {
+  const own = env === "production" ? LIVE_CREDITS : SANDBOX_CREDITS;
+  const product = (value ?? "").trim();
+  return product ? { product, anyPack: "" } : { ...own };
+}
+
+export type Pack = { price: string; credits: number; cents: number; currency: string; label: string };
+
+/** The packs on sale, smallest first, from Paddle's list of the product's
+ *  prices: active, one-off, with a credits number and a price. */
+export function packsFrom(prices: unknown): Pack[] {
+  const out: Pack[] = [];
+  for (const p of Array.isArray(prices) ? prices : []) {
+    const price = obj(p);
+    const id = str(price.id);
+    const credits = Math.floor(Number(obj(price.custom_data).credits));
+    const unit = obj(price.unit_price);
+    const cents = Math.floor(Number(unit.amount));
+    const currency = str(unit.currency_code) ?? "USD";
+    if (!id || str(price.status) !== "active" || price.billing_cycle) continue;     // one-off only
+    if (!(credits > 0) || !(cents > 0)) continue;
+    const whole = cents % 100 === 0 ? String(cents / 100) : (cents / 100).toFixed(2);
+    out.push({ price: id, credits, cents, currency, label: currency === "USD" ? `$${whole}` : `${whole} ${currency}` });
+  }
+  return out.sort((a, b) => a.credits - b.credits);
+}
 export const SIGNATURE_TOLERANCE_S = 300;
 
 export function apiBase(env: Env): string {
@@ -136,6 +176,29 @@ export function planUpdate(event: Obj, prices: Record<string, string>): PlanUpda
     cancelAt,
     periodStart: status === "canceled" ? null : str(obj(sub.current_billing_period).starts_at),
   };
+}
+
+export type CreditGrant = { user: string; credits: number; transaction: string };
+
+/** A paid pack of credits, from a transaction.completed event - null for
+ *  anything else. How many comes from the price's own custom data (set in
+ *  Paddle), times the quantity; whose, from the custom_data the server put
+ *  on the transaction when it made it. A subscription's renewal is a
+ *  transaction too, with no credits in its prices: null. */
+export function creditGrant(event: Obj): CreditGrant | null {
+  if (str(event.event_type) !== "transaction.completed") return null;
+  const txn = obj(event.data);
+  const id = str(txn.id);
+  const user = str(obj(txn.custom_data).user_id);
+  if (!id || !user) return null;
+  let credits = 0;
+  for (const item of Array.isArray(txn.items) ? txn.items : []) {
+    const price = obj(obj(item).price);
+    const each = Number(obj(price.custom_data).credits);
+    const qty = Math.max(1, Math.floor(Number(obj(item).quantity) || 1));
+    if (Number.isFinite(each) && each > 0) credits += Math.floor(each) * qty;
+  }
+  return credits > 0 ? { user, credits, transaction: id } : null;
 }
 
 /** Is there a subscription to change, rather than a new one to buy? */

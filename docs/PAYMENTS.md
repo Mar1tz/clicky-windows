@@ -42,6 +42,12 @@ changes this code later.
 - **Delete account:** cancels the Paddle subscription immediately, then
   deletes the account.
 - **Usage limits stay in Supabase.** Paddle only decides which plan applies.
+- **Credits** (migration 0012): each month's pot is shown as credits
+  (1 credit = 1 cent of AI cost; Free 50, Pro 900, Max 4,700). On Pro and
+  Max, Plans & billing shows a button per pack (`GET /me` lists them from
+  Paddle; `POST /credits {price}` opens a one-off checkout); when Paddle sends `transaction.completed`, the `paddle` webhook
+  adds them (`heytora_credit_grant`, once per transaction). Bought credits
+  never expire and are used after the month's. See `docs/COSTS.md`.
 
 | Piece | Where |
 |---|---|
@@ -78,8 +84,14 @@ or `max`.
    - events: `subscription.created`, `subscription.updated`,
      `subscription.activated`, `subscription.canceled`,
      `subscription.past_due`, `subscription.paused`, `subscription.resumed`,
-     `subscription.trialing`
+     `subscription.trialing`, and `transaction.completed` (bought credits)
    - copy its **secret key**.
+   - **Credit packs:** Catalog → product "HeyTora credits" (Standard digital
+     goods), with one **one-time** price per pack, each with custom data
+     `credits` = the number: $10 → `675`, $25 → `1750`, $50 → `3500`. Put
+     the product's `pro_` id in `billing.ts` (`SANDBOX_CREDITS_PRODUCT` /
+     `LIVE_CREDITS_PRODUCT`) or the `PADDLE_CREDITS_PRODUCT` secret. The
+     app lists every active pack; change packs in Paddle, not in code.
 7. **Supabase → Edge Functions → Secrets:**
    - `PADDLE_API_KEY`: the API key from step 3
    - `PADDLE_WEBHOOK_SECRET`: the secret from step 6

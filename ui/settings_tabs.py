@@ -640,7 +640,7 @@ class UsageTab(Tab):
     TOPICS = frozenset({"account"})
 
     # The allowances shown, in the user's words. "calls" is a hidden backstop.
-    _USAGE = (("talk", "Talk", "messages"), ("agent", "Agent", "messages"),
+    _USAGE = (("talk", "Questions", "questions"), ("agent", "Agent jobs", "jobs"),
               ("dictation", "Dictation", "dictations"))
 
     def showEvent(self, event) -> None:
@@ -703,35 +703,33 @@ class UsageTab(Tab):
             again.clicked.connect(lambda: br.refresh_account(force=True))
             g.row("Couldn't update just now", "This is your last known use.", again)
         if blocked.get("all") == "budget":
-            g.row("This month's use is up", f"Everything starts again on {when} - or change plan, "
-                  "or use your own Gemini key.")
+            from account.service import credits_more
+            g.row("This month's credits are used up",
+                  f"They come back on {when}.{credits_more(summary.get('plan') or '')}")
+        # Credits are the limit (0012): one meter. What was done this month
+        # is told plainly below it - counts, not allowances.
+        from account.service import credits_words
+        fair, words = summary.get("fair_use"), credits_words(summary)
+        if words and isinstance(fair, (int, float)):
+            r = g.row("Credits", words)
+            r.layout().itemAt(0).layout().addWidget(
+                Meter(min(1.0, float(fair)), colour=T.WARN if fair >= 0.8 else T.ACCENT))
         limits, usage = summary.get("limits") or {}, summary.get("usage") or {}
         for kind, name, unit in self._USAGE:
             if kind not in limits:
                 continue
-            used, limit = int(usage.get(kind) or 0), limits[kind]
-            if limit is None:
-                words = f"{used} this month - unlimited"
-            else:
-                left = max(0, int(limit) - used)
-                words = f"{used} of {limit} {unit} this month · " + (f"{left} left" if left else "all used")
+            used = int(usage.get(kind) or 0)
+            words = f"{used} {unit[:-1] if used == 1 else unit} this month"
             done_today = int((summary.get("today") or {}).get(kind) or 0)
             if done_today:
                 words += f" · {done_today} today"
             if blocked.get(kind) == "day":
                 words += " · today's fair use reached"
-            share = 0.0 if limit is None else min(1.0, used / max(1, int(limit)))
-            r = g.row(name, words)
-            # Amber from 80% used, as on Insights: the bar warns before it runs out.
-            r.layout().itemAt(0).layout().addWidget(
-                Meter(share, colour=T.WARN if share >= 0.8 or blocked.get(kind) else T.ACCENT))
-        fair = summary.get("fair_use")
-        if isinstance(fair, (int, float)):
-            r = g.row("Overall use", f"{round(fair * 100)}% of this month")
-            r.layout().itemAt(0).layout().addWidget(
-                Meter(min(1.0, float(fair)), colour=T.WARN if fair >= 0.8 else T.ACCENT))
-        g.note(f"Starts again on {when}. Everything Tora does for you - looking at your screen, "
-               "planning, agents thinking - counts a little towards overall use.")
+            elif blocked.get(kind) == "limit":
+                words += " · this month's limit reached"
+            g.row(name, words)
+        g.note(f"This month's credits come back on {when}. Everything Tora does uses a few - a question "
+               "about 2, looking at your screen less than 1, an agent job 25 to 150.")
         col.addWidget(g)
         return host
 
@@ -743,13 +741,15 @@ class UsageTab(Tab):
 PLANS = (
     {"key": "free", "name": "Free", "audience": "Best for trying it out", "price": "$0",
      "detail": "See what it does.",
-     "features": ("25 asks a month", "Voice, with live captions", "25 tasks a month, up to 10 a day")},
+     "features": ("50 credits a month", "About 25 questions", "Voice, with live captions")},
     {"key": "pro", "name": "Pro", "audience": "Best for everyday use", "price": "$20",
-     "detail": "Ask all day long.", "flag": "Popular",
-     "features": ("Up to 300 asks a day", "Voice, with live captions", "150 tasks a month, up to 50 a day")},
+     "detail": "Ask every day.", "flag": "Popular",
+     "features": ("900 credits a month", "About 450 questions, or a mix with agent jobs",
+                  "Add credits any time")},
     {"key": "max", "name": "Max", "audience": "Best for heavy use", "price": "$100",
      "detail": "Hand over the work.",
-     "features": ("Up to 600 asks a day", "Voice, with live captions", "1,000 tasks a month, up to 200 a day")},
+     "features": ("4,700 credits a month", "About 2,350 questions, or plenty of agent jobs",
+                  "Add credits any time")},
 )
 PLANS_NOTE = ("Prices in US dollars, plus tax where it applies. Paddle, our reseller, handles "
               "the payment - your card never reaches us.")
@@ -857,6 +857,21 @@ class PlansTab(Tab):
             elif mine != "free" and summary.get("plan_renews_at"):
                 billing.row(f"{name}, renews on {_day(summary['plan_renews_at'])}",
                             "Change or cancel any time; a change is prorated.")
+            from account.service import credits_words
+            credits = summary.get("credits") or {}
+            if credits.get("can_buy"):
+                # The packs are Paddle's (the server lists them with the plan).
+                packs = QWidget()
+                packs_row = QHBoxLayout(packs)
+                packs_row.setContentsMargins(0, 0, 0, 0)
+                packs_row.setSpacing(8)
+                for pack in summary.get("credit_packs") or []:
+                    buy = button(f"{int(pack['credits']):,} credits - {pack['label']}")
+                    buy.clicked.connect(lambda _=False, b=buy, p=pack: self._buy_credits(b, p))
+                    packs_row.addWidget(buy)
+                billing.row("Credits", (credits_words(summary) or "") +
+                            ". Added credits never expire and are used after the month's.",
+                            packs if packs_row.count() else None)
             if summary.get("billing"):
                 manage = button("Manage billing")
                 manage.clicked.connect(self._manage)
@@ -914,6 +929,31 @@ class PlansTab(Tab):
             elif answer.get("same"):
                 self._say(f"You're already on {plan['name']}.")
         self._busy = _Background(self, lambda: br.choose_plan(plan["key"]), done)
+
+    def _buy_credits(self, go, pack: dict) -> None:
+        """A pack of credits: Paddle's checkout in the browser; they show here
+        as soon as Paddle tells HeyTora's server it's paid."""
+        if self._busy is not None:
+            return
+        br = self.bridge
+        label_was = go.text()
+        go.setEnabled(False)
+        go.setText("Opening checkout…")
+
+        def done(answer: dict) -> None:
+            self._busy = None
+            go.setEnabled(True)
+            go.setText(label_was)
+            if answer.get("url"):
+                from PyQt6.QtCore import QUrl
+                from PyQt6.QtGui import QDesktopServices
+                QDesktopServices.openUrl(QUrl(answer["url"]))
+                self._say(f"Finish paying in your browser - the {answer.get('credits', '')} credits "
+                          "show here as soon as Paddle confirms it.")
+                br.watch_for_credits()
+            else:
+                self._say(answer.get("error") or "That didn't work - try again.")
+        self._busy = _Background(self, lambda: br.buy_credits(pack["price"]), done)
 
     def _manage(self) -> None:
         """Paddle's customer portal: card, invoices, cancel."""

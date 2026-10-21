@@ -266,7 +266,9 @@ def _state(**kw):
             "summary": {"plan": "free", "plan_name": "Free",
                         "limits": {"talk": 25, "agent": 25, "dictation": 300},
                         "usage": {"talk": 7, "agent": 25}, "period_end": "2026-11-01T00:00:00+00:00",
-                        "blocked": {"agent": "limit"}, "fair_use": 0.12}}
+                        "blocked": {"agent": "limit"}, "fair_use": 0.12,
+                        "credits": {"month": 200, "month_used": 24, "month_left": 176, "bought_left": 0,
+                                    "can_buy": False}}}
     base.update(kw)
     return base
 
@@ -282,10 +284,10 @@ def test_the_account_card_shows_the_plan_and_this_months_use(qapp, monkeypatch):
     qapp.processEvents()
     try:
         texts = _texts(page)
-        assert "Free plan" in texts and "7 of 25 messages this month · 18 left" in texts
-        assert "25 of 25 messages this month · all used" in texts
-        assert any(t.startswith("Starts again on 1 Nov") for t in texts)
-        assert "12% of this month" in texts
+        assert "Free plan" in texts and "7 questions this month" in texts
+        assert "25 jobs this month · this month's limit reached" in texts
+        assert any(t.startswith("This month's credits come back on 1 Nov") for t in texts)
+        assert "176 of 200 credits left this month" in texts
         assert not any("calls" in t.lower() or "requests" in t.lower() or "$" in t for t in texts), \
             "the server's own numbers stay hidden"
         buttons = {b.text(): b for b in page.findChildren(QPushButton)}
@@ -322,8 +324,8 @@ def test_unlimited_talk_on_pro(qapp):
         "usage": {"talk": 210, "agent": 12}, "period_end": "2026-11-01T00:00:00+00:00"})))
     page.refresh()
     texts = _texts(page)
-    assert "Pro plan" in texts and "210 this month - unlimited" in texts
-    assert "Overall use" not in texts, "not known, not shown"
+    assert "Pro plan" in texts and "210 questions this month" in texts
+    assert "Credits" not in texts, "not known, not shown"
 
 
 def _card_texts(qapp, **state):
@@ -349,15 +351,18 @@ def test_a_plan_that_could_not_be_read_says_why_and_offers_another_try(qapp):
 
 def test_a_failed_update_keeps_the_last_known_use(qapp):
     _page, texts = _card_texts(qapp, error="Could not reach HeyTora.", fresh=False)
-    assert "Couldn't update just now" in texts and "7 of 25 messages this month · 18 left" in texts
+    assert "Couldn't update just now" in texts and "7 questions this month" in texts
 
 
 def test_a_spent_month_and_todays_fair_use_are_said_plainly(qapp):
-    summary = _state()["summary"] | {"blocked": {"all": "budget", "talk": "day"}, "fair_use": 1.0}
+    summary = _state()["summary"] | {"blocked": {"all": "budget", "talk": "day"}, "fair_use": 1.0,
+                                     "credits": {"month": 200, "month_used": 200, "month_left": 0,
+                                                 "bought_left": 0, "can_buy": False}}
     _page, texts = _card_texts(qapp, summary=summary)
-    assert "This month's use is up" in texts
-    assert "7 of 25 messages this month · 18 left · today's fair use reached" in texts
-    assert "100% of this month" in texts
+    assert "This month's credits are used up" in texts
+    assert "They come back on 1 Nov. Upgrade in Settings → Plans & billing." in texts, "Free can't buy credits"
+    assert "7 questions this month · today's fair use reached" in texts
+    assert "0 of 200 credits left this month" in texts
 
 
 def test_signed_out_offers_to_sign_in(qapp):

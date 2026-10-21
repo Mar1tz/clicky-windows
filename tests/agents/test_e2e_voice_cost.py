@@ -168,3 +168,40 @@ def test_only_the_server_function_may_report():
 def test_the_ceilings_are_half_of_what_each_plan_leaves():
     assert "'{\"budget_usd\": 9}'::jsonb  where key = 'pro'" in SQL
     assert "'{\"budget_usd\": 47}'::jsonb where key = 'max'" in SQL
+
+
+# -- what a refusal says (21 Oct 2026) ----------------------------------------------------------------------
+
+def test_a_refusal_says_when_and_where_more_comes_from():
+    """The right day (a paid plan's month starts on its renewal day), more in
+    the app's Plans & billing (the website sells nothing), nothing above Max,
+    and no "use your own key" to someone who pays."""
+    from account.service import limit_words
+    on_6_nov = "2026-11-06T10:00:00+00:00"
+    pro = limit_words({"reason": "budget", "plan": "pro", "kind": "calls", "resets_at": on_6_nov})
+    assert pro == ("You've used this month's credits on the Pro plan. They come back on 6 Nov. "
+                   "Add credits or move to Max in Settings → Plans & billing.")
+    top = limit_words({"reason": "budget", "plan": "max", "kind": "talk", "resets_at": on_6_nov})
+    assert top == ("You've used this month's credits on the Max plan. They come back on 6 Nov. "
+                   "Add credits in Settings → Plans & billing."), "nothing above Max - but credits"
+    free = limit_words({"reason": "budget", "plan": "free", "kind": "talk"})
+    assert free == ("You've used this month's free credits. They come back next month. "
+                    "Upgrade in Settings → Plans & billing."), "credits are for paid plans"
+    trial = limit_words({"reason": "limit", "plan": "pro_trial", "kind": "agent", "limit": 150,
+                         "resets_at": on_6_nov})
+    assert trial == ("You've used all 150 agent messages on the Pro trial plan this month. They come back "
+                     "on 6 Nov. Choose a plan in Settings → Plans & billing.")
+    for words in (pro, top, free, trial):
+        assert "own Gemini key" not in words and "website" not in words and "the 1st" not in words
+
+
+def test_the_server_says_it_in_the_same_words():
+    for phrase in ('" Upgrade in Settings → Plans & billing."', '" Choose a plan in Settings → Plans & billing."',
+                   '" Or move to Max in Settings → Plans & billing."', "They come back ${when}.${more}",
+                   '" Add credits or move to Max in Settings → Plans & billing."',
+                   '" Add credits in Settings → Plans & billing."', 'pro_trial: "Pro trial"'):
+        assert phrase in FN, phrase
+    assert "own Gemini key" not in FN and "resets on the 1st" not in FN
+    assert FN[FN.index("Deno.serve("):].count("limitResponse(") == 1, \
+        "every refusal goes through refused(), which alone calls it"
+    assert 'resets_at: (await rpc("get_usage_summary", {})).period_end' in FN

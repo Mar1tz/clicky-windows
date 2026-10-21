@@ -682,23 +682,25 @@ class InsightsPage(Page):
         name = summary.get("plan_name") or (summary.get("plan") or "").capitalize() or "HeyTora"
         card = InfoCard("Monthly usage", f"{name} plan · resets {resets_on(summary)}")
         fair = summary.get("fair_use")
-        if isinstance(fair, (int, float)):
+        credits = summary.get("credits") or {}
+        if isinstance(fair, (int, float)) and isinstance(credits.get("month"), int):
             row = QHBoxLayout()
-            row.addWidget(label("Overall", "tileValueSmall"))
+            row.addWidget(label("Credits", "tileValueSmall"))
             row.addStretch(1)
-            row.addWidget(label(f"{round(fair * 100)}% used", "tileLineValue"))
+            left = f"{int(credits.get('month_left') or 0):,} of {credits['month']:,} left"
+            if credits.get("bought_left"):
+                left += f" · {int(credits['bought_left']):,} added"
+            row.addWidget(label(left, "tileLineValue"))
             card.body.addLayout(row)
             card.body.addWidget(GrowMeter(min(1.0, float(fair)), T.WARN if fair >= 0.8 else T.ACCENT, 10))
             card.body.addSpacing(8)
-        for words, used, limit in d["plan"]:
+        # Credits are the limit (0012); the rest is what was done, no allowances.
+        for words, used, _limit in d["plan"]:
             row = QHBoxLayout()
             row.addWidget(label(words, "tileLine"))
             row.addStretch(1)
-            row.addWidget(label(f"{used} of {limit}" if limit is not None else f"{used} · unlimited",
-                                "tileLineValue"))
+            row.addWidget(label(f"{used} this month", "tileLineValue"))
             card.body.addLayout(row)
-            frac = (used / limit) if limit else 0.0
-            card.body.addWidget(GrowMeter(frac, T.WARN if frac >= 0.8 else T.ACCENT))
             card.body.addSpacing(4)
         return card
 

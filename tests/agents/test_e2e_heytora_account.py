@@ -152,6 +152,16 @@ class FakeHeyTora:
                 return httpx.Response(200, json={"ok": True, "same": True} if same
                                       else {"ok": True, "changed": True, "plan": plan})
             return httpx.Response(200, json={"ok": True, "url": "https://heytora.example/pay?_ptxn=txn_1"})
+        if path.endswith("/heytora/credits"):
+            if not self.paying:
+                return httpx.Response(403, json={"error": {"code": 403, "status": "HEYTORA_BILLING",
+                    "message": "Credits can be added on Pro and Max - choose a plan first."}})
+            packs = {"pri_675": 675, "pri_1750": 1750}
+            if body.get("price") not in packs:
+                return httpx.Response(400, json={"error": {"code": 400, "status": "HEYTORA_BILLING",
+                    "message": "That pack of credits isn't on sale - choose another."}})
+            return httpx.Response(200, json={"ok": True, "url": "https://heytora.example/pay?_ptxn=txn_9",
+                                             "credits": packs[body["price"]]})
         if path.endswith("/heytora/voice-usage"):
             self.voice_reports.append(body)
             return httpx.Response(200, json={"ok": True, "added": 0})
@@ -553,7 +563,8 @@ def test_a_used_up_plan_says_which_and_what_to_do(heytora):
         asyncio.run(LiveSession(Models.REALTIME, {})._address())
     words = str(caught.value)
     assert "25 talk messages" in words and "Free plan" in words
-    assert "heytora.example" in words and "own Gemini key" in words
+    assert "Upgrade in Settings → Plans & billing." in words, "plans are bought in the app"
+    assert "own Gemini key" not in words and "website" not in words
     assert gemini.problem_of(caught.value) == "plan"
 
 

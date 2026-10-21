@@ -464,6 +464,18 @@ class AppBridge(QObject):
             _log.exception("checkout failed")
             return {"error": "That didn't work - try again."}
 
+    def buy_credits(self, price: str) -> dict:
+        """A pack of credits, by its Paddle price: {"url"} to open (Paddle's
+        checkout) or {"error"}. A network call - run it off the UI thread."""
+        from account.service import AccountError, account
+        try:
+            return account().buy_credits(price)
+        except AccountError as e:
+            return {"error": str(e) or "That didn't work - try again."}
+        except Exception:  # noqa: BLE001
+            _log.exception("buying credits failed")
+            return {"error": "That didn't work - try again."}
+
     def billing_page(self) -> dict:
         """Paddle's page for card, invoices and cancelling: {"url"} or {"error"}.
         A network call - run it off the UI thread."""
@@ -531,6 +543,14 @@ class AppBridge(QObject):
         summary = self.account_state().get("summary") or {}
         before = tuple(summary.get(k) for k in self.BILLING_FIELDS)
         self._watch(lambda s: tuple(s.get(k) for k in self.BILLING_FIELDS) != before,
+                    self.WATCH_BILLING_S)
+
+    def watch_for_credits(self) -> None:
+        """After opening the credits checkout: read the plan until the added
+        credits go up, or 10 minutes pass."""
+        summary = self.account_state().get("summary") or {}
+        before = int(((summary.get("credits") or {}).get("bought_left")) or 0)
+        self._watch(lambda s: int(((s.get("credits") or {}).get("bought_left")) or 0) > before,
                     self.WATCH_BILLING_S)
 
     def _watch(self, done, for_s: float) -> None:

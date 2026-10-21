@@ -53,7 +53,7 @@ def test_settings_does_not_stick_on_reading_your_plan(qapp, heytora):
         w.show()
         w.show_page("settings/usage")                       # built for the first time
         _until(qapp, lambda: "Free plan" in _texts(w))
-        assert "3 of 25 messages this month · 22 left" in _texts(w)
+        assert "3 questions this month" in _texts(w)
 
         # Closed; the plan moves while nobody looks; opened again.
         w.hide()
@@ -61,7 +61,7 @@ def test_settings_does_not_stick_on_reading_your_plan(qapp, heytora):
         acc.summary(force=True)
         qapp.processEvents()
         w.show()
-        _until(qapp, lambda: "9 of 25 messages this month · 16 left" in _texts(w))
+        _until(qapp, lambda: "9 questions this month" in _texts(w))
         assert "Reading your plan…" not in _texts(w)
     finally:
         w.close()
@@ -75,10 +75,10 @@ def test_the_card_moves_with_every_question(qapp, heytora):
     try:
         w.show()
         w.show_page("settings/usage")
-        _until(qapp, lambda: "3 of 25 messages this month · 22 left" in _texts(w))
+        _until(qapp, lambda: "3 questions this month" in _texts(w))
         heytora.account.new_talk()
         heytora.account.voice_pass("talk", "gemini-3.8-live")   # the server says: talk 1 this month
-        _until(qapp, lambda: "1 of 25 messages this month · 24 left · 1 today" in _texts(w))
+        _until(qapp, lambda: "1 question this month · 1 today" in _texts(w))
     finally:
         w.close()
 
@@ -138,14 +138,12 @@ def test_80_percent_and_all_used_are_said_once_a_month(heytora):
     assert acc.take_alerts() == [], "3 of 25: nothing to say"
     heytora.fake.usage = {"talk": 20}
     acc.summary(force=True)
-    said = acc.take_alerts()
-    assert said == ["5 talk messages left this month on the Free plan (20 of 25 used). More on 1 Nov."]
-    assert acc.take_alerts() == [] and _fresh_run(heytora).take_alerts() == [], "once, even after a restart"
+    assert acc.take_alerts() == [], "a count is a hidden brake now (0012): no 80% warning - credits have it"
     acc = heytora.account
     heytora.fake.usage = {"talk": 25}
     acc.summary(force=True)
     assert acc.take_alerts() == ["You've used all 25 talk messages on the Free plan this month. "
-                                 "They come back on 1 Nov - or upgrade on the HeyTora website."]
+                                 "They come back on 1 Nov. Upgrade in Settings → Plans & billing."]
 
 
 def test_the_month_spent_and_todays_fair_use_are_said(heytora):
@@ -156,7 +154,7 @@ def test_the_month_spent_and_todays_fair_use_are_said(heytora):
            "fair_use": 1.0, "day_resets_at": 1790985600}
     words = [w for _k, w in alerts(pro)]
     assert "That's today's fair use of talk messages on the Pro plan - more tomorrow." in words
-    assert any(w.startswith("This month's HeyTora use on the Pro plan is used up.") for w in words)
+    assert any(w.startswith("This month's credits on the Pro plan are used up.") for w in words)
 
 
 def test_the_tray_line(heytora):
@@ -255,7 +253,7 @@ def test_settings_says_todays_use(qapp):
     summary = _state()["summary"] | {"today": {"talk": 2}}
     page = SettingsPage(_Bridge(_state(summary=summary)))
     page.refresh()
-    assert "7 of 25 messages this month · 18 left · 2 today" in _texts(page)
+    assert "7 questions this month · 2 today" in _texts(page)
 
 
 def test_talking_moves_settings_in_place(qapp, heytora):
@@ -271,13 +269,13 @@ def test_talking_moves_settings_in_place(qapp, heytora):
     try:
         w.show()
         w.show_page("settings/usage")
-        _until(qapp, lambda: "3 of 25 messages this month · 22 left" in _texts(w))
+        _until(qapp, lambda: "3 questions this month" in _texts(w))
         page = w._settings.tab("usage")
         untouched = page.body.widget().findChildren(QWidget)[0]
         for n in (1, 2, 3):                           # three questions, one after another
             heytora.account.new_talk()
             heytora.account.ticket("talk")            # what _count_question does when Tora hears them
-            _until(qapp, lambda n=n: f"{n} of 25 messages this month · {25 - n} left · {n} today"
+            _until(qapp, lambda n=n: f"{n} question{'' if n == 1 else 's'} this month · {n} today"
                    in _texts(w))
         assert untouched in page.body.widget().findChildren(QWidget), "the page was not rebuilt"
         assert heytora.fake.opened["talk"] == 3

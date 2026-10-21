@@ -132,6 +132,32 @@ def test_plans_match_the_website_and_mark_yours(qapp):
     # What choosing does - Paddle's checkout - is tests/agents/test_e2e_billing.py.
 
 
+def test_pro_and_max_can_buy_credits_and_free_cannot(qapp):
+    """Credits (0012): the balance and the pack, on paid plans only."""
+    from PyQt6.QtWidgets import QPushButton
+    from ui.settings_tabs import PlansTab
+
+    def tab(plan, can_buy):
+        class Bridge:
+            def account_state(self):
+                return {"signed_in": True, "mode": "account", "summary": {
+                    "plan": plan, "billing": plan != "free",
+                    "credits": {"month": 900, "month_used": 300, "month_left": 600, "bought_left": 675,
+                                "can_buy": can_buy},
+                    "credit_packs": [{"price": "pri_675", "credits": 675, "label": "$10"},
+                                     {"price": "pri_1750", "credits": 1750, "label": "$25"}]
+                                    if can_buy else []}}
+        page = PlansTab(Bridge())
+        return ({b.text() for b in page.findChildren(QPushButton)},
+                [label.text() for label in page.findChildren(QLabel)])
+
+    buttons, texts = tab("pro", True)
+    assert {"675 credits - $10", "1,750 credits - $25"} <= buttons, "every pack Paddle has"
+    assert any(t.startswith("600 of 900 credits left this month · 675 added") for t in texts)
+    buttons, _texts = tab("free", False)
+    assert not any("credits -" in b for b in buttons), "Free upgrades instead"
+
+
 def test_the_agents_panels_lose_their_dark_sheet(qapp):
     """Drawn for the old dark windows; in Settings they take the app's look."""
     from PyQt6.QtWidgets import QWidget

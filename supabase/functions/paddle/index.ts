@@ -18,14 +18,21 @@
 // Paddle once and reused; one month at a time, the next at the next renewal.
 // That needs PADDLE_API_KEY (set already for the heytora function).
 //
+//
+// And it adds bought credits (migration 0012): a transaction.completed whose
+// price carries {"credits": n} adds them to the account the server named on
+// the transaction, once per transaction (heytora_credit_grant).
+//
 // Deploy:  supabase functions deploy paddle --no-verify-jwt
 //          (Paddle has no Supabase sign-in; the signature is the check)
 // Then, in Paddle > Developer tools > Notifications, a destination at
 //          https://<project>.supabase.co/functions/v1/paddle
-// with the subscription.* events.
+// with the subscription.* events and transaction.completed.
 
 import { createClient } from "npm:@supabase/supabase-js@2";
-import { apiBase, paddleEnv, planUpdate, priceMap, verifySignature } from "../_shared/billing.ts";
+import {
+  apiBase, creditGrant, paddleEnv, planUpdate, priceMap, verifySignature,
+} from "../_shared/billing.ts";
 
 const SECRET = Deno.env.get("PADDLE_WEBHOOK_SECRET") ?? "";
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL") ?? "";
@@ -96,10 +103,23 @@ Deno.serve(async (req: Request): Promise<Response> => {
     return reply(400, { error: "not JSON" });
   }
 
+  const admin = createClient(SUPABASE_URL, SERVICE_KEY, { auth: { persistSession: false } });
+
+  const grant = creditGrant(event);
+  if (grant) {
+    const { data, error } = await admin.rpc("heytora_credit_grant", {
+      p_user: grant.user, p_credits: grant.credits, p_txn: grant.transaction,
+    });
+    if (error) {
+      console.error("paddle: could not add credits", grant.transaction, error.message);
+      return reply(500, { error: "could not add credits" });        // Paddle retries
+    }
+    console.log("paddle: credits", grant.transaction, grant.credits, JSON.stringify(data));
+    return reply(200, { ok: true, ...(data as Record<string, unknown>) });
+  }
+
   const update = planUpdate(event, PRICES);
   if (!update) return reply(200, { ok: true, applied: false, note: "not a subscription event" });
-
-  const admin = createClient(SUPABASE_URL, SERVICE_KEY, { auth: { persistSession: false } });
   const { data, error } = await admin.rpc("heytora_billing_event", {
     p_event_id: String(event.event_id ?? ""),
     p_type: String(event.event_type ?? ""),

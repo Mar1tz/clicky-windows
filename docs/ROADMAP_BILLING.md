@@ -19,6 +19,17 @@ limits, the cost ceiling) and `docs/REFERRALS.md` (Pro trial, free months).
       on that PC?
 - [ ] **Pro trial ceiling:** keep $6 for the friend's 14 days, or half of
       Pro's new ceiling?
+- [x] **Extra usage instead of waiting** (owners, 21 Oct): visible credits
+      (1 credit = 1 cent); Free 50 a month; packs 675/$10, 1,750/$25,
+      3,500/$50 (~25% margin) from Paddle, Pro and Max only, never expire;
+      plans sold in credits in the app and on the website. Built: migration
+      0012, `POST /credits`, the webhook, Plans & billing. To do: the
+      product's id in `billing.ts`, tick `transaction.completed`, apply
+      0012, deploy both functions and the website, test a purchase; the same
+      in the live Paddle account.
+- [ ] **OmniRoute's routes:** what account sits behind `claude/`, `cc/` and
+      `agy/`? Customers' agent jobs must run on the paid Claude API, not on a
+      personal Claude Code or Antigravity subscription.
 
 ## Checklist
 
@@ -138,6 +149,15 @@ limits, the cost ceiling) and `docs/REFERRALS.md` (Pro trial, free months).
 - [ ] Real test: buy Pro with a real card → app shows Pro → upgrade to Max
       through the dialog → refund in Paddle → the account does what the
       owners decided.
+
+**Local development (a pass of its own)**
+- [ ] A local Supabase for the owners to experiment on, as Stuurly has: the
+      database, the functions and the website running on the PC, nothing
+      real touched.
+- [ ] Database tests that run the migrations on it (voice booking, credits
+      bought / spent / refused), not only read them.
+- [ ] One script to deploy when ready: migrations, both functions, secrets
+      check, the website.
 
 **After launch**
 - [ ] Week 1 and week 4: `heytora_admin_usage()` — reset the ceilings and voice

@@ -213,8 +213,10 @@ def profile_card(bridge, on_sign_out: Callable) -> Popover:
     if summary:
         plan = summary.get("plan_name") or (summary.get("plan") or "").capitalize() or "HeyTora"
         line = f"{plan} plan"
-        if isinstance(summary.get("fair_use"), (int, float)):
-            line += f" · {round(summary['fair_use'] * 100)}% used this month"
+        from account.service import credits_left
+        left = credits_left(summary)
+        if left is not None:
+            line += f" · {left:,} credits left"
         col.addWidget(_label(line, "popSub"))
     lay.addLayout(col, 1)
     pop.add(head)

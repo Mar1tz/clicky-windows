@@ -1507,8 +1507,8 @@ class CompanionManager(QObject):
                   "this key. It resets within a day; everything else still works."),
         # HeyTora account (2026-10-01). "plan" is shown with the server's own
         # words, which say which allowance and how much (_problem_detail).
-        "plan": ("This month's allowance on your HeyTora plan is used up. Upgrade "
-                 "on the HeyTora website, or use your own Gemini key in Settings."),
+        "plan": ("This month's allowance on your HeyTora plan is used up. "
+                 "See Settings → Plans & billing."),
         # FS-14: Google refused HeyTora's own account - a HeyTora plan's
         # billing, key or quota. Nothing for the user to do.
         "service": ("HeyTora is having trouble on our side right now - it's not you, and "

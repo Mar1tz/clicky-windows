@@ -6,7 +6,8 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createHmac } from "node:crypto";
 import {
-  apiBase, hasLivePlan, LIVE_PRICES, paddleEnv, planOf, planUpdate, priceMap, SANDBOX_PRICES, verifySignature,
+  apiBase, creditGrant, hasLivePlan, LIVE_PRICES, paddleEnv, planOf, planUpdate, priceMap, SANDBOX_PRICES,
+  packsFrom, verifySignature,
 } from "../functions/_shared/billing.ts";
 
 const SECRET = "pdl_ntfset_test_secret";
@@ -112,4 +113,37 @@ test("a plan to change in place is a live paid subscription", () => {
   assert.equal(hasLivePlan({ plan: "pro", plan_status: "canceled", paddle_subscription_id: "sub_1" }), false);
   assert.equal(hasLivePlan({ plan: "pro", plan_status: "active", paddle_subscription_id: null }), false);
   assert.equal(hasLivePlan({ plan: "free", plan_status: "active", paddle_subscription_id: "sub_1" }), false);
+});
+
+test("a paid pack adds the credits its price carries, to the account the server named", () => {
+  const paid = (items: unknown[], user: unknown = "u1", type = "transaction.completed") => ({
+    event_type: type, data: { id: "txn_1", custom_data: { user_id: user }, items },
+  });
+  const pack = { price: { id: "pri_pack", custom_data: { credits: "675" } }, quantity: 1 };   // Paddle: strings
+  assert.deepEqual(creditGrant(paid([pack])), { user: "u1", credits: 675, transaction: "txn_1" });
+  assert.equal(creditGrant(paid([{ ...pack, quantity: 2 }]))?.credits, 1350, "two packs");
+  // A renewal is a transaction too - its price carries no credits.
+  assert.equal(creditGrant(paid([{ price: { id: "pri_pro", custom_data: { plan: "pro" } } }])), null);
+  assert.equal(creditGrant(paid([pack], null)), null, "whose? nobody's: nothing");
+  assert.equal(creditGrant(paid([pack], "u1", "transaction.paid")), null, "only once it's completed");
+  assert.equal(creditGrant(paid([{ price: { custom_data: { credits: -5 } } }])), null);
+});
+
+test("the packs on sale are the product's active one-off prices with credits, smallest first", () => {
+  const price = (id: string, credits: unknown, cents: string, extra: Record<string, unknown> = {}) => ({
+    id, status: "active", billing_cycle: null, custom_data: { credits },
+    unit_price: { amount: cents, currency_code: "USD" }, ...extra,
+  });
+  assert.deepEqual(packsFrom([
+    price("pri_50", "3500", "5000"), price("pri_10", "675", "1000"), price("pri_25", "1750", "2500"),
+    price("pri_old", "100", "200", { status: "archived" }),
+    price("pri_sub", "900", "2000", { billing_cycle: { interval: "month", frequency: 1 } }),
+    price("pri_none", undefined, "1000"),
+  ]), [
+    { price: "pri_10", credits: 675, cents: 1000, currency: "USD", label: "$10" },
+    { price: "pri_25", credits: 1750, cents: 2500, currency: "USD", label: "$25" },
+    { price: "pri_50", credits: 3500, cents: 5000, currency: "USD", label: "$50" },
+  ]);
+  assert.deepEqual(packsFrom(null), []);
+  assert.equal(packsFrom([price("pri_x", "10", "999")])[0].label, "$9.99");
 });

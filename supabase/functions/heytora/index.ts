@@ -26,6 +26,9 @@
 //   POST /checkout     {plan: "pro"|"max"}  a Paddle checkout for this account
 //                      ({url}), or - already paying - the plan changed in
 //                      place ({changed: true}), prorated by Paddle.
+//   POST /credits      {price}  a Paddle checkout for a pack of credits
+//                      ({url}) - paid plans only; added by the webhook once
+//                      paid (0012). The packs come with GET /me.
 //   POST /billing      the Paddle customer portal for this account ({url}):
 //                      card, invoices, cancel.
 //   Referrals (migration 0010, docs/REFERRALS.md):
@@ -60,7 +63,7 @@ import {
   checkGenerate, costMicro, estimateTokens, family, liveCostMicro, makeTicket, MAX_BODY_BYTES, MAX_OUTPUT_TOKENS,
   omnirouteModels, prices, readTicket, UsageReader,
 } from "./rules.ts";
-import { apiBase, hasLivePlan, paddleEnv, priceMap } from "../_shared/billing.ts";
+import { apiBase, creditsSource, hasLivePlan, type Pack, packsFrom, paddleEnv, priceMap } from "../_shared/billing.ts";
 import { CHALLENGE, challengeOf, cleanCode, CODE, corsHeaders } from "../_shared/referrals.ts";
 
 const GOOGLE = "https://generativelanguage.googleapis.com";
@@ -86,9 +89,27 @@ const OMNIROUTE_MODELS = omnirouteModels(Deno.env.get("HEYTORA_OMNIROUTE_MODELS"
 const PADDLE_KEY = Deno.env.get("PADDLE_API_KEY") ?? "";
 const PADDLE_ENV = paddleEnv(Deno.env.get("PADDLE_ENV"));
 const PADDLE_PRICES = priceMap(Deno.env.get("PADDLE_PRICES"), PADDLE_ENV);
+const PADDLE_CREDITS = creditsSource(Deno.env.get("PADDLE_CREDITS_PRODUCT"), PADDLE_ENV);
 // The website, for its two referral calls without a sign-in (CORS).
 const SITE_ORIGINS = (Deno.env.get("HEYTORA_SITE_ORIGINS") ?? "https://heytora.co.za,https://www.heytora.co.za,https://app.agentora.co.za,http://localhost:3500")
   .split(",").map((o) => o.trim()).filter(Boolean);
+
+// The credit packs on sale (0012): the product's prices, read from Paddle at
+// most every 10 minutes - a pack added there shows in the app with no release.
+let packsCache: { at: number; packs: Pack[] } | null = null;
+let creditsProduct = PADDLE_CREDITS.product;
+async function creditPacks(): Promise<Pack[]> {
+  if (!PADDLE_KEY || !(creditsProduct || PADDLE_CREDITS.anyPack)) return [];
+  if (packsCache && Date.now() - packsCache.at < 10 * 60_000) return packsCache.packs;
+  if (!creditsProduct) {
+    // The product the known pack belongs to - every pack is a price of it.
+    creditsProduct = String((await paddle("GET", `/prices/${PADDLE_CREDITS.anyPack}`)).product_id ?? "");
+    if (!creditsProduct) return [];
+  }
+  const list = await paddle("GET", `/prices?product_id=${encodeURIComponent(creditsProduct)}&status=active&per_page=50`);
+  packsCache = { at: Date.now(), packs: packsFrom(list) };
+  return packsCache.packs;
+}
 
 /** One call to Paddle's API. Throws with Paddle's own words on a refusal. */
 async function paddle(method: string, path: string, body?: unknown): Promise<Record<string, unknown>> {
@@ -135,32 +156,56 @@ const WORDS: Record<string, string> = {
   talk: "talk messages", dictation: "dictations", agent: "agent messages", calls: "requests",
   wake: "wake-word checks",
 };
-const own = "switch to your own Gemini key in Settings";
+const PLAN_NAMES: Record<string, string> = { free: "Free", pro: "Pro", max: "Max", pro_trial: "Pro trial" };
+
+/** Where more comes from: plans are bought in the app, and there is nothing
+ *  above Max. The same words as the app's (account/service.py where_more). */
+function whereMore(plan: string): string {
+  return ({
+    free: " Upgrade in Settings → Plans & billing.",
+    pro_trial: " Choose a plan in Settings → Plans & billing.",
+    pro: " Or move to Max in Settings → Plans & billing.",
+  } as Record<string, string>)[plan] ?? "";
+}
+
+/** Out of credits: a paid plan can add some (0012), Pro can also move up. */
+function creditsMore(plan: string): string {
+  return ({
+    pro: " Add credits or move to Max in Settings → Plans & billing.",
+    max: " Add credits in Settings → Plans & billing.",
+  } as Record<string, string>)[plan] ?? whereMore(plan);
+}
+
+/** "on 6 Nov" - a paid plan's month starts again on its renewal day, not the 1st. */
+function again(iso: unknown): string {
+  const d = new Date(String(iso ?? ""));
+  if (!iso || Number.isNaN(d.getTime())) return "next month";
+  return `on ${d.getUTCDate()} ${d.toLocaleString("en-GB", { month: "short", timeZone: "UTC" })}`;
+}
 
 function limitResponse(info: Record<string, unknown>): Response {
   const kind = WORDS[String(info.kind)] ?? "allowance";
-  const plan = String(info.plan ?? "free").replace(/^./, (c) => c.toUpperCase());
-  const paid = plan !== "Free";
+  const key = String(info.plan ?? "free");
+  const plan = PLAN_NAMES[key] ?? key.replace(/^./, (c) => c.toUpperCase());
+  const more = whereMore(key);
+  const when = again(info.resets_at);
   switch (info.reason) {
     case "rate":
       return refuse(429, "HEYTORA_LIMIT", "That's a lot at once - give it a minute and try again.", info);
     case "day":
-      return refuse(402, "HEYTORA_LIMIT",
-        `That's today's fair-use limit for ${kind} on the ${plan} plan - it resets at midnight (UTC). ` +
-          `Or ${own}.`, info);
+      return refuse(402, "HEYTORA_LIMIT", `That's today's fair use of ${kind} on the ${plan} plan - more tomorrow.`, info);
     case "budget":
-      return refuse(402, "HEYTORA_LIMIT", paid
-        ? `You've reached this month's fair-use limit on the ${plan} plan. It resets on the 1st - or ${own}.`
-        : `You've used this month's free allowance. Upgrade on the HeyTora website, or ${own}.`, info);
+      return refuse(402, "HEYTORA_LIMIT", key === "free"
+        ? `You've used this month's free credits. They come back ${when}.${more}`
+        : `You've used this month's credits on the ${plan} plan. They come back ${when}.${creditsMore(key)}`, info);
     case "passes":
     case "window":
       return refuse(402, "HEYTORA_LIMIT", "That conversation has ended - ask again.", info);
     case "not_in_plan":
-      return refuse(402, "HEYTORA_LIMIT", `Your ${plan} plan doesn't include ${kind}.`, info);
+      return refuse(402, "HEYTORA_LIMIT", `Your ${plan} plan doesn't include ${kind}.${more}`, info);
     default:
       return refuse(402, "HEYTORA_LIMIT",
-        `You've used all ${info.limit} ${kind} on the ${plan} plan this month. ` +
-          `Upgrade on the HeyTora website, or ${own}.`, info);
+        `You've used all ${info.limit} ${kind} on the ${plan} plan this month. They come back ${when}.${more}`, info);
   }
 }
 
@@ -276,6 +321,18 @@ Deno.serve(async (req: Request): Promise<Response> => {
     if (error) throw new Error(`${fn}: ${error.message}`);
     return data as Record<string, unknown>;
   };
+  // A refusal says when the month starts again: the plan's own period (a
+  // paid plan's renewal day), read only when something is refused.
+  const refused = async (info: Record<string, unknown>): Promise<Response> => {
+    if (info.reason === "budget" || info.reason === "limit") {
+      try {
+        info = { ...info, resets_at: (await rpc("get_usage_summary", {})).period_end };
+      } catch {
+        // without the date it says "next month"
+      }
+    }
+    return limitResponse(info);
+  };
   // `now` rides along with every end time: the app measures what is left by
   // the server's clock, so a PC whose clock is off is never misled.
   const ticketFor = async (kind: string, w: Record<string, unknown>) => ({
@@ -288,7 +345,17 @@ Deno.serve(async (req: Request): Promise<Response> => {
 
   try {
     if (path === "me" && req.method === "GET") {
-      return json(200, await rpc("get_usage_summary", {}));
+      const summary = await rpc("get_usage_summary", {});
+      // A paid plan sees the packs it can buy (0012); Paddle being slow
+      // never holds up the plan itself.
+      if ((summary.credits as { can_buy?: boolean } | null)?.can_buy) {
+        try {
+          summary.credit_packs = (await creditPacks()).map(({ price, credits, label }) => ({ price, credits, label }));
+        } catch (e) {
+          console.error("heytora: credit packs", e);
+        }
+      }
+      return json(200, summary);
     }
 
     if (path === "account" && req.method === "DELETE") {
@@ -410,6 +477,31 @@ Deno.serve(async (req: Request): Promise<Response> => {
       return json(200, { ok: true, url });
     }
 
+    if (path === "credits" && req.method === "POST") {
+      // Bought credits (0012): a one-off checkout for the pack, on a paid
+      // plan only. Whose they are rides on the transaction, as for a plan;
+      // they're added when Paddle says it's paid (the paddle webhook).
+      if (!PADDLE_KEY) return refuse(503, "HEYTORA_BILLING", "Paid plans aren't open yet.");
+      const body = await req.json().catch(() => ({}));
+      const pack = (await creditPacks()).find((p) => p.price === String(body?.price ?? ""));
+      if (!pack) return refuse(400, "HEYTORA_BILLING", "That pack of credits isn't on sale - choose another.");
+      const admin = createClient(SUPABASE_URL, SERVICE_KEY, { auth: { persistSession: false } });
+      const { data: profile } = await admin.from("profiles")
+        .select("plan, plan_status, paddle_customer_id, paddle_subscription_id")
+        .eq("id", user.id).maybeSingle();
+      if (!profile || !hasLivePlan(profile)) {
+        return refuse(403, "HEYTORA_BILLING", "Credits can be added on Pro and Max - choose a plan first.");
+      }
+      const txn = await paddle("POST", "/transactions", {
+        items: [{ price_id: pack.price, quantity: 1 }],
+        custom_data: { user_id: user.id, credits: pack.credits },
+        ...(profile.paddle_customer_id ? { customer_id: profile.paddle_customer_id } : {}),
+      });
+      const url = (txn.checkout as { url?: string } | undefined)?.url;
+      if (!url) return refuse(503, "HEYTORA_BILLING", "The checkout isn't set up yet - try again later.");
+      return json(200, { ok: true, url, credits: pack.credits });
+    }
+
     if (path === "billing" && req.method === "POST") {
       // Card, invoices and cancelling are Paddle's pages, signed in for them.
       if (!PADDLE_KEY) return refuse(503, "HEYTORA_BILLING", "Paid plans aren't open yet.");
@@ -430,7 +522,7 @@ Deno.serve(async (req: Request): Promise<Response> => {
       const body = await req.json().catch(() => ({}));
       const kind = path === "agent-ticket" ? "agent" : body?.kind === "agent" ? "agent" : "talk";
       const w = await rpc("heytora_window", { p_kind: kind, p_new: body?.new === true });
-      if (!w.ok) return limitResponse(w);
+      if (!w.ok) return await refused(w);
       return json(200, { ...(await ticketFor(kind, w)), kind, usage: w });
     }
 
@@ -444,7 +536,7 @@ Deno.serve(async (req: Request): Promise<Response> => {
       if (kind !== "talk") {
         // A dictation, or a wake-word check: one pass each, counted apart.
         const usage = await rpc("heytora_consume", { p_kind: kind, p_quantity: 1, p_meta: { model } });
-        if (!usage.ok) return limitResponse(usage);
+        if (!usage.ok) return await refused(usage);
         const minutes = Number((usage.limits as Record<string, unknown>)?.[`${kind}_minutes`] ??
           (kind === "wake" ? 1 : 10));
         const endsAt = Date.now() / 1000 + Math.min(Math.max(minutes, 1), 120) * 60;
@@ -460,9 +552,9 @@ Deno.serve(async (req: Request): Promise<Response> => {
       const w = await rpc("heytora_window", standby
         ? { p_kind: "voice", p_new: body?.new === true }
         : { p_kind: "talk", p_new: body?.new !== false });
-      if (!w.ok) return limitResponse(w);
+      if (!w.ok) return await refused(w);
       const p = await rpc("heytora_pass", { p_window: Number(w.window), p_model: model });
-      if (!p.ok) return limitResponse({ ...p, plan: w.plan });
+      if (!p.ok) return await refused({ ...p, plan: w.plan });
       const pass = await mintPass(model, Number(p.expires_at));
       if (standby) {
         return json(200, {
@@ -532,7 +624,7 @@ Deno.serve(async (req: Request): Promise<Response> => {
         p_kind: "calls", p_quantity: 1, p_meta: { kind: "agent", model, via: "omniroute", window: t.window },
       });
       if (!usage.ok) {
-        return limitResponse(usage.reason === "limit" ? { ...usage, reason: "budget" } : usage);
+        return await refused(usage.reason === "limit" ? { ...usage, reason: "budget" } : usage);
       }
       const upstream = await fetch(`${OMNIROUTE_URL}/chat/completions`, {
         method: "POST",
@@ -614,7 +706,7 @@ Deno.serve(async (req: Request): Promise<Response> => {
     // The request count and the cost ceiling are the server's own: either
     // one running out reads as the month's allowance being used.
     if (!usage.ok) {
-      return limitResponse(usage.reason === "limit" ? { ...usage, reason: "budget" } : usage);
+      return await refused(usage.reason === "limit" ? { ...usage, reason: "budget" } : usage);
     }
 
     const query = new URLSearchParams(url.search);
