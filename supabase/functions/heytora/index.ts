@@ -381,11 +381,16 @@ Deno.serve(async (req: Request): Promise<Response> => {
         }
         // Already paying: the same subscription, the new plan, prorated now -
         // and a cancellation they had scheduled is undone by choosing again.
-        await paddle("PATCH", `/subscriptions/${profile.paddle_subscription_id}`, {
-          items: [{ price_id: price, quantity: 1 }],
-          proration_billing_mode: "prorated_immediately",
-          scheduled_change: null,
-        });
+        // Paddle refuses scheduled_change beside any other field, so the
+        // cancellation is undone on its own first.
+        const sub = `/subscriptions/${profile.paddle_subscription_id}`;
+        if (profile.plan_cancel_at) await paddle("PATCH", sub, { scheduled_change: null });
+        if (profile.plan !== plan) {
+          await paddle("PATCH", sub, {
+            items: [{ price_id: price, quantity: 1 }],
+            proration_billing_mode: "prorated_immediately",
+          });
+        }
         return json(200, { ok: true, changed: true, plan });
       }
       const txn = await paddle("POST", "/transactions", {

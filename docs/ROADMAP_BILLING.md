@@ -1,0 +1,134 @@
+# Roadmap: billing, usage and referrals
+
+**Written for:** the owners, and the sessions that build it. Work top to
+bottom; tick each box when it's done and checked.
+
+Builds on `docs/PAYMENTS.md` (Paddle), `docs/agents/ACCOUNTS.md` (plans,
+limits, the cost ceiling) and `docs/REFERRALS.md` (Pro trial, free months).
+
+## Owners' decisions
+
+- [x] **Margin target:** AI cost at most **50%** of what we receive per plan
+      (the price after Paddle's fee): Pro ≈ $9, Max ≈ $47 a month for
+      everything, voice included. (Owners, 21 Oct 2026; revisit after launch.)
+- [ ] **Refunds:** when Paddle refunds a payment or a chargeback comes in —
+      end the plan at once, or leave it to run to the end of the period?
+- [ ] **Refund window:** should a new subscription's first 14 days run on a
+      lower ceiling (like the Pro trial's $6)?
+- [ ] **Free per PC:** one Free allowance per device, shared by every account
+      on that PC?
+- [ ] **Pro trial ceiling:** keep $6 for the friend's 14 days, or half of
+      Pro's new ceiling?
+
+## Checklist
+
+**Tidy up**
+- [ ] Commit the plan-change fix (`supabase/functions/heytora/index.ts`,
+      deployed 21 Oct).
+- [ ] Commit the website's new sandbox client token (`heytora-web/src/lib/site.ts`).
+- [ ] `PAYMENTS.md`: correct the price ids (live ones are listed as
+      "sandbox"); record that sandbox is the **old** Paddle account and live
+      the **new** one.
+
+**Check what's there**
+- [ ] Why two Free accounts went over the $2 ceiling (Cameron $5.80, Torben
+      $3.09 in 30 days). Per month, and whether they were on a Pro trial:
+      ```sql
+      select p.email, p.plan, date_trunc('month', c.created_at) as month,
+             round(sum(c.cost_micro)/1e6, 2) as usd
+      from usage_costs c join profiles p on p.id = c.user_id
+      where p.plan = 'free' group by 1, 2, 3 order by 1, 3;
+      select * from referrals where friend in (select id from profiles where plan = 'free');
+      ```
+      If neither explains it, the ceiling has a bug — fix it first.
+- [ ] Migrations `0008`–`0010` applied on the live project.
+- [ ] Prices current: `rules.ts` `DEFAULT_PRICES` and `ai/gemini_live.py`
+      `LIVE_PRICES` against Google's list; Claude against what OmniRoute bills;
+      Paddle's fee against our Paddle account.
+- [ ] Measure voice with `tools/voice_eval.py`: one question, a three-answer
+      follow-up, a 30-minute talk window, a 30-minute standby window.
+
+**One cost ceiling for everything**
+- [ ] Migration `0011`: each talk, standby and dictation pass records an
+      **estimated** cost in `usage_costs` (kind `voice`), from new
+      `plans.limits` keys set from the measurements.
+- [ ] The ceiling is checked for **every** kind — talk window, voice pass,
+      dictation, agent window — not only forwarded calls. At the ceiling,
+      nothing new opens.
+- [ ] `POST /voice-usage {window, usage}`: the app sends the window's raw
+      `usageMetadata`; the server prices it itself and adds only what's
+      **above** the estimate, capped per window, once per window.
+- [ ] App: send it when a window ends (`companion_manager._note_voice`
+      already sums it).
+- [ ] Tests: a Free account at its ceiling on voice alone can't open a talk
+      window; `heytora_admin_usage()` shows voice in `cost_usd`.
+- [ ] Set `budget_usd` for Free, Pro, Max and `pro_trial` from the margin
+      target; a user at the daily limit every day should reach the ceiling
+      no sooner than about day 20.
+- [ ] Update the tables in `ACCOUNTS.md` and `REFERRALS.md`.
+
+**Confirm before a plan change**
+- [ ] Server: `POST /checkout {plan}` for someone already paying returns a
+      preview — `{confirm: {charge_now, credit, currency, next_amount,
+      next_date}}` from Paddle's `PATCH /subscriptions/{id}/preview` — and
+      `{plan, confirm: true}` makes the change.
+- [ ] App: a dialog in `PlansTab` — "Switch to Max: $80.00 now, then
+      $100/month from 6 Nov. [Switch] [Cancel]". A downgrade shows its credit.
+- [ ] Tests for both; sandbox Pro → Max → Pro.
+
+**Refunds** (as decided above)
+- [ ] Webhook also takes `adjustment.created` / `adjustment.updated`: an
+      approved refund or chargeback on a subscription does what the owners
+      decided, recorded in `billing_events`.
+- [ ] If decided: the refund window's lower ceiling.
+
+**Referrals**
+- [ ] A friend's Pro trial runs under the new ceiling (voice included) and
+      ends on `trial_until` back to Free.
+- [ ] Sandbox: a referrer with a month waiting renews → the next bill is
+      $0 (the 100% discount, made by the webhook; the API key needs
+      **discounts**).
+- [ ] Sandbox: a referrer on Free with a month banked subscribes → the month
+      goes on their first renewal, not lost.
+- [ ] A friend reaching 15 talk messages within the 14 days turns the referral
+      "qualified" and earns the month; after 14 days it doesn't.
+- [ ] Withdrawn: a month not yet used is withdrawn when the friend's account
+      is deleted or flagged.
+- [ ] If the owners decide refunds end the plan: a refunded bill that used a
+      free month gives the month back.
+
+**Free-account abuse**
+- [ ] If decided: Free allowance per device ID (already sent for referrals).
+- [ ] Refuse disposable email domains at sign-up too, reusing
+      `public.disposable_domains` (0010).
+
+**Alarms**
+- [ ] Daily check (`pg_cron`): accounts past 80% of their ceiling in their
+      first week, and the day's total cost — emailed to the owners.
+- [ ] Google Cloud budget alert on the Gemini key's project; OmniRoute's
+      spend limit.
+- [ ] Paddle emails when the webhook keeps failing.
+
+**Customers can sign in**
+- [ ] Custom SMTP sender for Supabase (ACCOUNTS.md, "Before real
+      customers"), with the code in the email.
+- [ ] Supabase → Email → *Allow new users to sign up* is on.
+
+**Go live on the new Paddle account** (`PAYMENTS.md`, "Going live")
+- [ ] Products Pro $20 / Max $100 monthly; each price's custom data
+      `{"plan": "pro"}` / `{"plan": "max"}`.
+- [ ] `LIVE_PRICES` in `billing.ts` and its test (`test_e2e_billing.py`).
+- [ ] API key (incl. discounts); webhook destination with `subscription.*`
+      and `adjustment.*`; its secret.
+- [ ] Default payment link `https://heytora.co.za/pay`; domain approved.
+- [ ] Secrets `PADDLE_API_KEY`, `PADDLE_WEBHOOK_SECRET`, `PADDLE_ENV=production`.
+- [ ] Website: the new `live_` client token, `PADDLE_ENVIRONMENT = "production"`.
+- [ ] Clear sandbox `paddle_customer_id` / `paddle_subscription_id` from every
+      test profile and set them to Free.
+- [ ] Real test: buy Pro with a real card → app shows Pro → upgrade to Max
+      through the dialog → refund in Paddle → the account does what the
+      owners decided.
+
+**After launch**
+- [ ] Week 1 and week 4: `heytora_admin_usage()` — reset the ceilings and voice
+      estimates from real customers.
