@@ -83,7 +83,7 @@ def test_the_prices_are_the_ones_made_in_paddle():
     sandbox = billing[billing.index("SANDBOX_PRICES"):billing.index("LIVE_PRICES")]
     live = billing[billing.index("LIVE_PRICES"):]
     assert 'pro: "pri_01m49bc41gge68ge4hf8mgbd6p"' in sandbox and 'max: "pri_01m49bddnrepm7dn5xvrzdrbv0"' in sandbox
-    assert 'pro: "pri_01m4971kmb5pw7cw739j3rktr1"' in live and 'max: "pri_01m496kctf4c4jxgzfzncrktny"' in live
+    assert 'pro: "pri_01m5jp78shv373a78y5yh0fqzk"' in live and 'max: "pri_01m5jp5hamq8ttkfgjedch16n8"' in live
 
 
 # ── the Plans & billing tab ─────────────────────────────────────────────────

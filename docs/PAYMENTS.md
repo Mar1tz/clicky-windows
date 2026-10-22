@@ -62,8 +62,10 @@ changes this code later.
 ## Switching it on (sandbox first)
 
 The sandbox prices are already in the code
-(`billing.ts: SANDBOX_PRICES`): Pro `pri_01m4971kmb5pw7cw739j3rktr1`, Max
-`pri_01m496kctf4c4jxgzfzncrktny`. Each price has custom data `plan` = `pro`
+(`billing.ts`). Sandbox (the old Paddle account): Pro
+`pri_01m49bc41gge68ge4hf8mgbd6p`, Max `pri_01m49bddnrepm7dn5xvrzdrbv0`. Live
+(the new account, 22 Oct 2026): Pro `pri_01m5jp78shv373a78y5yh0fqzk`, Max
+`pri_01m5jp5hamq8ttkfgjedch16n8`. Each price has custom data `plan` = `pro`
 or `max`.
 
 1. **Supabase → Authentication → Sign In / Providers → Email:** turn on

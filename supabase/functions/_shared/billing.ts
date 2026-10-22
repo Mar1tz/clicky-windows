@@ -13,14 +13,15 @@ export type Env = "sandbox" | "production";
 // The prices, per Paddle account (created 6 Oct 2026). Price ids aren't
 // secret. PADDLE_PRICES ("pro=pri_..,max=pri_..") overrides them - for a
 // new price, until it is written in here.
-// (Checked against Paddle's sandbox API, 6 Oct 2026.)
+// (Checked against Paddle's sandbox API, 6 Oct 2026. Live: the new Paddle
+// account, approved and set up 22 Oct 2026 - the first one never was.)
 export const SANDBOX_PRICES: Record<string, string> = {
   pro: "pri_01m49bc41gge68ge4hf8mgbd6p",
   max: "pri_01m49bddnrepm7dn5xvrzdrbv0",
 };
 export const LIVE_PRICES: Record<string, string> = {
-  pro: "pri_01m4971kmb5pw7cw739j3rktr1",
-  max: "pri_01m496kctf4c4jxgzfzncrktny",
+  pro: "pri_01m5jp78shv373a78y5yh0fqzk",
+  max: "pri_01m5jp5hamq8ttkfgjedch16n8",
 };
 export const PLANS = ["pro", "max"] as const;
 
@@ -33,9 +34,11 @@ export const PLANS = ["pro", "max"] as const;
 // their product); PADDLE_CREDITS_PRODUCT names the product outright. Empty:
 // not made in that account yet - buying credits says so.
 // (Sandbox, 21 Oct 2026: 675/$10 pri_01m5g1j3j5crwascanyj3vec7c,
-// 1,750/$25 pri_01m5g1x4jw6bm8ts8a27f08c3n, 3,500/$50 pri_01m5g1yaaz39xzp0rfqdhawf5t.)
+// 1,750/$25 pri_01m5g1x4jw6bm8ts8a27f08c3n, 3,500/$50 pri_01m5g1yaaz39xzp0rfqdhawf5t.
+// Live, 22 Oct 2026: 675/$10 pri_01m5jp3ejqvz8bt8xkjmzqff8n,
+// 1,750/$25 pri_01m5jp2njardr4nmd7aam9v8yp, 3,500/$50 pri_01m5jp1tvmdsg0exqebh3a4wqx.)
 export const SANDBOX_CREDITS = { product: "", anyPack: "pri_01m5g1j3j5crwascanyj3vec7c" };
-export const LIVE_CREDITS = { product: "", anyPack: "" };
+export const LIVE_CREDITS = { product: "", anyPack: "pri_01m5jp3ejqvz8bt8xkjmzqff8n" };
 
 export function creditsSource(value: string | undefined, env: Env): { product: string; anyPack: string } {
   const own = env === "production" ? LIVE_CREDITS : SANDBOX_CREDITS;
