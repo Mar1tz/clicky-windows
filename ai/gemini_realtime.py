@@ -275,7 +275,12 @@ def tool_declarations() -> list[dict]:
                 "email, a message, a reply, a post, notes, a description, a "
                 "prompt, a plan for something they want built, a form field - "
                 "when they ask you to write, type, draft, reply or put something "
-                "down, or talk about what they want written there. Never for a "
+                "down, or talk about what they want written there. Also to "
+                "CHANGE what is in the box already - shorter, reworded, a part "
+                "removed or replaced, 'no, say Thursday instead', 'I don't like "
+                "it', 'delete the last line', 'clear it', or only the part they "
+                "selected: it rewrites the text in place, never adds a second "
+                "version. Never for a "
                 "command ('send', 'open', 'search'): that is desktop_action or "
                 "delegate_task. Tora works out what they mean, writes it "
                 "properly and puts it in the box. Never read the text out: say "
@@ -305,7 +310,8 @@ def tool_declarations() -> list[dict]:
                 "saying I'll do it Monday'. Tora reads it, writes the reply and "
                 "fills in the reply form: To, Subject and the body. It NEVER "
                 "sends - they read it and press Send. Say one short line that "
-                "the draft is ready; never read it out."
+                "the draft is ready; never read it out. Changing a reply "
+                "already written is write_for_me."
             ),
             "parameters": {
                 "type": "object",

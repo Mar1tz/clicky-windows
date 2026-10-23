@@ -57,7 +57,7 @@ def test_the_writer_gets_their_words_and_the_box_and_streams_fast(monkeypatch):
     assert "say thursday works but not friday, friendly" in ask
     system = " ".join(sent["system"].split())
     assert "[placeholder]" in system and "changing their mind" in system and "filler" in system
-    assert "The first line is TYPE, or DO:" in system
+    assert "The first line is TYPE, EDIT, EDIT SELECTION, or DO:" in system
 
 
 def test_the_fastest_model_writes():
@@ -133,6 +133,12 @@ class FakeKeyboard:
 
     def to_start(self):
         self.done.append("ctrl+home")
+
+    def select_all(self):
+        self.done.append("ctrl+a")
+
+    def backspace(self):
+        self.done.append("backspace")
 
 
 class FakeClipboard:
@@ -260,8 +266,8 @@ def _manager(box, monkeypatch, *, pieces=("TYPE", "Thursday works, ", "Friday do
         return page
     monkeypatch.setattr(write_for_me, "page_context", page_context)
 
-    async def stream(request, b, pg=""):
-        asked.update(request=request, box=b, page=pg)
+    async def stream(request, b, pg="", edit_only=False):
+        asked.update(request=request, box=b, page=pg, edit_only=edit_only)
         for i, p in enumerate(pieces):
             if leave_after is not None and i == leave_after:
                 keyboard.window = ("hwnd", "somewhere else")
@@ -270,7 +276,10 @@ def _manager(box, monkeypatch, *, pieces=("TYPE", "Thursday works, ", "Friday do
     keyboard = FakeKeyboard()
     asked["keyboard"] = keyboard
     monkeypatch.setattr(write_for_me, "Keyboard", lambda: keyboard)
-    monkeypatch.setattr(write_for_me, "_clipboard", lambda c: FakeClipboard())
+    clipboard = FakeClipboard()
+    asked["clipboard"] = clipboard
+    monkeypatch.setattr(write_for_me, "_clipboard", lambda c: clipboard)
+    monkeypatch.setattr(write_for_me, "PASTE_SETTLE_S", 0)
     return mgr, asked
 
 
@@ -333,3 +342,198 @@ def test_the_live_model_knows_the_tool():
     assert "Never run an action on a guess" in rules
     assert "Never for a command" in decl["description"]
     assert "write_for_me" in cm.CompanionManager._tool_handlers(cm.CompanionManager.__new__(cm.CompanionManager))
+
+
+# -- changing what is there (23 Oct: "it just added more text, didn't change anything") ---------------------------
+
+DRAFT = Box("EditControl", "Message Body", "Inbox - Gmail - Opera",
+            "Hi Sam,\n\nThursday works, Friday doesn't.\n\nBest,\nTorben\n", selected="")
+
+
+@pytest.mark.parametrize("head, verdict", [("EDIT", "EDIT"), ("EDIT: shorter", "EDIT"),
+                                           ("EDIT SELECTION", "EDIT SELECTION"),
+                                           ("EDIT SELECTED: friendlier", "EDIT SELECTION")])
+def test_a_change_is_an_edit(monkeypatch, head, verdict):
+    _stream(monkeypatch, head + "\nHi Sam,\n", "Friday works.")
+    assert _items("no, say friday instead", DRAFT) == [verdict, "Hi Sam,\n", "Friday works."]
+
+
+def test_emptied_is_an_edit_with_no_text(monkeypatch):
+    _stream(monkeypatch, "EDIT")
+    assert _items("clear it", DRAFT) == ["EDIT"]
+
+
+def test_the_writer_knows_adding_from_changing():
+    system = " ".join(write_for_me._SYSTEM.split())
+    assert "TYPE only ever adds, at their cursor" in system
+    assert "\"no, say Thursday instead\"" in system and "\"delete the last line\"" in system
+    assert "everything they did not ask to change copied exactly" in system and "a signature" in system
+    assert "For EDIT SELECTION, only what replaces the selected part" in system
+
+
+def test_the_writer_sees_all_of_the_box_and_what_is_selected(monkeypatch):
+    sent = _stream(monkeypatch, "EDIT\nx")
+    box = Box("EditControl", "Message Body", "Gmail", "Hi Sam,\nThursday works.", selected="Thursday")
+    _items("make it friday", box)
+    ask = sent["contents"][0]["parts"][0]["text"]
+    assert "It holds:\n<<<\nHi Sam,\nThursday works.\n>>>" in ask and "Selected in it now:\n<<<\nThursday\n>>>" in ask
+    _items("x", Box("DocumentControl", "", "Report - Word", "...the end.", whole=False))
+    assert "more than can be shown - its end" in sent["contents"][0]["parts"][0]["text"]
+    _items("x", Box("EditControl", "", "App", "", whole=False))
+    assert "cannot be read" in sent["contents"][0]["parts"][0]["text"]
+
+
+def test_asked_to_change_it_the_writer_is_told(monkeypatch):
+    sent = _stream(monkeypatch, "EDIT\nx")
+
+    async def collect():
+        return [p async for p in write_for_me.stream_dictation("shorter", DRAFT, "", edit_only=True)]
+    asyncio.run(collect())
+    assert "answer EDIT or EDIT SELECTION" in sent["contents"][0]["parts"][0]["text"]
+
+
+def _replace(new, box=DRAFT, *, whole=True, now=None, monkeypatch):
+    kb, clip = FakeKeyboard(), FakeClipboard()
+    monkeypatch.setattr(write_for_me, "PASTE_SETTLE_S", 0)
+    monkeypatch.setattr(write_for_me, "focused_box", lambda: box if now is None else now)
+    how = write_for_me.replace(new, box, whole=whole, keyboard=kb, clipboard=clip)
+    return how, kb.done, clip
+
+
+def test_the_whole_box_is_swapped_in_one_paste(monkeypatch):
+    how, keys, clip = _replace("Hi Sam,\n\nFriday works.", monkeypatch=monkeypatch)
+    assert how == "replaced" and keys == ["ctrl+a", "ctrl+v"], "one paste: one Ctrl+Z brings the old back"
+    assert clip.log == [("set", "Hi Sam,\n\nFriday works.")] and clip.items == [(13, b"theirs")], "theirs, back"
+
+
+def test_a_selection_is_pasted_over_and_nothing_else_selected(monkeypatch):
+    how, keys, _clip = _replace("Friday", Box("EditControl", "", "Gmail", "x", selected="Thursday"),
+                                whole=False, monkeypatch=monkeypatch)
+    assert how == "replaced" and keys == ["ctrl+v"]
+
+
+def test_cleared_is_selected_and_deleted(monkeypatch):
+    how, keys, clip = _replace("", monkeypatch=monkeypatch)
+    assert how == "emptied" and keys == ["ctrl+a", "backspace"] and clip.log == []
+
+
+def test_a_box_no_longer_in_front_is_never_touched(monkeypatch):
+    elsewhere = Box("EditControl", "Search", "YouTube - Opera")
+    how, keys, clip = _replace("Friday works.", now=elsewhere, monkeypatch=monkeypatch)
+    assert how == "clipboard" and keys == [], "no Ctrl+A in some other box"
+    assert clip.log == [("set", "Friday works.")]
+
+
+def test_the_edited_mark_in_a_title_is_the_same_box():
+    assert Box("DocumentControl", "Text editor", "notes.txt - Notepad").same(
+        Box("DocumentControl", "Text editor", "*notes.txt - Notepad"))
+
+
+@pytest.mark.parametrize("old, new, out", [("Thursday ", "Friday", "Friday "), ("\nold line\n", " new line ", "\nnew line\n"),
+                                           ("Thursday", "  ", "")])
+def test_a_selection_keeps_its_spaces_round_it(old, new, out):
+    assert write_for_me.keep_edges(old, new) == out
+
+
+def _uia(monkeypatch, *, window="Inbox - Gmail - Opera", value=None, text="", selected=""):
+    import sys
+    rng = lambda s: SimpleNamespace(GetText=lambda n=-1: s)          # noqa: E731
+    patterns = {1: value, 2: SimpleNamespace(DocumentRange=rng(text), GetSelection=lambda: [rng(selected)])}
+    node = SimpleNamespace(ControlTypeName="EditControl", Name="Message Body", GetPattern=patterns.get,
+                           GetTopLevelControl=lambda: SimpleNamespace(Name=window))
+    monkeypatch.setitem(sys.modules, "uiautomation", SimpleNamespace(
+        GetFocusedControl=lambda: node, PatternId=SimpleNamespace(ValuePattern=1, TextPattern=2)))
+    return write_for_me.focused_box()
+
+
+def test_a_rich_box_is_read_through_its_text_with_the_selection(monkeypatch):
+    box = _uia(monkeypatch, text="Hi Sam,\nThursday works.", selected="Thursday")
+    assert box.text == "Hi Sam,\nThursday works." and box.selected == "Thursday" and box.whole
+
+
+@pytest.mark.parametrize("window, text, whole", [
+    ("Inbox - Gmail - Opera", "x" * 6000, True),
+    ("Inbox - Gmail - Opera", "x" * 6001, False),                     # too long to rewrite whole
+    ("main.py - clicky - Visual Studio Code", "x", False),            # Windows sees a few lines; Ctrl+A is the file
+    ("Report.docx - Word", "x", False),                               # headings and tables would go
+])
+def test_where_all_of_a_box_may_be_rewritten(monkeypatch, window, text, whole):
+    box = _uia(monkeypatch, window=window, text=text)
+    assert box.whole is whole and len(box.text) <= 6000
+
+
+def test_a_box_that_says_nothing_cannot_be_rewritten_whole(monkeypatch):
+    import sys
+    node = SimpleNamespace(ControlTypeName="EditControl", Name="", GetPattern=lambda _p: None,
+                           GetTopLevelControl=lambda: SimpleNamespace(Name="Some app"))
+    monkeypatch.setitem(sys.modules, "uiautomation", SimpleNamespace(
+        GetFocusedControl=lambda: node, PatternId=SimpleNamespace(ValuePattern=1, TextPattern=2)))
+    assert write_for_me.focused_box().whole is False
+
+
+def test_the_voice_tool_changes_the_draft_in_place(monkeypatch, caplog):
+    mgr, asked = _manager(DRAFT, monkeypatch, pieces=("EDIT", "Hi Sam,\n\nFriday works.\n\nBest,\nTorben\n"))
+    with caplog.at_level(logging.INFO, logger="tora.manager"):
+        out = asyncio.run(mgr._tool_write_for_me({"request": "no, say friday works instead"}))
+    assert out.get("ok") and "nothing added" in out["result"] and "Ctrl+Z" in out["result"]
+    assert asked["keyboard"].done == ["ctrl+a", "ctrl+v"], "the old text replaced - not more text after it"
+    assert asked["clipboard"].log == [("set", "Hi Sam,\n\nFriday works.\n\nBest,\nTorben")]
+    assert asked["card"] == ["Hi Sam,\n\nFriday works.\n\nBest,\nTorben\n\n"]
+    new = "Hi Sam,\n\nFriday works.\n\nBest,\nTorben"
+    assert f"rewrote the box, {len(DRAFT.text)} chars -> {len(new)}" in caplog.text
+
+
+def test_the_voice_tool_rewrites_only_what_is_selected(monkeypatch):
+    box = Box("EditControl", "Message Body", "Gmail", "Thursday works.", selected="Thursday ")
+    mgr, asked = _manager(box, monkeypatch, pieces=("EDIT SELECTION", "Friday"))
+    out = asyncio.run(mgr._tool_write_for_me({"request": "make this friday"}))
+    assert out.get("ok") and asked["keyboard"].done == ["ctrl+v"]
+    assert asked["clipboard"].log == [("set", "Friday ")]
+
+
+def test_an_edit_of_a_selection_with_nothing_selected_changes_nothing(monkeypatch):
+    mgr, asked = _manager(DRAFT, monkeypatch, pieces=("EDIT SELECTION", "Friday"))
+    out = asyncio.run(mgr._tool_write_for_me({"request": "make this friday"}))
+    assert "Nothing is selected" in out["error"] and asked["keyboard"].done == []
+
+
+def test_a_box_too_long_to_rewrite_asks_for_a_selection(monkeypatch):
+    box = Box("DocumentControl", "", "Report.docx - Word", "...the end.", whole=False)
+    mgr, asked = _manager(box, monkeypatch, pieces=("EDIT", "All new."))
+    out = asyncio.run(mgr._tool_write_for_me({"request": "make it shorter"}))
+    assert "select" in out["error"] and asked["keyboard"].done == [] and asked["card"] == []
+
+
+def test_deleting_everything_says_deleted(monkeypatch):
+    mgr, asked = _manager(DRAFT, monkeypatch, pieces=("EDIT",))
+    out = asyncio.run(mgr._tool_write_for_me({"request": "clear it"}))
+    assert out.get("ok") and "Deleted" in out["result"]
+    assert asked["keyboard"].done == ["ctrl+a", "backspace"]
+
+
+def test_asked_to_change_it_more_text_is_never_typed(monkeypatch):
+    mgr, asked = _manager(DRAFT, monkeypatch, pieces=("TYPE", "And another thing."))
+    out = asyncio.run(mgr._write_for_me("make it shorter", page="", edit_only=True))
+    assert "error" in out and asked["keyboard"].done == [] and asked["edit_only"] is True
+
+
+def test_what_tora_wrote_is_known_again_for_an_hour(monkeypatch):
+    mgr = cm.CompanionManager.__new__(cm.CompanionManager)
+    assert not mgr._wrote_into("Hi John,\n\nYes - which day?")
+    mgr._note_written("Hi John,\n\nYes -   which day suits you?")
+    assert mgr._wrote_into("Hi John, Yes - which day suits you?\n-- \nTorben"), "the same words, however laid out"
+    assert not mgr._wrote_into("-- \nTorben"), "a signature alone is not hers"
+    later = cm.time.monotonic() + mgr.WRITTEN_KEPT_S + 1
+    monkeypatch.setattr(cm.time, "monotonic", lambda: later)
+    assert not mgr._wrote_into("Hi John, Yes - which day suits you?")
+
+
+def test_the_live_model_knows_it_can_change_text():
+    import config
+    from ai import gemini_realtime
+    decls = {d["name"]: d for d in gemini_realtime.tool_declarations()[0]["functionDeclarations"]}
+    assert "CHANGE what is in the box" in decls["write_for_me"]["description"]
+    assert "never adds a second version" in decls["write_for_me"]["description"]
+    assert "Changing a reply already written is write_for_me" in decls["reply_to_email"]["description"]
+    rules = " ".join(config._REALTIME_RULES.split())
+    assert "Changing what is already written" in rules and "it never adds a second version" in rules

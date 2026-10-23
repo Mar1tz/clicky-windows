@@ -384,3 +384,43 @@ def test_the_voice_knows_replying_is_its_own_mode():
     rules = " ".join(config._REALTIME_RULES.split())
     assert "REPLYING TO THE EMAIL ON SCREEN is its own mode" in rules and "It never sends" in rules
     assert "reply_to_email" in cm.CompanionManager._tool_handlers(cm.CompanionManager.__new__(cm.CompanionManager))
+
+
+# -- asked again: her reply changed, not a second one above it (23 Oct) ---------------------------------------------
+
+class DraftedGmail(FakeGmail):
+    """A reply already open - the one Tora wrote, or only a signature."""
+
+    def read(self):
+        return Mail(THREAD, ME, self.name, self.draft)
+
+
+def _rewriting(monkeypatch, draft):
+    app = DraftedGmail(draft=draft)
+    mgr, card, keyboard, sent = _manager(monkeypatch, app)
+    handed = {}
+
+    async def write_for_me_(request, page=None, *, edit_only=False):
+        handed.update(request=request, page=page, edit_only=edit_only)
+        return {"ok": True, "result": "Changed in the box"}
+    mgr._write_for_me = write_for_me_
+    return mgr, keyboard, sent, handed
+
+
+def test_her_reply_asked_for_again_is_changed_in_place(monkeypatch, caplog):
+    mine = "Hi John,\n\nYes - which day suits you?\n\nKind regards,\nTorben"
+    mgr, keyboard, sent, handed = _rewriting(monkeypatch, mine + "\n-- \nTorben Mikkelsen")
+    mgr._note_written(mine)
+    with caplog.at_level(logging.INFO):
+        out = asyncio.run(mgr._tool_reply_to_email({"request": "no, say I can't make it this week"}))
+    assert out["ok"] and handed["edit_only"] is True and handed["request"] == "no, say I can't make it this week"
+    assert handed["page"] == THREAD, "the email goes with it: what \"no\" answers"
+    assert keyboard.done == [] and sent == {}, "no second reply written or typed above hers"
+    assert "changing it, not writing another" in caplog.text
+
+
+def test_a_signature_alone_is_still_a_new_reply(monkeypatch):
+    mgr, keyboard, sent, handed = _rewriting(monkeypatch, "-- \nTorben")
+    mgr._note_written("Hi Sam, something else entirely")
+    asyncio.run(mgr._tool_reply_to_email({"request": "say yes"}))
+    assert handed == {} and "".join(keyboard.done).startswith("Hi John,")

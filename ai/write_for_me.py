@@ -29,6 +29,16 @@ five seconds of nothing. Now:
      gets one paste at the end instead, and the clipboard put back exactly.
      The moment they leave the window or the tab, typing stops; the rest
      waits on the clipboard.
+
+23 Oct 2026, the owner, drafting an email: "I didn't like it - it just
+added more text, didn't change anything." Tora could only ever add at the
+cursor, and an email reply asked for again was typed above the first. Now
+the writer can also EDIT: the box's whole new text - or, with part of it
+selected, only that part's - swapped in with one paste, so a single Ctrl+Z
+in the box brings the old text back. Shorter, reworded, a paragraph gone,
+"no, say Thursday", "clear it". Where all of a box cannot be read, or a
+document's layout would be lost to plain text, only a selected part is
+rewritten.
 """
 
 from __future__ import annotations
@@ -56,6 +66,8 @@ _NOT_A_BOX = {
 }
 _CONTEXT_CHARS = 3000      # of the text already in the box, its end, for the writer
 _PAGE_CHARS = 6000         # of the page, its end, when they say "reply to this"
+EDIT_MAX_CHARS = 6000      # the most the writer rewrites in one go - a page or so
+_READ_CHARS = 100_000      # read from a rich box at most
 
 
 @dataclass
@@ -66,9 +78,17 @@ class Box:
     window: str             # the window's title
     text: str = ""          # what is in it already, when Windows can say
     password: bool = False
+    selected: str = ""      # the part of it selected now
+    whole: bool = True      # `text` is all of it, and all of it may be rewritten
 
     def same(self, other: Optional["Box"]) -> bool:
-        return other is not None and (self.kind, self.name, self.window) == (other.kind, other.name, other.window)
+        return other is not None and (self.kind, self.name, _bare(self.window)) == (
+            other.kind, other.name, _bare(other.window))
+
+
+def _bare(title: str) -> str:
+    """A window's title without its "edited" mark (Notepad's *, VS Code's ●)."""
+    return (title or "").lstrip("*● ").strip()
 
 
 def focused_box() -> Optional[Box]:
@@ -83,22 +103,35 @@ def focused_box() -> Optional[Box]:
         if kind in _NOT_A_BOX:
             return None
         password = bool(getattr(node, "IsPassword", False))
-        text = ""
+        text, read, selected = "", False, ""
         try:
             value = node.GetPattern(auto.PatternId.ValuePattern)
             if value is not None:
                 if value.IsReadOnly:
                     return None
                 if not password:
-                    text = str(value.Value or "")
+                    text, read = str(value.Value or ""), True
         except Exception:  # noqa: BLE001 - no value to read: still a box
             pass
+        if not password:
+            # A rich box - an email's body, a document - says what it holds,
+            # and what is selected in it, through its text pattern.
+            try:
+                pattern = node.GetPattern(auto.PatternId.TextPattern)
+                if pattern is not None:
+                    if not text:
+                        text, read = str(pattern.DocumentRange.GetText(_READ_CHARS) or ""), True
+                    selected = "".join(str(r.GetText(EDIT_MAX_CHARS + 1) or "") for r in pattern.GetSelection() or [])
+            except Exception:  # noqa: BLE001 - nothing more to read
+                pass
         try:
             top = node.GetTopLevelControl()
             window = (top.Name if top is not None else "") or ""
         except Exception:  # noqa: BLE001
             window = ""
-        return Box(kind, (node.Name or "").strip()[:80], window.strip()[:120], text[-_CONTEXT_CHARS:], password)
+        whole = read and len(text) <= EDIT_MAX_CHARS and not _PARTS_ONLY.search(window)
+        return Box(kind, (node.Name or "").strip()[:80], window.strip()[:120],
+                   text if whole else text[-_CONTEXT_CHARS:], password, selected, whole)
     except Exception:  # noqa: BLE001 - no UI Automation: no box
         return None
 
@@ -116,7 +149,16 @@ needs to be and no longer.
 FIRST decide what this is:
   • TYPE - words to write out: a message, an email, a reply, notes, a
     description, a prompt, or just talking an idea through. "Write",
-    "type", "say", "tell them", "reply that" are TYPE.
+    "type", "say", "tell them", "reply that" are TYPE. TYPE only ever
+    adds, at their cursor.
+  • EDIT - they want what is ALREADY in the box changed, not added to:
+    shorter, longer, friendlier, reworded, a part removed or replaced, a
+    mistake fixed, "no, say Thursday instead", "I don't like it, try
+    again", "delete the last line", "clear it". Something new that belongs
+    inside what is there - in its middle, before its sign-off - is EDIT
+    too.
+  • EDIT SELECTION - an EDIT of only the part they have selected: "make
+    this friendlier" with a sentence selected.
   • DO - they want something DONE, not written: "open", "go to", "search
     for", "send", "run", "create a file", "remind me". An instruction to
     act is DO even with a text box open in front of them: "write an email
@@ -143,10 +185,17 @@ For TYPE, the text:
   • Never invent a fact they did not give - a date, a price, a name: put a
     short [placeholder] in its place.
 
-Answer in exactly this form. The first line is TYPE, or DO: and in a few
-words what they want done. For TYPE the text for the box follows from the
-second line - only the text: no preamble, no quotes round it, no notes
-after it, and no markdown unless the box is a place for it."""
+For EDIT, the text is the box's whole new text: everything they did not
+ask to change copied exactly as it is - a greeting, a signature, a quoted
+email - and their change made the way the TYPE rules say. Nothing after
+the first line when they want it emptied. For EDIT SELECTION, only what
+replaces the selected part.
+
+Answer in exactly this form. The first line is TYPE, EDIT, EDIT SELECTION,
+or DO: and in a few words what they want done. For the others the text for
+the box follows from the second line - only the text: no preamble, no
+quotes round it, no notes after it, and no markdown unless the box is a
+place for it."""
 
 WRITE_TIMEOUT_S = 20.0
 
@@ -180,7 +229,7 @@ def page_context() -> str:
         return ""
 
 
-def _ask(request: str, box: Box, page: str) -> str:
+def _ask(request: str, box: Box, page: str, edit_only: bool = False) -> str:
     where = f'A {box.kind.replace("Control", "").lower() or "text"} box'
     if box.name:
         where += f' named "{box.name}"'
@@ -188,21 +237,28 @@ def _ask(request: str, box: Box, page: str) -> str:
         where += f' in the window "{box.window}"'
     ask = f"{where}.\n"
     if box.text.strip():
-        ask += f"It already holds (its end):\n<<<\n{box.text}\n>>>\n"
+        ask += (f"It holds:\n<<<\n{box.text}\n>>>\n" if box.whole else
+                f"It holds more than can be shown - its end:\n<<<\n{box.text}\n>>>\n")
+    elif not box.whole:
+        ask += "What it holds cannot be read.\n"
+    if box.selected.strip():
+        ask += f"Selected in it now:\n<<<\n{box.selected[:EDIT_MAX_CHARS]}\n>>>\n"
     if page:
-        ask += f"\nThe page on their screen (its end):\n<<<\n{page}\n>>>\n"
+        ask += f"\nThe page on their screen (its end):\n<<<\n{page[-_PAGE_CHARS:]}\n>>>\n"
+    if edit_only:
+        ask += "\nThey are changing what is already in the box: answer EDIT or EDIT SELECTION.\n"
     return ask + f"\nWhat they said they want written:\n{request.strip()}"
 
 
-async def stream_dictation(request: str, box: Box, page: str = "") -> AsyncIterator[str]:
-    """What the writer makes of it, as it is written: first "TYPE" or "DO:
-    <what>", then - for TYPE - the text, piece by piece. Nothing at all if
-    the call failed."""
+async def stream_dictation(request: str, box: Box, page: str = "", edit_only: bool = False) -> AsyncIterator[str]:
+    """What the writer makes of it, as it is written: first "TYPE", "EDIT",
+    "EDIT SELECTION" or "DO: <what>", then - but for DO - the text, piece
+    by piece. Nothing at all if the call failed."""
     head, decided = "", False
     try:
         async for piece in gemini.stream(
-                Models.WRITER, [{"role": "user", "parts": [gemini.text_part(_ask(request, box, page))]}],
-                system=_SYSTEM, max_tokens=2048, temperature=0.6, think=0, timeout=WRITE_TIMEOUT_S):
+                Models.WRITER, [{"role": "user", "parts": [gemini.text_part(_ask(request, box, page, edit_only))]}],
+                system=_SYSTEM, max_tokens=4096, temperature=0.6, think=0, timeout=WRITE_TIMEOUT_S):
             if decided:
                 yield piece
                 continue
@@ -229,6 +285,9 @@ def _split_head(head: str) -> list[str]:
     # WhatsApp message", seen live) - never the text's own "Type the report".
     if re.fullmatch(r"TYPE\b(\s*[:\-–].*)?", verdict):
         return ["TYPE"] + ([rest.lstrip("\n")] if rest.strip() else [])
+    edit = re.fullmatch(r"EDIT(\s+SELECT\w*)?\b(\s*[:\-–].*)?", verdict)
+    if edit:
+        return ["EDIT SELECTION" if edit.group(1) else "EDIT"] + ([rest.lstrip("\n")] if rest.strip() else [])
     done = re.fullmatch(r"DO\b\s*[:\-–]?\s*(.*)", verdict)
     if done:
         return ["DO: " + done.group(1).strip()]
@@ -293,6 +352,12 @@ class Keyboard:
 
     def select_all(self) -> None:
         self._ctrl(0x41)                                                 # Ctrl+A: in a one-line box, its text
+
+    def backspace(self) -> None:
+        user32 = ctypes.windll.user32
+        for up in (0, 2):                                                # the selection gone
+            user32.keybd_event(0x08, 0, up, 0)
+            time.sleep(0.01)
 
     def _ctrl(self, vk_key: int) -> None:
         user32 = ctypes.windll.user32
@@ -404,6 +469,7 @@ class Clipboard:
         # Kept out of Windows' clipboard history and cloud sync: it is
         # Tora's way in, not something the user copied.
         private = self._u32.RegisterClipboardFormatW("ExcludeClipboardContentFromMonitorProcessing")
+        text = text.replace("\r\n", "\n").replace("\n", "\r\n")          # Windows' line ends: a lone \n pastes as none
         return self._put([(self.CF_UNICODETEXT, (text + "\0").encode("utf-16-le")), (private, b"\0")])
 
     def restore(self, items: Optional[list[tuple[int, bytes]]]) -> None:
@@ -451,6 +517,43 @@ _PASTE_APPS = re.compile(r"Visual Studio Code|\bCursor\b|IntelliJ|PyCharm|WebSto
 def pastes(box: Box) -> bool:
     """Does this box take the text in one paste rather than typed?"""
     return bool(_PASTE_APPS.search(box.window or ""))
+
+
+# Where only a selected part is ever rewritten: a code editor's box shows
+# Windows a few lines of the file, and Ctrl+A there is the whole file; a
+# document's headings, tables and pictures would go with a plain-text paste.
+_PARTS_ONLY = re.compile(_PASTE_APPS.pattern + r"| - Word$|Microsoft Word|PowerPoint|Excel|OneNote|Google Docs",
+                         re.IGNORECASE)
+
+
+def replace(new: str, box: Box, *, whole: bool, keyboard: Optional[Keyboard] = None, clipboard=None) -> str:
+    """`new` in place of what the box holds - all of it, or (whole=False)
+    only its selected part - in one paste, so one Ctrl+Z in the box brings
+    the old text back. "replaced", "emptied", or "clipboard": that box is
+    no longer the one with the focus, so nothing was touched and `new`
+    waits on the clipboard."""
+    keyboard = keyboard or Keyboard()
+    if not box.same(focused_box()):
+        clipboard = _clipboard(clipboard)
+        if clipboard is not None and new.strip():
+            clipboard.set_text(new)
+        return "clipboard"
+    if whole:
+        keyboard.select_all()
+    if not new.strip():
+        keyboard.backspace()
+        return "emptied"
+    paste(new, keyboard=keyboard, clipboard=clipboard)
+    return "replaced"
+
+
+def keep_edges(old: str, new: str) -> str:
+    """`new` for a selected `old`, with the spaces and line breaks the
+    selection had round it: "Thursday " selected stays a word apart."""
+    core = new.strip()
+    if not core:
+        return ""
+    return old[:len(old) - len(old.lstrip())] + core + old[len(old.rstrip()):]
 
 
 class Typist:

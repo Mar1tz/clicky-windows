@@ -2156,8 +2156,13 @@ class CompanionManager(QObject):
         pump = None
         try:
             mail = await asyncio.to_thread(app.read)
-            pieces, pump = _prefetched(email_reply.stream_reply(request, mail, mail.draft))
+            rewrite = self._wrote_into(mail.draft)
+            if not rewrite:
+                pieces, pump = _prefetched(email_reply.stream_reply(request, mail, mail.draft))
             draft, done = await opening
+            if not rewrite and self._wrote_into(draft):
+                pump.cancel()
+                rewrite = True
         except Exception as e:  # noqa: BLE001 - say so, never half-guess an email
             if pump is not None:
                 pump.cancel()
@@ -2167,6 +2172,12 @@ class CompanionManager(QObject):
                 return {"error": f"{e}"}
             _log.info("email reply: could not read it or open the reply (%s)", e)
             return {"error": "The email could not be read, or its reply could not be opened. Ask them to try again."}
+        if rewrite:
+            # 23 Oct: "I didn't like it - it just added more text." Asked
+            # again, the reply she wrote is changed in place - never a
+            # second one typed above it.
+            _log.info("email reply: the draft holds Tora's reply - changing it, not writing another")
+            return await self._write_for_me(request, page=mail.text, edit_only=True)
         ready_s = time.monotonic() - started
         self._activity("writing")
         typist = write_for_me.Typist(keyboard)
@@ -2179,6 +2190,7 @@ class CompanionManager(QObject):
         if not how:
             return {"error": "The reply did not come back. Ask them to try again."}
         self.sig_response_chunk.emit(typist.text.strip() + "\n\n")
+        self._note_written(typist.text)
         if how == "clipboard":
             return {"ok": True, "result": ("They left the page while it was written: what was typed is in the "
                                            "draft and the rest is on their clipboard. It is NOT sent.")}
@@ -2208,6 +2220,12 @@ class CompanionManager(QObject):
         request = str(args.get("request") or "").strip()
         if not request:
             return {"error": "nothing was said about what to write"}
+        return await self._write_for_me(request)
+
+    async def _write_for_me(self, request: str, page: Optional[str] = None, *, edit_only: bool = False) -> dict:
+        """Into the focused box: typed as it is written, or (EDIT) its text
+        rewritten and swapped in. `page` given: what "this" means, already
+        read; `edit_only`: they are changing what is there."""
         self._activity("writing")
         box = await asyncio.to_thread(write_for_me.focused_box)
         if box is None:
@@ -2216,11 +2234,12 @@ class CompanionManager(QObject):
         if box.password:
             return {"error": "That is a password box - Tora never types into one. Tell them so."}
         started = time.monotonic()
-        # "Reply to this": the page's own text says what "this" is - never a picture.
-        sensitive = self._privacy_guard and is_sensitive_window(active_window_title())
-        page = (await asyncio.to_thread(write_for_me.page_context)
-                if write_for_me.leans_on_screen(request) and not sensitive else "")
-        pieces = write_for_me.stream_dictation(request, box, page).__aiter__()
+        if page is None:
+            # "Reply to this": the page's own text says what "this" is - never a picture.
+            sensitive = self._privacy_guard and is_sensitive_window(active_window_title())
+            page = (await asyncio.to_thread(write_for_me.page_context)
+                    if write_for_me.leans_on_screen(request) and not sensitive else "")
+        pieces = write_for_me.stream_dictation(request, box, page, edit_only=edit_only).__aiter__()
         head = await anext(pieces, "")
         if head.startswith("DO"):
             # Never mix the two: a command is not typed into the box. The
@@ -2230,7 +2249,9 @@ class CompanionManager(QObject):
             return {"ok": False, "result": (
                 f"Nothing was typed: that is a command ({command or 'an action'}), not text "
                 "for the box. Do it with desktop_action or delegate_task - they ask the user first.")}
-        if head != "TYPE":
+        if head.startswith("EDIT"):
+            return await self._edit_box(box, head == "EDIT", pieces, started)
+        if head != "TYPE" or edit_only:
             return {"error": "The writing did not come back. Ask them to try again."}
         keyboard = write_for_me.Keyboard()
         await asyncio.to_thread(write_for_me.keys_let_go, keyboard)
@@ -2244,11 +2265,60 @@ class CompanionManager(QObject):
             return {"error": "The writing did not come back. Ask them to try again."}
         # What was written, on the card (with its Copy) as she says it's in.
         self.sig_response_chunk.emit(text + "\n\n")
+        self._note_written(text)
         if how == "clipboard":
             return {"ok": True, "result": ("They left the box while it was written: what was typed is in it and "
                                            "the rest is on their clipboard - Ctrl+V puts it where they want it.")}
         return {"ok": True, "result": f"Written into the box ({len(text)} characters). Say it's in - "
                                       "never read it out."}
+
+    async def _edit_box(self, box, whole: bool, pieces, started: float) -> dict:
+        """EDIT: the box's whole text - or (whole=False) the part they
+        selected - rewritten and swapped in with one paste. Never added to."""
+        old = box.text if whole else box.selected
+        if not whole and not old.strip():
+            return {"error": ("Nothing is selected in the box, so nothing was changed. Ask them to select the "
+                              "part to change and say it again.")}
+        if (whole and not box.whole) or len(old) > write_for_me.EDIT_MAX_CHARS:
+            return {"error": ("Nothing was changed: Tora can't rewrite all of that box in one go (too long, not "
+                              "all of it readable, or a document whose layout would be lost). Ask them to select "
+                              "the part to change and say it again.")}
+        new = "".join([p async for p in pieces])
+        new = new.strip() if whole else write_for_me.keep_edges(old, new)
+        keyboard = write_for_me.Keyboard()
+        await asyncio.to_thread(write_for_me.keys_let_go, keyboard)
+        how = await asyncio.to_thread(write_for_me.replace, new, box, whole=whole, keyboard=keyboard)
+        _log.info("write for me: rewrote %s, %d chars -> %d, in %s %r in %r - %s, all in %.1fs",
+                  "the box" if whole else "the selection", len(old), len(new.strip()), box.kind, box.name,
+                  box.window, how, time.monotonic() - started)
+        if how == "clipboard":
+            return {"ok": True, "result": ("They left the box before the change went in: nothing in it was changed, "
+                                           "and the new text is on their clipboard - Ctrl+V puts it in.")}
+        if how == "emptied":
+            return {"ok": True, "result": "Deleted. Say so in a few words."}
+        self.sig_response_chunk.emit(new.strip() + "\n\n")
+        self._note_written(new)
+        return {"ok": True, "result": ("Changed in the box - the old text replaced, nothing added. Say one short "
+                                       "line that it's changed; never read it out. Ctrl+Z in the box brings the old "
+                                       "text back if they want it.")}
+
+    # What Tora put in boxes lately, by its start: an email reply asked for
+    # again is a change to hers, not a second reply above it (23 Oct).
+    WRITTEN_KEPT_S = 3600.0
+    _written: tuple = ()                     # ((when, its first 60 characters), ...)
+
+    def _note_written(self, text: str) -> None:
+        start = " ".join((text or "").split())[:60]
+        if start:
+            now = time.monotonic()
+            kept = [(t, s) for t, s in self._written if now - t < self.WRITTEN_KEPT_S]
+            self._written = tuple((kept + [(now, start)])[-5:])
+
+    def _wrote_into(self, text: str) -> bool:
+        """Does `text` (a draft) hold something Tora wrote this past hour?"""
+        have = " ".join((text or "").split())
+        now = time.monotonic()
+        return bool(have) and any(now - t < self.WRITTEN_KEPT_S and s in have for t, s in self._written)
 
     # ── Agent delegation ──────────────────────────────────────────────────────
     #
