@@ -22,6 +22,7 @@ EXPECTED = {
                     "compare_periods"},
     "desktop": {"list_app_actions", "app_action", "ui_control", "open_link"},
     "design": {"render_design"},
+    "devlink": {"devlink_context", "devlink_logs", "devlink_code"},
 }
 
 
@@ -64,6 +65,8 @@ def test_risk_levels():
     for name in (EXPECTED["browser"] | EXPECTED["computer"]) - looking_only_or_asks - {"open_app", "focus_window"}:
         assert risk[name] is RiskLevel.HIGH, name
     for name in looking_only:
+        assert risk[name] is RiskLevel.SAFE, name
+    for name in EXPECTED["devlink"]:                       # read-only, and DevLink asks per workspace
         assert risk[name] is RiskLevel.SAFE, name
 
 

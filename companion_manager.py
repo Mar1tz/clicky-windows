@@ -569,6 +569,7 @@ class CompanionManager(QObject):
         self._quiz_mode = False            # started on purpose, never restored
         self._privacy_guard = cfg.switch("privacy_guard")
         self._code_mode_auto = cfg.switch("code_mode")   # auto-detect IDE windows
+        self._devlink_wanted = cfg.switch("devlink")     # code editors read as data (devlink/)
         self._multilang = False            # English-only; kept for the tray toggle
         self._journal_enabled = cfg.switch("journal")    # log every Q&A to SQLite
         self._ocr_enabled = cfg.switch("ocr")            # read fine print on request
@@ -645,6 +646,7 @@ class CompanionManager(QObject):
         # Sleep/wake watchdog — restarts mic + loop after system resume
         self._start_sleep_watchdog()
         self._watch_audio_devices()
+        self._submit(self._start_devlink())
         self._submit(self._keep_session_fresh())
         self._submit(self._keep_signed_in())
         # Speed, measured (ai/speed.py): how late the loop wakes, and what
@@ -970,6 +972,7 @@ class CompanionManager(QObject):
             except Exception:
                 _log.debug("agent shutdown failed", exc_info=True)
             self._agents = None
+        self.set_devlink_running(False)
         self._listener.stop()
         self._rt_streaming = False
         # Close the websocket and the HTTP pool while the loop is still
@@ -2134,7 +2137,58 @@ class CompanionManager(QObject):
             "manage_agents":   self._tool_manage_agents,
             "write_for_me":    self._tool_write_for_me,
             "reply_to_email":  self._tool_reply_to_email,
+            "code_context":    self._tool_code_context,
         }
+
+    # ── DevLink (devlink/): the code editor, read as data ────────────────────
+    #
+    # The design of 23 Oct: what the developer is doing, from VS Code's own
+    # API through a connector, instead of from screenshots. The hub runs on
+    # this loop; the connector finds it through devlink.json in the data
+    # folder. Nothing is read until a workspace allows it.
+
+    async def _start_devlink(self) -> None:
+        if not self._devlink_wanted:
+            return
+        import devlink
+        if devlink.current() is not None:
+            return
+        try:
+            hub = devlink.Hub(cfg.data_dir())
+            await hub.start()
+        except Exception:  # noqa: BLE001 - the screen still works without it
+            _log.warning("devlink did not start", exc_info=True)
+            return
+        devlink.set_current(hub)
+
+    async def _stop_devlink(self) -> None:
+        import devlink
+        hub = devlink.current()
+        devlink.set_current(None)
+        if hub is not None:
+            await hub.stop()
+
+    def set_devlink_running(self, on: bool) -> None:
+        """Settings → Code editors: start or stop the hub now (the switch
+        itself is saved by the caller)."""
+        self._devlink_wanted = bool(on)
+        if not (self._loop and self._loop.is_running()):
+            return
+        try:
+            asyncio.run_coroutine_threadsafe(self._start_devlink() if on else self._stop_devlink(),
+                                             self._loop).result(timeout=4)
+        except Exception:  # noqa: BLE001
+            _log.debug("devlink %s failed", "start" if on else "stop", exc_info=True)
+
+    async def _tool_code_context(self, args: dict) -> dict:
+        from devlink import tools as devlink_tools
+        self._activity("reading_code")
+        started = time.monotonic()
+        out = await devlink_tools.answer(args)
+        _log.info("code_context %s: %s in %.2fs", args.get("action") or "overview",
+                  f"{len(out.get('text', ''))} chars" if out.get("ok") else out.get("error", "")[:80],
+                  time.monotonic() - started)
+        return out
 
     async def _tool_reply_to_email(self, args: dict) -> dict:
         """The email on screen, read and answered in the app's own reply
@@ -6180,6 +6234,7 @@ class CompanionManager(QObject):
         "searching":     "Looking that up…",
         "writing":       "Writing it for you…",
         "reading_email": "Reading the email…",
+        "reading_code": "Reading your editor…",
     }
 
     def _activity(self, key: str) -> None:

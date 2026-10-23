@@ -7,19 +7,19 @@
 Modules: registry (the choke point), base (Tool helpers), schema
 (argument validation), process (subprocess plumbing), and one module per
 category - file_tools, spreadsheet_tools, design_tools, terminal_tools, test_tools, git_tools,
-browser_tools, computer_tools - each exposing tools() -> list[Tool].
+browser_tools, computer_tools, devlink_tools - each exposing tools() -> list[Tool].
 """
 from __future__ import annotations
 
 from . import (
-    app_tools, browser_tools, computer_tools, control_tools, design_tools, file_tools, git_tools,
+    app_tools, browser_tools, computer_tools, control_tools, design_tools, devlink_tools, file_tools, git_tools,
     spreadsheet_tools, terminal_tools, test_tools,
 )
 from .base import Tool, make_spec
 from .registry import Registry
 
 _MODULES = (file_tools, spreadsheet_tools, design_tools, terminal_tools, test_tools, git_tools, browser_tools,
-            app_tools, control_tools, computer_tools)
+            app_tools, control_tools, computer_tools, devlink_tools)
 
 
 def all_tools() -> list[Tool]:

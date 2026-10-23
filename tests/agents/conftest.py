@@ -92,6 +92,10 @@ def _grants_stay_in_the_sandbox(tmp_path, monkeypatch):
     # Same rule, same reason: the launcher caches the machine's app list, and
     # a test must not write it into the user's profile or read theirs.
     monkeypatch.setenv("TORA_APPS_CACHE", str(tmp_path / "installed_apps.json"))
+    # DevLink's Connect looks for VS Code and its forks, and the extensions
+    # in the home folder: here, in an empty sandbox (devlink/install.py).
+    monkeypatch.setenv("TORA_EDITOR_ROOTS", str(tmp_path / "Programs"))
+    monkeypatch.setenv("TORA_EDITOR_HOME", str(tmp_path / "home"))
     # And the .env: it holds the user's real API keys, and saved switches
     # (APP-03) are written into it. No test may touch the real one - every
     # write goes to this test's own copy, and the switches start from their

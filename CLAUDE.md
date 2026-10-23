@@ -7,6 +7,8 @@ How a user likes a job done is a **skill**: a text file (starter skills in
 `skills/`, the user's own in the data folder) that Tora follows with the
 tools she already has — see `docs/agents/SKILLS.md`. Packs (`extensions/`)
 were removed on 6 Oct 2026; no job-specific code goes into `agents/`.
+DevLink (`devlink/`, the VS Code connector in `connectors/vscode`) reads
+code editors as data instead of screenshots — see `docs/devlink/DEVLINK.md`.
 
 ## Multi-session development protocol
 
@@ -19,7 +21,7 @@ pushes. Three worker sessions build. Conflicts are prevented by
 
 | you are   | you own (may create/edit)                                                    |
 |-----------|-------------------------------------------------------------------------------|
-| manager   | `agents/core`, `agents/manager`, `agents/skills`, `skills/`, `companion_manager.py`, `main.py`, `config.py`, `ui/*`, docs, `CLAUDE.md`, `TASKS.md`, `tests/agents/test_core*.py`, `tests/agents/test_e2e*.py` |
+| manager   | `agents/core`, `agents/manager`, `agents/skills`, `skills/`, `devlink/`, `connectors/`, `companion_manager.py`, `main.py`, `config.py`, `ui/*`, docs, `CLAUDE.md`, `TASKS.md`, `tests/agents/test_core*.py`, `tests/agents/test_e2e*.py` |
 | worker 1  | `agents/tools`, `agents/ui`, `tests/agents/test_tools_*.py`, `tests/agents/test_ui_*.py` |
 | worker 2  | `agents/providers`, `agents/workers`, `agents/understanding`, `tests/agents/test_providers_*.py`, `test_workers_*.py`, `test_understanding_*.py` |
 | worker 3  | `agents/memory`, `agents/planning`, `agents/verification`, `agents/persistence`, `supabase/migrations/0002*`, `tests/agents/test_memory_*.py`, `test_planning_*.py`, `test_verification_*.py`, `test_persistence_*.py` |

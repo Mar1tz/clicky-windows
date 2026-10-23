@@ -8,7 +8,7 @@ These are those tabs. Each is a Page (title, body, live refresh), so a tab
 redraws the way the app's pages do; the cards keep their words, only their
 home changed.
 
-    SETTINGS  General · System · Agents · Advanced
+    SETTINGS  General · System · Agents · Code editors · Advanced
     ACCOUNT   Account · Usage · Plans & billing · Data & privacy
 """
 
@@ -1019,12 +1019,117 @@ class PlansTab(Tab):
         return col
 
 
+class CodeEditorsTab(Tab):
+    """HeyTora DevLink (devlink/): Tora reads VS Code and its forks as data -
+    the file you are in, your errors, what your terminal printed - instead
+    of from screenshots. Connect installs the connector into an editor;
+    each project then asks there what HeyTora may read, and its answers
+    show here too, one switch per permission. Pause stops everything;
+    "What HeyTora sent" is the audit log of every answer that went to the
+    model."""
+
+    HEADING = "Code editors"
+    TOPICS = frozenset({"devlink"})
+
+    def build(self) -> None:
+        from devlink.protocol import CAPABILITY_WORDS
+        from ui.settings_parts import Group
+        br = self.bridge
+        st = _ask(br, "devlink_state", None) or {"on": False, "running": False, "editors": [], "workspaces": [],
+                                                  "paused": False, "data_policy": "redacted"}
+        top = Group("DevLink")
+        top.toggle("Read my code editors",
+                   "Tora reads VS Code, Cursor and Windsurf directly - the file you're in, your errors, what "
+                   "your terminal printed - instead of from screenshots. Read-only.", st["on"], br.devlink_set_on)
+        if st["on"] and not st["running"]:
+            top.note("DevLink did not start - see tora.log for why.")
+        self.body.add(top)
+        if not st["on"]:
+            return
+
+        eds = Group("Editors on this PC")
+        for e in st["editors"]:
+            go = button("Reinstall" if e["installed"] else "Connect", "ghost" if e["installed"] else "primary")
+            go.clicked.connect(lambda _c=False, k=e["key"], b=go: self._connect(k, b))
+            eds.row(e["name"], f"Connected - version {e['installed']}" if e["installed"] else "Not connected yet", go)
+        if not st["editors"]:
+            eds.row("No VS Code-style editor found", "Install VS Code, Cursor or Windsurf, then come back here.")
+        self._note = eds.note("")
+        self._note.hide()
+        self.body.add(eds)
+
+        for w in st["workspaces"][:12]:
+            forget = button("Forget", "link")
+            forget.clicked.connect(lambda _c=False, ws=w["workspace_id"]: br.devlink_forget(ws))
+            g = Group(w["name"] + (" · open now" if w.get("connected") else ""), forget)
+            for capability, (title, detail) in CAPABILITY_WORDS.items():
+                g.toggle(title, detail, capability in w["grants"],
+                         lambda on, ws=w["workspace_id"], c=capability: br.devlink_grant(ws, c, on))
+            self.body.add(g)
+        if not st["workspaces"]:
+            g = Group("Projects")
+            g.row("No project has connected yet", "Open one in an editor you connected: it asks there what "
+                                                  "HeyTora may read.")
+            self.body.add(g)
+
+        privacy = Group("Privacy")
+        privacy.toggle("Pause", "Stop reading every editor now. Your permissions are kept.", st["paused"],
+                       br.devlink_pause)
+        privacy.row("What may be sent", "Redacted: keys and tokens are taken out before anything is kept or "
+                                        "sent. Local only: nothing from your editors goes to the AI.",
+                    _choice((("redacted", "Redacted"), ("local_only", "Local only")), st["data_policy"],
+                            br.devlink_data_policy, 160))
+        show = button("Show")
+        show.clicked.connect(self._show_audit)
+        privacy.row("What HeyTora sent", "Every answer from your editors that went to the AI, the last 7 days.",
+                    show)
+        privacy.note("Never read, whatever you allow: .env files, keys and certificates, .ssh and cloud "
+                     "credentials, and anything in a project's .heytoraignore.")
+        self.body.add(privacy)
+
+    def _connect(self, key: str, go) -> None:
+        go.setEnabled(False)
+        go.setText("Connecting…")
+
+        def done(answer) -> None:
+            self._note.setText("Connected. Open a project in that editor - it asks there what HeyTora may read."
+                               if answer.get("ok") else f"That didn't work: {answer.get('said') or 'no answer'}")
+            self._note.show()
+            self.bridge.changed.emit("devlink")
+        self._busy = _Background(self, lambda: self.bridge.devlink_connect(key), done)
+
+    def _show_audit(self) -> None:
+        from PyQt6.QtWidgets import QPlainTextEdit
+        from datetime import datetime
+        from ui.settings_parts import SubDialog
+        w = self.window()
+        over = getattr(w, "_settings", None)
+        over = over if over is not None and over.isVisible() else w
+        dlg = SubDialog(over, "What HeyTora sent", "Each answer from your editors that went to the AI - "
+                                                   "exactly as it was sent, keys already taken out.")
+        dlg.W = 720
+        entries = _ask(self.bridge, "devlink_audit", []) or []
+        text = []
+        for e in entries:
+            when = datetime.fromtimestamp(e["ts"]).strftime("%d %b %H:%M:%S")
+            if e["kind"] == "sent":
+                text.append(f"── {when} · {e['tool']} · {e['size']:,} bytes\n{e['text']}\n")
+            else:
+                text.append(f"── {when} · {e['kind']} {e['tool']} {e['args']}\n")
+        view = QPlainTextEdit("\n".join(text) or "Nothing has been sent yet.")
+        view.setReadOnly(True)
+        view.setMinimumHeight(380)
+        dlg.body.addWidget(view)
+        dlg.open()
+
+
 # The menu, top to bottom: (section, [(key, words, icon, tab), ...]).
 TABS = (
     ("Settings", (
         ("general", "General", "sliders-horizontal", GeneralTab),
         ("system", "System", "monitor", SystemTab),
         ("agents", "Agents", "bot", AgentsTab),
+        ("devlink", "Code editors", "code", CodeEditorsTab),
         ("advanced", "Advanced", "wrench", AdvancedTab),
     )),
     # Wispr's order: who you are, what you pay, what is kept about you.

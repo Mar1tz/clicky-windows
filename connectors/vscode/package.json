@@ -1,0 +1,70 @@
+{
+  "name": "heytora-devlink",
+  "displayName": "HeyTora DevLink",
+  "description": "Lets HeyTora read your workspace - code, problems, terminals and debug output - as data instead of screenshots. Read-only, and nothing is read until you allow it.",
+  "version": "0.1.0",
+  "publisher": "heytora",
+  "license": "MIT",
+  "icon": "icon.png",
+  "engines": {
+    "vscode": "^1.93.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "keywords": [
+    "heytora",
+    "assistant",
+    "voice",
+    "context"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "main": "./extension.js",
+  "extensionKind": [
+    "ui",
+    "workspace"
+  ],
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": "limited",
+      "description": "HeyTora only reads what you allow, and never runs anything - in Restricted Mode too."
+    },
+    "virtualWorkspaces": false
+  },
+  "contributes": {
+    "commands": [
+      {
+        "command": "heytora.devlink.menu",
+        "title": "HeyTora: DevLink"
+      },
+      {
+        "command": "heytora.devlink.permissions",
+        "title": "HeyTora: Choose what HeyTora can see"
+      },
+      {
+        "command": "heytora.devlink.pause",
+        "title": "HeyTora: Pause DevLink"
+      },
+      {
+        "command": "heytora.devlink.resume",
+        "title": "HeyTora: Resume DevLink"
+      },
+      {
+        "command": "heytora.devlink.reconnect",
+        "title": "HeyTora: Reconnect to HeyTora"
+      }
+    ],
+    "configuration": {
+      "title": "HeyTora DevLink",
+      "properties": {
+        "heytora.devlink.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Connect to HeyTora on this computer."
+        }
+      }
+    }
+  }
+}

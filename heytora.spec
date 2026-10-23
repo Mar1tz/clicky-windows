@@ -168,6 +168,10 @@ for _wav in _glob.glob(os.path.join("assets", "sounds", "*.wav")):
 datas.append((os.path.join("assets", "voices"), os.path.join("assets", "voices")))
 # The wake word's model and keywords (audio/wake_local.py, HP-08).
 datas.append((os.path.join("assets", "wake"), os.path.join("assets", "wake")))
+# DevLink's VS Code connector (devlink/install.py packs it into a .vsix when
+# Settings -> Code editors -> Connect is clicked) - its files, not its tests.
+for _name in ("package.json", "extension.js", "README.md", "icon.png", "LICENSE"):
+    datas.append((os.path.join("connectors", "vscode", _name), os.path.join("connectors", "vscode")))
 
 
 a = Analysis(

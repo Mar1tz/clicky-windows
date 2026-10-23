@@ -743,6 +743,88 @@ class AppBridge(QObject):
             wf.revoke_desktop_action(key)
         self.changed.emit("grants")
 
+    # ── code editors: DevLink (devlink/) ─────────────────────────────────────
+    #
+    # The hub runs on the manager's loop; these hand it the work and wait a
+    # moment for the answer (run_sync), so the store is only ever touched
+    # from that one thread.
+
+    def devlink_state(self) -> dict:
+        """Settings → Code editors: on or off, the editors on this PC and
+        whether each has the connector, the workspaces seen with what each
+        may read, paused, the data policy."""
+        from config import cfg
+        from devlink import current
+        from devlink.install import editors
+        try:
+            found = [{"key": e.key, "name": e.name, "installed": e.installed} for e in editors()]
+        except Exception:  # noqa: BLE001 - the page still shows the rest
+            found = []
+        state = {"on": cfg.switch("devlink"), "running": False, "editors": found, "workspaces": [],
+                 "connections": [], "paused": False, "data_policy": "redacted"}
+        hub = current()
+        if hub is not None:
+            try:
+                state |= hub.run_sync(hub.overview_for_settings(), 3) | {"running": True}
+            except Exception:  # noqa: BLE001
+                pass
+        return state
+
+    def devlink_set_on(self, on: bool) -> None:
+        from config import cfg
+        cfg.set_switch("devlink", bool(on))
+        if self.manager is not None and hasattr(self.manager, "set_devlink_running"):
+            self.manager.set_devlink_running(bool(on))
+        self.changed.emit("devlink")
+
+    def _devlink(self, work) -> None:
+        from devlink import current
+        hub = current()
+        if hub is not None:
+            try:
+                hub.run_sync(work(hub), 3)
+            except Exception:  # noqa: BLE001
+                _log.warning("devlink setting failed", exc_info=True)
+        self.changed.emit("devlink")
+
+    def devlink_grant(self, workspace: str, capability: str, on: bool) -> None:
+        self._devlink(lambda hub: hub.set_grant(workspace, capability, "always" if on else None))
+
+    def devlink_pause(self, paused: bool) -> None:
+        self._devlink(lambda hub: hub.set_paused(paused))
+
+    def devlink_data_policy(self, policy: str) -> None:
+        self._devlink(lambda hub: hub.set_data_policy(policy))
+
+    def devlink_forget(self, workspace: str) -> None:
+        self._devlink(lambda hub: hub.forget(workspace))
+
+    def devlink_audit(self, limit: int = 50) -> list[dict]:
+        from devlink import current
+        hub = current()
+        if hub is None:
+            return []
+        try:
+            return hub.run_sync(hub.audit_log(limit), 3)
+        except Exception:  # noqa: BLE001
+            return []
+
+    def devlink_connect(self, editor_key: str) -> dict:
+        """Install the connector into one editor: {"ok", "said"}. Runs the
+        editor's own CLI - seconds - so call it off the UI thread."""
+        from config import data_dir
+        from devlink.install import build_vsix, editors, install
+        editor = next((e for e in editors() if e.key == editor_key), None)
+        if editor is None:
+            return {"ok": False, "said": "That editor is not installed any more."}
+        try:
+            vsix = build_vsix(data_dir() / "devlink")
+        except OSError as e:
+            return {"ok": False, "said": f"Could not build the connector: {e}"}
+        ok, said = install(editor, vsix)
+        _log.info("devlink: installing the connector in %s - %s", editor.name, "ok" if ok else said[:200])
+        return {"ok": ok, "said": said}
+
     # ── voice & models (APP-12) ──────────────────────────────────────────────
 
     def voices(self) -> tuple[str, ...]:

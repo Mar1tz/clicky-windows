@@ -34,11 +34,11 @@ def window(qapp):
 def test_the_menu_is_the_agreed_tabs(window):
     from ui.settings_tabs import TABS
     assert [(sec, [k for k, *_r in rows]) for sec, rows in TABS] == [
-        ("Settings", ["general", "system", "agents", "advanced"]),
+        ("Settings", ["general", "system", "agents", "devlink", "advanced"]),
         ("Account", ["account", "usage", "plans", "privacy"])]
     window.open_settings()
     words = [r.text() for r in window._settings._rows.values()]
-    assert words == ["General", "System", "Agents", "Advanced",
+    assert words == ["General", "System", "Agents", "Code editors", "Advanced",
                      "Account", "Usage", "Plans & billing", "Data & privacy"]
 
 

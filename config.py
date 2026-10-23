@@ -362,6 +362,13 @@ to do (a command):
 After write_for_me say one short line that it's in; never read it out. If
 it says nothing was typed because it was a command, do the command.
 
+THEIR CODE: a question about the code, project, errors, a build, tests, a
+terminal or the debugger - "what's wrong", "why did it fail", "where was I",
+"what does this do" - call code_context first (action overview, with their
+question). It reads their editor directly and sees what is off screen; use
+look_at_screen only when it says no editor is connected. Say what is wrong
+and where in a sentence or two, and offer to look deeper.
+
 DOING SOMETHING TO A FILE is a job for an agent: "turn this document into a
 PDF", "convert it", "export this", "rename these", "zip this folder" - call
 delegate_task with what they said. The files they traced over, selected or
@@ -565,6 +572,9 @@ class Config:
         # Settings > Updates: a downloaded update installs by itself - the
         # next time HeyTora starts, or as it is quit (updates/service.py).
         "auto_update":   ("TORA_AUTO_UPDATE", True),
+        # Settings > Code editors (devlink/): connectors may reach HeyTora.
+        # On - each workspace still reads nothing until it is allowed there.
+        "devlink":       ("TORA_DEVLINK", True),
     }
 
     def switch(self, name: str) -> bool:

@@ -465,7 +465,14 @@ def tool_declarations() -> list[dict]:
                 "required": ["action"],
             },
         },
+        _code_context(),
     ]}]
+
+
+def _code_context() -> dict:
+    """DevLink's one tool (devlink/tools.py): their editor, read as data."""
+    from devlink.tools import voice_declaration
+    return voice_declaration()
 
 
 @dataclass
