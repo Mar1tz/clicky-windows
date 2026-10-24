@@ -2138,7 +2138,81 @@ class CompanionManager(QObject):
             "write_for_me":    self._tool_write_for_me,
             "reply_to_email":  self._tool_reply_to_email,
             "code_context":    self._tool_code_context,
+            "fill_form":       self._tool_fill_form,
         }
+
+    # ── Filling in a form (ai/form_fill.py) ──────────────────────────────────
+    #
+    # 24 Oct: "allow it to click different places to fill in info". Every box
+    # of the form in front, from what they said and what HeyTora knows about
+    # them - her cursor going to each one. Never sends it.
+
+    async def _tool_fill_form(self, args: dict) -> dict:
+        from ai import form_fill
+        request = str(args.get("request") or "").strip() or "Fill in this form with my details."
+        self._activity("filling_form")
+        title = active_window_title()
+        if self._privacy_guard and is_sensitive_window(title):
+            return {"error": "That window looks private (banking, passwords) - Tora does not fill it in. Tell them."}
+        started = time.monotonic()
+        fields = await asyncio.to_thread(form_fill.read_fields)
+        if not [f for f in fields if not f.secret]:
+            return {"error": ("No boxes to fill in were found in the window in front. Ask them to open the form and "
+                              "scroll it into view, then ask again.")}
+        page = await asyncio.to_thread(write_for_me.page_context)
+        known = await self._known_about_user(request)
+        values, note = await form_fill.plan(request, fields, page, known)
+        if not values:
+            return {"error": ("Nothing true to put in those boxes - ask them for the details (and offer to remember "
+                              "them for next time).")}
+        keyboard = write_for_me.Keyboard()
+        await asyncio.to_thread(write_for_me.keys_let_go, keyboard)
+        self.sig_point_hold.emit(True)
+        try:
+            result = await asyncio.to_thread(form_fill.fill, fields, values, keyboard=keyboard,
+                                             on_field=self._point_at_field)
+        finally:
+            self.sig_point_hold.emit(False)
+            self.sig_point_release.emit()
+        _log.info("fill form: %d boxes in %r - %d filled, %d left empty, %d would not take it%s, in %.1fs",
+                  len(fields), title[:60], len(result.done), len(result.left), len(result.failed),
+                  ", stopped (left the window)" if result.stopped else "", time.monotonic() - started)
+        if result.done:
+            self.sig_response_chunk.emit("\n".join(f"{name}: {value}" for name, value in result.done) + "\n\n")
+            self._note_written(" ".join(v for _n, v in result.done))
+        return {"ok": bool(result.done), "result": form_fill.summary(result, note) + (
+            " Nothing was sent: they check it and press the button themselves. Say what you filled in one or two "
+            "short sentences - the boxes, not every value.")}
+
+    def _point_at_field(self, f) -> None:
+        """Her cursor on the box she is about to fill (from the filling thread)."""
+        try:
+            from screen.monitors import to_logical
+            x, y = to_logical(*f.centre)              # Windows gives pixels; the overlay draws in logical space
+            self.sig_point_at.emit(float(x), float(y), f.name[:40])
+        except Exception:  # noqa: BLE001 - the filling goes on without the cursor
+            pass
+
+    async def _known_about_user(self, request: str) -> str:
+        """What HeyTora knows about them, for a form: their name, the email
+        they signed in with, and what they asked her to remember."""
+        lines = []
+        name, _uses = cfg.profile()
+        if name:
+            lines.append(f"Their name: {name}")
+        try:
+            from account.service import account
+            if account().signed_in() and account().email:
+                lines.append(f"Their email: {account().email}")
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            hits = await gemini_memory.recall(f"{request} my details name address phone email", k=5)
+            for h in hits:
+                lines.append(f"Remembered: {h.text[:300]}")
+        except Exception:  # noqa: BLE001
+            _log.debug("recall for a form failed", exc_info=True)
+        return "\n".join(lines)
 
     # ── DevLink (devlink/): the code editor, read as data ────────────────────
     #
@@ -2180,11 +2254,29 @@ class CompanionManager(QObject):
         except Exception:  # noqa: BLE001
             _log.debug("devlink %s failed", "start" if on else "stop", exc_info=True)
 
+    async def _editor_context(self, question: str) -> str:
+        """The editor packet for a question on the slow route, or "" (DevLink
+        off, nothing connected, nothing allowed)."""
+        import devlink
+        hub = devlink.current()
+        if hub is None or not hub.gateway.connections:
+            return ""
+        from devlink import tools as devlink_tools
+        try:
+            out = await asyncio.wait_for(devlink_tools.answer({"action": "overview", "question": question},
+                                                              budget=4000, cap=4500), 4.0)
+        except Exception:  # noqa: BLE001 - the question still goes, without it
+            return ""
+        if not out.get("ok"):
+            return ""
+        return (f"\n\nTHEIR CODE EDITOR ({out['workspace']}, read directly - {out['note']})\n"
+                f"{out['text']}\n")
+
     async def _tool_code_context(self, args: dict) -> dict:
         from devlink import tools as devlink_tools
         self._activity("reading_code")
         started = time.monotonic()
-        out = await devlink_tools.answer(args)
+        out = await devlink_tools.answer(args, voice=True, window_title=active_window_title())
         _log.info("code_context %s: %s in %.2fs", args.get("action") or "overview",
                   f"{len(out.get('text', ''))} chars" if out.get("ok") else out.get("error", "")[:80],
                   time.monotonic() - started)
@@ -4982,6 +5074,11 @@ class CompanionManager(QObject):
             trace_line = await self._take_trace_line()
             trace_extra = f"\n\n{trace_line}\n" if trace_line else ""
 
+            # Their editor, read as data (devlink/): this route has no tools,
+            # so in a code window the packet comes with the question - the
+            # same one the live voice would fetch with code_context.
+            code_extra = await self._editor_context(transcript) if code_active else ""
+
             # 4. Build system prompt with all context
             system = _build_system_prompt(
                 window_title=title,
@@ -4991,7 +5088,7 @@ class CompanionManager(QObject):
                 detected_coord=detected_coord,
                 code_active=code_active,
                 language_code=lang_code,
-                extra=ocr_extra + doc_extra + fig_extra + trace_extra,
+                extra=ocr_extra + doc_extra + fig_extra + trace_extra + code_extra,
             )
             if sensitive:
                 system += (
@@ -6235,6 +6332,7 @@ class CompanionManager(QObject):
         "writing":       "Writing it for you…",
         "reading_email": "Reading the email…",
         "reading_code": "Reading your editor…",
+        "filling_form": "Filling in the form…",
     }
 
     def _activity(self, key: str) -> None:

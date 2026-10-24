@@ -62,6 +62,7 @@ class Connection:
         self._next = itertools.count(1)
         self._lock = asyncio.Lock()
         self.closed = False
+        self.focused_at = 0.0           # when its window last had the focus
 
     async def send(self, message: dict) -> None:
         if self.closed:

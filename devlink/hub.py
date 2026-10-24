@@ -60,12 +60,40 @@ class Hub:
         self.loop = asyncio.get_running_loop()
         await self.gateway.start()
         self._purger = asyncio.ensure_future(self._purge_now_and_then())
+        self._connector = asyncio.ensure_future(self.connect_editors())
 
     async def stop(self) -> None:
-        if self._purger:
-            self._purger.cancel()
+        for task in (self._purger, getattr(self, "_connector", None)):
+            if task:
+                task.cancel()
         await self.gateway.stop()
         self.store.close()
+
+    # ── the connector in every editor, without being asked ─────────────────
+    #
+    # 24 Oct, the owner: Tora "keeps asking me to make sure DevLink is
+    # enabled and configured". Connect was a button in Settings nobody had
+    # pressed, so nothing was ever connected. Now every VS Code-family
+    # editor on the PC gets the connector when HeyTora starts, and a newer
+    # one when HeyTora brings one. Installing it reads nothing - each
+    # project still asks. One the user removed is not put back.
+
+    async def connect_editors(self) -> list[str]:
+        if self.store.setting("auto_connect", "1") != "1":
+            return []
+        from . import install
+        known = {k: self.store.setting(k) for k in install.memory_keys()}
+        try:
+            done = await asyncio.get_running_loop().run_in_executor(
+                None, install.ensure_installed, known, self.folder / "connector")
+        except Exception:  # noqa: BLE001 - Settings still has the button
+            _log.warning("devlink: could not connect the editors", exc_info=True)
+            return []
+        for key, version in done.items():
+            self.store.set_setting(key, version)
+        if done:
+            _log.info("devlink: the connector is in %s", ", ".join(k.split(":", 1)[1] for k in done))
+        return list(done)
 
     async def _purge_now_and_then(self) -> None:
         while True:
@@ -104,7 +132,7 @@ class Hub:
         conn.workspace_id = ws = workspace_id(folders, name)
         self.store.seen_workspace(ws, name, folders)
         s = self.context.state(ws)
-        s.name, s.folders, s.app, s.connected, s.focused_at = name, folders, conn.app, True, time.time()
+        s.name, s.folders, s.app, s.connected, s.focused_at = name, folders, conn.app or s.app, True, time.time()
         self._rules[ws] = ignore_rules(folders)
         if folders and ws not in self.context.projects:
             asyncio.get_running_loop().run_in_executor(None, self._index, ws, folders)
@@ -122,6 +150,8 @@ class Hub:
             _log.warning("devlink: could not index %s", folders, exc_info=True)
 
     def on_event(self, conn, params: Any) -> None:
+        if isinstance(params, dict) and params.get("type") == "window.focused":
+            conn.focused_at = time.time()
         ev = P.normalise(conn.source, conn.workspace_id, params)
         if ev is None or not self.policy.allows(ev.workspace_id, ev.capability):
             return
@@ -171,6 +201,15 @@ class Hub:
         if method == "status":
             return {"grants": self.policy.grants(ws), "paused": self.policy.paused,
                     "dataPolicy": self.policy.data_policy}
+        if method == "context.preview":
+            # "What can HeyTora see?" in the editor: the packet Tora would get,
+            # shown on this PC - nothing is sent, so nothing is spent or logged.
+            allowed = {c for c in P.READ_CAPABILITIES if self.policy.allows(ws, c)}
+            if not allowed:
+                return {"text": "Nothing - HeyTora is not allowed to read this workspace"
+                                + (" (paused)." if self.policy.paused else ".")}
+            return {"text": redact(await self._packet(ws, allowed, str(params.get("question") or ""),
+                                                      int(params.get("budget") or 8000)))}
         raise RpcError(P.METHOD_NOT_FOUND, f"no method {method}")
 
     def on_close(self, conn) -> None:
@@ -194,8 +233,10 @@ class Hub:
         return max(live, key=lambda s: (s.focused_at, s.updated)).workspace_id
 
     def _connection(self, ws: str):
+        """The window of `ws` to ask: the one focused last (two windows can
+        show one workspace), else the first that connected."""
         conns = [c for c in self.gateway.connections if c.workspace_id == ws and not c.closed]
-        return conns[-1] if conns else None
+        return max(conns, key=lambda c: (c.focused_at, -c.id)) if conns else None
 
     async def _ask(self, ws: str, method: str, params: dict, timeout: float = 4.0) -> Any:
         conn = self._connection(ws)
@@ -219,8 +260,9 @@ class Hub:
         if not self.policy.use(ws, capability):
             title = P.CAPABILITY_WORDS[capability][0].lower()
             name = self.context.state(ws).name
-            return None, {"error": f"HeyTora has not been allowed to read {title} in {name}. They can allow it "
-                                   "from HeyTora in VS Code's status bar, or in HeyTora Settings → Code editors.",
+            return None, {"error": f"HeyTora is not allowed to read {title} in {name} yet. Ask them in one short "
+                                   f"question whether you may read {name} (its code, terminals and debugging); if "
+                                   "they say yes, call code_context with action allow, then answer.",
                           "needs": capability}
         return ws, None
 
@@ -240,6 +282,11 @@ class Hub:
             return why
         for capability in allowed:
             self.policy.use(ws, capability)
+        packet = await self._packet(ws, allowed, question, budget)
+        return self._out(ws, "overview", {"question": (question or "")[:200]}, packet)
+
+    async def _packet(self, ws: str, allowed: set, question: str, budget: int) -> str:
+        """The context packet for `ws`, of what `allowed` covers."""
         s = self.context.state(ws)
         sections: list[tuple[str, str]] = [("Where they are", self._where(s, P.READ_CODE in allowed))]
         if P.READ_CODE in allowed:
@@ -256,9 +303,48 @@ class Hub:
         sections.append(("Recently", self._timeline_text(ws, skip=FAILURE_KINDS if terminal else ())))
         if P.READ_CODE in allowed:
             sections += [("Project", self._project_text(ws)), ("Open files", self._tabs_text(s))]
-        packet = fit(sections, budget) + ("\nMore with code_context: a file, references to a symbol, symbols, "
-                                          "a code search, a log tail or search, failures.")
-        return self._out(ws, "overview", {"question": (question or "")[:200]}, packet)
+        return fit(sections, budget) + ("\nMore with code_context: a file, references to a symbol, symbols, "
+                                        "a code search, a log tail or search, failures.")
+
+    async def allow(self, workspace: Optional[str] = None) -> dict:
+        """They said yes, out loud: everything readable, for good, in the
+        project they are in. Only the voice calls this - never an agent."""
+        ws = workspace or self.active_workspace()
+        if ws is None:
+            return {"error": "No code editor is connected yet, so there is no project to allow."}
+        for capability in P.READ_CAPABILITIES:
+            self.policy.grant(ws, capability, P.ALWAYS)
+        self.store.audit("grant", ws, "all", {"scope": P.ALWAYS, "from": "said to Tora"}, "")
+        await self._tell_connectors(ws)
+        name = self.context.state(ws).name
+        return {"ok": True, "text": f"HeyTora may now read {name}: code and problems, terminals, debugging. "
+                                    "Say so in a few words, then answer with code_context."}
+
+    async def no_editor(self, title: str) -> dict:
+        """Nothing connected. When an editor is in front: what its title says
+        (the file, the project), and - if it has no connector yet - the
+        connector, installed now. Never "go to Settings"."""
+        from . import install
+        editor_name, file, project = install.parse_title(title)
+        if not editor_name:
+            return {"error": "No code editor is connected and none is in front. If they mean an editor, ask "
+                             "them to bring it to the front; otherwise use look_at_screen."}
+        loop = asyncio.get_running_loop()
+        found = await loop.run_in_executor(None, install.editors)
+        editor = next((e for e in found if e.name.lower() == editor_name.lower()), None)
+        seen = f"{editor_name} is in front" + (f" with {file}" if file else "") + (f" in {project}" if project else "")
+        if editor is not None and not editor.installed:
+            ok, said = await loop.run_in_executor(None, lambda: install.install(
+                editor, install.build_vsix(self.folder / "connector")))
+            if ok:
+                self.store.set_setting(install.memory_key(editor), install.manifest()["version"])
+                return {"ok": True, "text": f"{seen}. I have just added HeyTora to {editor_name}: in a few seconds it "
+                                            "asks them there to allow this project (if it does not, they reload the "
+                                            "window once). Tell them, and answer what you can from the screen."}
+            _log.info("devlink: could not install into %s: %s", editor_name, said[:200])
+        return {"ok": True, "text": f"{seen}, but its HeyTora connection is not open yet - reloading that window once "
+                                    "(Ctrl+Shift+P, 'Reload Window') opens it. Tell them that in one sentence, and "
+                                    "meanwhile answer from the screen (look_at_screen)."}
 
     async def problems(self, path: str = "") -> dict:
         ws, why = self._gate(P.READ_CODE)
@@ -544,7 +630,13 @@ class Hub:
             workspaces.append(w | {"connected": ws in live, "app": live[ws].app if ws in live else "",
                                    "grants": self.policy.grants(ws)})
         return {"port": self.gateway.port, "paused": self.policy.paused, "data_policy": self.policy.data_policy,
+                "auto_connect": self.store.setting("auto_connect", "1") == "1",
                 "connections": [c.describe() for c in self.gateway.connections], "workspaces": workspaces}
+
+    async def set_auto_connect(self, on: bool) -> None:
+        self.store.set_setting("auto_connect", "1" if on else "0")
+        if on:
+            await self.connect_editors()
 
     async def set_grant(self, ws: str, capability: str, scope: Optional[str]) -> None:
         self.policy.grant(ws, capability, scope)

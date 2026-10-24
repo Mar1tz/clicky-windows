@@ -490,13 +490,19 @@ class Account:
                 return s["access_token"]
             started = time.monotonic()
             r = self._auth_post("token?grant_type=refresh_token", {"refresh_token": s["refresh_token"]})
-            _log.info("sign-in refreshed in %.1fs", time.monotonic() - started)
             if r.status_code >= 400:
+                # 24 Oct: this said "sign-in refreshed" before the answer was
+                # read - a refusal that signed the owner out on 22 Oct looked
+                # like a success in the log, and everything after it failed.
+                _log.warning("sign-in refresh refused (%d, %s) in %.1fs", r.status_code, r.text[:120],
+                             time.monotonic() - started)
                 if r.status_code in (400, 401, 403):
                     self._session = None
                     store.clear()
+                    _log.warning("signed out: the saved sign-in was refused")
                     raise SignInNeeded("Your sign-in has expired - sign in to HeyTora again.")
                 raise AccountError(_auth_message(r, "Could not reach HeyTora - check the internet."))
+            _log.info("sign-in refreshed in %.1fs", time.monotonic() - started)
             self._keep(r.json())
             return self._session["access_token"]
 

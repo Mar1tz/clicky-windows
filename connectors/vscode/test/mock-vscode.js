@@ -52,6 +52,7 @@ const diagnostics = new Map();   // fsPath -> [diagnostic]
 const commands = new Map();
 const canned = { symbols: [], references: [] };
 const prompts = [];
+const opened = [];               // what untitled documents were opened with
 let promptAnswer = 'Allow';
 
 const vscode = {
@@ -77,6 +78,7 @@ const vscode = {
     async showInformationMessage(message, ...items) { prompts.push(message); return promptAnswer; },
     async showWarningMessage(message) { prompts.push(message); },
     async showQuickPick(items) { return items; },
+    async showTextDocument(doc) { return { document: doc }; },
   },
   workspace: {
     name: 'proj', isTrusted: true, workspaceFolders: [],
@@ -84,6 +86,10 @@ const vscode = {
     onDidChangeTextDocument: emitter(), onDidSaveTextDocument: emitter(),
     onDidChangeWorkspaceFolders: emitter(), onDidChangeConfiguration: emitter(),
     async openTextDocument(uri) {
+      if (uri && uri.content !== undefined) {          // a new untitled document
+        opened.push(uri.content);
+        return document(`untitled:${opened.length}`, uri.content, uri.language || 'plaintext');
+      }
       if (documents.has(uri.fsPath)) return documents.get(uri.fsPath);
       return document(uri.fsPath, fs.readFileSync(uri.fsPath, 'utf8'));
     },
@@ -114,7 +120,7 @@ const vscode = {
   },
   // test helpers
   _: {
-    emitter, document, diagnostics, documents, config, canned, prompts, commands,
+    emitter, document, diagnostics, documents, config, canned, prompts, commands, opened,
     answerPrompts(answer) { promptAnswer = answer; },
   },
 };

@@ -440,7 +440,7 @@ async def test_nothing_is_taken_in_or_answered_before_it_is_allowed(hub, project
     ws = hello["result"]["workspaceId"]
     assert hub.context.state(ws).active == {} and hub.store.search("secret") == [], "dropped, not stored"
     out = await dtools.answer({"action": "overview"})
-    assert "has not been allowed" in out["error"] and "status bar" in out["error"]
+    assert "is not allowed to read" in out["error"] and "action allow" in out["error"], "she asks, then allows"
     assert hub.store.audit_log() == [], "nothing was sent"
 
 
@@ -539,7 +539,7 @@ async def test_paused_local_only_and_once(hub, project):
     await c.call("policy.grant", {"capabilities": {"read_code": "once"}})
     c.serve({})
     assert (await dtools.answer({"action": "problems"}))["ok"]
-    assert "not been allowed" in (await dtools.answer({"action": "problems"}))["error"], "once was one answer"
+    assert "not allowed to read" in (await dtools.answer({"action": "problems"}))["error"], "once was one answer"
     await hub.set_grant(ws, P.READ_CODE, P.ALWAYS)
     await hub.set_paused(True)
     assert "paused" in (await dtools.answer({"action": "problems"}))["error"]
@@ -552,7 +552,7 @@ async def test_paused_local_only_and_once(hub, project):
 
 async def test_no_editor_and_no_hub_say_so():
     devlink.set_current(None)
-    assert "DevLink is off" in (await dtools.answer({"action": "overview"}))["error"]
+    assert "turned off in HeyTora" in (await dtools.answer({"action": "overview"}))["error"]
 
 
 async def test_no_editor_connected_says_look_at_the_screen(hub):

@@ -356,6 +356,9 @@ to do (a command):
   "I don't like it, redo it", "delete the last paragraph", the part they
   selected - is write_for_me too, with what they want changed. It rewrites
   the box in place; it never adds a second version.
+- A whole form - "fill in this form", "put my details in", "fill out the
+  address" - is fill_form, with everything they said: it goes to each box
+  itself. write_for_me is for the one box they are in.
 - Unclear: dictation when a text box has focus; otherwise ask in one short
   question. Never run an action on a guess.
 - A question or remark to you is neither: answer it.

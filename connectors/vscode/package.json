@@ -2,7 +2,7 @@
   "name": "heytora-devlink",
   "displayName": "HeyTora DevLink",
   "description": "Lets HeyTora read your workspace - code, problems, terminals and debug output - as data instead of screenshots. Read-only, and nothing is read until you allow it.",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "publisher": "heytora",
   "license": "MIT",
   "icon": "icon.png",
@@ -38,6 +38,10 @@
       {
         "command": "heytora.devlink.menu",
         "title": "HeyTora: DevLink"
+      },
+      {
+        "command": "heytora.devlink.show",
+        "title": "HeyTora: What can HeyTora see?"
       },
       {
         "command": "heytora.devlink.permissions",

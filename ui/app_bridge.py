@@ -761,7 +761,7 @@ class AppBridge(QObject):
         except Exception:  # noqa: BLE001 - the page still shows the rest
             found = []
         state = {"on": cfg.switch("devlink"), "running": False, "editors": found, "workspaces": [],
-                 "connections": [], "paused": False, "data_policy": "redacted"}
+                 "connections": [], "paused": False, "data_policy": "redacted", "auto_connect": True}
         hub = current()
         if hub is not None:
             try:
@@ -789,6 +789,9 @@ class AppBridge(QObject):
 
     def devlink_grant(self, workspace: str, capability: str, on: bool) -> None:
         self._devlink(lambda hub: hub.set_grant(workspace, capability, "always" if on else None))
+
+    def devlink_auto_connect(self, on: bool) -> None:
+        self._devlink(lambda hub: hub.set_auto_connect(on))
 
     def devlink_pause(self, paused: bool) -> None:
         self._devlink(lambda hub: hub.set_paused(paused))

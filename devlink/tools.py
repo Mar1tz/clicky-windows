@@ -14,7 +14,7 @@ from typing import Any
 from . import current
 
 ACTIONS = ("overview", "problems", "last_command", "failures", "tail", "search_logs", "streams",
-           "file", "symbols", "references", "search_code")
+           "file", "symbols", "references", "search_code", "allow")
 VOICE_BUDGET = 1800
 VOICE_CHARS = 2500
 AGENT_BUDGET = 8000
@@ -26,8 +26,9 @@ DESCRIPTION = (
     "fail', 'where was I', 'what does this function do', 'what did that command print'. "
     "overview: where they are and what is broken (start here). problems: errors and warnings. "
     "last_command / failures / tail / search_logs / streams: terminals, tasks and their output. "
-    "file / symbols / references / search_code: the code itself. Use look_at_screen only when this "
-    "says no editor is connected. Read-only: it never changes anything."
+    "file / symbols / references / search_code: the code itself. allow: ONLY after they said yes to "
+    "you reading the project. Use look_at_screen only when this says so. Read-only: it never changes "
+    "anything."
 )
 
 PARAMETERS = {
@@ -50,13 +51,23 @@ def voice_declaration() -> dict:
     return {"name": "code_context", "description": DESCRIPTION, "parameters": PARAMETERS}
 
 
-async def answer(args: dict[str, Any], *, budget: int = VOICE_BUDGET, cap: int = VOICE_CHARS) -> dict:
-    """The action asked for, from the running hub - or why it cannot be."""
+async def answer(args: dict[str, Any], *, budget: int = VOICE_BUDGET, cap: int = VOICE_CHARS,
+                 voice: bool = False, window_title: str = "") -> dict:
+    """The action asked for, from the running hub - or why it cannot be.
+    `voice`: the live voice asking, which alone may allow a project (the
+    user said yes to it); `window_title`: what is in front, for when no
+    editor is connected."""
     hub = current()
     if hub is None:
-        return {"error": "DevLink is off (HeyTora Settings → Code editors), so the editor cannot be read. "
+        return {"error": "Reading the code editor is turned off in HeyTora (Settings → Code editors). "
                          "Use look_at_screen instead."}
     action = str(args.get("action") or "overview")
+    if action == "allow":
+        if not voice:
+            return {"error": "only the user can allow a project"}
+        return await hub.run(hub.allow())
+    if not hub.gateway.connections:
+        return await hub.run(hub.no_editor(window_title))
     query = str(args.get("query") or "").strip()
     path = str(args.get("path") or "").strip()
     line = _int(args.get("line"))

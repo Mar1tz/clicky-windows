@@ -85,6 +85,10 @@ const actions = {
     mock._.canned.references = (references || []).map(loc);
   },
   async command({ id }) { await mock._.commands.get(id)(); },
+  async preview() {
+    await mock._.commands.get('heytora.devlink.show')();
+    say({ preview: mock._.opened[mock._.opened.length - 1] || '' });
+  },
   status() { say({ status: mock.window.statusBar.text, tooltip: mock.window.statusBar.tooltip, grants: link.grants, paused: link.paused, prompts: mock._.prompts }); },
   quit() { link.dispose(); setTimeout(() => process.exit(0), 50); },
 };

@@ -302,6 +302,32 @@ def tool_declarations() -> list[dict]:
             },
         },
         {
+            "name": "fill_form",
+            "description": (
+                "FILL IN A FORM: several boxes at once - 'fill in this form', "
+                "'put my details in', 'fill out the delivery address', 'complete "
+                "the sign-up'. Tora reads the form's boxes, goes to each one "
+                "(clicking into it) and types what fits, from what they said and "
+                "what she knows about them; a box she has nothing true for stays "
+                "empty. Never passwords, card or ID numbers, and it never presses "
+                "Submit. For one box they are typing in, use write_for_me."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "request": {
+                        "type": "string",
+                        "description": (
+                            "Everything they said, in their own words and complete: "
+                            "the details to use (name, address, dates...) and anything "
+                            "they want said in a message box."
+                        ),
+                    },
+                },
+                "required": ["request"],
+            },
+        },
+        {
             "name": "reply_to_email",
             "description": (
                 "REPLY to the email on screen: when they ask you to read the "

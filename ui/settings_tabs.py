@@ -1054,6 +1054,9 @@ class CodeEditorsTab(Tab):
             eds.row(e["name"], f"Connected - version {e['installed']}" if e["installed"] else "Not connected yet", go)
         if not st["editors"]:
             eds.row("No VS Code-style editor found", "Install VS Code, Cursor or Windsurf, then come back here.")
+        eds.toggle("Connect my editors automatically", "HeyTora adds itself to each editor, and keeps it up to "
+                   "date. Each project still asks before anything is read.", st.get("auto_connect", True),
+                   lambda on: _ask(br, "devlink_auto_connect", None, on))
         self._note = eds.note("")
         self._note.hide()
         self.body.add(eds)

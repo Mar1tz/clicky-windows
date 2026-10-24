@@ -173,6 +173,55 @@ def _version_key(v: str) -> tuple:
     return tuple(int(x) if x.isdigit() else 0 for x in v.split("."))
 
 
+def memory_key(editor: Editor) -> str:
+    """Where the hub remembers the connector version it put into `editor`."""
+    return f"connector:{editor.key}"
+
+
+def memory_keys() -> list[str]:
+    return [memory_key(e) for e in editors()]
+
+
+def ensure_installed(known: dict[str, str], dest: Path) -> dict[str, str]:
+    """The connector into every editor that lacks it or has an older one.
+    `known`: memory_key -> the version HeyTora installed there before. An
+    editor HeyTora had connected that has none now was cleaned out by the
+    user, and is left alone. {memory_key: version} for each one done."""
+    want = manifest()["version"]
+    done: dict[str, str] = {}
+    vsix: Optional[Path] = None
+    for editor in editors():
+        key = memory_key(editor)
+        if editor.installed and _version_key(editor.installed) >= _version_key(want):
+            continue
+        if not editor.installed and known.get(key):
+            continue                                       # they removed it
+        vsix = vsix or build_vsix(dest)
+        ok, _said = install(editor, vsix)
+        if ok:
+            done[key] = want
+    return done
+
+
+# A VS Code-family window's title: "● app.ts - shop - Visual Studio Code"
+# (activeEditorShort - rootName - appName, the default title format).
+_TITLE_APPS = ("Visual Studio Code - Insiders", "Visual Studio Code", "Cursor", "Windsurf", "VSCodium", "TRAE SOLO",
+               "Trae", "Antigravity", "Kiro")
+
+
+def parse_title(title: str) -> tuple[str, str, str]:
+    """(editor, file, project) from a window title; ("", "", "") when it
+    is not a VS Code-family editor's."""
+    parts = [p.strip() for p in (title or "").lstrip("●* ").split(" - ")]
+    app = next((a for a in _TITLE_APPS if parts and parts[-1].lower() == a.lower()), "")
+    if not app:
+        return "", "", ""
+    rest = parts[:-1]
+    if len(rest) >= 2:
+        return app, rest[0], rest[1]
+    return app, (rest[0] if rest else ""), ""
+
+
 def install(editor: Editor, vsix: Path) -> tuple[bool, str]:
     """Install `vsix` into `editor` with its own CLI. (ok, what it said)."""
     try:

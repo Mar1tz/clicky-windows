@@ -329,12 +329,30 @@ async function choosePermissions(link) {
   await link.grant(Object.fromEntries(Object.keys(CAPABILITIES).map((k) => [k, wanted.has(k) ? scope.value : null])));
 }
 
+// Exactly what Tora would be given for a question here - shown, never sent.
+async function showWhatHeyToraSees(link) {
+  if (!link.connected) {
+    vscode.window.showWarningMessage('HeyTora is not running on this computer.');
+    return;
+  }
+  let text;
+  try {
+    text = (await link.request('context.preview', {}, 10000)).text;
+  } catch (e) {
+    text = `HeyTora could not say: ${e.message}`;
+  }
+  const content = `# What HeyTora sees\n\n${text}\n`;
+  const doc = await vscode.workspace.openTextDocument({ language: 'markdown', content });
+  await vscode.window.showTextDocument(doc, { preview: true });
+}
+
 async function showMenu(link) {
   const items = [];
   if (!link.connected) {
     items.push({ label: '$(refresh) Reconnect to HeyTora', run: () => link.reconnect() });
   } else {
     items.push({ label: '$(eye) Choose what HeyTora can read…', run: () => choosePermissions(link) });
+    items.push({ label: '$(preview) What can HeyTora see?', run: () => showWhatHeyToraSees(link) });
     items.push(link.paused
       ? { label: '$(debug-start) Resume', run: () => link.setPaused(false) }
       : { label: '$(debug-pause) Pause - stop reading everything', run: () => link.setPaused(true) });
@@ -649,6 +667,7 @@ function activate(context) {
 
   subs.push(vscode.commands.registerCommand('heytora.devlink.menu', () => showMenu(link)));
   subs.push(vscode.commands.registerCommand('heytora.devlink.permissions', () => choosePermissions(link)));
+  subs.push(vscode.commands.registerCommand('heytora.devlink.show', () => showWhatHeyToraSees(link)));
   subs.push(vscode.commands.registerCommand('heytora.devlink.pause', () => link.setPaused(true)));
   subs.push(vscode.commands.registerCommand('heytora.devlink.resume', () => link.setPaused(false)));
   subs.push(vscode.commands.registerCommand('heytora.devlink.reconnect', () => link.reconnect()));
