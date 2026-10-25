@@ -2118,9 +2118,52 @@ class CompanionManager(QObject):
         # forever — the precise "is it stuck?" feeling the island exists to
         # prevent. One wrapper here is worth more than six remembered finallys.
         return {
-            name: self._clears_activity(fn)
+            name: self._clears_activity(self._guide_or_act(name, fn))
             for name, fn in self._tool_handlers().items()
         }
+
+    # ── PT-16: guide versus act ──────────────────────────────────────────────
+    #
+    # A walkthrough shows; the user does. While one runs, a tool that acts on
+    # their behalf runs only when what they said this turn asked her to do it
+    # ("just do it for me"), and the switch is said aloud - never silent.
+    ACT_TOOLS = ("desktop_action", "write_for_me", "fill_form", "reply_to_email", "delegate_task")
+    _DO_IT = re.compile(r"\b(do (it|that|this)( one)?|you do|for me|click (it|that|this|on)|press (it|that)|"
+                        r"go ahead|fill (it|this|that) in|type (it|that)|just do)\b", re.IGNORECASE)
+
+    def _guiding(self) -> bool:
+        try:
+            runner = self._guide_runner
+        except (AttributeError, RuntimeError):      # a manager not started (tests)
+            return False
+        return runner is not None and bool(getattr(runner, "running", False))
+
+    def _asked_to_act(self) -> bool:
+        try:
+            said = " ".join(self._heard_buf or [])
+        except (AttributeError, RuntimeError):
+            said = ""
+        return bool(self._DO_IT.search(said))
+
+    def _guide_or_act(self, name: str, fn):
+        if name not in self.ACT_TOOLS:
+            return fn
+
+        async def wrapped(args: dict) -> dict:
+            switched = self._guiding()
+            if switched and not self._asked_to_act():
+                _log.info("guide: %s refused - a walkthrough shows, it does not do", name)
+                return {"error": ("You are guiding them through this: you show, they do. Do not do it "
+                                  "for them unless they ask you to - point at the next step instead.")}
+            if switched:
+                _log.info("guide -> act: %s, because they asked", name)
+            if name == "desktop_action":
+                self._activity("acting")
+            result = await fn(args)
+            if switched and isinstance(result, dict):
+                result.setdefault("note", "Say that you did this one step for them, then go on guiding.")
+            return result
+        return wrapped
 
     def _clears_activity(self, fn):
         async def wrapped(args: dict) -> dict:
@@ -6492,6 +6535,7 @@ class CompanionManager(QObject):
         "reading_email": "Reading the email…",
         "reading_code": "Reading your editor…",
         "filling_form": "Filling in the form…",
+        "acting":        "Doing it for you…",
     }
 
     def _activity(self, key: str) -> None:
