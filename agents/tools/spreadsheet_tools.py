@@ -107,12 +107,14 @@ def _num(v: Any) -> Optional[float]:
 
 
 def _write_rows(path: str, headers: list[str], rows: list[list[Any]], sheet: str = "Sheet1") -> str:
+    from .base import replacing
     os.makedirs(os.path.dirname(os.path.abspath(path)) or ".", exist_ok=True)
     if not _is_xlsx(path):
-        with open(path, "w", encoding="utf-8", newline="") as fh:
-            w = csv.writer(fh)
-            w.writerow(headers)
-            w.writerows(rows)
+        with replacing(path) as tmp:               # OR-16: never half a file
+            with open(tmp, "w", encoding="utf-8", newline="") as fh:
+                w = csv.writer(fh)
+                w.writerow(headers)
+                w.writerows(rows)
         return path
     op = _openpyxl()
     if os.path.isfile(path):
@@ -127,8 +129,17 @@ def _write_rows(path: str, headers: list[str], rows: list[list[Any]], sheet: str
     ws.append(headers)
     for r in rows:
         ws.append(r)
-    wb.save(path)
+    _save_checked(wb, path)
     return path
+
+
+def _save_checked(wb, path: str) -> None:
+    """OR-16: saved beside, renamed into place, then opened again - a
+    workbook that does not open is a failure, not a result."""
+    from .base import replacing
+    with replacing(path) as tmp:
+        wb.save(tmp)
+        _openpyxl().load_workbook(tmp, read_only=True).close()
 
 
 def _table(headers: list[str], rows: list[list[Any]], limit: int = 40) -> str:
@@ -237,7 +248,7 @@ class WriteWorkbook(Tool):
                     for j, v in enumerate(r):
                         ws.cell(row=r0 + i, column=c0 + j, value=v)
                 written += sum(len(r) for r in rows)
-            wb.save(path)
+            _save_checked(wb, path)
         except (ValueError, KeyError, OSError) as exc:
             return self.fail(f"could not write {os.path.basename(path)}: {exc}")
         msg = f"wrote {written} cell(s) to {os.path.basename(path)}!{name}"

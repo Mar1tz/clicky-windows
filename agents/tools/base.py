@@ -11,7 +11,9 @@ workspace boundary is checked, so nothing can forget to.
 """
 from __future__ import annotations
 
-from typing import Any, Optional
+import os
+from contextlib import contextmanager
+from typing import Any, Iterator, Optional
 
 from agents.core import BaseTool, RiskLevel, ToolContext, ToolResult, ToolSpec
 
@@ -68,3 +70,24 @@ class Tool(BaseTool):
         if out.exit_code != 0:
             return self.fail(f"exit code {out.exit_code}", output=out.text(), **data)
         return self.ok(out.text(), **data)
+
+
+@contextmanager
+def replacing(path: str) -> Iterator[str]:
+    """OR-16: write to a temporary name beside `path` (its extension kept,
+    for writers that go by it) and rename it into place only once the write
+    finished - a crash or a full disk leaves the old file, never half a new
+    one. The temporary file is gone either way."""
+    folder = os.path.dirname(os.path.abspath(path)) or "."
+    os.makedirs(folder, exist_ok=True)
+    stem, ext = os.path.splitext(os.path.basename(path))
+    tmp = os.path.join(folder, f".{stem}.heytora-tmp{ext}")
+    try:
+        yield tmp
+        os.replace(tmp, path)
+    finally:
+        if os.path.exists(tmp):
+            try:
+                os.remove(tmp)
+            except OSError:
+                pass

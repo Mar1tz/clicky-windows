@@ -37,10 +37,16 @@ _PATH = {"type": "string", "description": "Path, relative to the workspace or ab
 
 
 def _write_text(path: str, content: str) -> int:
-    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    """Written beside, renamed into place, and read back (OR-16): a write
+    that did not land whole raises instead of reporting success."""
+    from .base import replacing
     data = content.encode("utf-8")
-    with open(path, "wb") as f:
-        f.write(data)
+    with replacing(path) as tmp:
+        with open(tmp, "wb") as f:
+            f.write(data)
+    with open(path, "rb") as f:
+        if f.read() != data:
+            raise OSError(f"{os.path.basename(path)} did not read back as written")
     return len(data)
 
 
