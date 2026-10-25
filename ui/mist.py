@@ -14,6 +14,12 @@ little, drifts upward like mist, and fades out over about a second. They
 are drawn from one soft blob rendered once per colour, scaled, so the
 overlay's 60 frames a second stay cheap; at most MAX_PUFFS live at once.
 
+PT-07 (the Massive Direction Plan): on release a small "Pointing context
+attached" sits under the haze for a moment - what was shown went with the
+question - and the haze stays until she starts to answer, which is when
+the answer has used it (an answer that takes a look can take 10-20 s; the
+haze used to go after 8).
+
 Painting only and state - the overlay (ui/overlay.py) ticks it, asks where
 it is to repaint just that, and paints it under everything else.
 """
@@ -26,7 +32,7 @@ from dataclasses import dataclass
 from typing import Optional
 
 from PyQt6.QtCore import QPointF, QRectF, Qt
-from PyQt6.QtGui import QColor, QPainter, QPixmap, QRadialGradient
+from PyQt6.QtGui import QColor, QFont, QFontMetricsF, QPainter, QPixmap, QRadialGradient
 
 from ui import buddy
 
@@ -39,7 +45,10 @@ GROW = 0.45                # and how much it swells over its life
 RISE_PX_S = 9.0            # mist drifts upward
 HAZE_EVERY_PX = 16.0       # the haze: one resting puff this far apart
 HAZE_ALPHA = 0.40
-HAZE_MAX_S = 8.0           # an answer that never comes does not leave it up
+HAZE_MAX_S = 30.0          # an answer that never comes does not leave it up
+CUE = "Pointing context attached"
+CUE_S = 2.5                # the release cue, then the haze alone
+CUE_GAP_PX = 12.0
 HAZE_FADE_S = 0.6
 _BLOB_PX = 96              # the cached blob's size
 
@@ -170,7 +179,22 @@ class Mist:
             return None
         pad = SIZE_PX * (1 + GROW) * 1.3
         xs, ys = [p[0] for p in pts], [p[1] for p in pts]
-        return QRectF(min(xs) - pad, min(ys) - pad, max(xs) - min(xs) + 2 * pad, max(ys) - min(ys) + 2 * pad)
+        box = QRectF(min(xs) - pad, min(ys) - pad, max(xs) - min(xs) + 2 * pad, max(ys) - min(ys) + 2 * pad)
+        cue = self.cue_rect()
+        return box.united(cue.adjusted(-4, -4, 4, 4)) if cue is not None else box
+
+    def cue_showing(self, now: float) -> bool:
+        return bool(self.haze) and self._haze_fade_at is None and now - self._haze_from < CUE_S
+
+    def cue_rect(self) -> Optional[QRectF]:
+        """Where the release cue goes: centred under the haze."""
+        if not self.haze:
+            return None
+        xs, ys = [x for x, _, _ in self.haze], [y for _, y, _ in self.haze]
+        fm = QFontMetricsF(_cue_font())
+        w, h = fm.horizontalAdvance(CUE) + 20, fm.height() + 8
+        cx, bottom = (min(xs) + max(xs)) / 2, max(ys) + SIZE_PX * 0.8 + CUE_GAP_PX
+        return QRectF(cx - w / 2, bottom, w, h)
 
     def draw(self, p: QPainter, now: float) -> None:
         if not (self.puffs or self.haze):
@@ -190,6 +214,8 @@ class Mist:
                     p.setOpacity(a)
                     p.drawPixmap(QRectF(x - size / 2, y - size / 2, size, size), blob,
                                  QRectF(0, 0, _BLOB_PX, _BLOB_PX))
+                if self.cue_showing(now):
+                    self._draw_cue(p, now)
             for puff in self.puffs:
                 age = (now - puff.born) / LIFE_S
                 if age < 0 or age >= 1:
@@ -202,6 +228,30 @@ class Mist:
                              QRectF(0, 0, _BLOB_PX, _BLOB_PX))
         finally:
             p.restore()
+
+    def _draw_cue(self, p: QPainter, now: float) -> None:
+        """PT-07: "Pointing context attached", easing in and out."""
+        r = self.cue_rect()
+        if r is None:
+            return
+        age = now - self._haze_from
+        a = min(1.0, age / 0.25) * min(1.0, (CUE_S - age) / 0.4)
+        if a <= 0:
+            return
+        p.setOpacity(0.92 * a)
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(QColor(12, 12, 14, 220))
+        p.drawRoundedRect(r, r.height() / 2, r.height() / 2)
+        p.setFont(_cue_font())
+        p.setPen(QColor(buddy.BLUE_LIGHT))
+        p.drawText(r, Qt.AlignmentFlag.AlignCenter, CUE)
+
+
+def _cue_font() -> QFont:
+    f = QFont("Segoe UI")
+    f.setPointSizeF(9.0)
+    f.setWeight(QFont.Weight.DemiBold)
+    return f
 
 
 def _every(path: list[tuple[float, float]], spacing: float) -> list[tuple[float, float]]:

@@ -662,3 +662,22 @@ def test_a_late_reading_keeps_what_was_read_while_held(monkeypatch):
         await mgr._send_trace_line(conv)
     asyncio.run(go())
     assert conv.sent and 'underlined "Total due within 30 days."' in conv.sent[0]
+
+
+def test_the_release_says_what_went_with_the_question():
+    """PT-07: "Pointing context attached" under the haze for a moment, and
+    the haze stays until she answers - a look can take 20 s."""
+    from ui import mist as mist_mod
+    m = mist_mod.Mist(seed=1)
+    m.start(0.0)
+    for i in range(40):
+        m._trail_to(100 + i * 5, 200 + (i % 7), 0.0)
+    m.stop(1.0, keep=True)
+    assert m.cue_showing(1.5) and not m.cue_showing(1.0 + mist_mod.CUE_S + 0.1)
+    cue = m.cue_rect()
+    assert cue is not None and cue.top() > max(y for _, y, _ in m.haze), "under what was shown"
+    assert m.bounds().contains(cue), "repainted with it"
+    m.tick(0, 0, 1.0 + 20.0)
+    assert m.haze, "a slow answer still finds it there"
+    m.end_haze(21.5)
+    assert not m.cue_showing(21.6)
