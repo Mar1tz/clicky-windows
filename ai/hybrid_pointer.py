@@ -57,6 +57,7 @@ class Target:
     label: str            # what we matched (button text, control type, etc.)
     source: str           # "uia" | "ocr" | "vision"
     confidence: float     # 0.0–1.0
+    evidence: object = None   # PT-18: ai.point_evidence.Evidence - what makes it exact
 
     @property
     def center_xy(self) -> Tuple[int, int]:
@@ -631,7 +632,40 @@ def _find_via_uia(
         label=name or ctrl_type,
         source="uia",
         confidence=score,
+        evidence=_uia_evidence(root, name, cx, cy, unique=(score - second) >= 0.15),
     )
+
+
+def _uia_evidence(root, name: str, cx: int, cy: int, *, unique: bool):
+    """PT-18: what the tree says about a match - one of a kind, inside its
+    window, enabled, not under another window. A part it cannot tell stays
+    None (unknown), which is not held against it."""
+    from ai import point_evidence
+    ev = point_evidence.Evidence("uia", unique=unique)
+    try:
+        r = root.BoundingRectangle
+        ev.visible = r.left <= cx < r.right and r.top <= cy < r.bottom
+    except Exception:  # noqa: BLE001
+        pass
+    hwnd = 0
+    try:
+        hwnd = int(root.NativeWindowHandle or 0)
+    except Exception:  # noqa: BLE001
+        pass
+    ev.occluded = point_evidence.covered(cx, cy, hwnd)
+    try:
+        import uiautomation as auto
+        el = auto.ControlFromPoint(cx, cy)
+        for _ in range(4):                  # the text inside a button: its button
+            if el is None:
+                break
+            if (el.Name or "") == name:
+                ev.enabled = bool(el.IsEnabled)
+                break
+            el = el.GetParentControl()
+    except Exception:  # noqa: BLE001
+        pass
+    return ev
 
 
 # ──────────────────────────────────────────────────────────────────────────────

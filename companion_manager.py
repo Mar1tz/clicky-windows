@@ -3160,6 +3160,10 @@ class CompanionManager(QObject):
             }
         if found:
             return {"found": True, "pointed_at": name}
+        if self._point_doubt:
+            return {"found": False, "unsure": self._point_doubt,
+                    "hint": "Not sure enough to point. Ask the user which one they mean, or to "
+                            "show it by holding the shortcut and circling it."}
         return {
             "found": False,
             "hint": (
@@ -3383,6 +3387,7 @@ class CompanionManager(QObject):
             x=x, y=y,
             label=(target.label or query), bbox=bbox,
             via=getattr(target, "source", "") or "local",
+            evidence=getattr(target, "evidence", None),
         )
 
     async def _vision_point(self, query: str, shot=None, *, context: str = ""):
@@ -3397,6 +3402,10 @@ class CompanionManager(QObject):
                 shot = await self._one_shot(1024)
                 if shot is None:
                     return None
+            import capture_watch
+            # PT-18: how old the picture was when it was asked about - not
+            # counting the model's own second.
+            age = (time.monotonic() - capture_watch.last_screen_at) if capture_watch.last_screen_at else None
             found = await gemini_vision.locate(
                 query,
                 hint=context,
@@ -3418,9 +3427,11 @@ class CompanionManager(QObject):
             return None
         if found is None:
             return None
+        from ai import point_evidence
         return SimpleNamespace(
             x=found.x, y=found.y, label=(getattr(found, "label", "") or query),
-            via="vision",
+            via="vision", bbox=tuple(getattr(found, "bbox", ()) or ()) or None,
+            evidence=point_evidence.Evidence("vision", frame_age=age),
         )
 
     # How long the control snapshot taken with a question may answer "where
@@ -3473,7 +3484,9 @@ class CompanionManager(QObject):
             return None                       # ambiguous — let the real search decide
         score, cx, cy, name = best
         x, y = monitors.to_logical(cx, cy)
-        return SimpleNamespace(x=x, y=y, label=name)
+        from ai import point_evidence
+        return SimpleNamespace(x=x, y=y, label=name,
+                               evidence=point_evidence.Evidence("snapshot", unique=(score - second) >= 0.15))
 
     async def _point_to(self, query: str, *, hold: bool = True, shot=None) -> bool:
         """Resolve `query` and fly the buddy there. True if it landed."""
@@ -3497,11 +3510,33 @@ class CompanionManager(QObject):
         self._remember_ref(found.x, found.y, label)
         return True
 
+    _point_doubt = ""
+
     def _show_point(self, found, query: str, *, hold: bool = True) -> bool:
-        """Fly the buddy to something already resolved. True if it landed."""
+        """Fly the buddy to something already resolved. True if it landed.
+
+        PT-18: only with the evidence for it (ai/point_evidence.py). Short
+        of that the region is framed and the buddy stays; when even that
+        would be a guess nothing is drawn and _point_doubt says why."""
+        from ai import point_evidence
         self._last_found = found
+        self._point_doubt = ""
         if found is None:
             return False
+        evidence = getattr(found, "evidence", None)
+        mode = point_evidence.judge(evidence)
+        if mode != point_evidence.EXACT:
+            doubts = evidence.doubts() if evidence is not None else []
+            _log.info("point %s for %r: %s", mode, query, "; ".join(doubts) or "no evidence")
+        if mode == point_evidence.ASK:
+            self._point_doubt = "; ".join(evidence.doubts() if evidence is not None else []) or "not sure"
+            return False
+        if mode == point_evidence.REGION:
+            label = (found.label or query)[:24]
+            self._frame_region(found)
+            self._pointed_this_turn = True
+            self._remember_ref(found.x, found.y, label)
+            return True
         if hold:
             self.sig_point_hold.emit(True)
             self._pointing_held = True
@@ -3512,6 +3547,23 @@ class CompanionManager(QObject):
         self._pointed_this_turn = True
         self._remember_ref(found.x, found.y, label)
         return True
+
+    def _frame_region(self, found) -> None:
+        """PT-18: the area she means, framed, with no arrow claiming an exact
+        spot - the model's box, or the best of several matches."""
+        bbox = getattr(found, "bbox", None)
+        try:
+            speed.cue("draw", "region")
+            if bbox:
+                l, t, r, b = bbox
+                pad = 10.0
+                self.sig_draw.emit({"kind": "rect", "color": "tora",
+                                    "x1": l - pad, "y1": t - pad, "x2": r + pad, "y2": b + pad})
+            else:
+                self.sig_draw.emit({"kind": "circle", "color": "tora",
+                                    "x": float(found.x), "y": float(found.y), "r": 48.0})
+        except Exception:
+            _log.debug("region frame failed", exc_info=True)
 
     def _highlight(self, found) -> None:
         """Ring whatever we just pointed at.

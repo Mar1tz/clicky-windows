@@ -723,6 +723,7 @@ class Detected:
     y: int
     screen_index: int
     label: str = ""
+    bbox: tuple = ()          # (left, top, right, bottom), logical px - the model's box
 
 
 _LOCATE_SCHEMA = {
@@ -829,10 +830,13 @@ async def locate(
                                original_width, original_height, physical_left, physical_top,
                                dpi_scale if dpi_scale > 0 else 1.0)
     lx, ly = frame.logical(frame.from_normalized((xmin + xmax) / 2.0, (ymin + ymax) / 2.0))
+    bl, bt = frame.logical(frame.from_normalized(xmin, ymin))
+    br, bb = frame.logical(frame.from_normalized(xmax, ymax))
 
     return Detected(
         x=int(round(lx)),
         y=int(round(ly)),
         screen_index=screen_index,
         label=(data.get("label") or "").strip()[:40],
+        bbox=(bl, bt, br, bb),
     )
