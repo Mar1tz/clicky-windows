@@ -40,7 +40,9 @@ SCORECARD_EVERY = 20                  # questions between scorecard lines
 # playbook's targets): the mic open after the key, the question sent after
 # the release, the first word, a look. A phase past it is named on the turn's
 # line and counted in the scorecard.
-BUDGET_S = {"mic": 0.15, "sent": 1.5, "first word": 2.5, "look": 5.0}
+BUDGET_S = {"mic": 0.15, "sent": 1.5, "first word": 2.5, "look": 5.0,
+            # WX-01: the state on screen - Listening from the key, Thinking from the release
+            "listening shown": 0.10, "thinking shown": 0.12}
 
 
 @dataclass
@@ -152,14 +154,21 @@ def _finish_locked(outcome: str) -> None:
     measured = {}
     if "mic" in t.at:
         measured["mic"] = t.at["mic"] - t.at["press"]
-    for phase, moment in (("sent", "sent"), ("first word", "audio"), ("look", "look")):
+    if "listening shown" in t.at:
+        measured["listening shown"] = t.at["listening shown"] - t.at["press"]
+    for phase, moment in (("sent", "sent"), ("first word", "audio"), ("look", "look"),
+                          ("thinking shown", "thinking shown")):
         if moment in t.at:
             measured[phase] = t.at[moment] - end
     parts = [t.route]
     if "mic" in t.at:
         parts.append("mic %d ms" % ((t.at["mic"] - t.at["press"]) * 1000))
+    if "listening shown" in t.at:
+        parts.append("listening shown %d ms" % round((t.at["listening shown"] - t.at["press"]) * 1000))
     if "release" in t.at:
         parts.append("held %.1fs" % (t.at["release"] - t.at["press"]))
+    if "thinking shown" in t.at:
+        parts.append("thinking shown +%d ms" % round((t.at["thinking shown"] - end) * 1000))
     if "sent" in t.at:
         parts.append("sent +%.1fs" % (t.at["sent"] - end))
     if "audio" in t.at:

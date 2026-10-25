@@ -54,7 +54,13 @@ SIZES = {
     "hands_free": (160.0, 42.0),
     "thinking": (112.0, 38.0),
     "speaking": (112.0, 38.0),
+    "stopped": (112.0, 38.0),
 }
+# WX-01: every state has a name - on the pill's tooltip, and for a screen
+# reader its accessible name. "Stopped" shows for a moment after Esc / Stop.
+STATE_LABELS = {"idle": "Ready", "listening": "Listening", "thinking": "Thinking",
+                "speaking": "Speaking", "stopped": "Stopped"}
+STOPPED_S = 1.2
 LONGEST = max(s[0] for s in SIZES.values())
 THICKEST = max(s[1] for s in SIZES.values())
 BARS = 11
@@ -411,7 +417,10 @@ class FlowBar(QObject):
         self._screen_at = 0.0            # when the screen was last looked at (monotonic)
 
         self.pill = _Pill(self)
-        self.pill.setToolTip(f"Hold {hotkey} to talk to Tora · drag me to any side")
+        self._hotkey = hotkey
+        self._stopped_until = 0.0
+        self.on_shown: Optional[Callable[[str], None]] = None    # WX-01: a state reached the screen
+        self._label_state("idle")
         self.card = _Card(self)
         self._fit_window()
         self._timer = QTimer(self)
@@ -453,14 +462,33 @@ class FlowBar(QObject):
         self._fit_window()
         self._place()
 
+    def _label_state(self, name: str) -> None:
+        label = STATE_LABELS.get(name, "Ready")
+        self.pill.setToolTip(f"Tora: {label} · hold {self._hotkey} to talk · drag me to any side")
+        self.pill.setAccessibleName(f"Tora: {label}")
+
     def set_state(self, name: str) -> None:
-        """"idle" | "listening" | "thinking" | "speaking" (AppState names work too)."""
+        """"idle" | "listening" | "thinking" | "speaking" | "stopped" (AppState
+        names work too). "stopped" shows for STOPPED_S, then rests."""
         name = str(name or "idle").lower()
-        if name not in ("idle", "listening", "thinking", "speaking"):
+        if name not in STATE_LABELS:
             name = "idle"
+        if name == "stopped":
+            self._stopped_until = time.monotonic() + STOPPED_S
+            self._wake()
+        elif name != "idle":
+            self._stopped_until = 0.0
+        if name == "idle" and self._stopped_until > time.monotonic():
+            return                       # the stop shows first; the tick rests it
         if name == self._state:
             return
         was, self._state = self._state, name
+        self._label_state(name)
+        if self.on_shown is not None:
+            try:
+                self.on_shown(name)
+            except Exception:  # noqa: BLE001 - a measurement never breaks the bar
+                pass
         if name == "listening":
             # A new question: the last answer goes.
             self._card_want = False
@@ -702,6 +730,8 @@ class FlowBar(QObject):
             if u >= 1.0:
                 self._card_glide = None
         self._tick_card(now, dt)
+        if self._state == "stopped" and now >= self._stopped_until:
+            self.set_state("idle")
         # Idle (or hovered) and settled, the pill does not change: painting it
         # 60 times a second anyway kept Windows composing it 60 times a second.
         look = self._look()
@@ -772,6 +802,13 @@ class FlowBar(QObject):
             self._paint_bars(p, r, level=0.0, alpha=110, count=7)
         elif self._state == "thinking":
             self._paint_thinking(p, r)
+        elif self._state == "stopped":
+            # WX-01: a small square - stopped - fading as it rests
+            a = max(0.0, min(1.0, (self._stopped_until - time.monotonic()) / 0.4))
+            s = 11.0
+            p.setPen(Qt.PenStyle.NoPen)
+            p.setBrush(QColor(255, 255, 255, int(235 * a)))
+            p.drawRoundedRect(QRectF(r.center().x() - s / 2, r.center().y() - s / 2, s, s), 2.5, 2.5)
         else:
             inner = QRectF(r)
             if self._state == "listening" and self._buttons_a > 0.02:

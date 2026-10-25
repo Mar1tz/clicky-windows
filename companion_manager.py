@@ -417,6 +417,7 @@ class CompanionManager(QObject):
 
     sig_state_changed       = pyqtSignal(object)          # AppState
     sig_capture             = pyqtSignal(bool, float)     # WX-05: mic open, last screen look
+    sig_stopped             = pyqtSignal()                # WX-01: Esc / Stop - the bar says so
     sig_response_chunk      = pyqtSignal(str)
     sig_response_done       = pyqtSignal(str)
     sig_audio_level         = pyqtSignal(float)
@@ -7200,3 +7201,7 @@ class CompanionManager(QObject):
         self._lesson_step_idx = 0
         self._lesson_nagged = False
         self._emit_state(AppState.IDLE)
+        try:
+            self.sig_stopped.emit()                 # WX-01: "Stopped", for a moment
+        except (AttributeError, RuntimeError):      # a manager not started (tests)
+            pass

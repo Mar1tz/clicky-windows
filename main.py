@@ -454,6 +454,11 @@ def main():
         # ui/flow_bar.py never has to import AppState.
         flow.set_state(state.name)
 
+    # WX-01: when a state reached the screen, on the turn's clock.
+    from ai import speed as _speed
+    flow.on_shown = lambda name: _speed.mark(f"{name} shown") if name in ("listening", "thinking") else None
+    manager.sig_stopped.connect(lambda: flow.set_state("stopped"))
+
     manager.sig_state_changed.connect(_on_state)
 
     # Response streaming -> panel scrollback AND the flow bar's answer card.
