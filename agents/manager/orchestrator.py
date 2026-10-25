@@ -307,7 +307,7 @@ class Orchestrator:
             try:
                 from agents.core import MemoryEntry
                 self.memory.add(MemoryEntry(
-                    scope=MemoryStore.project_scope(task.workspace), kind="task",
+                    scope=MemoryStore.project_scope(task.workspace), kind="task", source=f"job:{task.id}",
                     content=f"{task.title}: {status.value}" + (f" ({error})" if error else ""),
                     tags=[task.kind.value, status.value],
                     data={"task_id": task.id, "goal": task.goal, "steps": [s.title for s in task.steps]},
@@ -321,6 +321,7 @@ class Orchestrator:
             from agents.core import MemoryEntry
             self.memory.add(MemoryEntry(  # type: ignore[union-attr]
                 scope=MemoryStore.project_scope(ctx.task.workspace), kind="error",
+                source=f"job:{ctx.task.id}", confidence=0.8,
                 content=f"step '{step.title}' failed: {step.error}",
                 tags=[ctx.task.kind.value], data={"task_id": ctx.task.id, "step_id": step.id},
             ))

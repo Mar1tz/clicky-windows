@@ -21,6 +21,12 @@ Two things live in here:
 Stored in SQLite next to the journal, vectors as raw float32. 768 dimensions
 rather than the 3072 default: indistinguishable for "which of these passages
 is relevant" and a quarter of the disk.
+
+EN-13 / EN-14 (the Massive Direction Plan): every row says where it came
+from, when, for whom (scope), until when (expires_at), how sure (confidence)
+and whether the person confirmed it; an expired row is never recalled.
+Forgetting overwrites the row on disk (secure_delete) - nothing of it is
+left to find.
 """
 
 from __future__ import annotations
@@ -53,8 +59,13 @@ def _db_path() -> Path:
     return data_dir() / "memory.db"
 
 
+_PROVENANCE = (("scope", "TEXT NOT NULL DEFAULT 'user'"), ("updated_at", "REAL"), ("expires_at", "REAL"),
+               ("confidence", "REAL NOT NULL DEFAULT 1.0"), ("confirmed", "INTEGER NOT NULL DEFAULT 0"))
+
+
 def _connect() -> sqlite3.Connection:
     conn = sqlite3.connect(_db_path())
+    conn.execute("PRAGMA secure_delete=ON")         # EN-14: forgotten means overwritten
     conn.execute("""
         CREATE TABLE IF NOT EXISTS passages (
             id         INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -65,6 +76,10 @@ def _connect() -> sqlite3.Connection:
             created_at REAL NOT NULL
         )
     """)
+    have = {row[1] for row in conn.execute("PRAGMA table_info(passages)")}
+    for name, decl in _PROVENANCE:                  # EN-13: a database from before gains them
+        if name not in have:
+            conn.execute(f"ALTER TABLE passages ADD COLUMN {name} {decl}")
     conn.execute(
         "CREATE INDEX IF NOT EXISTS ix_passages_kind ON passages (kind, source)"
     )
@@ -143,9 +158,9 @@ async def index_document(source: str, text: str) -> int:
         conn.execute("DELETE FROM passages WHERE kind='document' AND source=?",
                      (source,))
         conn.executemany(
-            "INSERT INTO passages (kind, source, text, vec, created_at) "
-            "VALUES ('document', ?, ?, ?, ?)",
-            [(source, p, v.tobytes(), now) for p, v in zip(pieces, vecs)],
+            "INSERT INTO passages (kind, source, text, vec, created_at, scope, updated_at) "
+            "VALUES ('document', ?, ?, ?, ?, 'document', ?)",
+            [(source, p, v.tobytes(), now, now) for p, v in zip(pieces, vecs)],
         )
         conn.commit()
     finally:
@@ -174,10 +189,12 @@ async def remember(text: str, *, source: str = "") -> bool:
             if float(scores.max()) > 0.93:
                 stale = existing[int(scores.argmax())][0]
                 conn.execute("DELETE FROM passages WHERE id=?", (stale,))
+        said_by_them = source == "user"
         conn.execute(
-            "INSERT INTO passages (kind, source, text, vec, created_at) "
-            "VALUES ('fact', ?, ?, ?, ?)",
-            (source, text, vecs[0].tobytes(), time.time()),
+            "INSERT INTO passages (kind, source, text, vec, created_at, scope, updated_at, "
+            "confidence, confirmed) VALUES ('fact', ?, ?, ?, ?, 'user', ?, ?, ?)",
+            (source, text, vecs[0].tobytes(), time.time(), time.time(),
+             1.0 if said_by_them else 0.8, 1 if said_by_them else 0),
         )
         conn.commit()
     finally:
@@ -215,12 +232,12 @@ def _rows(
     rather than crashing the search: changing GEMINI_EMBED_MODEL or DIMS
     leaves older rows behind, and a stale row should be invisible, not fatal.
     """
-    sql = "SELECT id, kind, source, text, vec FROM passages"
-    args: tuple = ()
+    sql = "SELECT id, kind, source, text, vec FROM passages WHERE (expires_at IS NULL OR expires_at > ?)"
+    args: tuple = (time.time(),)
     if kinds:
         kinds = tuple(kinds)
-        sql += f" WHERE kind IN ({','.join('?' * len(kinds))})"
-        args = kinds
+        sql += f" AND kind IN ({','.join('?' * len(kinds))})"
+        args += kinds
     out = []
     for pid, kind, source, text, blob in conn.execute(sql, args):
         vec = np.frombuffer(blob, dtype=np.float32)
@@ -300,6 +317,42 @@ def recent_facts(limit: int = 2) -> list[tuple[str, float]]:
             "ORDER BY created_at DESC LIMIT ?", (limit,)).fetchall()
     finally:
         conn.close()
+
+
+def facts(limit: int = 200) -> list[dict]:
+    """EN-13: the facts kept about the person, with where each came from -
+    what Settings lists to inspect, confirm or forget (EN-15)."""
+    conn = _connect()
+    try:
+        rows = conn.execute(
+            "SELECT id, text, source, created_at, updated_at, expires_at, confidence, confirmed "
+            "FROM passages WHERE kind='fact' ORDER BY created_at DESC LIMIT ?", (limit,)).fetchall()
+    finally:
+        conn.close()
+    keys = ("id", "text", "source", "created_at", "updated_at", "expires_at", "confidence", "confirmed")
+    return [dict(zip(keys, r)) | {"confirmed": bool(r[7])} for r in rows]
+
+
+def forget_fact(fact_id: int) -> bool:
+    """EN-14: one fact gone - overwritten on disk, never recalled again."""
+    conn = _connect()
+    try:
+        gone = conn.execute("DELETE FROM passages WHERE id=? AND kind='fact'", (int(fact_id),)).rowcount
+        conn.commit()
+    finally:
+        conn.close()
+    return bool(gone)
+
+
+def confirm_fact(fact_id: int, confirmed: bool = True) -> bool:
+    conn = _connect()
+    try:
+        done = conn.execute("UPDATE passages SET confirmed=?, confidence=?, updated_at=? WHERE id=? AND kind='fact'",
+                            (1 if confirmed else 0, 1.0 if confirmed else 0.8, time.time(), int(fact_id))).rowcount
+        conn.commit()
+    finally:
+        conn.close()
+    return bool(done)
 
 
 def stats() -> dict:

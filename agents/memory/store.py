@@ -19,6 +19,7 @@ import os
 import re
 import sqlite3
 import threading
+import time
 from typing import Any, Optional
 
 from agents.core import MemoryEntry, MemoryStore
@@ -31,7 +32,12 @@ create table if not exists entries (
     content     text not null,
     tags        text not null default '[]',
     data        text not null default '{}',
-    created_at  real not null
+    created_at  real not null,
+    source      text not null default '',
+    updated_at  real,
+    expires_at  real,
+    confidence  real not null default 1.0,
+    confirmed   integer not null default 0
 );
 create index if not exists entries_scope_kind_created on entries (scope, kind, created_at desc);
 """
@@ -86,7 +92,11 @@ class SQLiteMemoryStore(MemoryStore):
         self.fts = has_fts5()
         with self._lock:
             self._conn.execute("pragma journal_mode=wal")
+            # EN-14: a deleted memory's bytes are overwritten, not left in
+            # free pages for a file search to turn up.
+            self._conn.execute("pragma secure_delete=on")
             self._conn.executescript(_SCHEMA)
+            _add_missing_columns(self._conn)
             if self.fts:
                 self._conn.executescript(_FTS_SCHEMA)
             self._conn.commit()
@@ -98,10 +108,13 @@ class SQLiteMemoryStore(MemoryStore):
         tags = json.dumps(entry.tags, ensure_ascii=False)
         with self._lock:
             self._conn.execute(
-                "insert or replace into entries (id, scope, kind, content, tags, data, created_at) "
-                "values (?, ?, ?, ?, ?, ?, ?)",
+                "insert or replace into entries (id, scope, kind, content, tags, data, created_at, "
+                "source, updated_at, expires_at, confidence, confirmed) "
+                "values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (entry.id, entry.scope, entry.kind, entry.content, tags,
-                 json.dumps(entry.data, ensure_ascii=False, default=str), entry.created_at),
+                 json.dumps(entry.data, ensure_ascii=False, default=str), entry.created_at,
+                 entry.source, entry.updated_at, entry.expires_at, float(entry.confidence),
+                 1 if entry.confirmed else 0),
             )
             if self.fts:
                 self._conn.execute("delete from entries_fts where id = ?", (entry.id,))
@@ -117,8 +130,9 @@ class SQLiteMemoryStore(MemoryStore):
         """Newest first. `tags` matches entries carrying ANY of them; `text`
         matches every word of it (prefix match under FTS, substring under
         LIKE)."""
-        sql = "select * from entries where scope = ?"
-        args: list[Any] = [scope]
+        # EN-13: an expired memory is not offered again.
+        sql = "select * from entries where scope = ? and (expires_at is null or expires_at > ?)"
+        args: list[Any] = [scope, time.time()]
         if kind is not None:
             sql += " and kind = ?"
             args.append(kind)
@@ -183,6 +197,18 @@ class SQLiteMemoryStore(MemoryStore):
 
         return _fit(lines, max_chars)
 
+    def delete(self, entry_id: str) -> bool:
+        """EN-14: the memory and its search index entry, overwritten on disk."""
+        with self._lock:
+            if self.fts:
+                self._conn.execute("delete from entries_fts where id = ?", (entry_id,))
+                # Merge the index, or its words linger in old segments.
+                self._conn.execute("insert into entries_fts(entries_fts) values('optimize')")
+            gone = self._conn.execute("delete from entries where id = ?", (entry_id,)).rowcount
+            self._conn.commit()
+            _fold_wal(self._conn)
+        return bool(gone)
+
     def clear(self, scope: str) -> None:
         with self._lock:
             if self.fts:
@@ -210,11 +236,26 @@ class SQLiteMemoryStore(MemoryStore):
                 pass
 
 
+_PROVENANCE = (("source", "text not null default ''"), ("updated_at", "real"), ("expires_at", "real"),
+               ("confidence", "real not null default 1.0"), ("confirmed", "integer not null default 0"))
+
+
+def _add_missing_columns(conn: sqlite3.Connection) -> None:
+    """EN-13: a memory database from before provenance gains its columns."""
+    have = {row[1] for row in conn.execute("pragma table_info(entries)")}
+    for name, decl in _PROVENANCE:
+        if name not in have:
+            conn.execute(f"alter table entries add column {name} {decl}")
+
+
 def _row_to_entry(r: sqlite3.Row) -> MemoryEntry:
     return MemoryEntry(
         id=r["id"], scope=r["scope"], kind=r["kind"], content=r["content"],
         tags=json.loads(r["tags"] or "[]"), data=json.loads(r["data"] or "{}"),
-        created_at=r["created_at"],
+        created_at=r["created_at"], source=r["source"] or "",
+        updated_at=r["updated_at"] or r["created_at"], expires_at=r["expires_at"],
+        confidence=float(r["confidence"] if r["confidence"] is not None else 1.0),
+        confirmed=bool(r["confirmed"]),
     )
 
 

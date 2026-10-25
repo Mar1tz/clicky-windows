@@ -533,6 +533,14 @@ class MemoryEntry(_Serialisable):
     data: dict[str, Any] = field(default_factory=dict)
     id: str = field(default_factory=new_id)
     created_at: float = field(default_factory=now)
+    # EN-13: where it came from and how far to trust it. `source`: who said
+    # so ("job:<id>", "user", a file); `expires_at`: None keeps it; a
+    # `confirmed` memory is one the person said yes to.
+    source: str = ""
+    updated_at: float = field(default_factory=now)
+    expires_at: Optional[float] = None
+    confidence: float = 1.0
+    confirmed: bool = False
 
 
 # -- nested-type registry for from_dict --------------------------------------

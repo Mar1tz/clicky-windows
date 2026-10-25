@@ -325,6 +325,11 @@ class MemoryStore(ABC):
     @abstractmethod
     def clear(self, scope: str) -> None: ...
 
+    def delete(self, entry_id: str) -> bool:
+        """EN-14: forget one memory - it, and everything it was indexed
+        under. False when there was no such memory (or no such ability)."""
+        return False
+
     # convenience scopes
     @staticmethod
     def project_scope(workspace: str) -> str:

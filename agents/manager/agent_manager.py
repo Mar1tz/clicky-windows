@@ -759,7 +759,7 @@ class AgentManager:
             from agents.core import MemoryEntry, MemoryStore
             done = (self.get_task(child.id) or child)
             self.memory.add(MemoryEntry(
-                scope=MemoryStore.project_scope(parent.workspace), kind="context",
+                scope=MemoryStore.project_scope(parent.workspace), kind="context", source=f"job:{done.id}",
                 content=f"{done.title} is done. {done.result or ''}".strip()[:800],
                 tags=["project", done.kind.value],
                 data={"task_id": done.id, "parent_id": parent.id}))
