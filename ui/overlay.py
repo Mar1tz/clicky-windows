@@ -127,6 +127,15 @@ SHAPE_DRAW_MIN_S    = 0.6
 SHAPE_DRAW_MAX_S    = 2.2
 SHAPE_GAP_SECONDS   = 0.28
 
+# PT-19: Windows' motion tokens. A pointing mark (the ring or frame round
+# what she means, shape["mark"]) is revealed in the normal 250 ms, the next
+# one 83 ms after; every drawing leaves in a fast 167 ms fade. Teaching
+# strokes keep the hand's pace above - that is the lesson. One focal
+# movement at a time: a mark waits for a flying arrow to land.
+MOTION_QUICK_S  = 0.083
+MOTION_FAST_S   = 0.167
+MOTION_NORMAL_S = 0.250
+
 # How long a one-off drawing stays on screen before fading itself away.
 # Answering "where is X" leaves an arrow behind; it has done its job after a
 # few seconds and then it is just clutter on the user's desktop. Drawings made
@@ -643,11 +652,15 @@ class CursorOverlay(QWidget):
         to finish, like a hand drawing on a board.
         """
         now = time.monotonic()
-        start = max(now, self._draw_queue_end)
+        start = max(now, self._draw_queue_end, self._flight_lands_at())
         shape = dict(shape)
-        # Draw at hand speed — long strokes take visibly longer
-        dur = _shape_length(shape) / STROKE_SPEED_PX_S
-        dur = max(SHAPE_DRAW_MIN_S, min(SHAPE_DRAW_MAX_S, dur))
+        if shape.get("mark"):
+            dur, gap = MOTION_NORMAL_S, MOTION_QUICK_S
+        else:
+            # Draw at hand speed — long strokes take visibly longer
+            dur = _shape_length(shape) / STROKE_SPEED_PX_S
+            dur = max(SHAPE_DRAW_MIN_S, min(SHAPE_DRAW_MAX_S, dur))
+            gap = SHAPE_GAP_SECONDS
         shape["start"] = start
         shape["dur"] = dur
         shape.setdefault("color", "tora")             # Tora's colour, read when it is painted
@@ -656,8 +669,14 @@ class CursorOverlay(QWidget):
         # arrows and circles piled up on screen long after they were relevant.
         if shape.get("ttl") is None:
             shape["ttl"] = None if self._guide_total != 0 else ANNOTATION_TTL_S
-        self._draw_queue_end = start + dur + SHAPE_GAP_SECONDS
+        self._draw_queue_end = start + dur + gap
         self._annotations.append(shape)
+
+    def _flight_lands_at(self) -> float:
+        """When the arrow now flying lands (monotonic), or 0."""
+        if self._flight_phase == _PHASE_FLYING:
+            return self._fly_t0 + self._fly_duration
+        return 0.0
 
     # Legacy single-shape helpers (kept for compatibility with old signals)
     def add_arrow(self, x1, y1, x2, y2, ttl=None):
@@ -801,7 +820,7 @@ class CursorOverlay(QWidget):
             if start - 0.1 <= now <= start + a.get("dur", 0.6) + 0.1:
                 return True
             ttl = a.get("ttl")
-            if ttl is not None and now - start > ttl * 0.75:
+            if ttl is not None and now - start > ttl - MOTION_FAST_S - 0.05:
                 return True
         return False
 
@@ -1196,7 +1215,7 @@ class CursorOverlay(QWidget):
 
         Each shape animates from 0→100% over SHAPE_DRAW_SECONDS starting at
         its queued "start" time. Shapes with ttl=None persist at full alpha;
-        shapes with a ttl fade out over their last 25%.
+        shapes with a ttl fade out over their last MOTION_FAST_S (PT-19).
         """
         now = time.monotonic()
         for ann in self._annotations:
@@ -1211,8 +1230,8 @@ class CursorOverlay(QWidget):
                 age = now - ann["start"]
                 if age > ttl:
                     continue         # expired - _prune_annotations drops it
-                if age > ttl * 0.75:
-                    alpha = max(0.0, 1.0 - (age - ttl * 0.75) / (ttl * 0.25))
+                if age > ttl - MOTION_FAST_S:
+                    alpha = max(0.0, (ttl - age) / MOTION_FAST_S)
 
             col = annotation_colour(ann.get("color"))
             col.setAlpha(int(235 * alpha))

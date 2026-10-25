@@ -3564,10 +3564,10 @@ class CompanionManager(QObject):
             if bbox:
                 l, t, r, b = bbox
                 pad = 10.0
-                self.sig_draw.emit({"kind": "rect", "color": "tora",
+                self.sig_draw.emit({"kind": "rect", "color": "tora", "mark": True,
                                     "x1": l - pad, "y1": t - pad, "x2": r + pad, "y2": b + pad})
             else:
-                self.sig_draw.emit({"kind": "circle", "color": "tora",
+                self.sig_draw.emit({"kind": "circle", "color": "tora", "mark": True,
                                     "x": float(found.x), "y": float(found.y), "r": 48.0})
         except Exception:
             _log.debug("region frame failed", exc_info=True)
@@ -3588,13 +3588,13 @@ class CompanionManager(QObject):
                 pad = 4.0
                 speed.cue("draw")
                 self.sig_draw.emit({
-                    "kind": "rect", "color": "tora",
+                    "kind": "rect", "color": "tora", "mark": True,
                     "x1": l - pad, "y1": t - pad, "x2": r + pad, "y2": b + pad,
                 })
             else:
                 speed.cue("draw")
                 self.sig_draw.emit({
-                    "kind": "circle", "color": "tora",
+                    "kind": "circle", "color": "tora", "mark": True,
                     "x": float(found.x), "y": float(found.y), "r": 32.0,
                 })
         except Exception:
