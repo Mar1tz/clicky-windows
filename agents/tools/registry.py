@@ -37,6 +37,23 @@ RETRY_PAUSE_S = 0.5
 ERROR_CLASSES = ("unknown_tool", "invalid_input", "permission", "timeout", "crashed", "failed")
 
 
+SCOPED_CATEGORIES = ("file", "spreadsheet", "design", "terminal", "git")
+PATH_ARGS = ("path", "paths", "source", "destination", "output", "other_path", "cwd")
+
+
+def _outside_workspace(spec, args: dict, ctx) -> str:
+    """The first path argument of a folder-bound tool that leaves the job's
+    folders, or ""."""
+    if spec.category not in SCOPED_CATEGORIES:
+        return ""
+    for key in PATH_ARGS:
+        value = args.get(key)
+        for path in (value if isinstance(value, list) else [value]):
+            if isinstance(path, str) and path and not ctx.is_inside_workspace(path):
+                return path
+    return ""
+
+
 def error_class(result) -> str:
     """The stable class of a failed result (its own, else from the registry's words)."""
     given = (result.data or {}).get("error_class")
@@ -168,6 +185,15 @@ class Registry(ToolRegistry):
         problems = validate(spec.parameters, args)
         if problems:
             return ToolResult.failure(call, "invalid arguments: " + "; ".join(problems))
+
+        # EN-11: a path outside the job's folders is refused before anyone is
+        # asked - the person's yes must never be all that stands between the
+        # model and another project (the EN-01 scenario set found it asked).
+        outside = _outside_workspace(spec, args, ctx)
+        if outside:
+            refused = ToolResult.failure(call, f"outside workspace: {outside}")
+            refused.data["error_class"] = "permission"
+            return refused
 
         # `always_ask` is a hard floor a tool can declare for itself: no
         # policy, ceiling or standing approval ever lets it run unasked.
