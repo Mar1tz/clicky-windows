@@ -194,3 +194,23 @@ def test_a_phase_past_its_budget_is_named_and_counted(caplog, monkeypatch):
     assert "over budget: first word" in line and "mic" not in line.split("over budget:")[1]
     assert speed._today.over == {"first word": 1}
     assert "over budget: first word 1" in speed.scorecard()
+
+
+def test_the_trail_the_frame_and_the_marks_share_the_turns_clock(caplog, monkeypatch):
+    """PT-15: one monotonic timeline - the key, the trail's first and last
+    sample, the picture a look used, each mark as it went up, the voice -
+    on one turn line, relative to the release."""
+    caplog.set_level(logging.INFO, logger="tora.speed")
+    clock = iter([10.0, 12.0, 13.5, 14.0])        # press, release, the point, first word
+    monkeypatch.setattr(speed, "_now", lambda: next(clock))
+    speed.begin()
+    speed.stamp("trail from", 10.4)              # taken by the trace recorder
+    speed.stamp("trail to", 11.8)
+    speed.mark("release")
+    speed.stamp("frame", 11.9)                   # the grab the look used
+    speed.cue("point", "Save")
+    speed.mark("audio")
+    monkeypatch.setattr(speed, "_now", lambda: 15.0)
+    speed.finish("answered")
+    line = next(r.getMessage() for r in caplog.records if r.getMessage().startswith("turn timeline"))
+    assert "trail -1.6..-0.2s" in line and "frame -0.1s" in line and "cues point 'Save' +1.5s" in line

@@ -2202,6 +2202,7 @@ class CompanionManager(QObject):
         try:
             from screen.monitors import to_logical
             x, y = to_logical(*f.centre)              # Windows gives pixels; the overlay draws in logical space
+            speed.cue("point")
             self.sig_point_at.emit(float(x), float(y), f.name[:40])
         except Exception:  # noqa: BLE001 - the filling goes on without the cursor
             pass
@@ -3490,6 +3491,7 @@ class CompanionManager(QObject):
         if found is None:
             return False
         label = (found.label or query)[:24]
+        speed.cue("guide")
         self.sig_guide_point.emit(float(found.x), float(found.y), label)
         self._highlight(found)
         self._remember_ref(found.x, found.y, label)
@@ -3504,6 +3506,7 @@ class CompanionManager(QObject):
             self.sig_point_hold.emit(True)
             self._pointing_held = True
         label = (found.label or query)[:24]
+        speed.cue("point")
         self.sig_point_at.emit(float(found.x), float(found.y), label)
         self._highlight(found)
         self._pointed_this_turn = True
@@ -3524,11 +3527,13 @@ class CompanionManager(QObject):
             if bbox:
                 l, t, r, b = bbox
                 pad = 4.0
+                speed.cue("draw")
                 self.sig_draw.emit({
                     "kind": "rect", "color": "tora",
                     "x1": l - pad, "y1": t - pad, "x2": r + pad, "y2": b + pad,
                 })
             else:
+                speed.cue("draw")
                 self.sig_draw.emit({
                     "kind": "circle", "color": "tora",
                     "x": float(found.x), "y": float(found.y), "r": 32.0,
@@ -3748,6 +3753,7 @@ class CompanionManager(QObject):
             for tag in again["tags"]:
                 sh = self._shape_from_tag(tag)
                 if sh:
+                    speed.cue("draw")
                     self.sig_draw.emit(sh)
             if again["tags"]:
                 self._pointed_this_turn = True
@@ -3820,10 +3826,13 @@ class CompanionManager(QObject):
             detail += f", {snapped} snapped to the real control"
         self._mark_answer("look", detail)
         speed.mark("look")
+        import capture_watch
+        speed.stamp("frame", capture_watch.last_screen_at)     # PT-15: the picture it looked at
         drawn = []
         for action in actions[:4]:
             sh = self._shape_from_tag(action.as_tag())
             if sh:
+                speed.cue("draw")
                 self.sig_draw.emit(sh)
                 drawn.append(action)
         if drawn:
@@ -3987,6 +3996,7 @@ class CompanionManager(QObject):
             return {"error": "no tags given"}
         shapes = self._extract_shapes(tags)
         for sh in shapes:
+            speed.cue("draw")
             self.sig_draw.emit(sh)
         if not shapes:
             return {"error": "none of those tags parsed — check the syntax"}
@@ -4279,6 +4289,9 @@ class CompanionManager(QObject):
         self._mist("keep" if shown else "drop")
         if shown:
             _log.info("trace: %s", trace.summary())
+            # PT-15: the trail on the turn's clock (its times count from the press).
+            speed.stamp("trail from", self._hotkey_pressed_at + trace.points[0].t)
+            speed.stamp("trail to", self._hotkey_pressed_at + trace.points[-1].t)
             # Read before the question is processed - queued first, it is
             # already under way when the voice's turn is about to end.
             self._submit(self._start_trace_read(trace))
@@ -5079,6 +5092,7 @@ class CompanionManager(QObject):
                 # still thinks. Hold dwell until TTS completes.
                 self.sig_point_hold.emit(True)
                 pointing_held = True
+                speed.cue("point")
                 self.sig_point_at.emit(
                     float(detected.x), float(detected.y), label,
                 )
@@ -6046,6 +6060,7 @@ class CompanionManager(QObject):
         except Exception:
             return
         if found is not None:
+            speed.cue("point")
             self.sig_point_at.emit(float(found.x), float(found.y), name[:24])
             self._remember_ref(found.x, found.y, name[:24])
 
@@ -6160,6 +6175,7 @@ class CompanionManager(QObject):
         for match in POINT_RE.finditer(text):
             x, y, label, scr = match.groups()
             lx, ly = self._denorm(float(x), float(y), int(scr))
+            speed.cue("point")
             self.sig_point_at.emit(lx, ly, label.strip())
         if CLEAR_RE.search(text):
             self.sig_clear_drawings.emit()
@@ -6340,6 +6356,7 @@ class CompanionManager(QObject):
                 break
             draw_end = max(draw_end, time.monotonic())
             for sh in shapes:
+                speed.cue("draw")
                 self.sig_draw.emit(sh)
                 if _shape_length is not None:
                     dur = _shape_length(sh) / STROKE_SPEED_PX_S

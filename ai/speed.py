@@ -48,6 +48,7 @@ class _Turn:
     route: str = "live"
     at: dict = field(default_factory=dict)        # moment -> monotonic seconds
     notes: dict = field(default_factory=dict)
+    cues: list = field(default_factory=list)      # (kind, label, monotonic) - marks as drawn
 
 
 @dataclass
@@ -92,6 +93,29 @@ def mark(what: str, **notes) -> None:
             return
         t.at.setdefault(what, _now())
         t.notes.update(notes)
+
+
+def stamp(what: str, at: float) -> None:
+    """PT-15: a moment that happened elsewhere, at a time.monotonic() taken
+    there - the trail's first and last sample, the frame a look used - so
+    it sits on the same timeline as the key and the voice."""
+    with _lock:
+        t = _turn
+        if t is None or "done" in t.at or not at:
+            return
+        t.at.setdefault(what, float(at))
+
+
+CUES_KEPT = 8
+
+
+def cue(kind: str, label: str = "") -> None:
+    """PT-15: a mark went up (a point, a drawing, a guide step), now."""
+    with _lock:
+        t = _turn
+        if t is None or "done" in t.at or len(t.cues) >= CUES_KEPT:
+            return
+        t.cues.append((kind, (label or "")[:24], _now()))
 
 
 def route(name: str) -> None:
@@ -146,6 +170,15 @@ def _finish_locked(outcome: str) -> None:
         look = t.at["look"] - end
         parts.append("look +%.1fs" % look)
         d.look.append(look)
+    # PT-15: the trail, the frame and the marks on the same clock as the
+    # key and the voice, relative to the release ("-" = before it).
+    if "trail from" in t.at and "trail to" in t.at:
+        parts.append("trail %+.1f..%+.1fs" % (t.at["trail from"] - end, t.at["trail to"] - end))
+    if "frame" in t.at:
+        parts.append("frame %+.1fs" % (t.at["frame"] - end))
+    if t.cues:
+        parts.append("cues " + ", ".join(
+            f"{kind}{' ' + repr(label) if label else ''} {at - end:+.1f}s" for kind, label, at in t.cues))
     for k, v in t.notes.items():
         parts.append(f"{k} {v}")
     over = [phase for phase, took in measured.items() if took > BUDGET_S[phase]]
