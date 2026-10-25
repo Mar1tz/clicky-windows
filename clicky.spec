@@ -27,8 +27,6 @@ hidden = [
     "ai.ollama_provider",
     "ai.ollama_models_registry",
     "ai.github_copilot_provider",
-    "ai.element_locator",
-    "ai.universal_locator",
     "ai.web_search",
     "ai.ollama_bootstrap",
     "ai.lmstudio_provider",

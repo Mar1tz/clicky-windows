@@ -3408,6 +3408,7 @@ class CompanionManager(QObject):
                 physical_top=shot.physical_top,
                 dpi_scale=shot.dpi_scale,
                 screen_index=shot.index,
+                frame=monitors.frame_of(shot),
             )
         except asyncio.CancelledError:
             raise
@@ -6095,9 +6096,7 @@ class CompanionManager(QObject):
         """
         shot = self._shot(screen_idx)
         if shot is not None:
-            dpi = shot.dpi_scale or 1.0
-            return (shot.logical_left, shot.logical_top,
-                    shot.physical_width / dpi, shot.physical_height / dpi)
+            return monitors.frame_of(shot).logical_rect()
         try:
             from tutor import foreground_window_center
             centre = foreground_window_center()
@@ -6137,10 +6136,8 @@ class CompanionManager(QObject):
         shot = self._shot(screen_idx)
         if shot is None:
             return int(x), int(y)
-        log_w = shot.physical_width / shot.dpi_scale
-        log_h = shot.physical_height / shot.dpi_scale
-        nx = (x - shot.logical_left) / max(log_w, 1) * 1000
-        ny = (y - shot.logical_top) / max(log_h, 1) * 1000
+        frame = monitors.frame_of(shot)
+        nx, ny = frame.normalized(frame.physical(monitors.Logical(x, y)))
         return int(round(nx)), int(round(ny))
 
     def _resolve_anchor(self, name: str):

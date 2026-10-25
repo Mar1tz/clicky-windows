@@ -770,6 +770,7 @@ async def locate(
     physical_top: int = 0,
     dpi_scale: float = 1.0,
     timeout: float = 30.0,
+    frame=None,
 ) -> Optional[Detected]:
     """Find the element `question` is about.
 
@@ -819,12 +820,15 @@ async def locate(
     if physical_height is None:
         physical_height = original_height
 
-    # Scaled from the MONITOR's corner, which Qt keeps where Windows has it
-    # (screen/monitors.py) - not from the desktop's origin, which put the
-    # point on the wrong spot, or monitor, anywhere but the main screen.
-    s = dpi_scale if dpi_scale > 0 else 1.0
-    lx = physical_left + ((xmin + xmax) / 2000.0) * physical_width / s
-    ly = physical_top + ((ymin + ymax) / 2000.0) * physical_height / s
+    # PT-08: through the picture's own Frame (screen/monitors.py), which
+    # keeps where it was cut from and its monitor's corner and scaling - not
+    # sums done here, which is how points landed on the wrong monitor before.
+    from screen import monitors
+    if frame is None:
+        frame = monitors.Frame(physical_left, physical_top, physical_width, physical_height,
+                               original_width, original_height, physical_left, physical_top,
+                               dpi_scale if dpi_scale > 0 else 1.0)
+    lx, ly = frame.logical(frame.from_normalized((xmin + xmax) / 2.0, (ymin + ymax) / 2.0))
 
     return Detected(
         x=int(round(lx)),

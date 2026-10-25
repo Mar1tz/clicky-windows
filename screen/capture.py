@@ -52,6 +52,12 @@ class ScreenShot:
     logical_left: int
     logical_top: int
 
+    @property
+    def frame(self):
+        """PT-08: this picture's crop and scale (screen.monitors.Frame)."""
+        from screen.monitors import frame_of
+        return frame_of(self)
+
 
 def _query_dpi_scale() -> float:
     """The system scaling - the main monitor's at sign-in. Only a fallback:
