@@ -583,6 +583,8 @@ class Config:
         # Settings > Code editors (devlink/): connectors may reach HeyTora.
         # On - each workspace still reads nothing until it is allowed there.
         "devlink":       ("TORA_DEVLINK", True),
+        # Settings > General (PT-03): the held-key trail as a line, not mist.
+        "trail_line":    ("TORA_TRAIL_LINE", False),
     }
 
     def switch(self, name: str) -> bool:

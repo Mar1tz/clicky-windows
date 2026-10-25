@@ -681,3 +681,42 @@ def test_the_release_says_what_went_with_the_question():
     assert m.haze, "a slow answer still finds it there"
     m.end_haze(21.5)
     assert not m.cue_showing(21.6)
+
+
+def test_the_trail_can_be_a_line_instead(monkeypatch):
+    """PT-03: a setting draws the path as one smooth rounded line; the haze,
+    the cue and their timing are the same, and mist stays the default."""
+    import config
+    from ui import mist as mist_mod
+    assert config.cfg.SWITCHES["trail_line"][1] is False, "mist is the default"
+    m = mist_mod.Mist(seed=1)
+    m.start(0.0, "line")
+    for i in range(40):
+        m._trail_to(100 + i * 9, 200 + (i % 5), i * 0.016)
+    assert m.line and not m.puffs, "a line, not puffs"
+    assert len(m.line) == len(m._path)
+    m.stop(1.0, keep=True)
+    assert m.line and m.cue_showing(1.2) and m.bounds() is not None
+    m.end_haze(5.0)
+    m.tick(0, 0, 5.0 + mist_mod.HAZE_FADE_S + 0.1)
+    assert not m.line and not m.active(), "gone with the haze once she answers"
+    m.start(10.0, "line")
+    for i in range(10):
+        m._trail_to(100 + i * 9, 200, 10.0 + i * 0.016)
+    m.stop(10.5, keep=False)                       # a tap
+    m.tick(0, 0, 10.5 + mist_mod.HAZE_FADE_S + 0.1)
+    assert not m.line
+
+
+def test_the_line_switch_is_saved_and_read_where_it_is_used(monkeypatch):
+    import config
+    from ui.app_bridge import AppBridge
+    written = {}
+    monkeypatch.setattr(config.cfg, "_write_env", lambda k, v: written.update({k: v}))
+    monkeypatch.delenv("TORA_TRAIL_LINE", raising=False)
+    br = AppBridge.__new__(AppBridge)
+    br.tray = None
+    br.changed = type("S", (), {"emit": lambda self, *a: None})()
+    br.set_switch("trail_line", True)
+    assert written == {"TORA_TRAIL_LINE": "1"} and config.cfg.switch("trail_line")
+    monkeypatch.delenv("TORA_TRAIL_LINE", raising=False)

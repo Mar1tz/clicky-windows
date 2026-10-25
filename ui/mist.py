@@ -20,6 +20,12 @@ question - and the haze stays until she starts to answer, which is when
 the answer has used it (an answer that takes a look can take 10-20 s; the
 haze used to go after 8).
 
+PT-03: a setting (Settings > General, "Trail as a line") draws the path
+instead as one smooth 6 DIP rounded line - through the One Euro filter the
+trace is read with (ai/trace.py) - for people who find mist too soft to
+follow. The haze, the cue and their timing are the same; mist stays the
+default.
+
 Painting only and state - the overlay (ui/overlay.py) ticks it, asks where
 it is to repaint just that, and paints it under everything else.
 """
@@ -32,7 +38,7 @@ from dataclasses import dataclass
 from typing import Optional
 
 from PyQt6.QtCore import QPointF, QRectF, Qt
-from PyQt6.QtGui import QColor, QFont, QFontMetricsF, QPainter, QPixmap, QRadialGradient
+from PyQt6.QtGui import QColor, QFont, QFontMetricsF, QPainter, QPainterPath, QPen, QPixmap, QRadialGradient
 
 from ui import buddy
 
@@ -49,6 +55,9 @@ HAZE_MAX_S = 30.0          # an answer that never comes does not leave it up
 CUE = "Pointing context attached"
 CUE_S = 2.5                # the release cue, then the haze alone
 CUE_GAP_PX = 12.0
+LINE_DIP = 6.0             # PT-03: the line's width
+LINE_ALPHA = 0.9           # while it is drawn
+LINE_KEPT_ALPHA = 0.55     # resting, as the haze
 HAZE_FADE_S = 0.6
 _BLOB_PX = 96              # the cached blob's size
 
@@ -107,16 +116,25 @@ class Mist:
         self._haze_from = 0.0
         self._haze_fade_at: Optional[float] = None
         self._rand = random.Random(seed)
+        self.style = "mist"                              # or "line" (PT-03)
+        self.line: list[tuple[float, float]] = []        # the smoothed path, for "line"
+        self._line_drop_at: Optional[float] = None
+        self._fx = self._fy = None
 
     # -- driven by the overlay ---------------------------------------------------------------------------------
 
-    def start(self, now: float) -> None:
+    def start(self, now: float, style: str = "mist") -> None:
         """The shortcut went down: the trail begins at the cursor's next move."""
         self.tracing = True
         self._last = None
         self._path = []
         self.haze = []
         self._haze_fade_at = None
+        self.style = "line" if style == "line" else "mist"
+        self.line = []
+        self._line_drop_at = None
+        from ai.trace import OneEuro
+        self._fx, self._fy = OneEuro(), OneEuro()
 
     def stop(self, now: float, keep: bool) -> None:
         """The shortcut came up. `keep`: the traced area stays as a faint
@@ -127,6 +145,8 @@ class Mist:
             self.haze = [(x, y, self._rand.uniform(0, math.tau)) for x, y in _every(self._path, HAZE_EVERY_PX)]
             self._haze_from = now
             self._haze_fade_at = None
+        elif self.line:
+            self._line_drop_at = now                     # a tap's line just fades
         self._path = []
 
     def end_haze(self, now: float) -> None:
@@ -139,11 +159,15 @@ class Mist:
         if self.tracing:
             self._trail_to(x, y, now)
         self.puffs = [p for p in self.puffs if now - p.born < LIFE_S]
+        if self.line and not self.tracing and not self.haze and (
+                self._line_drop_at is None or now - self._line_drop_at > HAZE_FADE_S):
+            self.line = []
         if self.haze:
             if self._haze_fade_at is None and now - self._haze_from > HAZE_MAX_S:
                 self._haze_fade_at = now
             if self._haze_fade_at is not None and now - self._haze_fade_at > HAZE_FADE_S:
                 self.haze = []
+                self.line = []
 
     def _trail_to(self, x: float, y: float, now: float) -> None:
         if self._last is None:
@@ -154,6 +178,12 @@ class Mist:
         if dist < SPACING_PX:
             return
         n = min(MAX_PER_FRAME, int(dist / SPACING_PX))
+        if self.style == "line":
+            self._path.append((x, y))
+            if self._fx is not None:
+                self.line.append((self._fx(now, x), self._fy(now, y)))
+            self._last = (x, y)
+            return
         for i in range(1, n + 1):
             f = i / n
             px, py = lx + (x - lx) * f, ly + (y - ly) * f
@@ -169,12 +199,12 @@ class Mist:
     # -- what the overlay asks -----------------------------------------------------------------------------------
 
     def active(self) -> bool:
-        return bool(self.puffs or self.haze or self.tracing)
+        return bool(self.puffs or self.haze or self.tracing or self.line)
 
     def bounds(self) -> Optional[QRectF]:
         """Everywhere it is drawn now, with room for a puff's full size."""
         pts = [(p.x + p.vx * LIFE_S, p.y + p.vy * LIFE_S) for p in self.puffs] + \
-              [(p.x, p.y) for p in self.puffs] + [(x, y) for x, y, _ in self.haze]
+              [(p.x, p.y) for p in self.puffs] + [(x, y) for x, y, _ in self.haze] + list(self.line)
         if not pts:
             return None
         pad = SIZE_PX * (1 + GROW) * 1.3
@@ -197,12 +227,17 @@ class Mist:
         return QRectF(cx - w / 2, bottom, w, h)
 
     def draw(self, p: QPainter, now: float) -> None:
-        if not (self.puffs or self.haze):
+        if not (self.puffs or self.haze or self.line):
             return
         blob = _blob()
         p.save()
         try:
-            if self.haze:
+            if self.line:
+                self._draw_line(p, now)
+            if self.haze and self.style == "line":
+                if self.cue_showing(now):
+                    self._draw_cue(p, now)
+            elif self.haze:
                 fade = 1.0
                 if self._haze_fade_at is not None:
                     fade = max(0.0, 1.0 - (now - self._haze_fade_at) / HAZE_FADE_S)
@@ -228,6 +263,38 @@ class Mist:
                              QRectF(0, 0, _BLOB_PX, _BLOB_PX))
         finally:
             p.restore()
+
+    def _draw_line(self, p: QPainter, now: float) -> None:
+        """PT-03: the path as one rounded line, smoothed."""
+        if len(self.line) < 2:
+            return
+        if self.tracing:
+            a = LINE_ALPHA
+        elif self.haze:
+            fade = 1.0 if self._haze_fade_at is None else max(0.0, 1.0 - (now - self._haze_fade_at) / HAZE_FADE_S)
+            settle = min(1.0, (now - self._haze_from) / 0.35)
+            a = LINE_ALPHA + (LINE_KEPT_ALPHA - LINE_ALPHA) * settle
+            a *= fade
+        else:
+            a = LINE_ALPHA * max(0.0, 1.0 - (now - (self._line_drop_at or now)) / HAZE_FADE_S)
+        if a <= 0:
+            return
+        path = QPainterPath(QPointF(*self.line[0]))
+        for x, y in self.line[1:]:
+            path.lineTo(x, y)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        p.setBrush(Qt.BrushStyle.NoBrush)
+        glow = QColor(buddy.BLUE)
+        glow.setAlphaF(0.25 * a)
+        p.setOpacity(1.0)
+        p.setPen(QPen(glow, LINE_DIP + 6, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap,
+                      Qt.PenJoinStyle.RoundJoin))
+        p.drawPath(path)
+        core = QColor(buddy.BLUE_LIGHT)
+        core.setAlphaF(a)
+        p.setPen(QPen(core, LINE_DIP, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap,
+                      Qt.PenJoinStyle.RoundJoin))
+        p.drawPath(path)
 
     def _draw_cue(self, p: QPainter, now: float) -> None:
         """PT-07: "Pointing context attached", easing in and out."""

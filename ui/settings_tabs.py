@@ -96,6 +96,8 @@ class GeneralTab(Tab):
         theme.currentIndexChanged.connect(
             lambda k: br.set_theme(keys[k]) if 0 <= k < len(keys) else None)
         look.row("Theme", "", theme)
+        look.toggle("Trail as a line", "Show what you point at with a smooth line instead of mist.",
+                    br.switch("trail_line"), lambda on: br.set_switch("trail_line", on))
         self.body.add(look)
 
     def _mic_words(self) -> str:

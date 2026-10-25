@@ -470,7 +470,12 @@ class CursorOverlay(QWidget):
         area stays as a haze until she answers - and "drop" for a tap."""
         now = time.monotonic()
         if state == "on":
-            self._mist.start(now)
+            try:
+                from config import cfg
+                style = "line" if cfg.switch("trail_line") else "mist"
+            except Exception:  # noqa: BLE001 - no config: the default
+                style = "mist"
+            self._mist.start(now, style)
         else:
             self._mist.stop(now, keep=state == "keep")
         self._refresh()
