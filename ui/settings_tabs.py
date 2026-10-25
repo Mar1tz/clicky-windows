@@ -1129,6 +1129,78 @@ class CodeEditorsTab(Tab):
 
 
 # The menu, top to bottom: (section, [(key, words, icon, tab), ...]).
+
+class MemoryTab(Tab):
+    """EN-15: what Tora keeps about the person, and the controls over it -
+    each fact with where it came from, when, and whether they confirmed
+    it, to confirm, edit or forget; a switch to stop her remembering; and
+    each project's memory with what changed in it - shown side by side,
+    never overwritten."""
+
+    HEADING = "Memory"
+    TOPICS = frozenset({"memory"})
+
+    def build(self) -> None:
+        import time as _time
+        from ui.settings_parts import Group
+        br = self.bridge
+        st = _ask(br, "memory_state", None) or {"on": True, "facts": [], "projects": []}
+
+        top = Group("Remembering")
+        top.toggle("Remember things about me",
+                   "Preferences and details you mention, so you do not have to say them twice. "
+                   "Off: nothing new is kept; what is below stays until you forget it.",
+                   st["on"], lambda on: br.set_switch("memory", on))
+        self.body.add(top)
+
+        about = Group(f"What Tora knows about you ({len(st['facts'])})")
+        for f in st["facts"][:60]:
+            when = _time.strftime("%d %b %Y", _time.localtime(f.get("created_at") or 0))
+            src = str(f.get("source") or "")
+            source = {"": "a conversation", "live": "a conversation", "user": "you"}.get(
+                src, "a job" if src.startswith("job:") else src)
+            trust = "you confirmed it" if f.get("confirmed") else "not confirmed yet"
+            about.row(str(f.get("text", ""))[:160], f"From {source} · {when} · {trust}", self._fact_buttons(f))
+        if not st["facts"]:
+            about.row("Nothing yet", "As you mention preferences and details, they show up here.")
+        self.body.add(about)
+
+        for proj in st["projects"]:
+            forget = button("Forget", "link")
+            forget.clicked.connect(lambda _c=False, sc=proj["scope"]: br.memory_forget_project(sc))
+            g = Group(f"{proj['name']} - {proj['count']} things remembered for this project", forget)
+            for c in proj["changed"][:8]:
+                parts = [f"{v['value']} ({_time.strftime('%d %b', _time.localtime(v['at']))})" for v in c["values"]]
+                g.row(f"{c['key']} changed", "Now " + parts[0] + " · before: " + ", ".join(parts[1:]))
+            if not proj["changed"]:
+                g.row("Nothing has changed its mind", "When a project's detail changes, both show here.")
+            self.body.add(g)
+
+    def _fact_buttons(self, fact: dict) -> QWidget:
+        box = QWidget()
+        row = QHBoxLayout(box)
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(6)
+        fid = fact.get("id")
+        if not fact.get("confirmed"):
+            yes = button("Confirm", "ghost")
+            yes.clicked.connect(lambda _c=False: self.bridge.memory_confirm(fid, True))
+            row.addWidget(yes)
+        change = button("Edit", "ghost")
+        change.clicked.connect(lambda _c=False: self._edit(fact))
+        row.addWidget(change)
+        gone = button("Forget", "danger")
+        gone.clicked.connect(lambda _c=False: self.bridge.memory_forget(fid))
+        row.addWidget(gone)
+        return box
+
+    def _edit(self, fact: dict) -> None:
+        from PyQt6.QtWidgets import QInputDialog
+        text, ok = QInputDialog.getText(self, "Edit what Tora remembers", "In your words:",
+                                        QLineEdit.EchoMode.Normal, fact.get("text", ""))
+        if ok and text.strip() and text.strip() != fact.get("text", ""):
+            self.bridge.memory_edit(fact.get("id"), text.strip())
+
 TABS = (
     ("Settings", (
         ("general", "General", "sliders-horizontal", GeneralTab),
@@ -1143,5 +1215,6 @@ TABS = (
         ("usage", "Usage", "chart-column", UsageTab),
         ("plans", "Plans & billing", "credit-card", PlansTab),
         ("privacy", "Data & privacy", "shield-check", PrivacyTab),
+        ("memory", "Memory", "book-open", MemoryTab),
     )),
 )

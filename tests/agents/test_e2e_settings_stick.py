@@ -95,7 +95,7 @@ def test_the_manager_starts_as_it_was_left(tmp_path, monkeypatch):
               + (Path(__file__).resolve().parents[2] / "main.py").read_text(encoding="utf-8"))
     root = Path(__file__).resolve().parents[2]
     # Read each time it is used, so it holds from the first use (PT-03).
-    used = {"trail_line": root / "ui" / "overlay.py"}
+    used = {"trail_line": root / "ui" / "overlay.py", "memory": root / "ai" / "gemini_memory.py"}
     for name in SWITCHES:
         if name in used:
             assert f'cfg.switch("{name}")' in used[name].read_text(encoding="utf-8"), f"{name} is never read"

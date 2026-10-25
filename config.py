@@ -585,6 +585,8 @@ class Config:
         "devlink":       ("TORA_DEVLINK", True),
         # Settings > General (PT-03): the held-key trail as a line, not mist.
         "trail_line":    ("TORA_TRAIL_LINE", False),
+        # Settings > Memory (EN-15): Tora keeps facts about the person.
+        "memory":        ("TORA_MEMORY", True),
     }
 
     def switch(self, name: str) -> bool:

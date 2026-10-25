@@ -170,9 +170,9 @@ async def index_document(source: str, text: str) -> int:
 
 
 async def remember(text: str, *, source: str = "") -> bool:
-    """Store one small fact about the user."""
+    """Store one small fact about the user - unless they paused it (EN-15)."""
     text = (text or "").strip()
-    if not text:
+    if not text or not remembering():
         return False
     try:
         vecs = await _embed([text], "RETRIEVAL_DOCUMENT")
@@ -342,6 +342,33 @@ def forget_fact(fact_id: int) -> bool:
     finally:
         conn.close()
     return bool(gone)
+
+
+def remembering() -> bool:
+    """Settings > Memory: "Remember things about me" (EN-15)."""
+    try:
+        from config import cfg
+        return cfg.switch("memory")
+    except Exception:  # noqa: BLE001 - no config: as before
+        return True
+
+
+async def edit_fact(fact_id: int, text: str) -> bool:
+    """EN-15: the person's own words for a fact - re-embedded so recall
+    finds it by them, and confirmed, since they wrote it."""
+    text = (text or "").strip()
+    if not text:
+        return False
+    vecs = await _embed([text], "RETRIEVAL_DOCUMENT")
+    conn = _connect()
+    try:
+        done = conn.execute("UPDATE passages SET text=?, vec=?, updated_at=?, confirmed=1, confidence=1.0 "
+                            "WHERE id=? AND kind='fact'",
+                            (text, vecs[0].tobytes(), time.time(), int(fact_id))).rowcount
+        conn.commit()
+    finally:
+        conn.close()
+    return bool(done)
 
 
 def confirm_fact(fact_id: int, confirmed: bool = True) -> bool:

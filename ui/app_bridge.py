@@ -229,7 +229,64 @@ class AppBridge(QObject):
             self.tray.apply_switch(name, bool(on))
         self.changed.emit("switches")
 
-    READ_WHERE_USED = ("trail_line",)
+    READ_WHERE_USED = ("trail_line", "memory")
+
+    # ── memory (EN-15) ───────────────────────────────────────────────────────
+
+    def _agent_memory(self):
+        mgr = getattr(self.manager, "_agents", None)
+        return getattr(mgr, "memory", None) if mgr is not None else None
+
+    def memory_state(self) -> dict:
+        """Settings > Memory: what Tora keeps about the person (each fact with
+        where it came from and whether they confirmed it), each project's
+        memory with what changed in it, and whether she is remembering."""
+        from config import cfg
+        try:
+            from ai import gemini_memory
+            facts = gemini_memory.facts(200)
+        except Exception:  # noqa: BLE001 - no memory file yet
+            facts = []
+        import os
+        projects = []
+        store = self._agent_memory()
+        if store is not None and hasattr(store, "scopes"):
+            for scope, n in store.scopes()[:20]:
+                if not scope.startswith("project:"):
+                    continue
+                projects.append({"scope": scope, "name": os.path.basename(scope[8:].rstrip("\\/")) or scope[8:],
+                                 "count": n, "changed": store.contradictions(scope)})
+        return {"on": cfg.switch("memory"), "facts": facts, "projects": projects}
+
+    def memory_forget(self, fact_id: int) -> None:
+        from ai import gemini_memory
+        gemini_memory.forget_fact(fact_id)
+        self.changed.emit("memory")
+
+    def memory_confirm(self, fact_id: int, yes: bool = True) -> None:
+        from ai import gemini_memory
+        gemini_memory.confirm_fact(fact_id, yes)
+        self.changed.emit("memory")
+
+    def memory_edit(self, fact_id: int, text: str) -> None:
+        """Re-embedded off the UI thread (an embedding call), then refreshed."""
+        import asyncio
+        import threading
+        from ai import gemini_memory
+
+        def run() -> None:
+            try:
+                asyncio.run(gemini_memory.edit_fact(fact_id, text))
+            except Exception:  # noqa: BLE001 - the old words stay
+                pass
+            self.changed.emit("memory")
+        threading.Thread(target=run, name="memory-edit", daemon=True).start()
+
+    def memory_forget_project(self, scope: str) -> None:
+        store = self._agent_memory()
+        if store is not None:
+            store.clear(scope)
+        self.changed.emit("memory")
 
     # ── settings (APP-11) ────────────────────────────────────────────────────
 

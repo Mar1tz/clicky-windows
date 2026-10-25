@@ -14,6 +14,7 @@ pytest.importorskip("PyQt6")
 
 from PyQt6.QtCore import QEvent, QPointF, Qt  # noqa: E402
 from PyQt6.QtGui import QKeyEvent, QMouseEvent  # noqa: E402
+from PyQt6.QtWidgets import QLabel, QPushButton  # noqa: E402
 from PyQt6.QtWidgets import QApplication, QLabel  # noqa: E402
 
 
@@ -35,11 +36,11 @@ def test_the_menu_is_the_agreed_tabs(window):
     from ui.settings_tabs import TABS
     assert [(sec, [k for k, *_r in rows]) for sec, rows in TABS] == [
         ("Settings", ["general", "system", "agents", "devlink", "advanced"]),
-        ("Account", ["account", "usage", "plans", "privacy"])]
+        ("Account", ["account", "usage", "plans", "privacy", "memory"])]
     window.open_settings()
     words = [r.text() for r in window._settings._rows.values()]
     assert words == ["General", "System", "Agents", "Code editors", "Advanced",
-                     "Account", "Usage", "Plans & billing", "Data & privacy"]
+                     "Account", "Usage", "Plans & billing", "Data & privacy", "Memory"]
 
 
 def test_every_tab_builds(window):
@@ -280,3 +281,33 @@ def test_no_settings_confirmation_uses_windows_message_box():
     root = Path(__file__).resolve().parents[2]
     for name in ("ui/settings_tabs.py", "ui/app_pages.py"):
         assert "QMessageBox" not in (root / name).read_text(encoding="utf-8"), name
+
+
+def test_memory_tab_lists_facts_and_what_changed(qapp, monkeypatch):
+    """EN-15: each fact with where it came from and whether it was confirmed,
+    with Confirm, Edit and Forget; a project's changed details side by side."""
+    from ui.settings_tabs import MemoryTab
+    calls = []
+
+    from tests.agents.test_e2e_app_settings import FakeBridge
+
+    class Br(FakeBridge):
+        def memory_state(self):
+            return {"on": True,
+                    "facts": [{"id": 7, "text": "prefers metric units", "source": "live",
+                               "created_at": 1.7e9, "confirmed": False}],
+                    "projects": [{"scope": "project:C:/w/site", "name": "site", "count": 4,
+                                  "changed": [{"key": "framework", "values": [
+                                      {"value": "Vue", "at": 1.7e9, "id": "b"},
+                                      {"value": "React", "at": 1.69e9, "id": "a"}]}]}]}
+
+        def memory_forget(self, fact_id):
+            calls.append(("memory_forget", (fact_id,)))
+
+    tab = MemoryTab(Br())
+    texts = " ".join(w.text() for w in tab.findChildren(QLabel))
+    assert "prefers metric units" in texts and "not confirmed yet" in texts
+    assert "framework changed" in texts and "Now Vue" in texts and "React" in texts
+    forget = next(b for b in tab.findChildren(QPushButton) if b.text() == "Forget")
+    forget.click()
+    assert ("memory_forget", (7,)) in calls

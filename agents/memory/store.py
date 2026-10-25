@@ -220,6 +220,31 @@ class SQLiteMemoryStore(MemoryStore):
 
     # -- extras --------------------------------------------------------------
 
+    def scopes(self) -> list[tuple[str, int]]:
+        """EN-15: every scope with how many memories it holds, busiest first."""
+        with self._lock:
+            return [(r[0], r[1]) for r in self._conn.execute(
+                "select scope, count(*) from entries group by scope order by count(*) desc")]
+
+    def contradictions(self, scope: str) -> list[dict]:
+        """EN-15: context facts that changed - each key with every value it
+        has had, newest first. Shown to the person, never overwritten."""
+        values: dict[str, list[MemoryEntry]] = {}
+        for e in self.query(scope, kind="context", limit=200):
+            key = str(e.data.get("key") or "").strip()
+            if key:
+                values.setdefault(key, []).append(e)
+        out = []
+        for key, entries in values.items():
+            seen = []
+            for e in entries:
+                v = str(e.data.get("value", e.content))
+                if v not in [s["value"] for s in seen]:
+                    seen.append({"value": v, "at": e.created_at, "id": e.id})
+            if len(seen) > 1:
+                out.append({"key": key, "values": seen})
+        return out
+
     def count(self, scope: Optional[str] = None) -> int:
         with self._lock:
             if scope is None:
