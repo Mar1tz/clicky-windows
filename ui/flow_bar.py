@@ -17,6 +17,11 @@ the left and right, and the card opens towards the middle of the screen. The
 side is kept (dock() / dock_changed: "bottom|0.500|0,0" - edge, place along
 it, the monitor's corner).
 
+Two small lights sit off the pill's ends (WX-05): red at one end while a
+microphone stream is open, blue at the other for two seconds after the
+screen was looked at. They are the only sign of a screenshot, so they are
+drawn whatever the pill is doing, and neither changes its size.
+
 Nothing here grows with what Tora says: the pill has one size per state, and
 the card keeps its size while its text rolls (the user's rule: no surfaces
 that grow as she talks). Neither window takes the keyboard focus, so a text
@@ -58,6 +63,9 @@ _MARKS = re.compile(r"[*•#`]+")
 CARD_HOLD_S = 12.0             # the card stays this long after she has finished
 CHARS_PER_S = 42.0             # the card's pace with no voice to keep time with
 VOICE_LEAD_S = 0.15            # words show a hair before they are heard
+SCREEN_LIT_S = 2.0             # the screen light, after a look
+MIC_LIGHT = QColor(255, 90, 79)
+SCREEN_LIGHT = QColor(79, 179, 255)
 DRAG_SLOP = 5                  # px before a press becomes a drag
 
 
@@ -399,6 +407,8 @@ class FlowBar(QObject):
         # SP-12: what is drawn now, asked of the overlay (watch); None: the notes alone.
         self.drawn_now: Optional[Callable[[], list[QRectF]]] = None
         self._card_glide: Optional[tuple[QPoint, QPoint, float]] = None   # (from, to, since)
+        self._mic_on = False             # WX-05: a microphone stream is open
+        self._screen_at = 0.0            # when the screen was last looked at (monotonic)
 
         self.pill = _Pill(self)
         self.pill.setToolTip(f"Hold {hotkey} to talk to Tora · drag me to any side")
@@ -460,6 +470,17 @@ class FlowBar(QObject):
         if name == "idle" and was == "speaking" and not self._finished_at:
             self._finished_at = time.monotonic()
         self._retarget()
+
+    def set_capture(self, mic_on: bool, screen_at: float) -> None:
+        """What is being captured (capture_watch): the microphone open, and
+        when the screen was last looked at (time.monotonic())."""
+        self._mic_on, self._screen_at = bool(mic_on), float(screen_at or 0.0)
+        self._wake()
+
+    def lights(self, now: Optional[float] = None) -> tuple[bool, bool]:
+        """(microphone light, screen light) as they are drawn now."""
+        now = time.monotonic() if now is None else now
+        return self._mic_on, bool(self._screen_at) and now - self._screen_at < SCREEN_LIT_S
 
     def set_hands_free(self, on: bool) -> None:
         """Listening without the shortcut held: show ✕ and ✓."""
@@ -684,7 +705,8 @@ class FlowBar(QObject):
         # Idle (or hovered) and settled, the pill does not change: painting it
         # 60 times a second anyway kept Windows composing it 60 times a second.
         look = self._look()
-        key = (look, self._edge, tuple(round(v, 1) for v in self._size), round(self._buttons_a, 2))
+        lit = self.lights(now)
+        key = (look, self._edge, tuple(round(v, 1) for v in self._size), round(self._buttons_a, 2), lit)
         if look not in ("idle", "hover") or key != self._painted or self._snap is not None:
             self._painted = key
             self.pill.update()
@@ -692,7 +714,7 @@ class FlowBar(QObject):
         # showing - nothing changes until something happens (_wake).
         if (look in ("idle", "hover") and now - self._size_t0 >= 0.3 and self._snap is None
                 and self._card_glide is None and not self.card.isVisible()
-                and self._buttons_a < 0.01 and self._level < 0.005):
+                and self._buttons_a < 0.01 and self._level < 0.005 and not lit[1]):
             self._timer.stop()
 
     def _voice_level(self, now: float) -> float:
@@ -742,6 +764,7 @@ class FlowBar(QObject):
         p.setBrush(QColor(0, 0, 0, 200 if idle else 240))
         p.setPen(QPen(QColor(255, 255, 255, 46 if idle else 30), 1.0))
         p.drawRoundedRect(r, radius, radius)
+        self._paint_lights(p, r)
         if idle:
             return
         look = self._look()
@@ -756,6 +779,24 @@ class FlowBar(QObject):
                 cut = 40.0
                 inner = r.adjusted(0, cut, 0, -cut) if self.upright() else r.adjusted(cut, 0, -cut, 0)
             self._paint_bars(p, inner, level=self._level, alpha=255, count=BARS)
+
+    def _paint_lights(self, p: QPainter, r: QRectF) -> None:
+        """WX-05: red off one end while the microphone is open, blue off the
+        other just after a look at the screen - in the shadow margin, so
+        the pill keeps its size."""
+        mic, screen = self.lights()
+        d = 6.0
+        for on, color, end in ((mic, MIC_LIGHT, 1), (screen, SCREEN_LIGHT, -1)):
+            if not on:
+                continue
+            c = r.center()
+            if self.upright():
+                c = QPointF(c.x(), (r.bottom() + 7) if end > 0 else (r.top() - 7))
+            else:
+                c = QPointF((r.right() + 7) if end > 0 else (r.left() - 7), c.y())
+            p.setPen(QPen(QColor(0, 0, 0, 140), 1.0))
+            p.setBrush(color)
+            p.drawEllipse(c, d / 2, d / 2)
 
     def _paint_bars(self, p: QPainter, r: QRectF, *, level: float, alpha: int, count: int) -> None:
         up = self.upright()

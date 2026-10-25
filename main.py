@@ -471,6 +471,14 @@ def main():
     manager.sig_audio_level.connect(overlay.set_audio_level)
     manager.sig_audio_level.connect(flow.set_level)
 
+    # WX-05: the lights for the microphone and the screen. capture_watch
+    # hears every capture path, on whatever thread it ran; the signal
+    # brings it to the flow bar on this one.
+    import capture_watch
+    manager.sig_capture.connect(flow.set_capture)
+    capture_watch.on_change(manager.sig_capture.emit)
+    flow.set_capture(capture_watch.mic_open(), capture_watch.last_screen_at)
+
     # The flow bar's own controls: ✕ and ✓ while listening hands-free, a
     # click on the resting pill to talk, and the side it was dragged to.
     manager.sig_hands_free.connect(flow.set_hands_free)

@@ -45,6 +45,7 @@ from typing import Callable, Optional
 import numpy as np
 import sounddevice as sd
 
+import capture_watch
 from audio.capture import resample_pcm, SAMPLE_RATE
 
 _log = logging.getLogger("tora.wake")
@@ -234,6 +235,7 @@ class AmbientListener:
                     latency="low",
                 )
             self._stream.start()
+            capture_watch.mic("listener", True)
 
     def stop(self):
         self._running = False
@@ -247,6 +249,7 @@ class AmbientListener:
             except Exception:
                 pass
             self._stream = None
+            capture_watch.mic("listener", False)
 
     def start_recording(self) -> None:
         """Switch to RECORDING mode; all audio buffered for STT.

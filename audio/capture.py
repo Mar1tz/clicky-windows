@@ -4,6 +4,8 @@ from typing import Callable, Optional
 import numpy as np
 import sounddevice as sd
 
+import capture_watch
+
 SAMPLE_RATE = 16000
 CHANNELS    = 1
 BLOCK_SIZE  = 1024
@@ -37,6 +39,7 @@ class MicCapture:
             callback=self._callback,
         )
         self._stream.start()
+        capture_watch.mic("capture", True)
 
     def stop(self):
         self._running = False
@@ -47,6 +50,7 @@ class MicCapture:
             except Exception:
                 pass
             self._stream = None
+            capture_watch.mic("capture", False)
 
     def _callback(self, indata: np.ndarray, frames: int, time_info, status):
         if not self._running:

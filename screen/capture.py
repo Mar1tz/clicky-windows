@@ -23,6 +23,8 @@ from typing import List
 
 import mss
 import mss.tools
+
+import capture_watch
 from PIL import Image
 
 
@@ -118,6 +120,7 @@ def capture_all_screens(max_width: int = 1280) -> List[ScreenShot]:
         # mss monitor index 0 is the combined virtual screen; 1+ are real monitors
         for i, monitor in enumerate(sct.monitors[1:], start=1):
             raw = sct.grab(monitor)
+            capture_watch.screen()
             img = Image.frombytes("RGB", raw.size, raw.bgra, "raw", "BGRX")
 
             phys_w, phys_h = img.width, img.height
@@ -164,6 +167,7 @@ def capture_region(left: int, top: int, width: int, height: int, max_width: int 
     try:
         with mss.mss() as sct:
             raw = sct.grab({"left": int(left), "top": int(top), "width": int(width), "height": int(height)})
+        capture_watch.screen()
         img = Image.frombytes("RGB", raw.size, raw.bgra, "raw", "BGRX")
     except Exception:
         return None

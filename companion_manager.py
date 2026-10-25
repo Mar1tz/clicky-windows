@@ -416,6 +416,7 @@ class CompanionManager(QObject):
     """Thread-safe signals for Qt UI updates from async/audio threads."""
 
     sig_state_changed       = pyqtSignal(object)          # AppState
+    sig_capture             = pyqtSignal(bool, float)     # WX-05: mic open, last screen look
     sig_response_chunk      = pyqtSignal(str)
     sig_response_done       = pyqtSignal(str)
     sig_audio_level         = pyqtSignal(float)

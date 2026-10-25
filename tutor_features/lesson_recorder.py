@@ -22,6 +22,8 @@ from typing import Optional
 import mss
 from PIL import Image
 
+import capture_watch
+
 
 FPS = 8
 
@@ -116,6 +118,7 @@ class LessonRecorder:
             while not self._stop_evt.is_set():
                 try:
                     raw = sct.grab(mon)
+                    capture_watch.screen()
                     img = Image.frombytes("RGB", raw.size, raw.bgra, "raw", "BGRX")
                     if self._writer is not None:
                         self._writer.append_data(_to_array(img))

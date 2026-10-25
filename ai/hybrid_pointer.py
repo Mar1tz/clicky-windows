@@ -766,6 +766,8 @@ def _ocr_screen(monitor: dict, asked_at: float):
         captured_at = time.monotonic()
         with make() as sct:
             raw = sct.grab({k: monitor[k] for k in ("left", "top", "width", "height")})
+        import capture_watch
+        capture_watch.screen()
         image = Image.frombytes("RGB", raw.size, raw.bgra, "raw", "BGRX")
         result, _ = ocr(np.array(image))
         _ocr_last = (key, captured_at, result)

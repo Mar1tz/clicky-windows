@@ -52,6 +52,8 @@ import time
 from dataclasses import dataclass
 from typing import Awaitable, Callable, Optional
 
+import capture_watch
+
 _log = logging.getLogger("tora.stepwatch")
 
 # ── Tunables ─────────────────────────────────────────────────────────────────
@@ -245,6 +247,7 @@ def grab_screen(max_width: int = 1280, *, jpeg: bool = True) -> tuple[str, bytes
     with mss.mss() as sct:
         mon = sct.monitors[idx] if idx < len(sct.monitors) else sct.monitors[1]
         raw = sct.grab(mon)
+        capture_watch.screen()
         img = Image.frombytes("RGB", raw.size, raw.bgra, "raw", "BGRX")
 
     # Thumbnail first, from the full frame, with the caption strip cut off so
