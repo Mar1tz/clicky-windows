@@ -30,6 +30,24 @@ from .schema import validate
 
 # A yes for a screen or money action is good for this long after the ask.
 APPROVAL_FRESH_S = 600.0
+RETRY_PAUSE_S = 0.5
+
+# EN-02 / OR-14: every failure carries one of these in data["error_class"],
+# so a worker, a recovery pass or a report can decide without reading prose.
+ERROR_CLASSES = ("unknown_tool", "invalid_input", "permission", "timeout", "crashed", "failed")
+
+
+def error_class(result) -> str:
+    """The stable class of a failed result (its own, else from the registry's words)."""
+    given = (result.data or {}).get("error_class")
+    if given:
+        return given
+    error = (result.error or "").lower()
+    for prefix, kind in (("unknown tool", "unknown_tool"), ("invalid arguments", "invalid_input"),
+                         ("permission denied", "permission"), ("timed out", "timeout")):
+        if error.startswith(prefix):
+            return kind
+    return "failed"
 
 
 def payload_hash(call) -> str:
@@ -119,6 +137,16 @@ class Registry(ToolRegistry):
         self._emit(ctx, EventKind.TOOL_CALL, _describe(call), {"call": _event_view(call)})
 
         result = await self._execute(call, ctx)
+        tool = self._tools.get(call.tool_name)
+        if (not result.ok and error_class(result) == "timeout" and tool is not None
+                and tool.spec.risk is RiskLevel.SAFE):
+            # OR-14: a read that only ran out of time gets one more go; a call
+            # that could change something is never repeated blindly.
+            await asyncio.sleep(RETRY_PAUSE_S)
+            result = await self._execute(call, ctx)
+            result.data["retried"] = True
+        if not result.ok:
+            result.data.setdefault("error_class", error_class(result))
         # Tools build results without knowing the call (see base.Tool);
         # stamp identity here so nothing downstream has to trust them.
         result.call_id = call.id
@@ -218,6 +246,7 @@ class Registry(ToolRegistry):
         except Exception as exc:  # noqa: BLE001 - contain programmer errors too
             log.exception("tool %s raised", call.tool_name)
             result = ToolResult.failure(call, f"{type(exc).__name__}: {exc}")
+            result.data["error_class"] = "crashed"
         if not isinstance(result, ToolResult):
             result = ToolResult.failure(
                 call, f"tool returned {type(result).__name__}, expected ToolResult")

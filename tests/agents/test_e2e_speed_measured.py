@@ -175,3 +175,22 @@ def test_a_stuck_loop_is_caught_in_the_act(monkeypatch, caplog):
         asyncio.run(go())
     stuck = [r.getMessage() for r in caplog.records if "is stuck" in r.getMessage()]
     assert stuck and "blocking_disk_write" in stuck[0], stuck
+
+
+def test_a_phase_past_its_budget_is_named_and_counted(caplog, monkeypatch):
+    """WX-08: the playbook's targets - mic 150 ms, sent 1.5 s, first word
+    2.5 s, a look 5 s - each turn's line names what ran over."""
+    caplog.set_level(logging.INFO, logger="tora.speed")
+    clock = iter([0.0, 0.05, 2.0, 2.4, 6.0])     # press, mic, release, sent, first word (4 s after release)
+    monkeypatch.setattr(speed, "_now", lambda: next(clock))
+    speed.begin()
+    speed.mark("mic")
+    speed.mark("release")
+    speed.mark("sent")
+    speed.mark("audio")
+    monkeypatch.setattr(speed, "_now", lambda: 7.0)
+    speed.finish("answered")
+    line = next(r.getMessage() for r in caplog.records if r.getMessage().startswith("turn timeline"))
+    assert "over budget: first word" in line and "mic" not in line.split("over budget:")[1]
+    assert speed._today.over == {"first word": 1}
+    assert "over budget: first word 1" in speed.scorecard()

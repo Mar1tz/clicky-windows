@@ -66,7 +66,11 @@ def test_worker_tool_schemas_stay_within_budget():
               "browser": 700, "computer": 2100}
     for worker_type, limit in budget.items():
         names = list(workers.get(worker_type).default_tools)
-        size = tokens(json.dumps([s.to_dict() for s in reg.specs(names)], default=str))
+        # What a provider sends per tool (agents/providers: name, description,
+        # parameters) - not the registry's own contract fields (EN-02/03).
+        sent = [{"name": s.name, "description": s.description, "parameters": s.parameters}
+                for s in reg.specs(names)]
+        size = tokens(json.dumps(sent, default=str))
         assert size <= limit, f"{worker_type} sends {size} tokens of tool schema per call (budget {limit})"
 
 

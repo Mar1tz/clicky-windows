@@ -36,6 +36,11 @@ _log = logging.getLogger("tora.speed")
 
 STARTED = time.monotonic()            # as near the process start as an import gets
 SCORECARD_EVERY = 20                  # questions between scorecard lines
+# WX-08, the budget each phase is held to (seconds; the engineering
+# playbook's targets): the mic open after the key, the question sent after
+# the release, the first word, a look. A phase past it is named on the turn's
+# line and counted in the scorecard.
+BUDGET_S = {"mic": 0.15, "sent": 1.5, "first word": 2.5, "look": 5.0}
 
 
 @dataclass
@@ -57,6 +62,7 @@ class _Day:
     sessions: int = 0
     lag_ms: list = field(default_factory=list)
     cpu: Optional[float] = None
+    over: dict = field(default_factory=dict)      # phase -> questions past its budget
 
 
 _lock = threading.Lock()
@@ -119,6 +125,12 @@ def _finish_locked(outcome: str) -> None:
     elif outcome == "interrupted":
         d.interrupted += 1
     end = t.at.get("release", t.at["press"])
+    measured = {}
+    if "mic" in t.at:
+        measured["mic"] = t.at["mic"] - t.at["press"]
+    for phase, moment in (("sent", "sent"), ("first word", "audio"), ("look", "look")):
+        if moment in t.at:
+            measured[phase] = t.at[moment] - end
     parts = [t.route]
     if "mic" in t.at:
         parts.append("mic %d ms" % ((t.at["mic"] - t.at["press"]) * 1000))
@@ -136,6 +148,11 @@ def _finish_locked(outcome: str) -> None:
         d.look.append(look)
     for k, v in t.notes.items():
         parts.append(f"{k} {v}")
+    over = [phase for phase, took in measured.items() if took > BUDGET_S[phase]]
+    for phase in over:
+        d.over[phase] = d.over.get(phase, 0) + 1
+    if over:
+        parts.append("over budget: " + ", ".join(over))
     parts.append(outcome)
     _log.info("turn timeline: %s", ", ".join(parts))
     if d.questions % SCORECARD_EVERY == 0:
@@ -209,6 +226,8 @@ def _scorecard_locked() -> str:
         bits.append("loop lag p99 %d ms" % _pct(d.lag_ms, 0.99))
     if d.cpu is not None:
         bits.append("idle cpu %.1f%%" % d.cpu)
+    if d.over:
+        bits.append("over budget: " + ", ".join(f"{phase} {n}" for phase, n in sorted(d.over.items())))
     return ", ".join(bits)
 
 

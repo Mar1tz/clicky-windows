@@ -394,6 +394,20 @@ class ClickElement(_BrowserTool):
                        **info)
 
 
+async def _value_of(locator) -> "str | None":
+    """What an input or textarea holds; None for a field that does not say
+    (contenteditable), which is then neither skipped nor checked."""
+    try:
+        return await locator.input_value(timeout=2000)
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _bare(text: str) -> str:
+    """Letters and digits only: a phone field that adds brackets still took it."""
+    return "".join(ch for ch in (text or "").lower() if ch.isalnum())
+
+
 class FillField(_BrowserTool):
     spec = make_spec(
         "fill_field", "Type a value into an input, textarea or editable field.",
@@ -423,7 +437,18 @@ class FillField(_BrowserTool):
                         "credentials — approve only if you expect it."))
             if not await ctx.approver(req):
                 return self.fail("denied: typing on a page with a password field")
+        # OR-13: look before acting, check after. Already holding the value,
+        # it is not typed again (a repeated step must not double anything);
+        # a field that did not take the value says so instead of "filled".
+        before = await _value_of(loc.first)
+        if before is not None and before == value and not args.get("submit"):
+            return self.ok(f"{selector!r} already holds that - nothing typed", url=page.url, selector=selector,
+                           unchanged=True)
         await loc.first.fill(value)
+        after = await _value_of(loc.first)
+        if after is not None and _bare(value) and _bare(value) not in _bare(after):
+            return self.fail(f"{selector!r} did not take the value (it holds {after[:60]!r})", url=page.url,
+                             selector=selector)
         if args.get("submit"):
             await loc.first.press("Enter")
             try:

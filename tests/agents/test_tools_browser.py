@@ -262,3 +262,12 @@ def test_agent_opens_a_local_page_and_reports_a_value(site, tmp_path):
         assert "t-" not in browser_tools._sessions or task.id not in browser_tools._sessions
     finally:
         mgr.stop()
+
+
+def test_a_field_already_holding_the_value_is_not_typed_again(site, run):
+    """OR-13: look before acting - a repeated step must not double anything."""
+    run("open_page", url=_url(site / "index.html"))
+    first = run("fill_field", selector="#name", value="Tora")
+    assert first.ok and not first.data.get("unchanged")
+    again = run("fill_field", selector="#name", value="Tora")
+    assert again.ok and again.data.get("unchanged") is True and "already holds" in again.output
