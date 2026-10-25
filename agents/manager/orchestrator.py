@@ -86,6 +86,16 @@ class Orchestrator:
     # -- public --------------------------------------------------------------
 
     async def run_task(self, ctx: AgentContext, worker: BaseWorker, *, resume: bool = False):
+        """The job's id on every log line made for it (EN-18), around _run_task."""
+        from .correlation import JOB, install
+        install()
+        token = JOB.set(ctx.task.id)
+        try:
+            return await self._run_task(ctx, worker, resume=resume)
+        finally:
+            JOB.reset(token)
+
+    async def _run_task(self, ctx: AgentContext, worker: BaseWorker, *, resume: bool = False):
         """Run a task from the start, or pick a recovered one up where it
         stopped.
 
