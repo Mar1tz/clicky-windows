@@ -1536,6 +1536,8 @@ class CompanionManager(QObject):
         self._gate().new_answer()                   # anything still waiting goes up now
         heard = (turn.heard or "").strip()
         said = (turn.said or "").strip()
+        if heard:
+            self._log_route(heard)
 
         # Guaranteed pointing: a "where is…" / "how do I get to…" turn must
         # end with the buddy on the target. If the model already pointed (or
@@ -2126,9 +2128,39 @@ class CompanionManager(QObject):
         # forever — the precise "is it stuck?" feeling the island exists to
         # prevent. One wrapper here is worth more than six remembered finallys.
         return {
-            name: self._clears_activity(self._guide_or_act(name, fn))
+            name: self._clears_activity(self._noted(name, self._guide_or_act(name, fn)))
             for name, fn in self._tool_handlers().items()
         }
+
+    _turn_tools: list = []
+
+    def _noted(self, name: str, fn):
+        """OR-03: which tools this answer used - the route the model took."""
+        async def wrapped(args: dict) -> dict:
+            self._turn_tools = [*self._turn_tools, name]
+            return await fn(args)
+        return wrapped
+
+    def _log_route(self, heard: str) -> None:
+        """OR-03/04: the decision table's route for what they said, beside
+        the one the model took, on the turn's line and in the log."""
+        from ai import routes
+        try:
+            trace = self._trace
+            traced = trace is not None and trace.moved
+        except (AttributeError, RuntimeError):
+            traced = False
+        try:
+            pointed = self._ref_fresh()
+        except Exception:  # noqa: BLE001 - a bare manager (tests)
+            pointed = False
+        d = routes.decide(heard, traced=traced, pointed=pointed)
+        took = routes.model_route(self._turn_tools)
+        self._turn_tools = []
+        speed.mark("route", route=f"{d} model {took}")
+        if routes.is_correction(heard):
+            speed.mark("correction", corrected="yes")      # OR-18: the last answer missed
+        _log.info("route: table %s - %s; model %s%s", d, d.words, took, "" if took == d.route else " (differ)")
 
     # ── PT-16: guide versus act ──────────────────────────────────────────────
     #
