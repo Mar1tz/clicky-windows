@@ -1947,6 +1947,7 @@ class CompanionManager(QObject):
         # see _match_snapshot (APP-04).
         self._pointables = summary.pointables
         self._pointables_at = time.monotonic()
+        self._pointables_gen = monitors.generation()
         self._pointables_title = active_window_title()
         self._note_uia(self._pointables_title, len(summary.pointables or ()))
         bits = [self._context_head(summary.line)]
@@ -3190,7 +3191,8 @@ class CompanionManager(QObject):
         its pictures.
         """
         if (reuse and self._screens_ctx
-                and (time.monotonic() - self._screens_at) < self._SHOT_CACHE_S):
+                and (time.monotonic() - self._screens_at) < self._SHOT_CACHE_S
+                and self._screens_gen in (None, monitors.generation())):
             return self._screens_ctx
         if not pixels:
             return await asyncio.to_thread(monitor_frames)
@@ -3198,6 +3200,7 @@ class CompanionManager(QObject):
         if screens:
             self._screens_ctx = screens
             self._screens_at = time.monotonic()
+            self._screens_gen = monitors.generation()
         return screens
 
     async def _one_shot(self, max_width: int = 1024):
@@ -3438,6 +3441,8 @@ class CompanionManager(QObject):
     # is it" without walking again: the same turn, not the next screen.
     SNAPSHOT_TRUST_S = 10.0
     _pointables_at = 0.0
+    _pointables_gen = None             # PT-10: the monitor layout it was taken under
+    _screens_gen = None
     _pointables_title = ""
 
     def _snapshot_fresh(self) -> bool:
@@ -3454,6 +3459,8 @@ class CompanionManager(QObject):
             return False
         if time.monotonic() - self._pointables_at > self.SNAPSHOT_TRUST_S:
             return False
+        if self._pointables_gen not in (None, monitors.generation()):
+            return False                            # PT-10: the monitors changed since
         return active_window_title() == self._pointables_title
 
     def _match_snapshot(self, query: str):
@@ -3599,6 +3606,7 @@ class CompanionManager(QObject):
         self._last_ref = SimpleNamespace(
             x=float(x), y=float(y), label=label,
             at=time.monotonic(), app=app_key(active_window_title()),
+            gen=monitors.generation(),
         )
 
     # How long a reference stays "the thing we were just talking about".
@@ -3617,6 +3625,7 @@ class CompanionManager(QObject):
             ref is not None
             and (time.monotonic() - ref.at) < self._REF_TTL_S
             and ref.app == app_key(active_window_title())
+            and getattr(ref, "gen", None) in (None, monitors.generation())     # PT-10
         )
 
     async def _resolve_reference(self, query: str):

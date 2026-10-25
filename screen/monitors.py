@@ -89,12 +89,29 @@ _lock = threading.Lock()
 _published: list[tuple] = []
 
 
-def publish(rects: list[tuple]) -> None:
+_generation = 0
+
+
+def publish(rects: list[tuple]) -> bool:
     """The UI thread's record of Qt's own logical screen rectangles, as
     (x, y, width, height). Called at start and whenever a monitor is added,
-    removed or changes."""
+    removed or changes. True when the layout changed."""
+    global _generation
+    new = [tuple(float(v) for v in r) for r in rects]
     with _lock:
-        _published[:] = [tuple(float(v) for v in r) for r in rects]
+        changed = new != _published
+        _published[:] = new
+        if changed:
+            _generation += 1
+    return changed
+
+
+def generation() -> int:
+    """PT-10: which layout of monitors this is. A position taken under one
+    (an arrow, a control list, a screenshot) means nothing under the next:
+    a monitor unplugged, moved or rescaled moves everything on it."""
+    with _lock:
+        return _generation
 
 
 def monitors() -> list[Monitor]:

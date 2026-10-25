@@ -733,6 +733,8 @@ class CursorOverlay(QWidget):
         for s in self._surfaces:
             s.hide()
 
+    _layout_seen = False
+
     def _screens_changed(self, *_args) -> None:
         # Coalesced: plugging a monitor in fires several of these at once.
         if not self._sync_pending:
@@ -761,8 +763,14 @@ class CursorOverlay(QWidget):
         self._surfaces = surfaces
         # Tell the rest of Tora where Qt puts each monitor, so its arrows
         # land in the same place the overlay draws them (screen/monitors.py).
-        monitors.publish([(g.x(), g.y(), g.width(), g.height())
-                          for g in (s.geometry() for s in screens)])
+        moved = monitors.publish([(g.x(), g.y(), g.width(), g.height())
+                                  for g in (s.geometry() for s in screens)])
+        if moved and self._layout_seen:
+            # PT-10: marks drawn for the old layout point at the wrong place
+            # now - gone before the next one is drawn.
+            self.clear_annotations()
+            self.release_point()
+        self._layout_seen = True
         self._cap_screen = None                    # the main monitor may have changed
         self._caption.needs_screen = self._caption.active()
         self._refresh(force=True)
