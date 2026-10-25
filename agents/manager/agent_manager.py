@@ -229,12 +229,25 @@ class AgentManager:
             return []
         recovered: list[Task] = []
         in_flight = {TaskStatus.PENDING, TaskStatus.PLANNING, TaskStatus.RUNNING,
-                     TaskStatus.VERIFYING, TaskStatus.WAITING_APPROVAL, TaskStatus.PAUSED}
+                     TaskStatus.VERIFYING, TaskStatus.WAITING_APPROVAL, TaskStatus.PAUSED,
+                     TaskStatus.NEEDS_ATTENTION}
         stored_agents = {a.id: a for a in self._safe_list_agents()}
         for task in self.store.list_tasks(limit=500):
             if task.status not in in_flight or task.id in self._tasks:
                 continue
-            if task.status is not TaskStatus.PAUSED:
+            unsettled = (self._unsettled_effect(task)
+                         if task.status in (TaskStatus.RUNNING, TaskStatus.VERIFYING) else None)
+            if unsettled is not None:
+                # EN-07: the step died with a call in flight that could have
+                # changed something - re-running it could do it twice.
+                task.status = TaskStatus.NEEDS_ATTENTION
+                task.updated_at = now()
+                task.metadata["interrupted"] = self.INTERRUPTED_NOTE
+                task.metadata["outcome_unknown"] = unsettled
+                task.current_action = (f"Needs you — {unsettled['tool']} may have run before HeyTora stopped. "
+                                       "Check it, then Resume or Stop.")
+                self.store.save_task(task)
+            elif task.status not in (TaskStatus.PAUSED, TaskStatus.NEEDS_ATTENTION):
                 task.status = TaskStatus.PAUSED
                 task.updated_at = now()
                 task.metadata["interrupted"] = self.INTERRUPTED_NOTE
@@ -269,6 +282,38 @@ class AgentManager:
         except Exception:  # noqa: BLE001 - a corrupt row must not block startup
             log.exception("could not read stored agents")
             return []
+
+    def _unsettled_effect(self, task: Task) -> Optional[dict]:
+        """The call the running step started and never heard back from, when
+        its tool could change something (MEDIUM or HIGH risk): run a
+        command, push, click. None when every such call answered, or the
+        unanswered one only read. The TOOL_CALL event, committed before the
+        tool runs, is the record of intent (EN-06)."""
+        from agents.core import RiskLevel, StepStatus
+        step = next((s for s in task.steps if s.status is StepStatus.RUNNING), None)
+        if step is None or self.store is None:
+            return None
+        try:
+            events = self.store.events(task.id, since=(step.started_at or task.created_at) - 1, limit=20000)
+        except Exception:  # noqa: BLE001 - no history: the old behaviour (paused)
+            return None
+        calls: dict[str, dict] = {}
+        answered: set = set()
+        for ev in events:
+            if ev.kind is EventKind.TOOL_CALL:
+                call = (ev.data or {}).get("call") or {}
+                calls[call.get("id")] = call | {"at": ev.timestamp}
+            elif ev.kind is EventKind.TOOL_RESULT:
+                answered.add(((ev.data or {}).get("result") or {}).get("call_id"))
+        for call_id, call in reversed(list(calls.items())):
+            if call_id in answered:
+                continue
+            name = call.get("tool_name") or ""
+            risk = self.tools.get(name).spec.risk if name in self.tools else RiskLevel.HIGH
+            if risk.rank >= RiskLevel.MEDIUM.rank:
+                return {"tool": name, "arguments": call.get("arguments") or {}, "call_id": call_id,
+                        "at": call.get("at")}
+        return None
 
     def _resume_recovered(self, task: Task) -> bool:
         """Re-enter the orchestrator for a task that has no live run."""
@@ -845,7 +890,8 @@ class AgentManager:
             # paused in the store, not in a RunControl, so it re-enters the
             # orchestrator instead of flipping an event.
             task = self._tasks.get(task_id)
-            if task is not None and task.status is TaskStatus.PAUSED:
+            if task is not None and task.status in (TaskStatus.PAUSED, TaskStatus.NEEDS_ATTENTION):
+                task.metadata.pop("outcome_unknown", None)     # they checked, and chose to go on
                 return self._resume_recovered(task)
             return False
         if not run.control.paused:
@@ -1173,7 +1219,7 @@ class AgentManager:
             changed = True
         elif ev.kind is EventKind.TASK_STATUS:
             st = TaskStatus(ev.data.get("status", "running"))
-            new = {TaskStatus.PAUSED: AgentStatus.PAUSED,
+            new = {TaskStatus.PAUSED: AgentStatus.PAUSED, TaskStatus.NEEDS_ATTENTION: AgentStatus.PAUSED,
                    TaskStatus.COMPLETED: AgentStatus.IDLE,
                    TaskStatus.CANCELLED: AgentStatus.STOPPED,
                    TaskStatus.FAILED: AgentStatus.ERROR}.get(st, AgentStatus.RUNNING)

@@ -228,20 +228,29 @@ def read(focuses: list[Focus], budget_s: float = READ_BUDGET_S) -> list[Reading]
     return out
 
 
-def voice_line(readings: list[Reading]) -> str:
-    """The line the voice gets when the shortcut comes up (TF-05)."""
+# PT-05: a trace says "look here" - it never says "do it".
+NOT_CONSENT = "The trace shows where they mean - it is not permission to click, type or change anything there."
+
+
+def voice_line(readings: list[Reading], changed: str = "") -> str:
+    """The line the voice gets when the shortcut comes up (TF-05). `changed`:
+    the window in front was another by the release (PT-06) - what was read may
+    no longer be what is there."""
     if not readings:
         return ""
+    stale = (f" The window changed while they traced ({changed}): what was read may be out of date - if it "
+             "matters, ask or look again." if changed else "")
     shown = "; ".join(f"({i}) {r.line()}" for i, r in enumerate(readings, 1)) if len(readings) > 1 \
         else readings[0].line()
     where = readings[0].window
     if any(r.files for r in readings):
         return (f"While asking, they traced with the mouse: {shown}" + (f' in "{where}"' if where else "") + ". "
                 "'This', 'that' and 'these' mean these files. To do something with them, delegate_task - the "
-                "paths go with it.")
+                "paths go with it." + stale)
     looks = any(r.is_picture() for r in readings)
     return (f"While asking, they traced with the mouse: {shown}" + (f' in "{where}"' if where else "") + ". "
             "'This', 'that', 'here' and 'these' mean what they traced" + (", in that order" if len(readings) > 1
                                                                          else "") + ". "
             + ("Part of it is a picture or has no text: look_at_screen sees the traced area."
-               if looks else "Its words are above: answer from them - no need to look."))
+               if looks else "Its words are above: answer from them - no need to look.")
+            + " " + NOT_CONSENT + stale)

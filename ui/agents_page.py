@@ -43,6 +43,7 @@ def status_words(status: str) -> tuple[str, str]:
         "pending": ("Queued", T.TEXT_DIM),
         "waiting_approval": ("Waiting for you", T.WARN),
         "paused": ("Paused", T.WARN),
+        "needs_attention": ("Needs you", T.WARN),
     }.get(status, (status.replace("_", " ").capitalize(), T.TEXT_DIM))
 
 
@@ -240,7 +241,7 @@ class AgentsPage(Page):
         took = ran_for(j["started"], time.time())
         if took:
             top.addWidget(label(took, "faint"))
-        paused = j["status"] == "paused"
+        paused = j["status"] in ("paused", "needs_attention")
         hold = button("Resume" if paused else "Pause")
         hold.clicked.connect(lambda: (self.bridge.resume_job(j["id"]) if paused
                                       else self.bridge.pause_job(j["id"]), self._later(self._fill)))

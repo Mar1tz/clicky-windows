@@ -28,6 +28,16 @@ from agents.core import (
 
 from .schema import validate
 
+# A yes for a screen or money action is good for this long after the ask.
+APPROVAL_FRESH_S = 600.0
+
+
+def payload_hash(call) -> str:
+    """The exact action an approval covers: the tool and its arguments."""
+    import hashlib
+    body = json.dumps({"tool": call.tool_name, "arguments": call.arguments or {}}, sort_keys=True, default=str)
+    return hashlib.sha256(body.encode("utf-8")).hexdigest()
+
 log = logging.getLogger("agents.tools")
 
 # Arguments larger than this are replaced in EVENTS (never in the call
@@ -168,7 +178,7 @@ class Registry(ToolRegistry):
             request = ApprovalRequest(task_id=ctx.task_id or "", agent_id=ctx.agent_id or "",
                                       call=call, reason=reason, sensitive=sensitive, grant_key=grant_key,
                                       confirm_word=(getattr(tool, "confirm_word", "") or "CONFIRM")
-                                      if sensitive else "")
+                                      if sensitive else "", payload_hash=payload_hash(call))
             try:
                 approved = bool(await ctx.approver(request))
             except asyncio.CancelledError:
@@ -178,15 +188,31 @@ class Registry(ToolRegistry):
                 approved = False
                 reason = f"{reason} (approver error: {exc})"
             request.approved = approved
+            request.decided_at = time.time()
             if not approved:
                 return ToolResult.failure(call, f"permission denied: {reason}")
+            # EN-08: a yes is for exactly what was shown, and only while it is
+            # fresh. Changed since, or a screen or money action approved long
+            # after it was asked: asked again, never run on the old yes.
+            if payload_hash(call) != request.payload_hash:
+                return ToolResult.failure(call, "permission denied: the action changed after it was approved - "
+                                                "ask again with what will actually run")
+            waited = request.decided_at - request.created_at
+            if (always_ask or sensitive) and waited > APPROVAL_FRESH_S:
+                return ToolResult.failure(call, f"permission denied: the approval came {waited / 60:.0f} min after "
+                                                "it was asked and the screen may have changed - look again, then ask")
 
         if ctx.dry_run and spec.risk is not RiskLevel.SAFE:
             return ToolResult.success(call, "dry run", dry_run=True, arguments=args)
 
         started = time.perf_counter()
         try:
-            result = await tool.run(args, ctx)
+            if spec.timeout_s:
+                result = await asyncio.wait_for(tool.run(args, ctx), spec.timeout_s)
+            else:
+                result = await tool.run(args, ctx)
+        except asyncio.TimeoutError:
+            result = ToolResult.failure(call, f"timed out after {spec.timeout_s:g}s")
         except asyncio.CancelledError:
             raise
         except Exception as exc:  # noqa: BLE001 - contain programmer errors too
@@ -196,6 +222,13 @@ class Registry(ToolRegistry):
             result = ToolResult.failure(
                 call, f"tool returned {type(result).__name__}, expected ToolResult")
         result.duration_ms = int((time.perf_counter() - started) * 1000)
+        cap = spec.max_output_chars
+        if cap and isinstance(result.output, str) and len(result.output) > cap:
+            # EN-03: a runaway result (a 10 MB log, a whole site) cannot sink
+            # the model's context or the app: cut, and said to be cut.
+            extra = len(result.output) - cap
+            result.output = result.output[:cap] + f"\n[... {extra} more characters cut - ask for a narrower part]"
+            result.data["truncated"] = True
         return result
 
     # -- events ----------------------------------------------------------------

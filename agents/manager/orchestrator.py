@@ -210,6 +210,11 @@ class Orchestrator:
         task = ctx.task
         if task.status is status:
             return
+        if task.status.is_terminal:
+            # EN-05: finished, failed or stopped is final - a late event from
+            # a step still unwinding must not bring the job back.
+            log.warning("task %s: %s -> %s refused (it had ended)", task.id, task.status.value, status.value)
+            return
         task.status = status
         task.updated_at = now()
         ctx.events.emit(EventKind.TASK_STATUS, status.value, task_id=task.id, agent_id=ctx.agent.id,

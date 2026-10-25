@@ -37,6 +37,10 @@ class TaskStatus(str, Enum):
     COMPLETED = "completed"
     FAILED = "failed"
     CANCELLED = "cancelled"
+    # EN-05: HeyTora stopped while a call that could change something outside
+    # the workspace's files was running - it may or may not have happened.
+    # Never re-run blindly: the user checks, then Resume or Stop.
+    NEEDS_ATTENTION = "needs_attention"
 
     @property
     def is_terminal(self) -> bool:
@@ -174,6 +178,11 @@ class ToolSpec(_Serialisable):
     parameters: dict[str, Any] = field(default_factory=lambda: {"type": "object", "properties": {}})
     risk: RiskLevel = RiskLevel.LOW
     category: str = "general"              # file | terminal | git | browser | computer | ...
+    # EN-02/03, the contract the registry enforces (never sent to a model):
+    # the most text a result may hand back - the rest is cut and marked -
+    # and, when set, how long the tool may run before it is stopped.
+    max_output_chars: int = 60_000
+    timeout_s: Optional[float] = None
 
 
 @dataclass
@@ -269,6 +278,11 @@ class ApprovalRequest(_Serialisable):
     # person can wave through skipping a track without waving through
     # everything the tool can do.
     grant_key: str = ""
+    # EN-08, the receipt: what exactly was approved (the tool and its
+    # arguments, hashed) and when the answer came. Set by the registry,
+    # which runs the call only if it still matches, and only while fresh.
+    payload_hash: str = ""
+    decided_at: Optional[float] = None
 
 
 @dataclass

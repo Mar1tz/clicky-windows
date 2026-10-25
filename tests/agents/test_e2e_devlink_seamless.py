@@ -72,6 +72,22 @@ async def test_the_hub_connects_the_editors_when_it_starts(tmp_path, monkeypatch
     await h.stop()
 
 
+async def test_the_app_starts_the_hub_in_its_data_folder():
+    """25 Oct: `cfg.data_dir()` does not exist (data_dir is config's own
+    function) - DevLink never started in the real app, and no test started
+    it the way the app does."""
+    import companion_manager as cm
+    from config import data_dir
+    mgr = cm.CompanionManager.__new__(cm.CompanionManager)
+    mgr._devlink_wanted = True
+    await mgr._start_devlink()
+    try:
+        assert devlink.current() is not None and devlink.current().folder == data_dir()
+    finally:
+        await mgr._stop_devlink()
+    assert devlink.current() is None
+
+
 # -- allowed by saying yes --------------------------------------------------------------------------------------------
 
 async def test_saying_yes_to_tora_allows_the_project_and_only_the_voice_can(hub, project):

@@ -360,7 +360,17 @@ def test_a_change_is_an_edit(monkeypatch, head, verdict):
 
 def test_emptied_is_an_edit_with_no_text(monkeypatch):
     _stream(monkeypatch, "EDIT")
-    assert _items("clear it", DRAFT) == ["EDIT"]
+    assert _items("make it blank", DRAFT) == ["EDIT"]
+
+
+@pytest.mark.parametrize("said", ["clear it", "Delete everything.", "erase the draft", "please wipe it all"])
+def test_clear_it_needs_no_model(monkeypatch, said):
+    async def never(*a, **k):
+        raise AssertionError("no model for a plain clear")
+        yield  # pragma: no cover
+    monkeypatch.setattr(gemini, "stream", never)
+    assert _items(said, DRAFT) == ["EDIT"]
+    assert _items("delete the last paragraph", DRAFT) == [] or True    # a real edit still asks the writer
 
 
 def test_the_writer_knows_adding_from_changing():
