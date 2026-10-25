@@ -2601,6 +2601,27 @@ class CompanionManager(QObject):
         goal = str(args.get("goal") or "").strip()
         if not goal:
             return {"error": "goal is required"}
+        # OR-07: a follow-up belongs to the job it follows - never a second build.
+        from agents.core import TaskStatus
+        from agents.manager import followups
+        try:
+            recent = self._agents.list_tasks()
+        except Exception:  # noqa: BLE001 - no history: a new job
+            recent = []
+        job, how = followups.match(goal, recent)
+        if how in ("duplicate", "continue"):
+            resumed = job.status in (TaskStatus.PAUSED, TaskStatus.WAITING_USER,
+                                     TaskStatus.NEEDS_ATTENTION) and self._agents.resume(job.id)
+            _log.info("delegate_task: %s of job %s (%s)%s", how, job.id, job.title, ", resumed" if resumed else "")
+            if not job.status.is_terminal:
+                return {"ok": True, "already_running": job.id, "title": job.title,
+                        "note": (f"That is the job already {'going again' if resumed else 'under way'} "
+                                 f"({job.title}) - say so in one line; nothing new was started.")}
+            how = "revise"                          # "continue" a finished job: build on it
+        if how == "revise":
+            _log.info("delegate_task: revises job %s (%s) in %s", job.id, job.title, job.workspace)
+            args = {**args, "_follows": job}
+            goal = followups.revision_goal(goal, job)
         skill = None
         skill_id = str(args.get("skill") or "").strip()
         if skill_id:
@@ -2614,6 +2635,10 @@ class CompanionManager(QObject):
             kind = TaskKind.CODING
         meta = {"request": goal, "reply": f"Understood. Starting on {title} now."}
         workspace = self._agents.workspace_root
+        follows = args.get("_follows")
+        if follows is not None:                     # OR-07: in the folder of what it changes
+            workspace = follows.workspace
+            meta["follows"] = follows.id
         # 11 Oct: "turn this Word document into a PDF" - the agent was given its
         # own workspace and no file, searched Tora Projects and failed twice.
         # The files they mean (traced over, selected in Explorer, open in
@@ -2641,7 +2666,7 @@ class CompanionManager(QObject):
         if skill is not None:
             meta["skill"] = skill.id
         hint = str(args.get("workspace_hint") or "").strip().strip("'\"")
-        if hint and not files:
+        if hint and not files and follows is None:
             meta["subdir"] = hint
         task = Task(title=title, goal=goal, workspace=workspace,
                     kind=kind, worker_type=self._WORKER_FOR_KIND.get(kind.value, "coding"),
