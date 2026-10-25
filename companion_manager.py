@@ -850,18 +850,22 @@ class CompanionManager(QObject):
                 if not status.is_terminal:
                     return
                 rep = (task.metadata or {}).get("report") or {}
+                # OR-12: a notification can show on the lock screen and over
+                # a shared screen, so it says who and what happened - never
+                # the job's own words (its title, result or error). Tora says
+                # those aloud, to the person at the PC.
                 if status is TaskStatus.COMPLETED and rep.get("shape") == "partial":
                     # OR-15: done to the end, but something did not happen - said.
                     from agents.manager.report import Report
                     report = Report(**rep)
-                    title, body = "Partly done", report.text()
+                    title, body = "Partly done", f"{who} finished, but part of it did not happen."
                     spoken = report.spoken(who)
                 elif status is TaskStatus.COMPLETED:
-                    title, body = "Done", f"{who} finished: {task.title}."
+                    title, body = "Done", f"{who} finished a job."
                     spoken = f"{who} is done — {task.title} is ready."
                 elif status is TaskStatus.FAILED:
                     reason = (task.error or "").split("\n")[0][:120]
-                    title, body = "Agent stopped", f"{who} could not finish {task.title}: {reason}"
+                    title, body = "Agent stopped", f"{who} could not finish a job."
                     spoken = f"{who} hit a problem with {task.title}: {reason}"
                 else:
                     return                   # cancelled: the user did that
@@ -869,7 +873,7 @@ class CompanionManager(QObject):
                 req = ev.data.get("request") or {}
                 call = (req.get("call") or {}).get("tool_name", "an action")
                 what = "the plan" if call == "approve_plan" else call.replace("_", " ")
-                title, body = "Approval needed", f"{who} wants to run {what}. {ev.message}"
+                title, body = "Approval needed", f"{who} needs your approval to {what}."
                 spoken = (f"{who} needs your approval to {what}. "
                           f"Say approve or deny, or use the dialog.")
             else:
@@ -903,7 +907,7 @@ class CompanionManager(QObject):
             if self._state is AppState.IDLE or time.monotonic() > deadline:
                 break
             await asyncio.sleep(5.0)
-        self.sig_agent_notice.emit("Still waiting", f"{task.title} is waiting for your approval.")
+        self.sig_agent_notice.emit("Still waiting", "A job is waiting for your approval.")
         self._say_when_idle(words)
 
     def _say_when_idle(self, text: str) -> None:

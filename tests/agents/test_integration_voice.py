@@ -90,7 +90,9 @@ def test_completion_is_spoken_and_toasted_when_idle(mgr):
     task = mgr.wait(mgr.submit(REQUEST).id, 60)
     stub = _Stub(mgr)
     stub._on_agent_event(_status_event(task, "completed"))
-    assert stub.sig_agent_notice.emitted == [("Done", f"Application Builder finished: {task.title}.")]
+    # OR-12: the toast says who and what, never the job's own words.
+    assert stub.sig_agent_notice.emitted == [("Done", "Application Builder finished a job.")]
+    assert task.title not in stub.sig_agent_notice.emitted[0][1]
     assert len(stub.spoken) == 1
 
 
@@ -109,7 +111,9 @@ def test_failure_names_the_reason(mgr):
     stub._on_agent_event(_status_event(task, "failed"))
     title, body = stub.sig_agent_notice.emitted[0]
     assert title == "Agent stopped"
-    assert "token budget" in body and "more detail" not in body
+    # OR-12: the reason is said aloud; the toast, which can show on the lock
+    # screen, never carries the job's own words.
+    assert body == "Application Builder could not finish a job." and len(stub.spoken) == 1
 
 
 def test_cancellation_is_silent(mgr):

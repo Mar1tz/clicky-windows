@@ -259,7 +259,9 @@ class AgentsPage(Page):
         bar = QHBoxLayout()
         bar.setSpacing(12)
         bar.addWidget(Meter(j["progress"], T.WARN if paused else T.ACCENT), 1)
-        bar.addWidget(label(f"{round(j['progress'] * 100)}%", "upPct"))
+        # OR-12: counts of real steps, not a percentage nobody measured.
+        if j["total"]:
+            bar.addWidget(label(f"{min(j['step'], j['total'])} of {j['total']}", "upPct"))
         lay.addLayout(bar)
         return card
 
