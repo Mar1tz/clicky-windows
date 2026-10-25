@@ -183,6 +183,7 @@ class AgentManager:
         self._lock = threading.RLock()
         self._active: set[str] = set()                  # task ids actually running
         self._queue: list[tuple] = []                   # (ctx, worker, run) waiting
+        self._held: dict[str, str] = {}                 # OR-10: claim -> the task holding it
         self._runs: dict[str, _Run] = {}                # task_id -> run
         self._agents: dict[str, AgentState] = {}        # agent_id -> state
         self._tasks: dict[str, Task] = {}               # task_id -> task (incl. finished)
@@ -339,6 +340,7 @@ class AgentManager:
                            extras=self._extras_for(task, worker, spec))
         with self._lock:
             self._active.add(task.id)
+            self._take_claims(task)                 # OR-10: a resumed job holds what it uses too
         run.future = self.runtime.submit(self._run(ctx, worker, resume=bool(task.steps)))
         return True
 
@@ -785,31 +787,80 @@ class AgentManager:
         with self._lock:
             at_capacity = (self.max_concurrent > 0
                            and len(self._active) >= self.max_concurrent)
-            if at_capacity:
+            busy = self._busy_claims(ctx.task)
+            if at_capacity or busy:
                 self._queue.append((ctx, worker, run))
                 queued = len(self._queue)
             else:
+                self._take_claims(ctx.task)
                 self._active.add(ctx.task.id)
-        if at_capacity:
-            self.events.emit(EventKind.LOG,
-                             f"Queued — {queued} task(s) waiting for a free slot",
+        if at_capacity or busy:
+            why = (f"waiting for {self._claim_words(busy[0])}" if busy and not at_capacity
+                   else f"{queued} task(s) waiting for a free slot")
+            self.events.emit(EventKind.LOG, f"Queued — {why}",
                              task_id=ctx.task.id, agent_id=ctx.agent.id,
-                             data={"queued": queued, "max_concurrent": self.max_concurrent})
+                             data={"queued": queued, "max_concurrent": self.max_concurrent,
+                                   "waiting_for": busy})
             return
         run.future = self.runtime.submit(self._run(ctx, worker))
 
+    # OR-10: a fair queue with caps. Each job claims what it must have to
+    # itself - its folder (one writer per artifact), the browser (one
+    # session at a time), the screen (one job driving the mouse) - and the
+    # first queued job whose claims are free goes next, so a job waiting
+    # for the browser never holds up a quick one behind it.
+    def _claims(self, task: Task) -> list[str]:
+        out = []
+        meta = task.metadata or {}
+        folder = os.path.abspath(task.workspace or ".")
+        if meta.get("subdir"):                              # what it builds is in its own folder
+            folder = os.path.join(folder, str(meta["subdir"]))
+        shared_root = os.path.normcase(folder) == os.path.normcase(os.path.abspath(self.workspace_root))
+        if not meta.get("parent_id") and not shared_root:   # a project's parts share its folder
+            out.append("folder:" + os.path.normcase(folder))
+        if task.worker_type == "browser":
+            out.append("browser")
+        if task.worker_type == "computer":
+            out.append("screen")
+        return out
+
+    def _busy_claims(self, task: Task) -> list[str]:
+        return [c for c in self._claims(task) if self._held.get(c, task.id) != task.id]
+
+    def _take_claims(self, task: Task) -> None:
+        for c in self._claims(task):
+            self._held[c] = task.id
+
+    def _release_claims(self, task_id: str) -> None:
+        for c in [c for c, holder in self._held.items() if holder == task_id]:
+            del self._held[c]
+
+    @staticmethod
+    def _claim_words(claim: str) -> str:
+        if claim == "browser":
+            return "the browser (one job uses it at a time)"
+        if claim == "screen":
+            return "the screen (one job drives the mouse at a time)"
+        return "another job working in the same folder"
+
     def _start_next(self) -> None:
-        with self._lock:
-            if not self._queue:
+        while True:
+            with self._lock:
+                if self.max_concurrent > 0 and len(self._active) >= self.max_concurrent:
+                    return
+                pick = next((q for q in self._queue
+                             if q[2].control.cancelled or not self._busy_claims(q[0].task)), None)
+                if pick is None:
+                    return
+                self._queue.remove(pick)
+                ctx, worker, run = pick
+                if not run.control.cancelled:
+                    self._take_claims(ctx.task)
+                self._active.add(ctx.task.id)
+            if run.control.cancelled:          # cancelled while it waited
+                self._finish_queued_as_cancelled(ctx)
                 return
-            if self.max_concurrent > 0 and len(self._active) >= self.max_concurrent:
-                return
-            ctx, worker, run = self._queue.pop(0)
-            self._active.add(ctx.task.id)
-        if run.control.cancelled:          # cancelled while it waited
-            self._finish_queued_as_cancelled(ctx)
-            return
-        run.future = self.runtime.submit(self._run(ctx, worker))
+            run.future = self.runtime.submit(self._run(ctx, worker))
 
     def _finish_queued_as_cancelled(self, ctx: AgentContext) -> None:
         ctx.task.status = TaskStatus.CANCELLED
@@ -831,6 +882,7 @@ class AgentManager:
             with self._lock:
                 self._runs.pop(ctx.task.id, None)
                 self._active.discard(ctx.task.id)
+                self._release_claims(ctx.task.id)
             self._start_next()
 
     def get_task(self, task_id: str) -> Optional[Task]:
