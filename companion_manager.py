@@ -1501,6 +1501,7 @@ class CompanionManager(QObject):
         # Output transcription arrives in fragments as the model speaks, so
         # the panel fills in at roughly the pace of the voice.
         self.sig_response_chunk.emit(text)
+        self._gate().said(text)                     # PT-14: what a waiting mark listens for
 
     def voice_clock(self):
         """Where Tora's live voice is: (seconds heard, seconds received) of the
@@ -1524,6 +1525,7 @@ class CompanionManager(QObject):
 
     def _on_realtime_turn_end(self, turn) -> None:
         """One complete answer. Called from the pump, on the loop thread."""
+        self._gate().new_answer()                   # anything still waiting goes up now
         heard = (turn.heard or "").strip()
         said = (turn.said or "").strip()
 
@@ -3538,22 +3540,58 @@ class CompanionManager(QObject):
         if mode == point_evidence.ASK:
             self._point_doubt = "; ".join(evidence.doubts() if evidence is not None else []) or "not sure"
             return False
-        if mode == point_evidence.REGION:
-            label = (found.label or query)[:24]
-            self._frame_region(found)
-            self._pointed_this_turn = True
-            self._remember_ref(found.x, found.y, label)
-            return True
-        if hold:
-            self.sig_point_hold.emit(True)
-            self._pointing_held = True
         label = (found.label or query)[:24]
-        speed.cue("point")
-        self.sig_point_at.emit(float(found.x), float(found.y), label)
-        self._highlight(found)
+        if mode == point_evidence.REGION:
+            def draw():
+                self._frame_region(found)
+        else:
+            def draw():
+                if hold:
+                    self.sig_point_hold.emit(True)
+                    self._pointing_held = True
+                speed.cue("point", label)
+                self.sig_point_at.emit(float(found.x), float(found.y), label)
+                self._highlight(found)
         self._pointed_this_turn = True
         self._remember_ref(found.x, found.y, label)
+        if self._answering_aloud():
+            # PT-14: up with the words that name it, not before them - and
+            # never for an answer that has since been stopped or replaced.
+            asked = self._question_no
+
+            def when_named():
+                if self._question_no == asked:
+                    draw()
+            self._gate().wait(label, when_named, time.monotonic())
+            self._poll_gate()
+        else:
+            draw()
         return True
+
+    # ── PT-14: marks on the phrase that names them (ai/phrase_gate.py) ──
+    _phrase_gate = None
+    GATE_POLL_S = 0.08
+
+    def _gate(self):
+        if self._phrase_gate is None:
+            from ai.phrase_gate import PhraseGate
+            self._phrase_gate = PhraseGate()
+        return self._phrase_gate
+
+    def _answering_aloud(self) -> bool:
+        """The live voice is answering (or about to): a mark can wait for it."""
+        try:
+            return self._realtime is not None and self._state in (AppState.THINKING, AppState.SPEAKING)
+        except (AttributeError, RuntimeError):      # a manager not started (tests)
+            return False
+
+    def _poll_gate(self) -> None:
+        """Put up what has been named; come back while anything waits."""
+        gate = self._gate()
+        gate.poll(self.voice_clock(), time.monotonic())
+        loop = self._loop
+        if gate.pending and loop is not None and loop.is_running():
+            loop.call_later(self.GATE_POLL_S, self._poll_gate)
 
     def _frame_region(self, found) -> None:
         """PT-18: the area she means, framed, with no arrow claiming an exact
@@ -4383,6 +4421,8 @@ class CompanionManager(QObject):
         """Everything she has on screen gone: her pointing, drawings, a
         walkthrough's arrow, the trail. Safe from any thread."""
         self._pointing_held = False
+        if self._phrase_gate is not None:
+            self._phrase_gate.pending = []          # PT-14: a mark still waiting for its words
         for signal in (self.sig_point_release, self.sig_clear_drawings, self.sig_guide_release):
             try:
                 signal.emit()
