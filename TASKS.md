@@ -1,5 +1,15 @@
 # TASKS — agent system build board
 
+> **Current direction (25 Oct 2026): the Massive Direction Plan** — 122
+> milestones in six workstreams (PT pointing, EN engine/safety/release, OR
+> orchestration, WX Windows experience, CI connectors, DL DevLink/writing/
+> forms), five gated phases. It lives as a Claude Doc with a Status dropdown
+> per milestone: https://claude.ai/artifact/XX572CFRLWR2Ly1nksecMF. Take the
+> next milestone of the current phase in your folders, keep its "Done when"
+> as the test, and set its Status when it lands. Sources: the six documents
+> in `Massive direction plan/` (repo root). The board below is the original
+> agent-system build, kept for history.
+
 Manager: `clicky-windows-main-0f`. Workers report by `SendMessage` when a
 task's tests are green and the commit is in. Status: ⬜ todo · 🔵 in progress
 · 🟡 in review · ✅ merged · ⛔ blocked.
