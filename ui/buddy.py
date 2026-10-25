@@ -16,6 +16,7 @@ dart): the triangle they know, done properly -
 from __future__ import annotations
 
 import math
+from typing import Optional
 
 from PyQt6.QtCore import QPointF, QRectF, Qt
 from PyQt6.QtGui import (QBrush, QColor, QConicalGradient, QFont, QFontMetricsF, QLinearGradient,
@@ -185,24 +186,39 @@ def draw_thinking(p: QPainter, cx: float, cy: float, phase: float, alpha: float 
 _BUBBLE_FONT = None
 
 
-def bubble_rect(cx: float, cy: float, label: str) -> QRectF:
-    """Where the name bubble sits beside the buddy at (cx, cy)."""
+def bubble_size(label: str) -> tuple[float, float]:
     global _BUBBLE_FONT
     if _BUBBLE_FONT is None:
         _BUBBLE_FONT = QFont("Segoe UI", 9, QFont.Weight.DemiBold)
     fm = QFontMetricsF(_BUBBLE_FONT)
-    w = fm.horizontalAdvance(label) + 20.0
-    h = fm.height() + 10.0
+    return fm.horizontalAdvance(label) + 20.0, fm.height() + 10.0
+
+
+def bubble_rect(cx: float, cy: float, label: str, at: Optional[QPointF] = None) -> QRectF:
+    """Where the name bubble sits beside the buddy at (cx, cy) - or at `at`
+    (its top-left), when the overlay has found it clear space (PT-13)."""
+    w, h = bubble_size(label)
+    if at is not None:
+        return QRectF(at.x(), at.y(), w, h)
     return QRectF(cx + 14.0, cy + 14.0, w, h)
 
 
 def draw_bubble(p: QPainter, cx: float, cy: float, label: str, *, alpha: float = 1.0,
-                scale: float = 1.0) -> None:
+                scale: float = 1.0, at: Optional[QPointF] = None,
+                anchor: Optional[QPointF] = None) -> None:
     """The name of what Tora points at: a pill in her colour beside the buddy, with a
-    soft shadow and white semibold text. `scale` pops it in from its left."""
+    soft shadow and white semibold text. `scale` pops it in from its left. Placed
+    off the target (`at`), a short connector runs to it from `anchor`."""
     if alpha <= 0.01 or not label:
         return
-    r = bubble_rect(cx, cy, label)
+    r = bubble_rect(cx, cy, label, at)
+    if anchor is not None:
+        p.save()
+        p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        p.setPen(QPen(_c(BLUE_LIGHT, 0.75 * alpha), 1.6))
+        end = QPointF(min(max(anchor.x(), r.left()), r.right()), min(max(anchor.y(), r.top()), r.bottom()))
+        p.drawLine(anchor, end)
+        p.restore()
     x, y, h = r.x(), r.y(), r.height()
     p.save()
     p.setRenderHint(QPainter.RenderHint.Antialiasing, True)

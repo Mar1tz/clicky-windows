@@ -30,9 +30,10 @@ def ov(qapp):
 
 def test_a_mark_comes_in_on_the_motion_tokens(ov):
     ov.add_shape({"kind": "rect", "mark": True, "x1": 10, "y1": 10, "x2": 90, "y2": 40})
-    ov.add_shape({"kind": "circle", "mark": True, "x": 50, "y": 50, "r": 30})
-    a, b = ov._annotations
+    a = ov._annotations[0]
     assert a["dur"] == ov_mod.MOTION_NORMAL_S
+    ov.add_shape({"kind": "circle", "mark": True, "x": 50, "y": 50, "r": 30})
+    b = ov._annotations[-1]                        # it takes the first one's place (PT-13)
     assert b["start"] == pytest.approx(a["start"] + ov_mod.MOTION_NORMAL_S + ov_mod.MOTION_QUICK_S)
 
 

@@ -669,8 +669,57 @@ class CursorOverlay(QWidget):
         # arrows and circles piled up on screen long after they were relevant.
         if shape.get("ttl") is None:
             shape["ttl"] = None if self._guide_total != 0 else ANNOTATION_TTL_S
+        if shape.get("mark"):
+            # PT-13: one active mark at a time - a walkthrough's next step,
+            # or the next thing named, takes the last one's place.
+            self._annotations = [a for a in self._annotations if not a.get("mark")]
         self._draw_queue_end = start + dur + gap
         self._annotations.append(shape)
+
+    def _target_box(self) -> Optional[QRectF]:
+        """The mark round what the arrow is on (PT-13), or None."""
+        lp = self._locked_pos
+        if lp is None:
+            return None
+        for a in self._annotations:
+            if not a.get("mark"):
+                continue
+            if a.get("kind") == "rect":
+                r = QRectF(QPointF(a["x1"], a["y1"]), QPointF(a["x2"], a["y2"])).normalized()
+            elif a.get("kind") == "circle":
+                rad = float(a.get("r", 0))
+                r = QRectF(a["x"] - rad, a["y"] - rad, 2 * rad, 2 * rad)
+            else:
+                continue
+            if r.adjusted(-2, -2, 2, 2).contains(lp):
+                return r
+        return None
+
+    BUBBLE_GAP = 10.0
+
+    def _bubble_place(self, words: str) -> Optional[tuple[QPointF, QPointF]]:
+        """PT-13: (top-left, connector anchor) for the name bubble in the
+        nearest clear space beside the target's mark - right, below, left,
+        above, the first that stays on its monitor - or None to sit beside
+        the arrow as before (no mark round the target)."""
+        box = self._target_box()
+        if box is None:
+            return None
+        w, h = buddy.bubble_size(words)
+        g = self.BUBBLE_GAP
+        cy, cx = box.center().y(), box.center().x()
+        spots = [
+            (QPointF(box.right() + g, cy - h / 2), QPointF(box.right(), cy)),
+            (QPointF(cx - w / 2, box.bottom() + g), QPointF(cx, box.bottom())),
+            (QPointF(box.left() - g - w, cy - h / 2), QPointF(box.left(), cy)),
+            (QPointF(cx - w / 2, box.top() - g - h), QPointF(cx, box.top())),
+        ]
+        screen = QApplication.screenAt(box.center().toPoint())
+        area = QRectF(screen.availableGeometry()) if screen is not None else None
+        for top_left, anchor in spots:
+            if area is None or area.contains(QRectF(top_left.x(), top_left.y(), w, h)):
+                return top_left, anchor
+        return spots[0]
 
     def _flight_lands_at(self) -> float:
         """When the arrow now flying lands (monotonic), or 0."""
@@ -837,7 +886,11 @@ class CursorOverlay(QWidget):
             out.append(QRectF(cx - BUDDY_REACH, cy - BUDDY_REACH, 2 * BUDDY_REACH, 2 * BUDDY_REACH))
             if self._locked_pos is not None and self._bubble_text:
                 for words in {self._bubble_text, IN_CONTROL_CUE}:
-                    out.append(buddy.bubble_rect(cx, cy, words).adjusted(-8, -8, 8, 10))
+                    place = self._bubble_place(words)
+                    out.append(buddy.bubble_rect(cx, cy, words, place[0] if place else None)
+                               .adjusted(-8, -8, 8, 10))
+                    if place:
+                        out.append(QRectF(place[1], place[1]).adjusted(-4, -4, 4, 4))
             lines = self._island_lines()
             if lines and self._island_alpha >= 0.02:
                 out.append(self._island_box(cx, cy, *lines)[0].adjusted(-12, -12, 30, 12))
@@ -1120,8 +1173,10 @@ class CursorOverlay(QWidget):
                                    breath=0.5 + 0.5 * math.sin(self._phase * 0.37))
 
             if self._locked_pos is not None and self._bubble_text:
-                buddy.draw_bubble(p, cx, cy, self._bubble_now(),
-                                  alpha=self._bubble_alpha, scale=self._bubble_scale)
+                words = self._bubble_now()
+                place = self._bubble_place(words) if self._flight_phase == _PHASE_DWELLING else None
+                buddy.draw_bubble(p, cx, cy, words, alpha=self._bubble_alpha, scale=self._bubble_scale,
+                                  at=place[0] if place else None, anchor=place[1] if place else None)
 
             self._draw_island(p, cx, cy)
 
