@@ -220,15 +220,16 @@ class AppBridge(QObject):
         return cfg.switch(name)
 
     def set_switch(self, name: str, on: bool) -> None:
-        handled = getattr(self.tray, "_SWITCH_HANDLERS", {}) if self.tray is not None else {}
-        if name in handled and hasattr(self.tray, "apply_switch"):
-            self.tray.apply_switch(name, bool(on))
-        else:
-            # A switch with nothing to tell live (the trail's look, PT-03):
-            # saved, and read where it is used.
+        if name in self.READ_WHERE_USED:
+            # Nothing to tell live (the trail's look, PT-03): saved, and read
+            # each time it is used.
             from config import cfg
             cfg.set_switch(name, bool(on))
+        elif self.tray is not None and hasattr(self.tray, "apply_switch"):
+            self.tray.apply_switch(name, bool(on))
         self.changed.emit("switches")
+
+    READ_WHERE_USED = ("trail_line",)
 
     # ── settings (APP-11) ────────────────────────────────────────────────────
 
