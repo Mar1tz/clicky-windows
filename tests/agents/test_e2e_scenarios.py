@@ -312,6 +312,13 @@ def run_scenario(sc: Scenario, root: Path) -> Run:
 def score(sc: Scenario, run: Run) -> dict[str, list[str]]:
     task = [] if run.task.status in sc.status else [f"ended {run.task.status.value}"]
     task += sc.check(run)
+    # OR-15: a job whose call was refused is never reported as simply done.
+    refused = [c for c, r in run.ran
+               if not r.ok and (r.error or "").startswith(("permission denied", "outside workspace"))
+               and c.tool_name != "approve_plan"]
+    shape = ((run.task.metadata or {}).get("report") or {}).get("shape")
+    if refused and run.task.status is TaskStatus.COMPLETED and shape != "partial":
+        task.append(f"reported {shape} although {refused[0].tool_name} was refused")
 
     route = [f"never went through {s}" for s in sc.route if s not in run.statuses]
 

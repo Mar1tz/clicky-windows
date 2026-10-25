@@ -126,8 +126,7 @@ class Orchestrator:
                             agent_id=ctx.agent.id, data={"result": vr.to_dict(), "scope": "task"},
                             level="info" if vr.ok else "warn")
             if vr.ok:
-                task.result = self._result_text(task, vr.summary)
-                self._finish(ctx, TaskStatus.COMPLETED)
+                self._finish(ctx, TaskStatus.COMPLETED, verification=vr.summary)
             else:
                 self._finish(ctx, TaskStatus.FAILED, f"final verification failed: {vr.summary}")
         except asyncio.CancelledError:
@@ -274,12 +273,24 @@ class Orchestrator:
                         data={"status": status.value})
         self._save(ctx)
 
-    def _finish(self, ctx: AgentContext, status: TaskStatus, error: str = "") -> None:
+    def _finish(self, ctx: AgentContext, status: TaskStatus, error: str = "", *,
+                verification: str = "") -> None:
         task = ctx.task
         if error:
             task.error = error
         if status is TaskStatus.COMPLETED:
             task.progress = 1.0
+        if task.status.can_become(status):
+            # OR-15: every ending says what was verified, what did not happen
+            # and what next - written before the status changes, so whoever
+            # hears of the ending can read it.
+            from .report import report_for
+            was, task.status = task.status, status
+            rep = report_for(task, verification)
+            task.status = was
+            task.metadata["report"] = rep.to_dict()
+            if status is TaskStatus.COMPLETED:
+                task.result = rep.text()
         self._set_status(ctx, status)
         ctx.progress(status.value.capitalize())
         if self.memory:
@@ -313,25 +324,3 @@ class Orchestrator:
             except Exception:  # noqa: BLE001
                 log.exception("task save failed")
 
-    @staticmethod
-    def _result_text(task, verification_summary: str) -> str:
-        done = [s.title for s in task.steps if s.status is StepStatus.DONE]
-        lines = [f"Completed: {task.title}", *[f"  ✓ {t}" for t in done]]
-        checks = int((task.metadata or {}).get("checks_run") or 0)
-        findings = [f for f in (task.metadata or {}).get("findings", []) if isinstance(f, dict)]
-        if checks:
-            lines.append(f"{checks} checks completed automatically")
-        if findings:
-            # Exceptions first: the person reads this to know what THEY
-            # have to do, not to re-read what the agent did.
-            order = {"high": 0, "review": 1, "info": 2}
-            findings = sorted(findings, key=lambda f: order.get(f.get("severity", "review"), 1))
-            lines.append(f"Needs review ({len(findings)}):")
-            lines.extend(f"  {i}. {f.get('title', '')}" for i, f in enumerate(findings[:20], 1))
-            if len(findings) > 20:
-                lines.append(f"  … and {len(findings) - 20} more")
-        elif checks:
-            lines.append("Nothing needs review.")
-        if verification_summary:
-            lines.append(f"Verified: {verification_summary}")
-        return "\n".join(lines)

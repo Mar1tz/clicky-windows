@@ -849,7 +849,14 @@ class CompanionManager(QObject):
                 status = TaskStatus(ev.data.get("status", ""))
                 if not status.is_terminal:
                     return
-                if status is TaskStatus.COMPLETED:
+                rep = (task.metadata or {}).get("report") or {}
+                if status is TaskStatus.COMPLETED and rep.get("shape") == "partial":
+                    # OR-15: done to the end, but something did not happen - said.
+                    from agents.manager.report import Report
+                    report = Report(**rep)
+                    title, body = "Partly done", report.text()
+                    spoken = report.spoken(who)
+                elif status is TaskStatus.COMPLETED:
                     title, body = "Done", f"{who} finished: {task.title}."
                     spoken = f"{who} is done — {task.title} is ready."
                 elif status is TaskStatus.FAILED:
