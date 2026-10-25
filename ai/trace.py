@@ -12,6 +12,13 @@ words (docs/TRACE_TO_FOCUS.md, TF-01 and on).
 
 Kept small: a move under two pixels is the hand trembling, not a move; a
 long hold is capped; straight runs are thinned when the path is read.
+
+PT-04 (the Massive Direction Plan): the raw points are kept as they came -
+they are the evidence. What is read for its shape, and drawn, is the path
+through a One Euro filter (Casiez et al., CHI 2012): steady when the hand
+is slow, so a tremble does not read as turns, and quick to follow when it
+is fast, so a fast loop is not cut short. A slow circle, a fast loop and a
+scribble enclose the same region before and after.
 """
 
 from __future__ import annotations
@@ -23,6 +30,11 @@ from typing import Optional
 MIN_STEP_PX = 2.0          # under this, the hand trembled
 MAX_POINTS = 2000          # ~30 s of moving at 60 a second
 MOVED_PX = 24.0            # a path shorter than this showed nothing
+# One Euro, in physical px and seconds: 1 Hz when still, rising with speed
+# (a 2000 px/s flick follows at ~41 Hz, so the loop keeps its size).
+EURO_MIN_CUTOFF = 1.0
+EURO_BETA = 0.02
+EURO_D_CUTOFF = 1.0
 
 
 @dataclass(frozen=True)
@@ -72,6 +84,11 @@ class Trace:
         every bend kept, within `epsilon` px."""
         return _rdp(self.points, epsilon)
 
+    def smoothed(self, epsilon: float = 1.5) -> list[Point]:
+        """The path as it is drawn and read for its shape: One Euro, then
+        thinned. The raw points stay in `points`."""
+        return _rdp(smooth(self.points), epsilon)
+
     def summary(self) -> str:
         """For the log: how much was traced."""
         b = self.bounds()
@@ -105,6 +122,44 @@ class Focus:
     def describe(self) -> str:
         return {"circle": "circled", "underline": "underlined", "sweep": "swept over",
                 "point": "pointed at"}.get(self.kind, "traced")
+
+
+class OneEuro:
+    """The One Euro filter for one coordinate: a low-pass whose cutoff
+    rises with speed - little lag when fast, little jitter when slow."""
+
+    def __init__(self, min_cutoff: float = EURO_MIN_CUTOFF, beta: float = EURO_BETA,
+                 d_cutoff: float = EURO_D_CUTOFF) -> None:
+        self.min_cutoff, self.beta, self.d_cutoff = min_cutoff, beta, d_cutoff
+        self._t: Optional[float] = None
+        self._x = self._dx = 0.0
+
+    @staticmethod
+    def _alpha(dt: float, cutoff: float) -> float:
+        tau = 1.0 / (2 * math.pi * cutoff)
+        return 1.0 / (1.0 + tau / dt)
+
+    def __call__(self, t: float, x: float) -> float:
+        if self._t is None:
+            self._t, self._x = t, x
+            return x
+        dt = max(t - self._t, 1e-3)
+        a_d = self._alpha(dt, self.d_cutoff)
+        self._dx = a_d * (x - self._x) / dt + (1 - a_d) * self._dx
+        a = self._alpha(dt, self.min_cutoff + self.beta * abs(self._dx))
+        self._t, self._x = t, a * x + (1 - a) * self._x
+        return self._x
+
+
+def smooth(points: list[Point]) -> list[Point]:
+    """Each point through One Euro (x and y apart); the last point is kept
+    exactly, so the stroke still ends where the hand stopped."""
+    if len(points) < 3:
+        return list(points)
+    fx, fy = OneEuro(), OneEuro()
+    out = [Point(p.t, fx(p.t, p.x), fy(p.t, p.y)) for p in points]
+    out[-1] = points[-1]
+    return out
 
 
 def _turning(pts: list[Point]) -> float:
@@ -147,7 +202,9 @@ def strokes(trace: Trace) -> list[list[Point]]:
 
 
 def kind_of(pts: list[Point]) -> str:
-    """What a stroke's shape says."""
+    """What a stroke's shape says - read from the smoothed path, so a
+    tremble is no turn; where it is stays the raw path's (focuses)."""
+    pts = smooth(pts)
     l, t, r, b = _bounds(pts)
     w, h = r - l, b - t
     reach = math.hypot(w, h)
