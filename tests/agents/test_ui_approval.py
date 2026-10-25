@@ -191,7 +191,7 @@ def test_plan_approval_deny_cancels_the_task(tmp_path, qapp, monkeypatch):
     try:
         task = mgr.submit(REQUEST)
         assert _pump_until(qapp, lambda: task.status.is_terminal), task.status
-        assert task.status is TaskStatus.CANCELLED
+        assert task.status is TaskStatus.REJECTED
         assert not (tmp_path / "MyApp").exists(), "a denied plan must build nothing"
     finally:
         controller.close()

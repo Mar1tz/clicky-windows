@@ -44,6 +44,9 @@ def status_words(status: str) -> tuple[str, str]:
         "waiting_approval": ("Waiting for you", T.WARN),
         "paused": ("Paused", T.WARN),
         "needs_attention": ("Needs you", T.WARN),
+        "waiting_user": ("Your turn", T.WARN),
+        "retry_wait": ("Trying again soon", T.TEXT_DIM),
+        "rejected": ("Plan declined", T.TEXT_FAINT),
     }.get(status, (status.replace("_", " ").capitalize(), T.TEXT_DIM))
 
 
@@ -241,7 +244,7 @@ class AgentsPage(Page):
         took = ran_for(j["started"], time.time())
         if took:
             top.addWidget(label(took, "faint"))
-        paused = j["status"] in ("paused", "needs_attention")
+        paused = j["status"] in ("paused", "needs_attention", "waiting_user")
         hold = button("Resume" if paused else "Pause")
         hold.clicked.connect(lambda: (self.bridge.resume_job(j["id"]) if paused
                                       else self.bridge.pause_job(j["id"]), self._later(self._fill)))
@@ -265,7 +268,7 @@ class AgentsPage(Page):
     def _fill_history(self) -> None:
         from ui.app_parts import HoverRow, ListBox, RowAction, day_name, empty, section_head
         tasks = [t for t in (_ask(self.bridge, "tasks", [], 60) or [])
-                 if t["status"] in ("completed", "failed", "cancelled")]
+                 if t["status"] in ("completed", "failed", "cancelled", "rejected")]
         widgets: list[QWidget] = []
         if not tasks:
             widgets.append(section_head("History"))
@@ -397,7 +400,7 @@ class JobDrawer(Drawer):
         words, colour = status_words(job["status"])
         meta = words
         took = ran_for(job["started"], job["updated"] if job["status"] in
-                       ("completed", "failed", "cancelled") else time.time())
+                       ("completed", "failed", "cancelled", "rejected") else time.time())
         if took:
             meta += f" · ran for {took}"
         state = QHBoxLayout()
@@ -420,7 +423,7 @@ class JobDrawer(Drawer):
             self.body.addSpacing(6)
             self.body.addWidget(label("WHAT IT DID", "sectionTitle"))
             self.body.addWidget(label(_clip(job["result"], 1200), wrap=True))
-        if job["error"] and job["status"] in ("failed", "cancelled"):
+        if job["error"] and job["status"] in ("failed", "cancelled", "rejected"):
             self.body.addSpacing(6)
             self.body.addWidget(label("WHY IT STOPPED", "sectionTitle"))
             why = label(_clip(job["error"], 600), wrap=True)
@@ -437,7 +440,7 @@ class JobDrawer(Drawer):
             folder = button("Open folder")
             folder.clicked.connect(lambda: self.bridge.open_folder(job["folder"]))
             foot.addWidget(folder)
-        if job["status"] in ("completed", "failed", "cancelled") and job["goal"]:
+        if job["status"] in ("completed", "failed", "cancelled", "rejected") and job["goal"]:
             again = button("Run again", "primary")
             again.clicked.connect(lambda: (self.bridge.give_job(job["goal"]), self.close_drawer()))
             foot.addWidget(again)
@@ -446,7 +449,7 @@ class JobDrawer(Drawer):
             keep.setToolTip("Do it this way next time: a draft from this job, for you to check first")
             keep.clicked.connect(lambda: self._save_as_skill(job["id"]))
             foot.addWidget(keep)
-        elif job["status"] not in ("completed", "failed", "cancelled"):
+        elif job["status"] not in ("completed", "failed", "cancelled", "rejected"):
             stop = button("Stop", "danger")
             stop.clicked.connect(lambda: self.bridge.stop_job(job["id"]))
             foot.addWidget(stop)

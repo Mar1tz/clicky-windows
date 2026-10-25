@@ -230,7 +230,7 @@ class AgentManager:
         recovered: list[Task] = []
         in_flight = {TaskStatus.PENDING, TaskStatus.PLANNING, TaskStatus.RUNNING,
                      TaskStatus.VERIFYING, TaskStatus.WAITING_APPROVAL, TaskStatus.PAUSED,
-                     TaskStatus.NEEDS_ATTENTION}
+                     TaskStatus.NEEDS_ATTENTION, TaskStatus.RETRY_WAIT, TaskStatus.WAITING_USER}
         stored_agents = {a.id: a for a in self._safe_list_agents()}
         for task in self.store.list_tasks(limit=500):
             if task.status not in in_flight or task.id in self._tasks:
@@ -247,7 +247,7 @@ class AgentManager:
                 task.current_action = (f"Needs you — {unsettled['tool']} may have run before HeyTora stopped. "
                                        "Check it, then Resume or Stop.")
                 self.store.save_task(task)
-            elif task.status not in (TaskStatus.PAUSED, TaskStatus.NEEDS_ATTENTION):
+            elif task.status not in (TaskStatus.PAUSED, TaskStatus.NEEDS_ATTENTION, TaskStatus.WAITING_USER):
                 task.status = TaskStatus.PAUSED
                 task.updated_at = now()
                 task.metadata["interrupted"] = self.INTERRUPTED_NOTE
@@ -890,7 +890,8 @@ class AgentManager:
             # paused in the store, not in a RunControl, so it re-enters the
             # orchestrator instead of flipping an event.
             task = self._tasks.get(task_id)
-            if task is not None and task.status in (TaskStatus.PAUSED, TaskStatus.NEEDS_ATTENTION):
+            if task is not None and task.status in (TaskStatus.PAUSED, TaskStatus.NEEDS_ATTENTION,
+                                                    TaskStatus.WAITING_USER):
                 task.metadata.pop("outcome_unknown", None)     # they checked, and chose to go on
                 return self._resume_recovered(task)
             return False
@@ -1133,7 +1134,8 @@ class AgentManager:
             self.events.emit(EventKind.APPROVAL_RESOLVED, "approved" if ok else "denied",
                              task_id=task.id, agent_id=task.agent_id,
                              data={"request_id": req.id, "approved": ok})
-            if run is not None and task.status is TaskStatus.WAITING_APPROVAL:
+            refused_plan = not ok and req.call.tool_name == "approve_plan"   # it ends as REJECTED
+            if run is not None and task.status is TaskStatus.WAITING_APPROVAL and not refused_plan:
                 self._status(run, TaskStatus.RUNNING if previous is TaskStatus.WAITING_APPROVAL
                              else previous)
             return ok
@@ -1183,6 +1185,9 @@ class AgentManager:
         return self.router.pick(task.kind, hint=spec.provider_hint, needs_vision=needs_vision)
 
     def _status(self, run: _Run, status: TaskStatus) -> None:
+        if not run.task.status.can_become(status):
+            log.warning("task %s: %s -> %s refused", run.task.id, run.task.status.value, status.value)
+            return
         run.task.status = status
         run.task.updated_at = now()
         self.events.emit(EventKind.TASK_STATUS, status.value, task_id=run.task.id,
@@ -1220,8 +1225,9 @@ class AgentManager:
         elif ev.kind is EventKind.TASK_STATUS:
             st = TaskStatus(ev.data.get("status", "running"))
             new = {TaskStatus.PAUSED: AgentStatus.PAUSED, TaskStatus.NEEDS_ATTENTION: AgentStatus.PAUSED,
+                   TaskStatus.WAITING_USER: AgentStatus.PAUSED,
                    TaskStatus.COMPLETED: AgentStatus.IDLE,
-                   TaskStatus.CANCELLED: AgentStatus.STOPPED,
+                   TaskStatus.CANCELLED: AgentStatus.STOPPED, TaskStatus.REJECTED: AgentStatus.STOPPED,
                    TaskStatus.FAILED: AgentStatus.ERROR}.get(st, AgentStatus.RUNNING)
             if st is TaskStatus.FAILED and task is not None:
                 state.last_error = task.error

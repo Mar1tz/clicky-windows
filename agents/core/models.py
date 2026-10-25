@@ -41,10 +41,31 @@ class TaskStatus(str, Enum):
     # the workspace's files was running - it may or may not have happened.
     # Never re-run blindly: the user checks, then Resume or Stop.
     NEEDS_ATTENTION = "needs_attention"
+    RETRY_WAIT = "retry_wait"              # a passing fault (rate limit, dropped line): trying again shortly
+    WAITING_USER = "waiting_user"          # a step only the user can do (sign in, a captcha); Resume goes on
+    REJECTED = "rejected"                  # the user said no to the plan
 
     @property
     def is_terminal(self) -> bool:
-        return self in (TaskStatus.COMPLETED, TaskStatus.FAILED, TaskStatus.CANCELLED)
+        return self in (TaskStatus.COMPLETED, TaskStatus.FAILED, TaskStatus.CANCELLED,
+                        TaskStatus.REJECTED)
+
+    def can_become(self, new: "TaskStatus") -> bool:
+        """EN-05: the one rule every status change goes through.
+
+        An ended job stays ended (a late event from a step still unwinding
+        must not bring it back), nothing returns to the queue, a job is only
+        rejected while its plan is being decided, and only a running or
+        checking job can finish."""
+        if new is self:
+            return True
+        if self.is_terminal or new is TaskStatus.PENDING:
+            return False
+        if new is TaskStatus.REJECTED:
+            return self in (TaskStatus.PLANNING, TaskStatus.WAITING_APPROVAL)
+        if new is TaskStatus.COMPLETED:
+            return self in (TaskStatus.RUNNING, TaskStatus.VERIFYING)
+        return True
 
 
 class StepStatus(str, Enum):

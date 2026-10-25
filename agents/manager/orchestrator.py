@@ -4,7 +4,11 @@ State machine (see docs/agents/ARCHITECTURE.md §1):
 
     PENDING -> PLANNING -> [WAITING_APPROVAL] -> RUNNING -> VERIFYING -> COMPLETED
                                                    |  \\-> FAILED (after replan budget)
+                                                   |  \\-> RETRY_WAIT / WAITING_USER -> RUNNING
                                                    \\----> CANCELLED (RunControl.cancel)
+    PLANNING / WAITING_APPROVAL -> REJECTED (the user said no to the plan)
+
+Every change goes through TaskStatus.can_become (EN-05).
 
 It owns no threads and no state beyond the task it is given: everything
 it learns goes out on the EventBus and into the TaskStore, so a UI that
@@ -14,6 +18,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import time
 import traceback
 from typing import Optional
@@ -31,6 +36,30 @@ log = logging.getLogger("agents.orchestrator")
 def _started(ctx: AgentContext) -> float:
     """When the clock started: the metered provider knows, else creation."""
     return float(getattr(ctx.provider, "started_at", None) or ctx.task.created_at)
+
+
+# EN-05: how long a step that hit a passing fault waits before its one retry.
+RETRY_WAIT_S = 5.0
+_PASSING = re.compile(r"\b(429|502|503|504)\b|rate.?limit|overloaded|temporarily|unavailable|"
+                      r"timed out|connection (reset|aborted|error|closed)|disconnected", re.I)
+# The tools' own words for "only you can do this" (browser_tools, connectors).
+_FOR_USER = re.compile(r"ask the user|needs you to|captcha", re.I)
+# A wrong tool name or bad arguments is the model's mistake (and lists every
+# tool name after it), never a fault to wait out or a job for the user.
+_MODEL_MISTAKE = ("unknown tool", "invalid arguments")
+
+
+def _passing(error: str) -> bool:
+    return not (error or "").startswith(_MODEL_MISTAKE) and bool(_PASSING.search(error or ""))
+
+
+def _for_the_user(error: str) -> bool:
+    return not (error or "").startswith(_MODEL_MISTAKE) and bool(_FOR_USER.search(error or ""))
+
+
+def _reset(step: Step) -> None:
+    step.status, step.error = StepStatus.PENDING, ""
+    step.results.clear()
 
 
 class Orchestrator:
@@ -79,7 +108,10 @@ class Orchestrator:
             else:
                 plan = await self._plan(ctx)
                 if plan is None:                   # plan rejected by the user
-                    self._finish(ctx, TaskStatus.CANCELLED, "plan rejected")
+                    if ctx.control.cancelled:      # stopped while it waited, not refused
+                        self._finish(ctx, TaskStatus.CANCELLED, "cancelled")
+                    else:
+                        self._finish(ctx, TaskStatus.REJECTED, "plan rejected")
                     return task
 
             self._set_status(ctx, TaskStatus.RUNNING)
@@ -142,6 +174,7 @@ class Orchestrator:
     async def _execute(self, ctx: AgentContext, worker: BaseWorker, plan: Plan) -> None:
         task = ctx.task
         replans = 0
+        retried: set[str] = set()
         i = 0
         while i < len(task.steps):
             await ctx.control.checkpoint()
@@ -174,6 +207,28 @@ class Orchestrator:
                 ctx.events.emit(EventKind.STEP_FAILED, step.error or step.title, task_id=task.id,
                                 agent_id=ctx.agent.id, level="warn",
                                 data={"step": step.to_dict(), "index": i, "total": total})
+                if _for_the_user(step.error):
+                    # EN-05: a sign-in or a captcha is the user's to do, not
+                    # a reason to replan - wait for them, then try it again.
+                    task.current_action = f"Your turn - {step.error}"
+                    self._set_status(ctx, TaskStatus.WAITING_USER)
+                    ctx.progress(task.current_action, i / total)
+                    ctx.control.pause()
+                    await ctx.control.checkpoint()
+                    self._set_status(ctx, TaskStatus.RUNNING)
+                    _reset(step)
+                    continue
+                if _passing(step.error) and step.id not in retried:
+                    # A rate limit or a dropped connection is gone in a few
+                    # seconds; spending a replan on it rewrites a good plan.
+                    retried.add(step.id)
+                    self._set_status(ctx, TaskStatus.RETRY_WAIT)
+                    ctx.progress(f"Trying again in {RETRY_WAIT_S:.0f}s", i / total)
+                    await asyncio.sleep(RETRY_WAIT_S)
+                    await ctx.control.checkpoint()
+                    self._set_status(ctx, TaskStatus.RUNNING)
+                    _reset(step)
+                    continue
                 if self.memory:
                     self._remember_error(ctx, step)
                 if replans >= self.max_replans:
@@ -210,10 +265,8 @@ class Orchestrator:
         task = ctx.task
         if task.status is status:
             return
-        if task.status.is_terminal:
-            # EN-05: finished, failed or stopped is final - a late event from
-            # a step still unwinding must not bring the job back.
-            log.warning("task %s: %s -> %s refused (it had ended)", task.id, task.status.value, status.value)
+        if not task.status.can_become(status):
+            log.warning("task %s: %s -> %s refused", task.id, task.status.value, status.value)
             return
         task.status = status
         task.updated_at = now()

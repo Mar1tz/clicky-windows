@@ -404,7 +404,7 @@ def test_plan_approval_gate(tmp_path):
         assert req.call.tool_name == "approve_plan" and task.status is TaskStatus.WAITING_APPROVAL
         mgr.approve(req.id, False)
         task = mgr.wait(task.id, 10)
-        assert task.status is TaskStatus.CANCELLED
+        assert task.status is TaskStatus.REJECTED
     finally:
         mgr.stop()
 

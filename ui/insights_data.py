@@ -133,7 +133,7 @@ def time_worked(walks: Iterable[tuple], tasks: Iterable[dict], today: Optional[d
     this_week = last_week = 0.0
     events = [(float(ts), float(sec), "guide") for ts, sec in walks if sec]
     events += [(float(t.get("when") or 0), _ran_seconds(t), "agent") for t in tasks
-                if t.get("status") in ("completed", "failed", "cancelled")]
+                if t.get("status") in ("completed", "failed", "cancelled", "rejected")]
     for ts, sec, kind in events:
         if not sec or not ts:
             continue
@@ -201,6 +201,6 @@ def agents_month(tasks: Iterable[dict], today: Optional[date] = None) -> dict:
         else:
             running += 1
         recent.append(t)
-    ran = sum(_ran_seconds(t) for t in recent if t.get("status") in ("completed", "failed", "cancelled"))
+    ran = sum(_ran_seconds(t) for t in recent if t.get("status") in ("completed", "failed", "cancelled", "rejected"))
     return {"done": done, "failed": failed, "running": running, "recent": recent[:3],
             "ran_min": round(ran / 60)}
