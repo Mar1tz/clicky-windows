@@ -1300,9 +1300,11 @@ class CursorOverlay(QWidget):
                 elif kind == "rect":
                     x1, y1, x2, y2 = ann["x1"], ann["y1"], ann["x2"], ann["y2"]
                     pts = [(x1, y1), (x2, y1), (x2, y2), (x1, y2)]
-                    self._paint_stroke_path(p, pts, True, u, col)
+                    self._paint_stroke_path(p, pts, True, u, col, dashed=ann.get("mark") == "frame")
                 elif kind == "circle":
                     self._paint_circle(p, ann, u, col, alpha)
+                    if ann.get("mark") == "reticle" and u >= 1.0:
+                        self._paint_reticle(p, ann, col)
                 elif kind == "underline":
                     pts = [(ann["x"], ann["y"]), (ann["x"] + ann["w"], ann["y"])]
                     self._paint_stroke_path(p, pts, False, u, col)
@@ -1334,8 +1336,18 @@ class CursorOverlay(QWidget):
         main.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
         return under, main
 
-    def _paint_stroke_path(self, p, pts, closed, u, col, arrow=False, width=4.0):
-        """Draw the first u-fraction of a polyline (progressive stroke)."""
+    def _paint_reticle(self, p, ann, col):
+        """PT-11: the reticle's crosshair - this exact spot, no control."""
+        x, y, r = ann["x"], ann["y"], ann["r"]
+        for pen in self._pens(col, 2.5):
+            p.setPen(pen)
+            for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+                p.drawLine(QPointF(x + dx * r * 0.55, y + dy * r * 0.55),
+                           QPointF(x + dx * r * 1.15, y + dy * r * 1.15))
+
+    def _paint_stroke_path(self, p, pts, closed, u, col, arrow=False, width=4.0, dashed=False):
+        """Draw the first u-fraction of a polyline (progressive stroke).
+        `dashed`: a frame (PT-11) - somewhere in here, not this exactly."""
         pts = list(pts)
         drawn = _partial_pts(pts, closed, u)
         if len(drawn) < 2:
@@ -1347,6 +1359,8 @@ class CursorOverlay(QWidget):
             path.lineTo(QPointF(*pt))
         p.setBrush(Qt.BrushStyle.NoBrush)
         for pen in self._pens(col, width):
+            if dashed:
+                pen.setDashPattern([2.2, 1.6])
             p.setPen(pen)
             p.drawPath(path)
         # Arrowhead appears once the line is fully drawn
