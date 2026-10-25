@@ -768,47 +768,31 @@ def main():
     tray.on_api_keys.connect(_open_api_keys)
 
     def _save_diagnostics():
-        import datetime, platform, traceback
+        """EN-16: the redacted package (diagnostics.py), shown first; saved
+        to the data folder only when they press Save. Nothing is sent."""
+        import diagnostics
         from config import data_dir
-        out = data_dir() / f"diagnostics-{datetime.datetime.now():%Y%m%d-%H%M%S}.txt"
+        from ui.diagnostics_preview import DiagnosticsPreview
         try:
-            providers_d = cfg.describe()
-        except Exception:
-            providers_d = {}
-        report = []
-        report.append(f"HeyTora diagnostics — {datetime.datetime.now().isoformat()}")
-        report.append(f"Python: {sys.version.split()[0]}")
-        report.append(f"Platform: {platform.platform()}")
-        report.append(f"Active LLM: {providers_d.get('llm', '?')}")
-        report.append(f"STT: {providers_d.get('stt', '?')}  TTS: {providers_d.get('tts', '?')}")
-        report.append("")
-        report.append("─── Models ───")
-        try:
-            from ai.gemini import Models
-            for role, model in Models.all_roles().items():
-                report.append(f"  {role:<12} {model}")
-            report.append(f"Conversation route: {providers_d.get('conversation', '?')}")
-            report.append(f"Voice: {providers_d.get('voice', '?')}")
-            report.append(f"Google API key: {providers_d.get('key', '?')}")
-        except Exception:
-            report.append(traceback.format_exc())
-        report.append("")
-        report.append("─── Memory ───")
-        try:
-            from ai import gemini_memory
-            report.append(str(gemini_memory.stats()))
-        except Exception:
-            report.append(traceback.format_exc())
-        report.append("")
-        try:
-            out.write_text("\n".join(report), encoding="utf-8")
-            tray.show_notification("Diagnostics saved", str(out))
-            try:
-                os.startfile(str(out))
-            except Exception:
-                pass
-        except Exception as e:
+            text = diagnostics.build(data_dir())
+        except Exception as e:  # noqa: BLE001
             tray.show_notification("Diagnostics failed", str(e))
+            return
+
+        def save(words: str) -> None:
+            try:
+                out = diagnostics.save(words, data_dir())
+                tray.show_notification("Diagnostics saved", out.name)
+                try:
+                    os.startfile(str(out))
+                except Exception:  # noqa: BLE001
+                    pass
+            except Exception as e:  # noqa: BLE001
+                tray.show_notification("Diagnostics failed", str(e))
+
+        dlg = DiagnosticsPreview(text, save)
+        _setup_keepalive[1] = dlg      # keep a reference so Qt doesn't GC it
+        dlg.show()
     tray.on_diagnostics.connect(_save_diagnostics)
 
     tray.on_quit.connect(_quit)
