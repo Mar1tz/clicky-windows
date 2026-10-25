@@ -286,6 +286,13 @@ RETURN_DURATION  = 1.4
 # there. So it arrives in a blink and stays until the step changes.
 GUIDE_FLY_S = 0.35
 
+# PT-17, "you're in control": during a walkthrough the mouse is theirs. While
+# they move it, Tora's arrow holds still where it is - a flight pauses, and
+# goes on once the mouse has rested this long - and its bubble says so.
+IN_CONTROL_S = 0.6
+IN_CONTROL_PX = 3.0
+IN_CONTROL_CUE = "You're in control"
+
 # Pointing state machine
 _PHASE_FOLLOW    = "follow"
 _PHASE_FLYING    = "flying"
@@ -356,6 +363,11 @@ class CursorOverlay(QWidget):
         # TF-02: the ghost trail while the shortcut is held, and its haze.
         self._mist = Mist()
         self._phase: float = 0.0
+
+        # PT-17: when the user last moved the mouse, and where it was
+        self._user_moved_at = 0.0
+        self._last_real: Optional[QPointF] = None
+        self._last_tick_at = 0.0
 
         # Pointing / speech bubble
         self._locked_pos: Optional[QPointF] = None
@@ -800,7 +812,8 @@ class CursorOverlay(QWidget):
         if self._buddy_visible():
             out.append(QRectF(cx - BUDDY_REACH, cy - BUDDY_REACH, 2 * BUDDY_REACH, 2 * BUDDY_REACH))
             if self._locked_pos is not None and self._bubble_text:
-                out.append(buddy.bubble_rect(cx, cy, self._bubble_text).adjusted(-8, -8, 8, 10))
+                for words in {self._bubble_text, IN_CONTROL_CUE}:
+                    out.append(buddy.bubble_rect(cx, cy, words).adjusted(-8, -8, 8, 10))
             lines = self._island_lines()
             if lines and self._island_alpha >= 0.02:
                 out.append(self._island_box(cx, cy, *lines)[0].adjusted(-12, -12, 30, 12))
@@ -859,9 +872,27 @@ class CursorOverlay(QWidget):
         self._hold_dwell = False
         self._ring = None
 
+    def in_control(self, now: Optional[float] = None) -> bool:
+        """PT-17: a walkthrough is on and the user is moving the mouse."""
+        now = time.monotonic() if now is None else now
+        return self._guide_total != 0 and now - self._user_moved_at < IN_CONTROL_S
+
+    def _bubble_now(self) -> str:
+        """The bubble's words: the target's, or that the mouse is theirs."""
+        if self._bubble_text and self._flight_phase in (_PHASE_FLYING, _PHASE_DWELLING) and self.in_control():
+            return IN_CONTROL_CUE
+        return self._bubble_text
+
     def _tick(self):
         qp = QCursor.pos()
         real = QPointF(qp.x(), qp.y())
+        now = time.monotonic()
+        last = self._last_real
+        if last is not None and abs(real.x() - last.x()) + abs(real.y() - last.y()) > IN_CONTROL_PX:
+            self._user_moved_at = now
+        self._last_real = real
+        since_tick = now - self._last_tick_at if self._last_tick_at else 0.0
+        self._last_tick_at = now
         # Before any phase returns early: the mist follows the real mouse.
         self._mist.tick(real.x(), real.y(), time.monotonic())
 
@@ -885,6 +916,8 @@ class CursorOverlay(QWidget):
         self._prune_annotations()
 
         # ── Pointing phase machine ──
+        if self._flight_phase == _PHASE_FLYING and self.in_control(now):
+            self._fly_t0 += since_tick      # PT-17: the flight waits where it is
         if self._flight_phase in (_PHASE_FLYING, _PHASE_RETURNING):
             elapsed = time.monotonic() - self._fly_t0
             lp = min(1.0, elapsed / max(0.001, self._fly_duration))
@@ -1063,7 +1096,7 @@ class CursorOverlay(QWidget):
                                    breath=0.5 + 0.5 * math.sin(self._phase * 0.37))
 
             if self._locked_pos is not None and self._bubble_text:
-                buddy.draw_bubble(p, cx, cy, self._bubble_text,
+                buddy.draw_bubble(p, cx, cy, self._bubble_now(),
                                   alpha=self._bubble_alpha, scale=self._bubble_scale)
 
             self._draw_island(p, cx, cy)
