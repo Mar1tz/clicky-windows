@@ -839,6 +839,10 @@ class CompanionManager(QObject):
                 mgr.events.subscribe(
                     self._on_agent_event,
                     kinds=[EventKind.TASK_STATUS, EventKind.APPROVAL_REQUIRED])
+                mgr.events.subscribe(
+                    lambda ev: self.sig_agent_notice.emit("Tora is in control", "Press Esc to stop her.")
+                    if (ev.data or {}).get("takeover") else None,
+                    kinds=[EventKind.LOG])
                 self._agents = mgr
                 _log.info("agent workforce ready — workspace %s", mgr.workspace_root)
             except Exception:
@@ -2822,6 +2826,13 @@ class CompanionManager(QObject):
         except ValueError:
             kind = TaskKind.CODING
         meta = {"request": goal, "reply": f"Understood. Starting on {title} now."}
+        if args.get("take_over"):
+            # "Take over and do it": a computer job with the person's one yes
+            # for their mouse and keyboard (agents/manager/orchestrator.py).
+            kind = TaskKind.COMPUTER
+            meta["takeover"] = True
+            if args.get("minutes"):
+                meta["takeover_minutes"] = int(args.get("minutes") or 0)
         workspace = self._agents.workspace_root
         follows = args.get("_follows")
         if follows is not None:                     # OR-07: in the folder of what it changes

@@ -218,6 +218,11 @@ class Registry(ToolRegistry):
             except Exception:  # noqa: BLE001
                 grant_key = ""
         granted = bool(grant_key) and grant_key in ctx.policy.always_allow
+        if always_ask and not granted and getattr(ctx.policy, "control_until", 0.0) > time.time():
+            # The person handed this job the controls ("take over"): no ask
+            # per click while it lasts. A SENSITIVE tool still asks below.
+            from agents.tools.computer_tools import kill_switch
+            granted = not kill_switch.tripped
         if (always_ask and not granted) or sensitive or not (ctx.policy.allows(spec) or granted):
             default_reason = f"{spec.name} always needs a human: it controls your mouse and keyboard"
             per_call = getattr(tool, "ask_reason_for", None)

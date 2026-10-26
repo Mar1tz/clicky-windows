@@ -38,6 +38,9 @@ def _started(ctx: AgentContext) -> float:
     return float(getattr(ctx.provider, "started_at", None) or ctx.task.created_at)
 
 
+# "Take over": how long the person's one yes lasts, unless the job asks for less.
+TAKEOVER_MINUTES = 15
+
 # EN-05: how long a step that hit a passing fault waits before its one retry.
 RETRY_WAIT_S = 5.0
 _PASSING = re.compile(r"\b(429|502|503|504)\b|rate.?limit|overloaded|temporarily|unavailable|"
@@ -124,6 +127,10 @@ class Orchestrator:
                         self._finish(ctx, TaskStatus.REJECTED, "plan rejected")
                     return task
 
+            if task.metadata.get("takeover") and not resume:
+                if not await self._take_control(ctx):
+                    self._finish(ctx, TaskStatus.REJECTED, "they kept control of the mouse and keyboard")
+                    return task
             self._set_status(ctx, TaskStatus.RUNNING)
             await self._execute(ctx, worker, plan)
             if task.status is not TaskStatus.RUNNING:   # failed inside _execute
@@ -260,6 +267,26 @@ class Orchestrator:
             i += 1
 
     # -- helpers -------------------------------------------------------------
+
+    async def _take_control(self, ctx: AgentContext) -> bool:
+        """"Take over and do it": one yes for the whole job, time-boxed, then
+        no ask per click (the registry honours policy.control_until). Esc
+        stops it at any moment; sending, paying and deleting still ask."""
+        task = ctx.task
+        minutes = max(1, min(60, int(task.metadata.get("takeover_minutes") or TAKEOVER_MINUTES)))
+        req = ApprovalRequest(task_id=task.id, agent_id=ctx.agent.id,
+                              call=ToolCall("take_control", {"goal": task.goal[:200], "minutes": minutes}),
+                              reason=(f"Let Tora use your mouse and keyboard to: {task.title or task.goal[:80]} - "
+                                      f"for up to {minutes} minutes. Press Esc to stop her at any time. "
+                                      "Paying, sending and deleting still ask you first."))
+        if not await ctx.approver(req):
+            return False
+        until = time.time() + minutes * 60
+        ctx.agent.permissions.control_until = until
+        ctx.events.emit(EventKind.LOG, f"Tora is in control until {time.strftime('%H:%M', time.localtime(until))} "
+                                       "- Esc stops her", task_id=task.id, agent_id=ctx.agent.id,
+                        data={"takeover": True, "until": until})
+        return True
 
     def _adopt_plan(self, ctx: AgentContext, plan: Plan, *, revised: bool, reason: str = "") -> None:
         """OR-09: every plan the job had is kept on it (metadata["plans"]),

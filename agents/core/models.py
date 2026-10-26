@@ -262,6 +262,11 @@ class PermissionPolicy(_Serialisable):
     denied_tools: list[str] = field(default_factory=list)
     workspace_roots: list[str] = field(default_factory=list)
     always_allow: list[str] = field(default_factory=list)
+    # "Take over and do it": the person gave this job their mouse and
+    # keyboard until this time (time.time()). Until then the tools that
+    # otherwise ask before every click run without asking - never a
+    # SENSITIVE one (money, sending, a filing) - and Esc stops it all.
+    control_until: float = 0.0
 
     def allows(self, spec: "ToolSpec") -> bool:
         if spec.name in self.denied_tools:

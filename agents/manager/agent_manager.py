@@ -1044,7 +1044,7 @@ class AgentManager:
             that is its own, more particular, request to be asked.
         """
         return (self.auto_approve and not req.sensitive
-                and req.call.tool_name != "approve_plan")
+                and req.call.tool_name not in ("approve_plan", "take_control"))
 
     def pending_approvals(self) -> list[ApprovalRequest]:
         with self._lock:
@@ -1186,7 +1186,7 @@ class AgentManager:
             self.events.emit(EventKind.APPROVAL_RESOLVED, "approved" if ok else "denied",
                              task_id=task.id, agent_id=task.agent_id,
                              data={"request_id": req.id, "approved": ok})
-            refused_plan = not ok and req.call.tool_name == "approve_plan"   # it ends as REJECTED
+            refused_plan = not ok and req.call.tool_name in ("approve_plan", "take_control")  # ends REJECTED
             if run is not None and task.status is TaskStatus.WAITING_APPROVAL and not refused_plan:
                 self._status(run, TaskStatus.RUNNING if previous is TaskStatus.WAITING_APPROVAL
                              else previous)

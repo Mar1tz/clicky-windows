@@ -470,6 +470,20 @@ def tool_declarations() -> list[dict]:
                             "skills in your context. Omit when none fits."
                         ),
                     },
+                    "take_over": {
+                        "type": "boolean",
+                        "description": (
+                            "True when they ask Tora to do it HERSELF on their screen - 'take "
+                            "over', 'do it for me', 'go ahead and click through it'. She asks "
+                            "once for their mouse and keyboard for the job, then works without "
+                            "asking per click; Esc stops her. Sending, paying and deleting "
+                            "still ask."
+                        ),
+                    },
+                    "minutes": {
+                        "type": "integer",
+                        "description": "With take_over: how long she may keep control (default 15, at most 60).",
+                    },
                 },
                 "required": ["goal"],
             },
