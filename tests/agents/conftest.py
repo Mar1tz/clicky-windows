@@ -69,6 +69,17 @@ def _no_ocr_model(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _no_real_credential_vault(monkeypatch):
+    """integrations/vault.py keeps tokens in Windows Credential Manager; a
+    test gets a dictionary."""
+    try:
+        from integrations import vault
+        monkeypatch.setattr(vault, "_vault", vault.MemoryVault())
+    except Exception:  # noqa: BLE001
+        pass
+
+
+@pytest.fixture(autouse=True)
 def _no_registry_reads(monkeypatch):
     """health.py reads Windows' microphone switch from the registry; a test
     reads a stand-in that says it is allowed."""
