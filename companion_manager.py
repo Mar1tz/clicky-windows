@@ -412,6 +412,34 @@ def _retrieve(task) -> None:
         task.exception()
 
 
+def _what_it_means(self, goal: str, jobs: list):
+    """OR-06: what "it" / "that" in a request refers to (ai/references.py),
+    from what HeyTora knows now - or None when nothing is referred to."""
+    from ai import references
+    from ai.references import Thing
+    if not references.refers(goal):
+        return None
+    wall, mono = time.time(), time.monotonic()
+    last = None
+    try:
+        ref = self._last_ref
+        if ref is not None:
+            last = Thing("control", ref.label or "there", at=wall - (mono - ref.at))
+    except (AttributeError, RuntimeError):
+        pass
+    running = next((j for j in jobs if not j.status.is_terminal), None)
+    job = Thing("job", running.title, running.id, at=running.updated_at) if running is not None else None
+    recent = []
+    try:
+        for reading in (self._trace_readings or [])[-3:]:
+            recent.append(Thing("trace", (reading.text or reading.line())[:80], at=wall))
+    except (AttributeError, RuntimeError):
+        pass
+    res = references.resolve(goal, last_said=last, active_job=job, recent=tuple(recent))
+    _log.info("reference: %s -> %s (%s)", goal[:60], res.thing.describe() if res.thing else res.link, res.evidence)
+    return res
+
+
 class CompanionManager(QObject):
     """Thread-safe signals for Qt UI updates from async/audio threads."""
 
@@ -2652,6 +2680,14 @@ class CompanionManager(QObject):
             names = ", ".join(os.path.basename(f) for f in files)
             return {"ok": True, "result": (f"Converting {names} to PDF in the background - nothing opens on their "
                                            "screen. Say in one line that it has started; Tora says when it is done.")}
+        if not files and follows is None:
+            resolution = _what_it_means(self, goal, recent)
+            if resolution is not None and resolution.link == "ask":
+                return {"error": "It is not clear what they mean by that - ask them which thing, in one "
+                                 "short question, then call delegate_task again with it named."}
+            if resolution is not None and resolution.thing is not None:
+                goal += f"\n\nWhat they refer to: {resolution.thing.describe()} - {resolution.evidence}."
+                meta["reference"] = resolution.to_dict()
         if files:
             goal += "\n\nThe file(s) they mean - use these exact paths: " + "; ".join(files)
             meta["request"], meta["files"] = goal, files
