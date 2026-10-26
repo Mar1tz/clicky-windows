@@ -59,24 +59,46 @@ def attach(registry, hub) -> list[str]:
     """Register every running server's tools; their names."""
     names = []
     for server in hub.servers.values():
-        if not server.running:
-            continue
-        for tool in server.tools:
-            t = McpTool(server, tool)
-            registry.register(t)
-            names.append(t.name)
+        names += attach_server(registry, server)
     return names
 
 
+def attach_server(registry, server) -> list[str]:
+    """One server's tools ("connect Linear" while HeyTora runs); any it had before go first."""
+    detach(registry, server.cfg.name)
+    if not server.running:
+        return []
+    names = []
+    for tool in server.tools:
+        t = McpTool(server, tool)
+        registry.register(t)
+        names.append(t.name)
+    return names
+
+
+def detach(registry, server_name: str) -> int:
+    """Forget a server's tools, so nothing is left for a model to call."""
+    gone = 0
+    for name in list(registry.names()):
+        if name.startswith(PREFIX):
+            cfg = getattr(getattr(registry.get(name), "server", None), "cfg", None)
+            if cfg is not None and cfg.name == server_name:
+                gone += bool(registry.unregister(name))
+    return gone
+
+
 def for_goal(goal: str, registry) -> list[str]:
-    """The MCP tools of the servers a job names ("open an issue on github")."""
+    """The MCP tools of the servers a job names ("open an issue on github",
+    "my jira tickets" - a service's other names, integrations/catalog.py)."""
+    from integrations.catalog import names_for_jobs
     words = set(re.findall(r"[a-z0-9]+", (goal or "").lower()))
+    known = names_for_jobs()
     out = []
     for name in registry.names():
         if not name.startswith(PREFIX):
             continue
         tool = registry.get(name)
         server = getattr(getattr(tool, "server", None), "cfg", None)
-        if server is not None and set(server.name.split("_")) & words:
+        if server is not None and (set(server.name.split("_")) | set(known.get(server.name, ()))) & words:
             out.append(name)
     return out

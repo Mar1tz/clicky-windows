@@ -374,19 +374,43 @@ def tool_declarations() -> list[dict]:
         {
             "name": "connect_account",
             "description": (
-                "CONNECT ONE OF THEIR ACCOUNTS - only after they said yes to connecting it. Opens "
-                "Google's sign-in in their browser; HeyTora asks only for what the feature needs "
-                "(sending email: send only, never reading the inbox)."
+                "CONNECT A SERVICE so jobs can work in it - 'connect Linear', 'connect my GitHub', "
+                "'add Zapier', 'connect Gmail'. Only after they asked or said yes. gmail/calendar, "
+                "linear, notion, sentry, jira (atlassian): their own sign-in opens in the browser. "
+                "github, stripe: its key page opens; they copy a key and say 'done' -> call again "
+                "with pasted true. zapier, composio: one private link reaching thousands of apps "
+                "(Slack, Outlook, Sheets...), same copy-and-done. 'custom': any MCP server URL "
+                "they copied. Never ask them to read a key aloud."
             ),
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "service": {"type": "string", "enum": ["gmail", "calendar"]},
+                    "service": {"type": "string",
+                                "description": "gmail, calendar, linear, notion, sentry, atlassian, github, "
+                                               "stripe, zapier, composio, files, or custom."},
                     "for": {"type": "string", "enum": ["send", "read"],
-                            "description": "What it is needed for: send (Gmail) or read (Calendar)."},
+                            "description": "Gmail/Calendar only: send (Gmail) or read (Calendar)."},
+                    "pasted": {"type": "boolean",
+                               "description": "They copied the key or link and said done."},
                 },
                 "required": ["service"],
             },
+        },
+        {
+            "name": "list_connections",
+            "description": (
+                "WHAT TORA IS CONNECTED TO - 'what can you access', 'what's connected', 'what apps "
+                "can you use'. Real connections apart from apps she can only work on screen, and "
+                "what more can be connected."
+            ),
+            "parameters": {"type": "object", "properties": {}},
+        },
+        {
+            "name": "disconnect_account",
+            "description": "DISCONNECT A SERVICE - 'disconnect Zapier', 'remove my GitHub'. Its key or sign-in is removed from this PC.",
+            "parameters": {"type": "object",
+                           "properties": {"service": {"type": "string"}},
+                           "required": ["service"]},
         },
         {
             "name": "fill_form",

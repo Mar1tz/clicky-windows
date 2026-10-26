@@ -2286,6 +2286,8 @@ class CompanionManager(QObject):
             "send_email":      self._tool_send_email,
             "send_open_email": self._tool_send_open_email,
             "connect_account": self._tool_connect_account,
+            "list_connections": self._tool_list_connections,
+            "disconnect_account": self._tool_disconnect_account,
             "setup_browser":   self._tool_setup_browser,
             "read_calendar":   self._tool_read_calendar,
         }
@@ -2488,9 +2490,9 @@ class CompanionManager(QObject):
     async def _tool_connect_account(self, args: dict) -> dict:
         from integrations import oauth
         from integrations.connections import connections
-        service = str(args.get("service") or "gmail")
+        service = str(args.get("service") or "gmail").strip().lower()
         if service not in ("gmail", "calendar"):
-            return {"error": f"HeyTora cannot connect {service} yet"}
+            return await self._connect_mcp(service, args)
         try:
             oauth.client()
         except oauth.NotConfigured as exc:
@@ -2508,6 +2510,199 @@ class CompanionManager(QObject):
         threading.Thread(target=run, name="connect-gmail", daemon=True).start()
         return {"ok": True, "note": "Google's sign-in is opening in their browser. Say so in one line; "
                                     "you will be told when it is connected."}
+
+    # ── Services by MCP (integrations/catalog.py, mcp_http.py, mcp_oauth.py) ─
+    #
+    # "Connect Linear": its own sign-in, nothing to copy. "Connect GitHub":
+    # its key page opens; they copy a key and say done; it is read off the
+    # clipboard once, kept in Credential Manager and wiped from the
+    # clipboard - never said aloud, never in a file. Then jobs that name the
+    # service get its tools (agents/tools/mcp_tools.py), each one that may
+    # change something asking first.
+
+    def _mcp_hub(self):
+        mgr = self._agents
+        return getattr(mgr, "mcp", None) if mgr is not None else None
+
+    async def _connect_mcp(self, service: str, args: dict) -> dict:
+        from integrations import catalog
+        hub = self._mcp_hub()
+        if hub is None:
+            return {"error": "Tora's jobs are not running, so nothing can be connected right now."}
+        svc = catalog.find(service)
+        pasted = bool(args.get("pasted"))
+        if svc is None and service not in ("custom", "mcp", "other", "url"):
+            ready = ", ".join(s.name for s in catalog.SERVICES.values())
+            return {"error": f"No ready connection for {service}.", "ready": ready,
+                    "note": ("Say what can be connected. Zapier reaches thousands of apps (Slack, Outlook, "
+                             "Sheets...). Any service with an MCP server works too: they copy its URL and say "
+                             "'connect it' - call connect_account with service custom and pasted true.")}
+        if svc is not None and svc.how == "sign_in":
+            self._connect_in_background(svc.name, lambda: self._mcp_sign_in(svc.id, svc.url, svc.gives))
+            return {"ok": True, "note": f"{svc.name}'s sign-in is opening in their browser. Say so in one line; "
+                                        "you will be told when it is connected."}
+        if svc is not None and svc.how == "local":
+            return await self._mcp_local(svc)
+        if not pasted:
+            if svc is not None:
+                await asyncio.to_thread(os.startfile, svc.setup)
+                what = "a key" if svc.how == "key" else "their personal server link"
+                return {"ok": True, "waiting_for_copy": svc.id, "note": (
+                    f"{svc.name}'s page is open in their browser. Tell them: make {what} there and copy it, "
+                    f"then say 'done'. Then call connect_account again with service {svc.id} and pasted true. "
+                    "Never ask them to read a key out loud.")}
+            return {"ok": True, "note": "Ask them to copy the MCP server's URL, then say 'done' - then call "
+                                        "connect_account with service custom and pasted true."}
+        from agents.control.system import clipboard_read, clipboard_write
+        try:
+            copied = (await asyncio.to_thread(clipboard_read, 4000)).strip()
+        except RuntimeError as exc:
+            return {"error": f"Could not read the clipboard: {exc}. Ask them to copy it again."}
+        if svc is not None and not catalog.accepts(svc, copied):
+            return {"error": f"What is on the clipboard is not a {svc.name} "
+                             f"{'key' if svc.how == 'key' else 'link'} - nothing was saved. Ask them to copy it "
+                             "again (never read the clipboard out)."}
+        if svc is None and not catalog.custom_url_ok(copied):
+            return {"error": "The clipboard does not hold an https:// MCP server address - nothing was saved."}
+        try:
+            await asyncio.to_thread(clipboard_write, "")      # a key does not stay on the clipboard
+        except RuntimeError:
+            pass
+        if svc is None:
+            name = re.sub(r"^(mcp|api|www)\.", "", copied.split("/")[2]).split(".")[0][:20] or "custom"
+            self._connect_in_background(name, lambda: self._mcp_custom(name, copied))
+            return {"ok": True, "note": "Connecting to that server - say so in one line; you will be told."}
+        secret = ({"url": svc.url, "headers": {svc.header: f"Bearer {copied}"}} if svc.how == "key"
+                  else {"url": copied, "headers": {}})
+        self._connect_in_background(svc.name, lambda: self._mcp_with_secret(svc, secret))
+        return {"ok": True, "note": f"Got it - connecting {svc.name}. Say so in one line; you will be told."}
+
+    def _connect_in_background(self, label: str, work) -> None:
+        """Sign-ins wait for the person: on a thread, the outcome said when it comes."""
+        def run():
+            try:
+                said = work()
+            except Exception as exc:  # noqa: BLE001 - every failure is said, never swallowed
+                _log.warning("connect %s failed: %s", label, exc)
+                said = f"{label} wasn't connected: {exc}"
+            self._say_when_idle(said)
+        threading.Thread(target=run, name=f"connect-{label}", daemon=True).start()
+
+    def _mcp_start(self, cfg_entry: dict, name: str, gives: str, label: str) -> str:
+        """Save the server, start it on the agents' loop, give jobs its tools."""
+        from agents.tools import mcp_tools
+        from config import data_dir
+        from integrations import mcp
+        mgr = self._agents
+        cfg = mcp.load_config_entry(name, cfg_entry)
+        server = mcp.make_server(cfg)
+        ok = mgr.runtime.submit(mgr.mcp.add(server)).result(timeout=mcp.START_S + 30)
+        if not ok:
+            return f"{label} didn't connect: {mgr.mcp.failed.get(name, 'no answer')}"
+        mcp.save_server(data_dir(), name, cfg_entry)
+        tools = mcp_tools.attach_server(mgr.tools, server)
+        _log.info("mcp %s connected: %d tools", name, len(tools))
+        return f"{label} is connected" + (f" - jobs can now {gives}." if gives else f" ({len(tools)} tools).")
+
+    def _mcp_sign_in(self, name: str, url: str, gives: str = "", challenge: str = "") -> str:
+        from integrations import catalog, mcp_oauth
+        mcp_oauth.connect(name, url, challenge)
+        label = catalog.SERVICES[name].name if name in catalog.SERVICES else name
+        return self._mcp_start({"url": url, "auth": "oauth"}, name, gives, label)
+
+    def _mcp_with_secret(self, svc, secret: dict) -> str:
+        from integrations import mcp_oauth
+        from integrations.vault import vault
+        vault().put(mcp_oauth.vault_ref(svc.id), secret)
+        return self._mcp_start({"secret": "vault"}, svc.id, svc.gives, svc.name)
+
+    def _mcp_custom(self, name: str, url: str) -> str:
+        """Any server: tried as it is; a 401 means its own sign-in first."""
+        from integrations import mcp, mcp_oauth
+        from integrations.mcp_http import AuthNeeded
+        probe = mcp.make_server(mcp.load_config_entry(name, {"url": url}))
+        try:
+            self._agents.runtime.submit(self._probe_mcp(probe)).result(timeout=mcp.START_S + 10)
+        except AuthNeeded as need:
+            return self._mcp_sign_in(name, url, challenge=need.challenge)
+        return self._mcp_start({"url": url}, name, "", name)
+
+    @staticmethod
+    async def _probe_mcp(server) -> None:
+        try:
+            await server.start()
+        finally:
+            await server.stop()
+
+    async def _mcp_local(self, svc) -> dict:
+        import shutil
+        if shutil.which("npx") is None:
+            return {"error": f"{svc.name} runs on their PC and needs Node.js (nodejs.org) - it isn't installed. "
+                             "Say so; after installing it they ask again."}
+        documents = str(Path.home() / "Documents")
+        entry = {"command": svc.command, "args": [a.replace("{documents}", documents) for a in svc.args]}
+        self._connect_in_background(svc.name, lambda: self._mcp_start(entry, svc.id, svc.gives, svc.name))
+        return {"ok": True, "note": f"Setting up {svc.name} - say so in one line; you will be told."}
+
+    async def _tool_list_connections(self, args: dict) -> dict:
+        """WX-09: what Tora reaches through a real connection, apart from the
+        apps she can only work on screen."""
+        from integrations import catalog
+        from integrations.browser_bridge import current as bridge
+        from integrations.connections import connections
+        api = [f"{c.provider}: {c.account} ({c.state.value})" for c in connections().all()]
+        hub = self._mcp_hub()
+        if hub is not None:
+            for name, server in hub.servers.items():
+                state = (f"{len(server.tools)} tools" if server.running
+                         else f"not working: {hub.failed.get(name, 'stopped')}")
+                label = catalog.SERVICES[name].name if name in catalog.SERVICES else name
+                api.append(f"{label} ({state})")
+        b = bridge()
+        on_screen = []
+        try:
+            from agents.control import control
+            on_screen = [a["name"] for a in control().apps(include_discovered=False)]
+        except Exception:  # noqa: BLE001 - the list is extra
+            pass
+        linked = {n.split(" (")[0].lower() for n in api}
+        return {"connected": api or ["nothing yet"],
+                "browser_extension": "connected" if b is not None and b.connected else "not set up or not running",
+                "apps_tora_controls_directly": on_screen[:20],
+                "can_connect": [s.name for s in catalog.SERVICES.values() if s.name.lower() not in linked],
+                "note": ("'connected' = real connections (APIs); apps_tora_controls_directly = apps she drives "
+                         "through their own controls; anything else she can only work on screen. Any other "
+                         "service with an MCP server, or Zapier for thousands of apps, can be added.")}
+
+    async def _tool_disconnect_account(self, args: dict) -> dict:
+        from agents.tools import mcp_tools
+        from config import data_dir
+        from integrations import catalog, mcp, mcp_oauth
+        service = str(args.get("service") or "").strip().lower()
+        if service in ("gmail", "calendar"):
+            from integrations.connections import connections
+            conns = connections()
+            done = await asyncio.to_thread(lambda: [(c.account, conns.disconnect(c)) for c in conns.all(service)])
+            if not done:
+                return {"ok": False, "note": f"No {service} was connected."}
+            stuck = [a for a, ok in done if not ok]
+            if stuck:
+                return {"ok": False, "note": f"Google did not confirm for {', '.join(stuck)} - they remove "
+                                             "HeyTora at myaccount.google.com/permissions."}
+            return {"ok": True, "note": f"{service} is disconnected and Google was asked to forget HeyTora's access."}
+        svc = catalog.find(service)
+        name = svc.id if svc is not None else mcp.server_id(service)
+        hub = self._mcp_hub()
+        stopped = False
+        if hub is not None:
+            stopped = await asyncio.wrap_future(self._agents.runtime.submit(hub.remove(name)))
+            mcp_tools.detach(self._agents.tools, name)
+        saved = await asyncio.to_thread(mcp.remove_server, data_dir(), name)
+        forgot = await asyncio.to_thread(mcp_oauth.forget, name)
+        if not (stopped or saved or forgot):
+            return {"ok": False, "note": f"{service} was not connected."}
+        return {"ok": True, "note": f"{svc.name if svc else service} is disconnected and its key or sign-in "
+                                    "removed from this PC."}
 
     # ── Filling in a form (ai/form_fill.py) ──────────────────────────────────
     #
@@ -2615,9 +2810,8 @@ class CompanionManager(QObject):
             from config import data_dir
             from integrations import mcp
             configs = mcp.load_config(data_dir())
-            if not configs:
-                return
             hub = mcp.McpHub(configs)
+            mgr.mcp = hub                    # there even when empty: "connect Linear" adds to it
             await hub.start()
             names = mcp_tools.attach(mgr.tools, hub)
             mgr.mcp = hub
