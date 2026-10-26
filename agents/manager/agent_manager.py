@@ -1197,11 +1197,19 @@ class AgentManager:
 
     def _default_spec(self, task: Task) -> AgentSpec:
         skill = self.skill_for(task)
+        tools = self._skill_tools() if skill is not None else []
+        # CI-18: a job that names one of the person's MCP servers ("on GitHub",
+        # "in Notion") gets that server's tools beside its own.
+        from agents.tools.mcp_tools import for_goal
+        extra = for_goal(task.goal, self.tools) if hasattr(self.tools, "names") else []
+        if extra:
+            own = tools or list(getattr(self.workers.get(task.worker_type), "default_tools", []) or [])
+            tools = own + [t for t in extra if t not in own]
         return AgentSpec(
             name=skill.name if skill is not None else AGENT_NAMES.get(task.kind, "Assistant Agent"),
             goal=task.goal,
             worker_type=task.worker_type,
-            tools=self._skill_tools() if skill is not None else [],
+            tools=tools,
             permissions=PermissionPolicy(
                 max_auto_risk=self.default_policy.max_auto_risk,
                 allowed_tools=self.default_policy.allowed_tools,

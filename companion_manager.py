@@ -845,6 +845,7 @@ class CompanionManager(QObject):
                     kinds=[EventKind.LOG])
                 self._agents = mgr
                 _log.info("agent workforce ready — workspace %s", mgr.workspace_root)
+                mgr.runtime.submit(self._start_mcp(mgr))
             except Exception:
                 _log.exception("agent workforce failed to start — delegation disabled")
                 self._agents = None
@@ -2497,6 +2498,26 @@ class CompanionManager(QObject):
             _log.warning("devlink did not start", exc_info=True)
             return
         devlink.set_current(hub)
+
+    async def _start_mcp(self, mgr) -> None:
+        """CI-18: the person's MCP servers (mcp_servers.json in the data
+        folder), started on the agents' own loop, their tools registered for
+        the jobs that name them."""
+        try:
+            from agents.tools import mcp_tools
+            from config import data_dir
+            from integrations import mcp
+            configs = mcp.load_config(data_dir())
+            if not configs:
+                return
+            hub = mcp.McpHub(configs)
+            await hub.start()
+            names = mcp_tools.attach(mgr.tools, hub)
+            mgr.mcp = hub
+            _log.info("mcp: %d server(s), %d tools%s", len(hub.servers), len(names),
+                      f"; did not start: {', '.join(hub.failed)}" if hub.failed else "")
+        except Exception:  # noqa: BLE001 - the rest works without them
+            _log.warning("mcp servers did not start", exc_info=True)
 
     def _start_browser_bridge(self) -> None:
         """CI-03: the local end of HeyTora's browser extension - 127.0.0.1,
