@@ -69,6 +69,17 @@ def _no_ocr_model(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _no_registry_reads(monkeypatch):
+    """health.py reads Windows' microphone switch from the registry; a test
+    reads a stand-in that says it is allowed."""
+    try:
+        import health
+        monkeypatch.setattr(health, "_consent", lambda sub="": "Allow")
+    except Exception:  # noqa: BLE001
+        pass
+
+
+@pytest.fixture(autouse=True)
 def _no_real_monitors(monkeypatch):
     """screen.monitors reads the machine's real monitors - three of them, at
     100% and 125%, on the PC this was written on - so a test's pixels would

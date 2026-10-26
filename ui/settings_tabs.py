@@ -515,7 +515,7 @@ class AdvancedTab(Tab):
         models.note("Set in .env; the list refreshes itself weekly.")
         self.body.add(models)
 
-        checks = Group("Diagnostics")
+        checks = Group("Health")
         for name, detail, level in br.diagnostics():
             checks.row(name, detail, Dot(self._LEVEL.get(level, T.TEXT_FAINT), 8))
         checks.note("What is working right now. Nothing here goes online.")

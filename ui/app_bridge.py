@@ -983,6 +983,14 @@ class AppBridge(QObject):
             ocr = False
         rows.append(("Local OCR", "RapidOCR ready" if ocr else
                      "Not installed - reading fine print is off", "ok" if ocr else "warn"))
+        # EN-17: the rest of the health panel - Windows' microphone switch,
+        # connectors, disk, databases, the last update.
+        try:
+            import health
+            from config import data_dir
+            rows += health.rows(data_dir())
+        except Exception:  # noqa: BLE001 - a check must never break the page
+            pass
         return rows
 
     def run_setup(self) -> None:
