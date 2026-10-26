@@ -41,6 +41,9 @@ log = logging.getLogger("agents.scheduler")
 
 TICK_S = 30.0
 MAX_FILES_PER_FIRE = 50
+# WX-10: a slot that fires this long after it was due ran late (the PC was
+# asleep or off) - and the job says so.
+LATE_S = 300.0
 
 
 @dataclass
@@ -142,6 +145,14 @@ class Scheduler:
             return None
         task.metadata.setdefault("scheduled_job", job.id)
         task.metadata.setdefault("trigger", job.trigger.describe() if hasattr(job.trigger, "describe") else "")
+        late = (extra or {}).get("late_by_s")
+        if late:
+            slot = datetime.fromisoformat(extra["slot"])
+            task.metadata["ran_late"] = {"due": extra["slot"], "late_by_s": late,
+                                         "words": f"Ran late - it was due at {slot:%H:%M}"
+                                                  + ("" if slot.date() == datetime.fromtimestamp(now).date()
+                                                     else f" on {slot:%a %d %b}")
+                                                  + "; the PC was asleep or off"}
         submitted = self.manager.submit_task(task, agent=spec)
         with self._lock:
             st = self._state.setdefault(job.id, {})
@@ -151,8 +162,10 @@ class Scheduler:
             self._save()
         events = getattr(self.manager, "events", None)
         if events is not None:
-            events.emit(EventKind.LOG, f"Scheduled: {job.name}", task_id=submitted.id,
-                        data={"job": job.id, "owner": job.owner})
+            late_words = (task.metadata.get("ran_late") or {}).get("words")
+            events.emit(EventKind.LOG, f"Scheduled: {job.name}" + (f" - {late_words}" if late_words else ""),
+                        task_id=submitted.id, data={"job": job.id, "owner": job.owner,
+                                                    "late_by_s": (extra or {}).get("late_by_s", 0)})
         return submitted
 
     # -- due-ness ------------------------------------------------------------------------
@@ -175,7 +188,10 @@ class Scheduler:
             slot_ts = slot.timestamp()
             if slot_ts <= st.get("created", now) or slot_ts <= st.get("last_fired", 0.0):
                 return None
-            return {"slot": slot.isoformat(timespec="minutes")}
+            due = {"slot": slot.isoformat(timespec="minutes")}
+            if now - slot_ts >= LATE_S:
+                due["late_by_s"] = round(now - slot_ts)
+            return due
         if kind == "folder":
             return self._new_files(job)
         return None

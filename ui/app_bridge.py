@@ -1214,6 +1214,7 @@ class AppBridge(QObject):
                 "error": (t.error or "").strip().split("\n")[0][:160],
                 "when": float(t.updated_at or t.created_at or 0.0),
                 "created": float(t.created_at or 0.0),
+                "late": str(((t.metadata or {}).get("ran_late") or {}).get("words") or ""),
             })
             if len(out) >= limit:
                 break
@@ -1261,7 +1262,8 @@ class AppBridge(QObject):
                         "step": min(total, done + 1) if total else 0, "total": total,
                         "progress": float(t.progress or 0.0),
                         "status": str(getattr(t.status, "value", t.status)),
-                        "started": float(t.created_at or 0.0)})
+                        "started": float(t.created_at or 0.0),
+                        "late": str(((t.metadata or {}).get("ran_late") or {}).get("words") or "")})
         return out
 
     def give_job(self, text: str) -> tuple[str, str]:
@@ -1331,7 +1333,8 @@ class AppBridge(QObject):
                 "result": task.result or "", "error": (task.error or "").strip(),
                 "folder": task.workspace or "", "started": float(task.created_at or 0.0),
                 "updated": float(task.updated_at or 0.0),
-                "skill": str((task.metadata or {}).get("skill") or "")}
+                "skill": str((task.metadata or {}).get("skill") or ""),
+                "late": str(((task.metadata or {}).get("ran_late") or {}).get("words") or "")}
 
     # ── skills (docs/agents/SKILLS.md) ───────────────────────────────────────
 

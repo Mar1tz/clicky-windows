@@ -256,6 +256,8 @@ class AgentsPage(Page):
         where = f"Step {j['step']} of {j['total']}" if j["total"] else words
         doing = j["doing"] or words
         lay.addWidget(label(f"{where} · {doing}" if j["total"] else doing, "dim", wrap=True))
+        if j.get("late"):                                   # WX-10: a routine that missed its time
+            lay.addWidget(label(j["late"], "faint", wrap=True))
         bar = QHBoxLayout()
         bar.setSpacing(12)
         bar.addWidget(Meter(j["progress"], T.WARN if paused else T.ACCENT), 1)
@@ -298,6 +300,8 @@ class AgentsPage(Page):
                 sub += f" · ran for {took}"
             if t["status"] == "failed" and t.get("error"):
                 sub += f" · {t['error']}"
+            if t.get("late"):
+                sub += f" · {t['late']}"
             text.addWidget(label(sub, "rowSub", wrap=True))
             lay.addLayout(text, 1)
             row.actions_lay.addWidget(RowAction("folder-open", "Open its folder",
