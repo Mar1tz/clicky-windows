@@ -130,14 +130,25 @@ class ProviderVerifier(Verifier):
         lines = [f"  [{s.status.value}] {s.title}" for s in done]
         results: list[ToolResult] = [r for s in done for r in s.results]
         calls = [c for s in done for c in s.tool_calls]
-        return "\n\n".join([
-            f"Goal: {ctx.task.goal}",
-            *self._skill(ctx),
-            "Steps taken:\n" + ("\n".join(lines) or "  (none)"),
-            "Actual state on disk:\n" + (self._evidence(results, ctx, calls)
-                                         or _tree(ctx.workspace) or "  (workspace is empty)"),
-            "Did the agent achieve the goal?",
-        ])
+        parts = [f"Goal: {ctx.task.goal}", *self._skill(ctx),
+                 "Steps taken:\n" + ("\n".join(lines) or "  (none)")]
+        if ctx.task.worker_type in ("computer", "browser"):
+            # Its work is on screen. Judged by the disk, "type a shopping list
+            # in Notepad" failed for "no shopping list text file was created".
+            did = [f"  {c.tool_name}({_short_args(c.arguments)}) -> "
+                   f"{'ok' if r.ok else 'FAILED'}: {_one_line(r.output if r.ok else r.error)}"
+                   for c, r in zip(calls, results)][-12:]
+            parts.append("What its actions did (latest last):\n" + ("\n".join(did) or "  (nothing)"))
+            windows = _open_windows()
+            if windows:
+                parts.append("Open windows right now:\n" + "\n".join(f"  {w}" for w in windows))
+            parts.append("This job works on screen: judge it by these. No file is expected unless "
+                         "the goal asks to save one.")
+        else:
+            parts.append("Actual state on disk:\n" + (self._evidence(results, ctx, calls)
+                                                      or _tree(ctx.workspace) or "  (workspace is empty)"))
+        parts.append("Did the agent achieve the goal?")
+        return "\n\n".join(parts)
 
     def _evidence(self, results: list[ToolResult], ctx: AgentContext, calls: Iterable = ()) -> str:
         """Describe what is really on disk for the paths this step touched,
@@ -260,6 +271,11 @@ def _open_windows(limit: int = 12) -> list[str]:
         return [w["title"][:80] for w in list_windows()[:limit]]
     except Exception:  # noqa: BLE001 - headless, or not Windows
         return []
+
+
+def _one_line(text: Optional[str], limit: int = 120) -> str:
+    text = " ".join(str(text or "").split())
+    return text if len(text) <= limit else text[:limit - 1] + "…"
 
 
 def _short_args(args: dict[str, Any], limit: int = 60) -> str:

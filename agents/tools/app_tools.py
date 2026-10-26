@@ -175,19 +175,69 @@ def list_windows(*, include_own: bool = False) -> list[dict[str, Any]]:
     return out
 
 
-def focus_window(title_fragment: str) -> Optional[dict[str, Any]]:
-    if _user32 is None:
-        return None
+def find_window(title_fragment: str) -> Optional[dict[str, Any]]:
+    """The front-most window whose title contains the fragment; not raised."""
     frag = title_fragment.lower()
     for w in list_windows():                      # never Tora's own: see list_windows
         if frag in w["title"].lower():
-            try:
-                _user32.ShowWindow(w["hwnd"], 9)            # SW_RESTORE
-                _user32.SetForegroundWindow(w["hwnd"])
-            except Exception:  # noqa: BLE001
-                pass
             return w
     return None
+
+
+def raise_window(hwnd: int) -> None:
+    if _user32 is None:
+        return
+    try:
+        _user32.ShowWindow(hwnd, 9)                         # SW_RESTORE
+        _user32.SetForegroundWindow(hwnd)
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def focus_window(title_fragment: str) -> Optional[dict[str, Any]]:
+    if _user32 is None:
+        return None
+    w = find_window(title_fragment)
+    if w is not None:
+        raise_window(w["hwnd"])
+    return w
+
+
+# -- the person's own documents ------------------------------------------------
+#
+# In the field "open Notepad and type a shopping list" reused the Notepad
+# window that held the person's CSV and typed the list into it. An editor's
+# window with a document in it is theirs: a job gets a new, empty window,
+# and never types there unless its goal names that document.
+
+_EDITORS = ("notepad", "notepad++", "wordpad", "word", "excel", "powerpoint")
+_EMPTY_DOC = re.compile(r"^(untitled|document\s*\d*|book\s*\d*|presentation\s*\d*|new\s*\d+|"
+                        r"new text document)$", re.I)
+
+
+def _editor_doc(title: str) -> Optional[str]:
+    """For an editor's window: the document in it ("" for a new, empty one).
+    None for any other window."""
+    head, sep, app = (title or "").rpartition(" - ")
+    app = app.strip().lower().removeprefix("microsoft ")
+    if not sep or app not in _EDITORS:
+        return None
+    head = head.strip().lstrip("*").strip()
+    return "" if _EMPTY_DOC.match(head) else head
+
+
+def document_in(title: str) -> Optional[str]:
+    """The person's document an editor window holds ("budget.csv" from
+    "*budget.csv - Notepad"); None for an empty one or any other window."""
+    return _editor_doc(title) or None
+
+
+def named_in(doc: str, goal: str) -> bool:
+    """Does the job's goal name this document ("add a row to budget.csv")?"""
+    base = os.path.basename(doc.replace("\\", "/")).lower()
+    stem = os.path.splitext(base)[0]
+    goal = (goal or "").lower()
+    return bool(stem) and (base in goal or stem in goal)
 
 
 def _process_running(path: str) -> bool:
@@ -216,12 +266,16 @@ def _launch(path: str) -> None:
         subprocess.Popen([path])
 
 
-async def _wait_for_window(fragment: str, timeout: float) -> Optional[dict[str, Any]]:
+async def _wait_for_window(fragment: str, timeout: float, *,
+                           before: frozenset[int] = frozenset()) -> Optional[dict[str, Any]]:
+    """The window the launch opened. `before`: windows already there - a new
+    one is wanted, or an old one now showing a new, empty document (Notepad
+    opens a tab in the window it has)."""
     deadline = time.monotonic() + timeout
     frag = fragment.lower()
     while time.monotonic() < deadline:
         for w in await asyncio.to_thread(list_windows):
-            if frag in w["title"].lower():
+            if frag in w["title"].lower() and (w["hwnd"] not in before or _editor_doc(w["title"]) == ""):
                 return w
         await asyncio.sleep(0.25)
     return None
@@ -234,7 +288,8 @@ class OpenApp(Tool):
         "open_app",
         "Open an installed application by name (as it appears in the Start Menu), "
         "or bring it to the front if it is already open. One step - never press "
-        "the Windows key and type to open an app.",
+        "the Windows key and type to open an app. An editor (Notepad, Word, Excel) "
+        "whose open window holds the person's own document gets a new window.",
         risk=RiskLevel.MEDIUM, category=CATEGORY,
         properties={"name": {"type": "string", "description": "e.g. 'Notepad', 'Devin', 'Chrome'."}},
         required=["name"],
@@ -244,8 +299,10 @@ class OpenApp(Tool):
         name = str(args.get("name") or "").strip()
         if not name:
             return self.fail("give the app's name")
-        already = await asyncio.to_thread(focus_window, name)
-        if already is not None:
+        already = await asyncio.to_thread(find_window, name)
+        doc = document_in(already["title"]) if already is not None else None
+        if already is not None and (doc is None or named_in(doc, ctx.extras.get("goal", ""))):
+            await asyncio.to_thread(raise_window, already["hwnd"])
             return self.ok(f"{already['title']!r} was already open; brought it to the front",
                            title=already["title"], launched=False)
         found = await asyncio.to_thread(find_app, name)
@@ -257,11 +314,13 @@ class OpenApp(Tool):
                              + "Use list_windows to see what is open.",
                              installed=apps[:40])
         display, path = found
+        # Their document's window is left alone: the new one is told apart by its handle.
+        before = frozenset(w["hwnd"] for w in await asyncio.to_thread(list_windows)) if doc else frozenset()
         try:
             await asyncio.to_thread(_launch, path)
         except OSError as exc:
             return self.fail(f"could not launch {display}: {exc}")
-        window = await _wait_for_window(display.split()[0], APPEAR_TIMEOUT_S)
+        window = await _wait_for_window(display.split()[0], APPEAR_TIMEOUT_S, before=before)
         if window is None:
             # An honest failure beats a hopeful success. In the field the
             # app exited on launch (a pending update); "launched, no window
@@ -275,8 +334,9 @@ class OpenApp(Tool):
                              f"{APPEAR_TIMEOUT_S:.0f}s: {why}. Do NOT assume it is open. "
                              f"Tell the user, or try list_windows once more later.",
                              app=display, path=path, launched=True, process_running=running)
-        await asyncio.to_thread(focus_window, window["title"])
-        return self.ok(f"opened {display}: window {window['title']!r} is in front",
+        await asyncio.to_thread(raise_window, window["hwnd"])
+        kept = f" (their {doc!r} is in another window - leave it alone)" if doc else ""
+        return self.ok(f"opened {display}: window {window['title']!r} is in front{kept}",
                        app=display, path=path, title=window["title"], launched=True)
 
 

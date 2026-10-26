@@ -153,6 +153,7 @@ class AgentContext:
             workspace=self.task.workspace, task_id=self.task.id, agent_id=self.agent.id,
             events=self.events, policy=self.agent.permissions, approver=self.approver,
             control=self.control,
+            extras={"goal": self.task.goal},     # what the job may touch (e.g. a document it names)
         )
 
     def progress(self, action: str, fraction: Optional[float] = None) -> None:

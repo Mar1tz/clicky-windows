@@ -293,3 +293,19 @@ def test_verifier_treats_a_failed_look_as_information(tmp_path):
     # but a failed ACT still fails the step
     step.results.append(ToolResult(call_id="5", tool_name="click", ok=False, error="denied"))
     assert not aio.run(RuleVerifier().verify_step(step, ctx)).ok
+
+
+# -- the person's own documents ----------------------------------------------
+
+def test_never_types_into_their_open_document(rec):
+    """Field, 26 Oct: a shopping list was typed into the person's CSV."""
+    rec.front_window = lambda: "*budget.csv - Notepad"
+    r = run("type_text", text="milk")
+    assert not r.ok and "budget.csv" in r.error and rec.calls == []
+    assert not run("key_press", keys=["ctrl", "a"]).ok and rec.calls == []
+    assert run("key_press", keys=["ctrl", "n"]).ok                 # a new window is fine
+    ctx = ToolContext(workspace=".", policy=PermissionPolicy(max_auto_risk=RiskLevel.HIGH),
+                      extras={"goal": "add milk to the end of budget.csv"})
+    assert run("type_text", ctx, text="milk").ok and ("type", "milk") in rec.calls
+    rec.front_window = lambda: "Untitled - Notepad"
+    assert run("type_text", text="eggs").ok

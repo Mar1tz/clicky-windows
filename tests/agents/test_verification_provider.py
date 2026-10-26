@@ -248,3 +248,18 @@ async def test_an_output_the_command_named_but_never_wrote_says_so(tmp_path):
     say = Say()
     await ProviderVerifier().verify_step(step, context(tmp_path, [step], say))
     assert "report.pdf  (DOES NOT EXIST)" in say.prompts[0]
+
+
+async def test_an_on_screen_job_is_judged_by_the_screen_not_the_disk(tmp_path):
+    """Field, 26 Oct: "type a shopping list in Notepad" was failed with
+    "no shopping list text file was created" - the judge saw only the disk."""
+    say = Say()
+    step = Step("Type the list", status=StepStatus.DONE,
+                tool_calls=[ToolCall("type_text", {"text": "milk\neggs"})],
+                results=[ToolResult(call_id="c", tool_name="type_text", ok=True, output="typed 'milk eggs'")])
+    ctx = context(tmp_path, [step], say)
+    ctx.task.worker_type = "computer"
+    await ProviderVerifier().verify_task(ctx)
+    prompt = say.prompts[0]
+    assert "type_text(" in prompt and "ok: typed 'milk eggs'" in prompt
+    assert "No file is expected" in prompt and "Actual state on disk" not in prompt

@@ -84,6 +84,7 @@ class Backend:
     def type_text(self, text: str) -> None: ...
     def press(self, keys: list[str]) -> None: ...
     def position(self) -> tuple[int, int]: ...
+    def front_window(self) -> str: return ""          # the title keys would go to
 
 
 class PynputBackend(Backend):
@@ -122,6 +123,11 @@ class PynputBackend(Backend):
         x, y = self._mouse.position
         return int(x), int(y)
 
+    def front_window(self):
+        from .app_tools import list_windows
+        wins = list_windows()
+        return wins[0]["title"] if wins else ""
+
 
 _backend: Optional[Backend] = None
 
@@ -137,6 +143,29 @@ def set_backend(backend: Optional[Backend]) -> None:
     """Tests inject a recorder; None restores the real one lazily."""
     global _backend
     _backend = backend
+
+
+# -- the person's own documents ------------------------------------------------
+
+# Keys that change nothing in a document: moving, finding, a new window or tab.
+_HARMLESS = {"ctrl+n", "ctrl+t", "ctrl+o", "ctrl+f", "ctrl+tab", "ctrl+shift+tab", "alt+tab", "esc",
+             "escape", "up", "down", "left", "right", "home", "end", "page_up", "page_down",
+             "pageup", "pagedown", "win", "cmd", "f1"}
+
+
+def _into_their_document(ctx: ToolContext) -> Optional[str]:
+    """When the keys would go into a document the person has open (an
+    editor's window with a file in it) and the job's goal does not name
+    it: why not. In the field a shopping list was typed into their CSV."""
+    from .app_tools import document_in, named_in
+    try:
+        doc = document_in(get_backend().front_window())
+    except Exception:  # noqa: BLE001
+        return None
+    if not doc or named_in(doc, ctx.extras.get("goal", "")):
+        return None
+    return (f"the window in front holds their own document {doc!r} - nothing was typed. Never "
+            "change a file of theirs the job does not name: open_app gives a new, empty window.")
 
 
 # -- target resolution ---------------------------------------------------------
@@ -331,6 +360,9 @@ class TypeText(_ComputerTool):
             if await asyncio.to_thread(_hwnd_for, window) is None:
                 return self.fail(f"no open window matches {window!r}; use list_windows")
             await asyncio.sleep(0.15)             # let focus settle before keystrokes
+        theirs = await asyncio.to_thread(_into_their_document, ctx)
+        if theirs:
+            return self.fail(theirs)
         await asyncio.to_thread(get_backend().type_text, text)
         preview = text if len(text) <= 60 else text[:57] + "…"
         return self.ok(f"typed {preview!r}", chars=len(text))
@@ -365,6 +397,10 @@ class KeyPress(_ComputerTool):
                     keys.append(part)
         if not keys:
             return self.fail("no keys given")
+        if "+".join(k.lower() for k in keys) not in _HARMLESS:
+            theirs = await asyncio.to_thread(_into_their_document, ctx)
+            if theirs:
+                return self.fail(theirs.replace("nothing was typed", "no key was pressed"))
         await asyncio.to_thread(get_backend().press, keys)
         return self.ok("pressed " + "+".join(keys), keys=keys)
 

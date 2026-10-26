@@ -67,7 +67,7 @@ def test_open_app_is_medium_risk_one_step():
 
 def test_open_app_unknown_names_similar_apps(monkeypatch):
     monkeypatch.setattr(app_tools, "find_app", lambda n: None)
-    monkeypatch.setattr(app_tools, "focus_window", lambda n: None)
+    monkeypatch.setattr(app_tools, "find_window", lambda n: None)
     monkeypatch.setattr(app_tools, "installed_apps", lambda limit=60: ["Notepad", "Notion", "Node.js"])
     r = run("open_app", name="Noteworthy")
     assert not r.ok
@@ -76,7 +76,8 @@ def test_open_app_unknown_names_similar_apps(monkeypatch):
 
 
 def test_open_app_focuses_an_already_open_window(monkeypatch):
-    monkeypatch.setattr(app_tools, "focus_window", lambda n: {"hwnd": 1, "title": "Untitled - Notepad"})
+    monkeypatch.setattr(app_tools, "find_window", lambda n: {"hwnd": 1, "title": "Untitled - Notepad"})
+    monkeypatch.setattr(app_tools, "raise_window", lambda h: None)
     r = run("open_app", name="notepad")
     assert r.ok and r.data["launched"] is False and "already open" in r.output
 
@@ -299,12 +300,12 @@ def test_open_app_fails_honestly_when_no_window_appears(monkeypatch):
     carried on as if the app were open - acting on whatever window it
     found next. Now it is a failure that says what happened."""
     monkeypatch.setattr(app_tools, "find_app", lambda n: ("Devin", r"C:\x\Devin.lnk"))
-    monkeypatch.setattr(app_tools, "focus_window", lambda t: None)
+    monkeypatch.setattr(app_tools, "find_window", lambda t: None)
     monkeypatch.setattr(app_tools, "_launch", lambda p: None)
     monkeypatch.setattr(app_tools, "_process_running", lambda p: False)
     monkeypatch.setattr(app_tools, "APPEAR_TIMEOUT_S", 0.05)
 
-    async def no_window(frag, timeout):
+    async def no_window(frag, timeout, **kw):
         return None
     monkeypatch.setattr(app_tools, "_wait_for_window", no_window)
     r = run("open_app", name="Devin")
@@ -316,3 +317,42 @@ def test_open_app_fails_honestly_when_no_window_appears(monkeypatch):
     monkeypatch.setattr(app_tools, "_process_running", lambda p: True)
     r = run("open_app", name="Devin")
     assert not r.ok and "process is running but showed no window" in r.error
+
+
+# -- the person's own documents ----------------------------------------------
+
+def test_which_windows_hold_their_document():
+    assert app_tools.document_in("*budget.csv - Notepad") == "budget.csv"
+    assert app_tools.document_in("Q3 report.docx - Word") == "Q3 report.docx"
+    assert app_tools.document_in("Untitled - Notepad") is None
+    assert app_tools.document_in("Book1 - Excel") is None
+    assert app_tools.document_in("Compose Mail - Gmail - Opera") is None
+    assert app_tools.named_in(r"C:\Users\me\budget.csv", "add milk to my budget sheet")
+    assert not app_tools.named_in("budget.csv", "type a shopping list")
+
+
+def _notepad_with_their_csv(monkeypatch):
+    """Field, 26 Oct: "open Notepad and type a shopping list" reused the
+    Notepad window holding the person's CSV and typed the list into it."""
+    wins = [{"hwnd": 1, "title": "*budget.csv - Notepad"}]
+    raised = []
+    monkeypatch.setattr(app_tools, "list_windows", lambda **k: list(wins))
+    monkeypatch.setattr(app_tools, "find_app", lambda n: ("Notepad", r"C:\x\Notepad.lnk"))
+    monkeypatch.setattr(app_tools, "_launch", lambda p: wins.insert(0, {"hwnd": 2, "title": "Untitled - Notepad"}))
+    monkeypatch.setattr(app_tools, "raise_window", raised.append)
+    return raised
+
+
+def test_open_app_gives_a_new_window_when_theirs_holds_a_document(monkeypatch):
+    raised = _notepad_with_their_csv(monkeypatch)
+    r = run("open_app", name="Notepad")
+    assert r.ok and r.data["launched"] is True and r.data["title"] == "Untitled - Notepad"
+    assert raised == [2] and "budget.csv" in r.output
+
+
+def test_open_app_reuses_their_document_when_the_job_names_it(monkeypatch):
+    raised = _notepad_with_their_csv(monkeypatch)
+    ctx = ToolContext(workspace=".", policy=PermissionPolicy(max_auto_risk=RiskLevel.MEDIUM),
+                      extras={"goal": "add milk to budget.csv"})
+    r = asyncio.run(default_registry().execute(ToolCall("open_app", {"name": "Notepad"}), ctx))
+    assert r.ok and r.data["launched"] is False and raised == [1]
