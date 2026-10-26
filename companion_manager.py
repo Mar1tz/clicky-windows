@@ -685,6 +685,7 @@ class CompanionManager(QObject):
         self._start_sleep_watchdog()
         self._watch_audio_devices()
         self._submit(self._start_devlink())
+        self._start_browser_bridge()
         self._submit(self._keep_session_fresh())
         self._submit(self._keep_signed_in())
         # Speed, measured (ai/speed.py): how late the loop wakes, and what
@@ -2272,6 +2273,7 @@ class CompanionManager(QObject):
             "fill_form":       self._tool_fill_form,
             "send_email":      self._tool_send_email,
             "connect_account": self._tool_connect_account,
+            "setup_browser":   self._tool_setup_browser,
         }
 
     # ── Connected accounts (integrations/, CI-09..CI-14) ─────────────────────
@@ -2468,6 +2470,40 @@ class CompanionManager(QObject):
             _log.warning("devlink did not start", exc_info=True)
             return
         devlink.set_current(hub)
+
+    def _start_browser_bridge(self) -> None:
+        """CI-03: the local end of HeyTora's browser extension - 127.0.0.1,
+        its own thread; the extension connects to it when it is set up."""
+        try:
+            from config import data_dir
+            from integrations import browser_bridge
+            if browser_bridge.current() is None:
+                bridge = browser_bridge.BrowserBridge(data_dir())
+                bridge.start()
+                browser_bridge.set_current(bridge)
+        except Exception:  # noqa: BLE001 - everything else works without it
+            _log.warning("browser bridge did not start", exc_info=True)
+
+    async def _tool_setup_browser(self, args: dict) -> dict:
+        """CI-02: put the extension where the browser can load it, with this
+        install's port and token, and open that folder. Browsers only let a
+        person add an extension themselves: three clicks, said here."""
+        from config import data_dir
+        from integrations import browser_bridge
+        bridge = browser_bridge.current()
+        if bridge is None:
+            return {"error": "the browser bridge did not start - see tora.log"}
+        if bridge.connected:
+            return {"ok": True, "note": "The browser extension is already connected."}
+        folder = await asyncio.to_thread(browser_bridge.install, bridge, data_dir() / "browser-extension")
+        try:
+            os.startfile(str(folder))
+        except Exception:  # noqa: BLE001
+            pass
+        return {"ok": True, "folder": str(folder),
+                "note": ("Tell them, briefly: in Chrome go to chrome://extensions (in Edge, edge://extensions), "
+                         "turn on Developer mode, click Load unpacked, and pick the folder that just opened. "
+                         "Then HeyTora can work in their own tabs - each click or typing approved by them.")}
 
     async def _stop_devlink(self) -> None:
         import devlink

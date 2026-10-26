@@ -15,7 +15,8 @@ EXPECTED = {
     "git": {"git_init", "git_status", "git_diff", "git_log", "git_add", "git_commit",
             "git_branch", "git_push"},
     "browser": {"open_page", "extract_information", "click_element", "fill_field",
-                "screenshot_page", "close_browser", "ask_to_sign_in"},
+                "screenshot_page", "close_browser", "ask_to_sign_in",
+                "tab_read", "tab_click", "tab_type"},
     "computer": {"find_on_screen", "screenshot", "move_cursor", "click", "type_text",
                  "key_press", "open_app", "list_windows", "focus_window"},
     "spreadsheet": {"read_workbook", "write_workbook", "clean_data", "reconcile_sheets", "check_formulas",
@@ -62,7 +63,10 @@ def test_risk_levels():
     assert risk["ask_to_sign_in"] is RiskLevel.SAFE
     looking_only_or_asks = looking_only | {"ask_to_sign_in"}
     assert risk["open_app"] is RiskLevel.MEDIUM and risk["focus_window"] is RiskLevel.LOW
-    for name in (EXPECTED["browser"] | EXPECTED["computer"]) - looking_only_or_asks - {"open_app", "focus_window"}:
+    # Reading their own signed-in tab reads, it does not act (CI-04); acting there is HIGH and always asks.
+    assert risk["tab_read"] is RiskLevel.MEDIUM
+    for name in (EXPECTED["browser"] | EXPECTED["computer"]) - looking_only_or_asks - {"open_app", "focus_window",
+                                                                                       "tab_read"}:
         assert risk[name] is RiskLevel.HIGH, name
     for name in looking_only:
         assert risk[name] is RiskLevel.SAFE, name

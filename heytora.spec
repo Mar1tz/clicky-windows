@@ -172,6 +172,10 @@ datas.append((os.path.join("assets", "wake"), os.path.join("assets", "wake")))
 # Settings -> Code editors -> Connect is clicked) - its files, not its tests.
 for _name in ("package.json", "extension.js", "README.md", "icon.png", "LICENSE"):
     datas.append((os.path.join("connectors", "vscode", _name), os.path.join("connectors", "vscode")))
+# The browser extension (integrations/browser_bridge.py installs it for the
+# browser to load) - its files, not its tests.
+for _name in ("manifest.json", "background.js", "icon.png", "LICENSE"):
+    datas.append((os.path.join("connectors", "browser", _name), os.path.join("connectors", "browser")))
 
 
 a = Analysis(

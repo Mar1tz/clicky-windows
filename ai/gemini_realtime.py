@@ -325,6 +325,15 @@ def tool_declarations() -> list[dict]:
             },
         },
         {
+            "name": "setup_browser",
+            "description": (
+                "SET UP HEYTORA'S BROWSER EXTENSION - 'set up the browser extension', 'let Tora use my "
+                "browser'. With it, jobs can read and act in their own browser tabs, signed in as them, "
+                "without moving their mouse; every click or typing is approved by them."
+            ),
+            "parameters": {"type": "object", "properties": {}},
+        },
+        {
             "name": "connect_account",
             "description": (
                 "CONNECT ONE OF THEIR ACCOUNTS - only after they said yes to connecting it. Opens "
