@@ -185,6 +185,30 @@ class Filled:
     stopped: bool = False                                         # they left the window
 
 
+_FIELD_WORDS = {"to": ("to", "recipient", "recipients"), "cc": ("cc",), "bcc": ("bcc",),
+                "subject": ("subject",), "body": ("message body", "body", "message"),
+                "message": ("message body", "message", "body")}
+
+
+def find_field(fields: list[Field], wanted: str) -> Optional[Field]:
+    """The box called `wanted` ("Subject", "To", "the message"): its label's
+    words, exactly before loosely - "To" is never "Tomorrow's notes"."""
+    want = re.sub(r"\b(the|box|field|line)\b", " ", (wanted or "").lower()).strip()
+    if not want:
+        return None
+    names = _FIELD_WORDS.get(want, (want,))
+    words = lambda label: re.findall(r"[a-z0-9]+", label.lower())
+    for name in names:                                   # the label is exactly that
+        for f in fields:
+            if " ".join(words(f.label)) == name:
+                return f
+    for name in names:                                   # its first words are that
+        for f in fields:
+            if " ".join(words(f.label)).startswith(name + " ") or f" {name} " in f" {' '.join(words(f.label))} ":
+                return f
+    return None
+
+
 def click(x: int, y: int) -> None:
     """A left click at screen pixel (x, y)."""
     user32 = ctypes.windll.user32

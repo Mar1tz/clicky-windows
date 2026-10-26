@@ -297,6 +297,15 @@ def tool_declarations() -> list[dict]:
                             "who it is for, tone, length, any exact wording."
                         ),
                     },
+                    "field": {
+                        "type": "string",
+                        "description": (
+                            "Which box, when it is NOT the one the cursor is in: its "
+                            "label - 'Subject', 'To', 'Cc', 'Message' (an email's "
+                            "body). 'Change the subject to X' is field 'Subject'. "
+                            "Leave out for the box they are in."
+                        ),
+                    },
                 },
                 "required": ["request"],
             },

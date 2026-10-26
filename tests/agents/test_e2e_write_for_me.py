@@ -547,3 +547,36 @@ def test_the_live_model_knows_it_can_change_text():
     assert "Changing a reply already written is write_for_me" in decls["reply_to_email"]["description"]
     rules = " ".join(config._REALTIME_RULES.split())
     assert "Changing what is already written" in rules and "it never adds a second version" in rules
+
+
+def test_a_named_box_is_found_by_its_label():
+    """'Change the subject': the Subject box, not the body the cursor is in."""
+    from ai.form_fill import Field, find_field
+    boxes = [Field("f1", "To recipients"), Field("f2", "Subject", "Running late"),
+             Field("f3", "Message Body", "Hi Lee"), Field("f4", "Tomorrow's notes")]
+    assert find_field(boxes, "Subject").key == "f2"
+    assert find_field(boxes, "the subject line").key == "f2"
+    assert find_field(boxes, "To").key == "f1", "'To' is the recipients, never Tomorrow's notes"
+    assert find_field(boxes, "message").key == "f3" and find_field(boxes, "body").key == "f3"
+    assert find_field(boxes, "Bcc") is None
+
+
+def test_change_the_subject_goes_to_the_subject_box(monkeypatch):
+    import asyncio
+    import companion_manager as cm
+    from ai import form_fill
+    from ai.form_fill import Field
+    boxes = [Field("f1", "To recipients"), Field("f2", "Subject", "Running late")]
+    moved, wrote = [], []
+    monkeypatch.setattr(form_fill, "read_fields", lambda: boxes)
+    monkeypatch.setattr(form_fill, "_into", lambda f, clicker: moved.append(f.label) or True)
+    mgr = cm.CompanionManager.__new__(cm.CompanionManager)
+
+    async def write(request, page=None, *, edit_only=False):
+        wrote.append(request)
+        return {"ok": True}
+    mgr._write_for_me = write
+    out = asyncio.run(mgr._tool_write_for_me({"request": "change the subject to Late tomorrow", "field": "Subject"}))
+    assert out == {"ok": True} and moved == ["Subject"] and wrote == ["change the subject to Late tomorrow"]
+    missing = asyncio.run(mgr._tool_write_for_me({"request": "x", "field": "Bcc"}))
+    assert "No box called 'Bcc'" in missing["error"] and "Subject" in missing["error"]

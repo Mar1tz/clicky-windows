@@ -2389,7 +2389,9 @@ class CompanionManager(QObject):
             return {"ok": False, "error": f"could not open the browser: {exc}"}
         _log.info("email: compose window opened (%s, %d recipient(s))", via, len(to))
         note = ("The email is open in their browser, filled in - they check it and press Send themselves. "
-                "Say that in one line; do not say it was sent.")
+                "Say that in one line; do not say it was sent. To change it now: write_for_me with field "
+                "'Subject', 'To' or 'Message' (the body). If they say 'send it', press its Send button with "
+                "desktop_action (they approve).")
         if offer_connect:
             note += (" If they want Tora to send emails for them in future, offer once to connect Gmail "
                      "(connect_account).")
@@ -2730,7 +2732,29 @@ class CompanionManager(QObject):
         request = str(args.get("request") or "").strip()
         if not request:
             return {"error": "nothing was said about what to write"}
+        field = str(args.get("field") or "").strip()
+        if field:
+            # "Change the subject": the box they named, not the one the cursor is in.
+            moved = await self._focus_field(field)
+            if moved is not None:
+                return moved
         return await self._write_for_me(request)
+
+    async def _focus_field(self, name: str) -> Optional[dict]:
+        """Put the keyboard in the box called `name` in the window in front
+        (ai/form_fill.find_field). None when it is there; else an error."""
+        from ai import form_fill
+        fields = await asyncio.to_thread(form_fill.read_fields)
+        target = form_fill.find_field(fields, name)
+        if target is None:
+            labels = ", ".join(f.label for f in fields[:12] if f.label) or "none"
+            return {"error": f"No box called {name!r} in the window in front. Boxes there: {labels}."}
+        if target.secret:
+            return {"error": "That is a password or card box - Tora never types into one. Tell them so."}
+        ok = await asyncio.to_thread(form_fill._into, target, form_fill.click)
+        if not ok:
+            return {"error": f"Tora could not get into the {target.label!r} box - ask them to click into it."}
+        return None
 
     async def _write_for_me(self, request: str, page: Optional[str] = None, *, edit_only: bool = False) -> dict:
         """Into the focused box: typed as it is written, or (EDIT) its text
