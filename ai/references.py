@@ -67,6 +67,8 @@ def refers(text: str) -> bool:
                 and not (w == "that" and i + 1 < len(words) and words[i + 1] in _CONJUNCTION_NEXT)]
     if not pointers:
         return False
+    if any(w in ("and", "then") for w in words[:pointers[0]]):
+        return False                    # "write up the minutes and email them": its own
     return pointers[0] < 6 or len(words) <= 7
 
 

@@ -2688,6 +2688,13 @@ class CompanionManager(QObject):
             if resolution is not None and resolution.thing is not None:
                 goal += f"\n\nWhat they refer to: {resolution.thing.describe()} - {resolution.evidence}."
                 meta["reference"] = resolution.to_dict()
+        # OR-05: who, which file, how much, which account - asked once, together.
+        from ai import clarify
+        gaps = clarify.missing(str(args.get("goal") or ""), has_file=bool(files),
+                               has_referent=bool(meta.get("reference")) or follows is not None)
+        if gaps:
+            return {"error": (f"Ask them this one question, then call delegate_task again with the answers: "
+                              f"{clarify.question(gaps)} Say what you will get ready meanwhile.")}
         if files:
             goal += "\n\nThe file(s) they mean - use these exact paths: " + "; ".join(files)
             meta["request"], meta["files"] = goal, files
