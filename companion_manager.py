@@ -2287,22 +2287,25 @@ class CompanionManager(QObject):
         from integrations import gmail, oauth
         from integrations.connections import connections
         from integrations.lifecycle import State
+        to = [str(a).strip() for a in args.get("to") or []]
+        cc = [str(a).strip() for a in args.get("cc") or []]
+        subject, body = str(args.get("subject") or ""), str(args.get("body") or "")
+        via = str(args.get("via") or "gmail").lower()
         try:
             oauth.client()
-        except oauth.NotConfigured as exc:
-            return {"ok": False, "error": str(exc)}
+            configured = True
+        except oauth.NotConfigured:
+            configured = False
         conns = connections()
         wanted = str(args.get("account") or "").strip()
-        ready = conns.usable("gmail", "send", wanted)
+        ready = conns.usable("gmail", "send", wanted) if configured and via == "gmail" else []
         if not ready:
-            stale = [c for c in conns.all("gmail") if c.state is State.REAUTH_REQUIRED]
-            if stale:
+            stale = [c for c in conns.all("gmail") if c.state is State.REAUTH_REQUIRED] if configured else []
+            if stale and via == "gmail":
                 return {"ok": False, "needs_reconnect": stale[0].account,
                         "note": f"Their Gmail ({stale[0].account}) needs connecting again. Ask once if they "
                                 "want to reconnect it now; if yes, call connect_account."}
-            return {"ok": False, "needs_connection": "gmail",
-                    "note": "Gmail is not connected. Offer to connect it - one sign-in in their browser, and "
-                            "HeyTora may only send, never read the inbox. If they say yes, call connect_account."}
+            return await self._compose_in_browser(to, cc, subject, body, via, offer_connect=configured)
         if len(ready) > 1 and not wanted:
             return {"ok": False, "which_account": [c.account for c in ready],
                     "note": "They have more than one Gmail connected - ask which one sends it."}
@@ -2324,6 +2327,26 @@ class CompanionManager(QObject):
         return {"awaiting_approval": True,
                 "note": "Say in one short sentence that the email is on screen for them to check and approve. "
                         "Do not say it is sent - you will be told."}
+
+    async def _compose_in_browser(self, to, cc, subject, body, via, *, offer_connect: bool) -> dict:
+        """No connection: the message, filled in, in their own Gmail or
+        Outlook in their browser - they press Send (integrations/compose.py)."""
+        from integrations import compose, gmail
+        problems = gmail.Draft("you@example.com", to, subject, body, cc).problems()
+        if problems:
+            return {"ok": False, "error": "; ".join(problems)}
+        link = compose.url(to, subject, body, cc, via=via)
+        try:
+            await asyncio.to_thread(os.startfile, link)
+        except Exception as exc:  # noqa: BLE001
+            return {"ok": False, "error": f"could not open the browser: {exc}"}
+        _log.info("email: compose window opened (%s, %d recipient(s))", via, len(to))
+        note = ("The email is open in their browser, filled in - they check it and press Send themselves. "
+                "Say that in one line; do not say it was sent.")
+        if offer_connect:
+            note += (" If they want Tora to send emails for them in future, offer once to connect Gmail "
+                     "(connect_account).")
+        return {"ok": True, "opened_compose": via, "note": note}
 
     async def _after_send_approval(self, future, draft, conn) -> None:
         from integrations import gmail

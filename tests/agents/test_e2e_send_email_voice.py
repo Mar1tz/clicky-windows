@@ -54,10 +54,29 @@ def _manager(answer=True):
 ARGS = {"to": ["lee@example.com"], "subject": "Running late", "body": "Be there at 3:15."}
 
 
-def test_not_connected_she_offers_to_connect(setup):
+def test_not_connected_the_message_opens_filled_in_for_them_to_send(setup, monkeypatch):
+    opened = []
+    monkeypatch.setattr(cm.os, "startfile", opened.append)
     mgr, asked, *_ = _manager()
     out = asyncio.run(mgr._tool_send_email(dict(ARGS)))
-    assert out["needs_connection"] == "gmail" and "connect_account" in out["note"] and not asked
+    assert out["opened_compose"] == "gmail" and "press Send themselves" in out["note"] and not asked
+    assert "connect_account" in out["note"], "and connecting is offered, once"
+    from urllib.parse import parse_qs, urlsplit
+    q = {k: v[0] for k, v in parse_qs(urlsplit(opened[0]).query).items()}
+    assert opened[0].startswith("https://mail.google.com/mail/?")
+    assert (q["to"], q["su"], q["body"], q["view"]) == ("lee@example.com", "Running late", "Be there at 3:15.", "cm")
+
+
+def test_outlook_and_no_google_client_still_work(setup, monkeypatch):
+    opened = []
+    monkeypatch.setattr(cm.os, "startfile", opened.append)
+    monkeypatch.delenv("TORA_GOOGLE_CLIENT_ID")
+    mgr, *_ = _manager()
+    out = asyncio.run(mgr._tool_send_email({**ARGS, "via": "outlook"}))
+    assert out["opened_compose"] == "outlook" and opened[0].startswith("https://outlook.live.com/mail/0/deeplink/compose?")
+    assert "connect_account" not in out["note"], "nothing to connect to on this copy"
+    bad = asyncio.run(mgr._tool_send_email({**ARGS, "to": ["not an address"]}))
+    assert not bad["ok"] and "not an email address" in bad["error"]
 
 
 def test_they_approve_exactly_what_goes_and_it_is_sent_when_gmail_confirms(setup, monkeypatch):

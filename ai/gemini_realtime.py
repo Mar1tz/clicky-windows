@@ -307,8 +307,9 @@ def tool_declarations() -> list[dict]:
                 "SEND AN EMAIL from their connected Gmail - 'email Lee that I'm running late', "
                 "'send Sam the summary'. They see exactly what goes - from, to, subject, body - "
                 "and approve it; any change is asked again. Use the exact address they gave or "
-                "one they confirmed; never guess one. If Gmail is not connected the result says "
-                "so: offer to connect it (connect_account)."
+                "one they confirmed; never guess one. Without a connected Gmail it opens the "
+                "message filled in, in their own Gmail or Outlook in the browser, for them to "
+                "send."
             ),
             "parameters": {
                 "type": "object",
@@ -320,6 +321,8 @@ def tool_declarations() -> list[dict]:
                     "cc": {"type": "array", "items": {"type": "string"}},
                     "account": {"type": "string",
                                 "description": "Which of their Gmail accounts sends it, if they have more than one."},
+                    "via": {"type": "string", "enum": ["gmail", "outlook"],
+                            "description": "Their email service, if they said (default Gmail)."},
                 },
                 "required": ["to", "subject", "body"],
             },
