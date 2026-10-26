@@ -337,6 +337,21 @@ def tool_declarations() -> list[dict]:
             "parameters": {"type": "object", "properties": {}},
         },
         {
+            "name": "read_calendar",
+            "description": (
+                "WHAT IS ON THEIR GOOGLE CALENDAR - 'what's on tomorrow', 'am I free Friday "
+                "afternoon', 'my meetings this week'. Read only: it never adds, moves or deletes. "
+                "If it is not connected the result says so: offer to connect it."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "start": {"type": "string", "description": "First day, YYYY-MM-DD (default today)."},
+                    "days": {"type": "integer", "description": "How many days from start (default 1, max 31)."},
+                },
+            },
+        },
+        {
             "name": "connect_account",
             "description": (
                 "CONNECT ONE OF THEIR ACCOUNTS - only after they said yes to connecting it. Opens "
@@ -346,9 +361,9 @@ def tool_declarations() -> list[dict]:
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "service": {"type": "string", "enum": ["gmail"]},
-                    "for": {"type": "string", "enum": ["send"],
-                            "description": "What it is needed for."},
+                    "service": {"type": "string", "enum": ["gmail", "calendar"]},
+                    "for": {"type": "string", "enum": ["send", "read"],
+                            "description": "What it is needed for: send (Gmail) or read (Calendar)."},
                 },
                 "required": ["service"],
             },

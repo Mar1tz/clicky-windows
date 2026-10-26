@@ -112,7 +112,7 @@ def is_correction(text: str) -> bool:
 _TOOL_ROUTE = {"point_at": "draw", "draw": "draw", "show_me_how": "guided", "guide_step": "guided",
                "desktop_action": "direct", "write_for_me": "direct", "fill_form": "direct",
                "reply_to_email": "direct", "delegate_task": "job", "send_email": "direct",
-               "connect_account": "direct"}
+               "connect_account": "direct", "read_calendar": "answer"}
 
 
 def model_route(tools: list[str]) -> str:
