@@ -397,6 +397,14 @@ def tool_declarations() -> list[dict]:
             },
         },
         {
+            "name": "decline_connect",
+            "description": ("THEY SAID NO to connecting a service Tora offered - 'not now', 'no thanks'. "
+                            "never: true when they said don't ask again."),
+            "parameters": {"type": "object",
+                           "properties": {"service": {"type": "string"}, "never": {"type": "boolean"}},
+                           "required": ["service"]},
+        },
+        {
             "name": "list_connections",
             "description": (
                 "WHAT TORA IS CONNECTED TO - 'what can you access', 'what's connected', 'what apps "

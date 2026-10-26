@@ -150,3 +150,21 @@ def test_send_it_sends_the_open_email_after_a_yes(setup, monkeypatch):
     assert "To: lee@example.com" in reason and "Subject: Running late" in reason and kw["may_auto_approve"] is False
     asyncio.run(later[0])
     assert pressed == [["ctrl", "enter"]] and said == ["Sent."]
+
+
+def test_connecting_is_offered_once_and_a_no_is_kept(setup, monkeypatch, tmp_path):
+    """CI-10: offered when a feature needs it, at most once a session; "not
+    now" holds for the session, "don't ask again" until they ask for it."""
+    from integrations import offers as offers_mod
+    monkeypatch.setattr(cm.os, "startfile", lambda link: None)
+    mgr, *_ = _manager()
+    first = asyncio.run(mgr._tool_send_email(dict(ARGS)))
+    again = asyncio.run(mgr._tool_send_email(dict(ARGS)))
+    assert "connect Gmail" in first["note"] and "connect Gmail" not in again["note"], "once a session"
+    asyncio.run(mgr._tool_decline_connect({"service": "gmail", "never": True}))
+    fresh = offers_mod.Offers(tmp_path)
+    fresh.declined("gmail", never=True)
+    later = offers_mod.Offers(tmp_path)                     # the next session
+    assert not later.may_offer("gmail") and later.may_offer("calendar")
+    later.asked_for("gmail")
+    assert offers_mod.Offers(tmp_path).may_offer("gmail"), "asking for it lifts the no"

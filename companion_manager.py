@@ -440,6 +440,11 @@ def _what_it_means(self, goal: str, jobs: list):
     return res
 
 
+def offers():
+    from integrations.offers import offers as _offers
+    return _offers()
+
+
 def _box_named(box) -> str:
     """"the 'Message Body' box": which box was written, so Tora never says
     she changed the subject when it was the body (field, 26 Oct)."""
@@ -2287,6 +2292,7 @@ class CompanionManager(QObject):
             "send_open_email": self._tool_send_open_email,
             "connect_account": self._tool_connect_account,
             "list_connections": self._tool_list_connections,
+            "decline_connect": self._tool_decline_connect,
             "disconnect_account": self._tool_disconnect_account,
             "setup_browser":   self._tool_setup_browser,
             "read_calendar":   self._tool_read_calendar,
@@ -2310,9 +2316,9 @@ class CompanionManager(QObject):
                 return {"ok": False, "needs_reconnect": stale[0].account,
                         "note": "Their Google Calendar needs connecting again. Ask once; if yes, call "
                                 "connect_account with service calendar."}
-            return {"ok": False, "needs_connection": "calendar",
-                    "note": "Google Calendar is not connected. Offer to connect it - read only, HeyTora "
-                            "never changes their calendar. If yes, call connect_account with service calendar."}
+            return {"ok": False, "needs_connection": "calendar", "note": self._connect_offer(
+                "calendar", "Google Calendar is not connected. Offer to connect it - read only, HeyTora never "
+                            "changes their calendar. If yes, call connect_account with service calendar.")}
         try:
             start = dt.date.fromisoformat(str(args.get("start") or "")) if args.get("start") else dt.date.today()
         except ValueError:
@@ -2403,10 +2409,27 @@ class CompanionManager(QObject):
                 "Say that in one line; do not say it was sent. To change it now: write_for_me with field "
                 "'Subject', 'To' or 'Message' (the body). If they say 'send it': send_open_email "
                 "(they approve).")
-        if offer_connect:
-            note += (" If they want Tora to send emails for them in future, offer once to connect Gmail "
-                     "(connect_account).")
+        if offer_connect and offers().may_offer("gmail"):
+            offers().offered("gmail")
+            note += (" Then offer once to connect Gmail so Tora can send emails for them in future "
+                     "(connect_account; a no: decline_connect).")
         return {"ok": True, "opened_compose": via, "note": note}
+
+    @staticmethod
+    def _connect_offer(service: str, offer: str) -> str:
+        """CI-10: the offer, when it may be made now; else just the fact."""
+        if not offers().may_offer(service):
+            return (f"{service.capitalize()} is not connected and they asked not to be offered it now. Say it "
+                    "isn't connected in a few words; they can say 'connect my " + service + "' any time.")
+        offers().offered(service)
+        return offer + " If they say no: decline_connect (never: true if they say don't ask again)."
+
+    async def _tool_decline_connect(self, args: dict) -> dict:
+        service = str(args.get("service") or "").strip().lower()
+        never = bool(args.get("never"))
+        offers().declined(service, never=never)
+        return {"ok": True, "note": "Say 'okay' and nothing more." + (
+            f" Tora won't offer {service} again until they ask for it." if never else "")}
 
     async def _tool_send_open_email(self, args: dict) -> dict:
         """"Send it": the email Tora opened in their browser (the compose
@@ -2491,6 +2514,7 @@ class CompanionManager(QObject):
         from integrations import oauth
         from integrations.connections import connections
         service = str(args.get("service") or "gmail").strip().lower()
+        offers().asked_for(service)                   # CI-10: asking lifts a "don't ask again"
         if service not in ("gmail", "calendar"):
             return await self._connect_mcp(service, args)
         try:

@@ -77,6 +77,11 @@ def _no_real_credential_vault(monkeypatch):
         monkeypatch.setattr(vault, "_vault", vault.MemoryVault())
     except Exception:  # noqa: BLE001
         pass
+    try:                                       # and a fresh session of connect offers, nothing on disk
+        from integrations import offers
+        monkeypatch.setattr(offers, "_offers", offers.Offers(None))
+    except Exception:  # noqa: BLE001
+        pass
 
 
 @pytest.fixture(autouse=True)
