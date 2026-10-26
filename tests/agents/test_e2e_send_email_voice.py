@@ -1,0 +1,107 @@
+"""Sending an email by voice (CI-09..CI-14, the Massive Direction Plan).
+
+Not connected: she offers to connect, once. Connected: they see from, to,
+subject and body and approve exactly that; it is "sent" only when Gmail
+gives back the message id. An expired grant asks to reconnect.
+"""
+from __future__ import annotations
+
+import asyncio
+import time
+from concurrent.futures import Future
+from types import SimpleNamespace
+
+import pytest
+
+import companion_manager as cm
+from integrations import connections as conn_mod
+from integrations import gmail, vault
+from integrations.connections import Connections
+from integrations.lifecycle import Connection, State
+
+
+@pytest.fixture(autouse=True)
+def setup(monkeypatch, tmp_path):
+    monkeypatch.setenv("TORA_GOOGLE_CLIENT_ID", "heytora-desktop")
+    conns = Connections(tmp_path / "connections.json", authorize=lambda *a, **k: None)
+    monkeypatch.setattr(conn_mod, "_connections", conns)
+    return conns
+
+
+def _connected(conns, account="sam@example.com"):
+    c = Connection("gmail", account, State.CONNECTED,
+                   scopes=["https://www.googleapis.com/auth/gmail.send"], vault_ref=vault.ref("gmail", account))
+    vault.vault().put(c.vault_ref, {"access_token": "at", "refresh_token": "rt", "expires_at": time.time() + 600})
+    conns._items[c.key] = c
+    return c
+
+
+def _manager(answer=True):
+    mgr = cm.CompanionManager.__new__(cm.CompanionManager)
+    asked, said, later = [], [], []
+
+    def confirm(reason, **kw):
+        asked.append((reason, kw))
+        f = Future()
+        f.set_result(answer)
+        return f
+    mgr._agents = SimpleNamespace(request_confirmation=confirm)
+    mgr._say_when_idle = said.append
+    mgr._submit = later.append
+    return mgr, asked, said, later
+
+
+ARGS = {"to": ["lee@example.com"], "subject": "Running late", "body": "Be there at 3:15."}
+
+
+def test_not_connected_she_offers_to_connect(setup):
+    mgr, asked, *_ = _manager()
+    out = asyncio.run(mgr._tool_send_email(dict(ARGS)))
+    assert out["needs_connection"] == "gmail" and "connect_account" in out["note"] and not asked
+
+
+def test_they_approve_exactly_what_goes_and_it_is_sent_when_gmail_confirms(setup, monkeypatch):
+    _connected(setup)
+    sent = []
+    monkeypatch.setattr(gmail, "send", lambda draft, token, **kw: sent.append((draft, token)) or "msg-9")
+    mgr, asked, said, later = _manager(answer=True)
+    out = asyncio.run(mgr._tool_send_email(dict(ARGS)))
+    assert out["awaiting_approval"] and not sent, "nothing goes before the yes"
+    reason, kw = asked[0]
+    assert "From: sam@example.com" in reason and "To: lee@example.com" in reason and "Be there at 3:15." in reason
+    assert kw["may_auto_approve"] is False and kw["grant_key"] == "", "a send is never waved through"
+    asyncio.run(later[0])
+    draft, token = sent[0]
+    assert token == "at" and draft.digest() == kw["arguments"]["digest"], "exactly what was approved"
+    assert said == ["Sent to lee@example.com."]
+
+
+def test_a_no_sends_nothing(setup, monkeypatch):
+    _connected(setup)
+    monkeypatch.setattr(gmail, "send", lambda *a, **k: pytest.fail("sent without a yes"))
+    mgr, asked, said, later = _manager(answer=False)
+    asyncio.run(mgr._tool_send_email(dict(ARGS)))
+    asyncio.run(later[0])
+    assert said == ["Okay, I didn't send it."]
+
+
+def test_an_expired_grant_asks_to_reconnect(setup):
+    c = _connected(setup)
+    c.state = State.REAUTH_REQUIRED
+    mgr, *_ = _manager()
+    out = asyncio.run(mgr._tool_send_email(dict(ARGS)))
+    assert out["needs_reconnect"] == "sam@example.com"
+
+
+def test_two_accounts_are_never_picked_silently(setup):
+    _connected(setup, "sam@example.com")
+    _connected(setup, "sam@work.example")
+    mgr, asked, *_ = _manager()
+    out = asyncio.run(mgr._tool_send_email(dict(ARGS)))
+    assert sorted(out["which_account"]) == ["sam@example.com", "sam@work.example"] and not asked
+    out = asyncio.run(mgr._tool_send_email({**ARGS, "account": "sam@work.example"}))
+    assert out["awaiting_approval"] and "From: sam@work.example" in asked[0][0]
+
+
+def test_while_guiding_it_is_an_act_that_needs_asking():
+    assert "send_email" in cm.CompanionManager.ACT_TOOLS

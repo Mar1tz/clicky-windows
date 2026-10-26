@@ -302,6 +302,46 @@ def tool_declarations() -> list[dict]:
             },
         },
         {
+            "name": "send_email",
+            "description": (
+                "SEND AN EMAIL from their connected Gmail - 'email Lee that I'm running late', "
+                "'send Sam the summary'. They see exactly what goes - from, to, subject, body - "
+                "and approve it; any change is asked again. Use the exact address they gave or "
+                "one they confirmed; never guess one. If Gmail is not connected the result says "
+                "so: offer to connect it (connect_account)."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "to": {"type": "array", "items": {"type": "string"},
+                           "description": "Recipient email addresses, exactly as given."},
+                    "subject": {"type": "string"},
+                    "body": {"type": "string", "description": "The whole message, as it will be sent."},
+                    "cc": {"type": "array", "items": {"type": "string"}},
+                    "account": {"type": "string",
+                                "description": "Which of their Gmail accounts sends it, if they have more than one."},
+                },
+                "required": ["to", "subject", "body"],
+            },
+        },
+        {
+            "name": "connect_account",
+            "description": (
+                "CONNECT ONE OF THEIR ACCOUNTS - only after they said yes to connecting it. Opens "
+                "Google's sign-in in their browser; HeyTora asks only for what the feature needs "
+                "(sending email: send only, never reading the inbox)."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "service": {"type": "string", "enum": ["gmail"]},
+                    "for": {"type": "string", "enum": ["send"],
+                            "description": "What it is needed for."},
+                },
+                "required": ["service"],
+            },
+        },
+        {
             "name": "fill_form",
             "description": (
                 "FILL IN A FORM: several boxes at once - 'fill in this form', "

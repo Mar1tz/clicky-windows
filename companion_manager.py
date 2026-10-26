@@ -2199,7 +2199,8 @@ class CompanionManager(QObject):
     # A walkthrough shows; the user does. While one runs, a tool that acts on
     # their behalf runs only when what they said this turn asked her to do it
     # ("just do it for me"), and the switch is said aloud - never silent.
-    ACT_TOOLS = ("desktop_action", "write_for_me", "fill_form", "reply_to_email", "delegate_task")
+    ACT_TOOLS = ("desktop_action", "write_for_me", "fill_form", "reply_to_email", "delegate_task",
+                 "send_email")
     _DO_IT = re.compile(r"\b(do (it|that|this)( one)?|you do|for me|click (it|that|this|on)|press (it|that)|"
                         r"go ahead|fill (it|this|that) in|type (it|that)|just do)\b", re.IGNORECASE)
 
@@ -2269,7 +2270,107 @@ class CompanionManager(QObject):
             "reply_to_email":  self._tool_reply_to_email,
             "code_context":    self._tool_code_context,
             "fill_form":       self._tool_fill_form,
+            "send_email":      self._tool_send_email,
+            "connect_account": self._tool_connect_account,
         }
+
+    # ── Connected accounts (integrations/, CI-09..CI-14) ─────────────────────
+    #
+    # Gmail send: the person sees from, to, subject and body and approves
+    # exactly that (bound to the draft's digest; a change asks again); it is
+    # "sent" only once Gmail returns the message's id. Not connected, or the
+    # grant expired: the voice offers to connect it, once, when it is needed.
+
+    async def _tool_send_email(self, args: dict) -> dict:
+        from integrations import gmail, oauth
+        from integrations.connections import connections
+        from integrations.lifecycle import State
+        try:
+            oauth.client()
+        except oauth.NotConfigured as exc:
+            return {"ok": False, "error": str(exc)}
+        conns = connections()
+        wanted = str(args.get("account") or "").strip()
+        ready = conns.usable("gmail", "send", wanted)
+        if not ready:
+            stale = [c for c in conns.all("gmail") if c.state is State.REAUTH_REQUIRED]
+            if stale:
+                return {"ok": False, "needs_reconnect": stale[0].account,
+                        "note": f"Their Gmail ({stale[0].account}) needs connecting again. Ask once if they "
+                                "want to reconnect it now; if yes, call connect_account."}
+            return {"ok": False, "needs_connection": "gmail",
+                    "note": "Gmail is not connected. Offer to connect it - one sign-in in their browser, and "
+                            "HeyTora may only send, never read the inbox. If they say yes, call connect_account."}
+        if len(ready) > 1 and not wanted:
+            return {"ok": False, "which_account": [c.account for c in ready],
+                    "note": "They have more than one Gmail connected - ask which one sends it."}
+        conn = ready[0]
+        draft = gmail.Draft(sender=conn.account, to=[str(a).strip() for a in args.get("to") or []],
+                            subject=str(args.get("subject") or ""), body=str(args.get("body") or ""),
+                            cc=[str(a).strip() for a in args.get("cc") or []])
+        if draft.problems():
+            return {"ok": False, "error": "; ".join(draft.problems())}
+        mgr = self._agents
+        if mgr is None or not hasattr(mgr, "request_confirmation"):
+            return {"error": "I cannot ask for approval right now, so I will not send it"}
+        future = mgr.request_confirmation(
+            "Send this email?\n\n" + draft.review(), tool_name="send_email",
+            arguments={"from": draft.sender, "to": draft.to, "cc": draft.cc, "subject": draft.subject,
+                       "digest": draft.digest()},
+            grant_key="", may_auto_approve=False)
+        self._submit(self._after_send_approval(future, draft, conn))
+        return {"awaiting_approval": True,
+                "note": "Say in one short sentence that the email is on screen for them to check and approve. "
+                        "Do not say it is sent - you will be told."}
+
+    async def _after_send_approval(self, future, draft, conn) -> None:
+        from integrations import gmail
+        from integrations.connections import connections
+        try:
+            approved = await asyncio.wrap_future(future)
+        except Exception:  # noqa: BLE001
+            approved = False
+        if not approved:
+            self._say_when_idle("Okay, I didn't send it.")
+            return
+        conns = connections()
+        token = await asyncio.to_thread(conns.token, conn)
+        if not token:
+            self._say_when_idle(f"Your Gmail connection for {conn.account} needs renewing, so I didn't send it. "
+                                "Say if you want to reconnect it.")
+            return
+        try:
+            msg_id = await asyncio.to_thread(gmail.send, draft, token)
+        except gmail.SendFailed as exc:
+            if exc.expired:
+                conns.expired(conn, str(exc))
+            self._say_when_idle(f"It didn't send: {exc}")
+            return
+        _log.info("gmail: sent %s from %s to %d recipient(s)", msg_id, conn.account, len(draft.to))
+        self._say_when_idle(f"Sent to {', '.join(draft.to)}.")
+
+    async def _tool_connect_account(self, args: dict) -> dict:
+        from integrations import oauth
+        from integrations.connections import connections
+        service = str(args.get("service") or "gmail")
+        if service != "gmail":
+            return {"error": f"HeyTora cannot connect {service} yet"}
+        try:
+            oauth.client()
+        except oauth.NotConfigured as exc:
+            return {"ok": False, "error": str(exc)}
+        feature = str(args.get("for") or "send")
+
+        def run():
+            conn = connections().connect("gmail", [feature])
+            if conn.state.usable:
+                self._say_when_idle(f"Gmail is connected for {conn.account}." + (
+                    " Some of what I asked for wasn't allowed." if conn.state.value == "limited" else ""))
+            else:
+                self._say_when_idle(f"Gmail wasn't connected: {conn.detail or 'nothing came back'}")
+        threading.Thread(target=run, name="connect-gmail", daemon=True).start()
+        return {"ok": True, "note": "Google's sign-in is opening in their browser. Say so in one line; "
+                                    "you will be told when it is connected."}
 
     # ── Filling in a form (ai/form_fill.py) ──────────────────────────────────
     #

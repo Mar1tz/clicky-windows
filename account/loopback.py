@@ -44,10 +44,11 @@ _PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8">
 <h1>{title}</h1><p>{words}</p></div></body></html>"""
 
 
-def page(ok: bool, words: str) -> bytes:
+def page(ok: bool, words: str, done_title: str = "You're signed in to HeyTora") -> bytes:
     return _PAGE.format(
         colour="#3D8BFF" if ok else "#ff7a7a", mark="&#10003;" if ok else "&#9888;",
-        title="You're signed in to HeyTora" if ok else "That didn't sign you in",
+        title=html.escape(done_title) if ok else (
+            "That didn't sign you in" if done_title == "You're signed in to HeyTora" else "That didn't work"),
         words=html.escape(words)).encode("utf-8")
 
 
@@ -59,9 +60,17 @@ class LinkCatcher:
     catcher stops by itself.
     """
 
-    def __init__(self, on_code: Callable[[str], tuple[bool, str]], listen_s: float = LISTEN_S):
+    def __init__(self, on_code: Callable[[str], tuple[bool, str]], listen_s: float = LISTEN_S, *,
+                 path: str = PATH, on_params: Optional[Callable[[dict], tuple[bool, str]]] = None,
+                 done_title: str = "You're signed in to HeyTora"):
+        """`path` and `on_params` (CI-07): a connector's OAuth comes back to
+        its own path, and is handed every parameter (state, code, error) to
+        check - not just the code - with no hop to the website."""
         self._on_code = on_code
         self._listen_s = listen_s
+        self._path = path
+        self._on_params = on_params
+        self._done_title = done_title
         self._server: Optional[ThreadingHTTPServer] = None
         self._timer: Optional[threading.Timer] = None
         self._lock = threading.Lock()
@@ -71,7 +80,7 @@ class LinkCatcher:
         with self._lock:
             if not self._server:
                 return ""
-            return f"http://127.0.0.1:{self._server.server_address[1]}{PATH}"
+            return f"http://127.0.0.1:{self._server.server_address[1]}{self._path}"
 
     def start(self) -> str:
         """Listen (if not already) and return the address for the link; "" if it can't."""
@@ -109,10 +118,25 @@ class LinkCatcher:
         class Handler(BaseHTTPRequestHandler):
             def do_GET(self):  # noqa: N802 - http.server's name
                 parts = urlsplit(self.path)
-                if parts.path != PATH:
+                if parts.path != catcher._path:
                     self.send_error(404)
                     return
                 query = parse_qs(parts.query)
+                if catcher._on_params is not None:
+                    try:
+                        ok, words = catcher._on_params({k: v[0] for k, v in query.items()})
+                    except Exception as e:  # noqa: BLE001 - shown in the browser, in words
+                        ok, words = False, str(e)
+                    body = page(ok, words, catcher._done_title)
+                    self.send_response(200)
+                    self.send_header("Content-Type", "text/html; charset=utf-8")
+                    self.send_header("Content-Length", str(len(body)))
+                    self.send_header("Cache-Control", "no-store")
+                    self.end_headers()
+                    self.wfile.write(body)
+                    if ok:
+                        catcher.stop()
+                    return
                 code = (query.get("code") or [""])[0]
                 if code:
                     try:

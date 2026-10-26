@@ -111,7 +111,8 @@ def is_correction(text: str) -> bool:
 # What the live model did, from the tools it called this turn.
 _TOOL_ROUTE = {"point_at": "draw", "draw": "draw", "show_me_how": "guided", "guide_step": "guided",
                "desktop_action": "direct", "write_for_me": "direct", "fill_form": "direct",
-               "reply_to_email": "direct", "delegate_task": "job"}
+               "reply_to_email": "direct", "delegate_task": "job", "send_email": "direct",
+               "connect_account": "direct"}
 
 
 def model_route(tools: list[str]) -> str:
