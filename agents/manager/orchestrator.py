@@ -216,6 +216,7 @@ class Orchestrator:
                 ctx.events.emit(EventKind.STEP_FAILED, step.error or step.title, task_id=task.id,
                                 agent_id=ctx.agent.id, level="warn",
                                 data={"step": step.to_dict(), "index": i, "total": total})
+                self._ran(task, step, "failed")
                 if _for_the_user(step.error):
                     # EN-05: a sign-in or a captcha is the user's to do, not
                     # a reason to replan - wait for them, then try it again.
@@ -244,31 +245,48 @@ class Orchestrator:
                     self._finish(ctx, TaskStatus.FAILED, f"step '{step.title}' failed: {step.error}")
                     return
                 replans += 1
+                why = f"'{step.title}' failed: {step.error}"
                 plan = await self.planner.replan(ctx, plan, step.error)
-                self._adopt_plan(ctx, plan, revised=True)
+                self._adopt_plan(ctx, plan, revised=True, reason=why)
                 i = task.step_index
                 continue
 
             ctx.events.emit(EventKind.STEP_DONE, step.summary or step.title, task_id=task.id,
                             agent_id=ctx.agent.id,
                             data={"step": step.to_dict(), "index": i, "total": total})
+            self._ran(task, step, "done")
             ctx.progress(step.title, (i + 1) / total)
             self._save(ctx)
             i += 1
 
     # -- helpers -------------------------------------------------------------
 
-    def _adopt_plan(self, ctx: AgentContext, plan: Plan, *, revised: bool) -> None:
+    def _adopt_plan(self, ctx: AgentContext, plan: Plan, *, revised: bool, reason: str = "") -> None:
+        """OR-09: every plan the job had is kept on it (metadata["plans"]),
+        apart from what really ran (metadata["ran"]); a replan says why in
+        the job's timeline."""
         task = ctx.task
         task.steps = plan.steps
         task.plan_id = plan.id
         if self.store:
             self.store.save_plan(plan)
-        ctx.events.emit(EventKind.PLAN_CREATED,
-                        ("Revised plan" if revised else "Plan") + f": {len(plan.steps)} steps",
+        plans = task.metadata.setdefault("plans", [])
+        plans.append({"version": len(plans) + 1, "at": now(), "revised": revised, "reason": reason[:240],
+                      "steps": [s.title for s in plan.steps]})
+        head = (f"Revised plan after {reason[:120]}" if revised and reason
+                else "Revised plan" if revised else "Plan")
+        ctx.events.emit(EventKind.PLAN_CREATED, f"{head}: {len(plan.steps)} steps",
                         task_id=task.id, agent_id=ctx.agent.id,
-                        data={"plan": plan.to_dict(), "revised": revised})
+                        data={"plan": plan.to_dict(), "revised": revised, "reason": reason,
+                              "version": len(plans)})
         self._save(ctx)
+
+    @staticmethod
+    def _ran(task, step, status: str) -> None:
+        """OR-09: what really happened, step by step, under which plan."""
+        task.metadata.setdefault("ran", []).append(
+            {"step": step.title, "status": status, "at": now(),
+             "plan": len(task.metadata.get("plans", [])) or 1, "error": (step.error or "")[:200]})
 
     def _set_status(self, ctx: AgentContext, status: TaskStatus) -> None:
         task = ctx.task
