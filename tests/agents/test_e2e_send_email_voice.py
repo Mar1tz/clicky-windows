@@ -124,3 +124,29 @@ def test_two_accounts_are_never_picked_silently(setup):
 
 def test_while_guiding_it_is_an_act_that_needs_asking():
     assert "send_email" in cm.CompanionManager.ACT_TOOLS
+
+
+def test_send_it_sends_the_open_email_after_a_yes(setup, monkeypatch):
+    """Field, 26 Oct: "send it" had no way to press Send in the compose
+    window. They approve its To and Subject; Ctrl+Enter sends it there."""
+    from agents.tools import app_tools, computer_tools
+    from ai import form_fill
+    from ai.form_fill import Field
+    monkeypatch.setattr(cm.os, "startfile", lambda link: None)
+    windows = {"Compose Mail"}
+    monkeypatch.setattr(app_tools, "focus_window", lambda f: {"hwnd": 2, "title": f} if f in windows else None)
+    monkeypatch.setattr(app_tools, "find_window", lambda f: {"hwnd": 2, "title": f} if f in windows else None)
+    monkeypatch.setattr(form_fill, "read_fields", lambda: [Field("f1", "To recipients", "lee@example.com"),
+                                                           Field("f2", "Subject", "Running late")])
+    pressed = []
+    monkeypatch.setattr(computer_tools, "get_backend",
+                        lambda: SimpleNamespace(press=lambda keys: pressed.append(keys) or windows.clear()))
+    mgr, asked, said, later = _manager(answer=True)
+    monkeypatch.delenv("TORA_GOOGLE_CLIENT_ID")
+    asyncio.run(mgr._tool_send_email(dict(ARGS)))                  # the compose window opens
+    out = asyncio.run(mgr._tool_send_open_email({}))
+    assert out["awaiting_approval"] and not pressed, "nothing goes before the yes"
+    reason, kw = asked[0]
+    assert "To: lee@example.com" in reason and "Subject: Running late" in reason and kw["may_auto_approve"] is False
+    asyncio.run(later[0])
+    assert pressed == [["ctrl", "enter"]] and said == ["Sent."]

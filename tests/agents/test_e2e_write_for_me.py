@@ -580,3 +580,23 @@ def test_change_the_subject_goes_to_the_subject_box(monkeypatch):
     assert out == {"ok": True} and moved == ["Subject"] and wrote == ["change the subject to Late tomorrow"]
     missing = asyncio.run(mgr._tool_write_for_me({"request": "x", "field": "Bcc"}))
     assert "No box called 'Bcc'" in missing["error"] and "Subject" in missing["error"]
+
+
+def test_the_subject_is_found_from_another_window(monkeypatch):
+    """Field, 26 Oct: "give it a new subject" was said with VS Code in
+    front. The email Tora opened is the one meant: it is brought back."""
+    import asyncio
+    import time
+    import companion_manager as cm
+    from agents.tools import app_tools
+    from ai import form_fill
+    from ai.form_fill import Field
+    screens = {"front": [Field("e1", "Search")], "Compose Mail": [Field("f2", "Subject", "test")]}
+    shown, moved = ["front"], []
+    monkeypatch.setattr(form_fill, "read_fields", lambda: screens[shown[-1]])
+    monkeypatch.setattr(form_fill, "_into", lambda f, clicker: moved.append(f.label) or True)
+    monkeypatch.setattr(app_tools, "focus_window", lambda frag: shown.append(frag) or {"hwnd": 2, "title": frag})
+    mgr = cm.CompanionManager.__new__(cm.CompanionManager)
+    mgr._draft_window = (time.monotonic(), "Compose Mail")
+    assert asyncio.run(mgr._focus_field("subject")) is None and moved == ["Subject"]
+    assert cm._box_named(type("B", (), {"name": "Message Body"})()) == "the 'Message Body' box"

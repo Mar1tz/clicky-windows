@@ -440,6 +440,13 @@ def _what_it_means(self, goal: str, jobs: list):
     return res
 
 
+def _box_named(box) -> str:
+    """"the 'Message Body' box": which box was written, so Tora never says
+    she changed the subject when it was the body (field, 26 Oct)."""
+    name = " ".join(str(getattr(box, "name", "") or "").split())[:40]
+    return f"the {name!r} box" if name else "the box"
+
+
 class CompanionManager(QObject):
     """Thread-safe signals for Qt UI updates from async/audio threads."""
 
@@ -2206,7 +2213,7 @@ class CompanionManager(QObject):
     # their behalf runs only when what they said this turn asked her to do it
     # ("just do it for me"), and the switch is said aloud - never silent.
     ACT_TOOLS = ("desktop_action", "write_for_me", "fill_form", "reply_to_email", "delegate_task",
-                 "send_email")
+                 "send_email", "send_open_email")
     _DO_IT = re.compile(r"\b(do (it|that|this)( one)?|you do|for me|click (it|that|this|on)|press (it|that)|"
                         r"go ahead|fill (it|this|that) in|type (it|that)|just do)\b", re.IGNORECASE)
 
@@ -2277,6 +2284,7 @@ class CompanionManager(QObject):
             "code_context":    self._tool_code_context,
             "fill_form":       self._tool_fill_form,
             "send_email":      self._tool_send_email,
+            "send_open_email": self._tool_send_open_email,
             "connect_account": self._tool_connect_account,
             "setup_browser":   self._tool_setup_browser,
             "read_calendar":   self._tool_read_calendar,
@@ -2388,14 +2396,68 @@ class CompanionManager(QObject):
         except Exception as exc:  # noqa: BLE001
             return {"ok": False, "error": f"could not open the browser: {exc}"}
         _log.info("email: compose window opened (%s, %d recipient(s))", via, len(to))
+        self._draft_window = (time.monotonic(), "Compose Mail" if via == "gmail" else "Outlook")
         note = ("The email is open in their browser, filled in - they check it and press Send themselves. "
                 "Say that in one line; do not say it was sent. To change it now: write_for_me with field "
-                "'Subject', 'To' or 'Message' (the body). If they say 'send it', press its Send button with "
-                "desktop_action (they approve).")
+                "'Subject', 'To' or 'Message' (the body). If they say 'send it': send_open_email "
+                "(they approve).")
         if offer_connect:
             note += (" If they want Tora to send emails for them in future, offer once to connect Gmail "
                      "(connect_account).")
         return {"ok": True, "opened_compose": via, "note": note}
+
+    async def _tool_send_open_email(self, args: dict) -> dict:
+        """"Send it": the email Tora opened in their browser (the compose
+        window), sent with the mail page's own shortcut, Ctrl+Enter - after
+        they approve what its To and Subject boxes hold now."""
+        from ai import form_fill
+        from agents.tools.app_tools import focus_window
+        when, window = self._draft_window
+        if not window or time.monotonic() - when > self.DRAFT_KEPT_S:
+            return {"error": "No email Tora opened is waiting. If one is open, they press its Send button."}
+        if await asyncio.to_thread(focus_window, window) is None:
+            return {"error": "The email's window is closed - it was sent or discarded. Ask them which."}
+        await asyncio.sleep(0.4)
+        fields = await asyncio.to_thread(form_fill.read_fields)
+        to, subject = form_fill.find_field(fields, "to"), form_fill.find_field(fields, "subject")
+        shown = "\n".join(f"{name}: {f.value or '(empty)'}" for name, f in (("To", to), ("Subject", subject)) if f)
+        mgr = self._agents
+        if mgr is None or not hasattr(mgr, "request_confirmation"):
+            return {"error": "I cannot ask for approval right now, so I will not send it"}
+        future = mgr.request_confirmation(
+            "Send the email open in your browser?\n\n" + (shown or window), tool_name="send_open_email",
+            arguments={"window": window, "to": to.value if to else "", "subject": subject.value if subject else ""},
+            grant_key="", may_auto_approve=False)
+        self._submit(self._after_open_send_approval(future, window))
+        return {"awaiting_approval": True,
+                "note": "Say in one short sentence that they approve it on screen. Do not say it is sent - "
+                        "you will be told."}
+
+    async def _after_open_send_approval(self, future, window: str) -> None:
+        from agents.tools.app_tools import find_window, focus_window
+        from agents.tools.computer_tools import get_backend
+        try:
+            approved = await asyncio.wrap_future(future)
+        except Exception:  # noqa: BLE001
+            approved = False
+        if not approved:
+            self._say_when_idle("Okay, I didn't send it.")
+            return
+        front = await asyncio.to_thread(focus_window, window)
+        if front is None:
+            self._say_when_idle("The email's window was closed, so I didn't send anything.")
+            return
+        await asyncio.sleep(0.4)
+        await asyncio.to_thread(get_backend().press, ["ctrl", "enter"])
+        for _ in range(12):                       # the compose page goes when it is sent
+            await asyncio.sleep(0.5)
+            if await asyncio.to_thread(find_window, window) is None:
+                _log.info("email: sent from the compose window")
+                self._draft_window = (0.0, "")
+                self._say_when_idle("Sent.")
+                return
+        _log.info("email: Ctrl+Enter pressed, the compose window is still open")
+        self._say_when_idle("I pressed send, but the email is still open - have a quick look at it.")
 
     async def _after_send_approval(self, future, draft, conn) -> None:
         from integrations import gmail
@@ -2740,12 +2802,27 @@ class CompanionManager(QObject):
                 return moved
         return await self._write_for_me(request)
 
+    # The window of the email (or other draft) Tora is working on, by a
+    # piece of its title: (when, fragment). Boxes in it are found from
+    # anywhere for an hour.
+    DRAFT_KEPT_S = 3600.0
+    _draft_window: tuple = (0.0, "")
+
     async def _focus_field(self, name: str) -> Optional[dict]:
         """Put the keyboard in the box called `name` in the window in front
         (ai/form_fill.find_field). None when it is there; else an error."""
         from ai import form_fill
         fields = await asyncio.to_thread(form_fill.read_fields)
         target = form_fill.find_field(fields, name)
+        when, window = self._draft_window
+        if target is None and window and time.monotonic() - when < self.DRAFT_KEPT_S:
+            # "Give it a new subject" said from another window (field: VS Code
+            # was in front): the email Tora is working on is the one meant.
+            from agents.tools.app_tools import focus_window
+            if await asyncio.to_thread(focus_window, window) is not None:
+                await asyncio.sleep(0.4)
+                fields = await asyncio.to_thread(form_fill.read_fields)
+                target = form_fill.find_field(fields, name)
         if target is None:
             labels = ", ".join(f.label for f in fields[:12] if f.label) or "none"
             return {"error": f"No box called {name!r} in the window in front. Boxes there: {labels}."}
@@ -2806,7 +2883,8 @@ class CompanionManager(QObject):
         if how == "clipboard":
             return {"ok": True, "result": ("They left the box while it was written: what was typed is in it and "
                                            "the rest is on their clipboard - Ctrl+V puts it where they want it.")}
-        return {"ok": True, "result": f"Written into the box ({len(text)} characters). Say it's in - "
+        self._draft_window = (time.monotonic(), box.window or "")
+        return {"ok": True, "result": f"Written into {_box_named(box)} ({len(text)} characters). Say it's in - "
                                       "never read it out."}
 
     async def _edit_box(self, box, whole: bool, pieces, started: float) -> dict:
@@ -2837,7 +2915,9 @@ class CompanionManager(QObject):
             return {"ok": True, "result": "Deleted. Say so in a few words."}
         self.sig_response_chunk.emit(new.strip() + "\n\n")
         self._note_written(new)
-        return {"ok": True, "result": ("Changed in the box - the old text replaced, nothing added. Say one short "
+        self._draft_window = (time.monotonic(), box.window or "")
+        return {"ok": True, "result": (f"Changed in {_box_named(box)} - the old text replaced, nothing added. "
+                                       "Say only what really changed (that box, nothing else). Say one short "
                                        "line that it's changed; never read it out. Ctrl+Z in the box brings the old "
                                        "text back if they want it.")}
 

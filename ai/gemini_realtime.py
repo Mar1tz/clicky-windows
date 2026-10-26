@@ -302,8 +302,11 @@ def tool_declarations() -> list[dict]:
                         "description": (
                             "Which box, when it is NOT the one the cursor is in: its "
                             "label - 'Subject', 'To', 'Cc', 'Message' (an email's "
-                            "body). 'Change the subject to X' is field 'Subject'. "
-                            "Leave out for the box they are in."
+                            "body). 'Change the subject (topic, title) to X' is field "
+                            "'Subject'. A change to both subject and body is two "
+                            "calls, one per box. Works for the email Tora opened "
+                            "even when another window is in front. Leave out for "
+                            "the box they are in."
                         ),
                     },
                 },
@@ -335,6 +338,14 @@ def tool_declarations() -> list[dict]:
                 },
                 "required": ["to", "subject", "body"],
             },
+        },
+        {
+            "name": "send_open_email",
+            "description": (
+                "SEND THE EMAIL TORA OPENED in their browser (the compose window send_email "
+                "opened) - 'send it', 'ok send that'. They approve its To and Subject first."
+            ),
+            "parameters": {"type": "object", "properties": {}},
         },
         {
             "name": "setup_browser",
