@@ -14,6 +14,14 @@ note ("Express API on :3001, routes in src/server.js") is the Frontend
 agent's context. No agent talks to another directly; it is cheaper, it
 is inspectable in the timeline, and it survives restarts.
 
+OR-08: each node also says what it takes from the nodes before it (their
+results reach its goal as its inputs), what proves it done (`done_when`,
+the line its own verifier judges by), and what its failure means
+(`on_fail`): "stop" skips what depends on it, "retry" runs it once more,
+"continue" lets the rest go on and says it failed. Jobs on the screen or
+in the browser are nodes too; two of them never run at once - the
+manager's claims give the mouse to one job at a time (OR-10).
+
 Two decomposers: `TemplateDecomposer` recognises the obvious shapes with
 no model call, and `ProviderDecomposer` asks the model for a JSON graph,
 validates it, and falls back to the template on any problem.
@@ -32,6 +40,9 @@ from agents.core import AgentContext, ProviderMessage, TaskKind, new_id
 log = logging.getLogger("agents.graph")
 
 MAX_NODES = 8
+ON_FAIL = ("stop", "retry", "continue")
+WORKERS = {"coding": TaskKind.CODING, "research": TaskKind.RESEARCH, "browser": TaskKind.BROWSER,
+           "file": TaskKind.FILE, "terminal": TaskKind.TERMINAL, "computer": TaskKind.COMPUTER}
 
 
 class GraphError(ValueError):
@@ -48,11 +59,18 @@ class TaskNode:
     kind: TaskKind = TaskKind.CODING
     depends_on: list[str] = field(default_factory=list)
     agent_name: str = ""                       # "Backend Agent"; default from kind
+    done_when: str = ""                        # proof of completion, for its verifier
+    on_fail: str = "stop"                      # stop | retry | continue
+
+    def __post_init__(self) -> None:
+        if self.on_fail not in ON_FAIL:
+            self.on_fail = "stop"
 
     def to_dict(self) -> dict[str, Any]:
         return {"key": self.key, "title": self.title, "goal": self.goal,
                 "worker_type": self.worker_type, "kind": self.kind.value,
-                "depends_on": list(self.depends_on), "agent_name": self.agent_name}
+                "depends_on": list(self.depends_on), "agent_name": self.agent_name,
+                "done_when": self.done_when, "on_fail": self.on_fail}
 
 
 @dataclass
@@ -186,12 +204,18 @@ class ProviderDecomposer(Decomposer):
         "workspace. Decide whether the goal is one agent's job or several. "
         "Reply with ONLY a JSON object: {\"split\": bool, \"rationale\": str, "
         "\"nodes\": [{\"key\": str, \"title\": str, \"goal\": str, "
-        "\"worker_type\": \"coding|research|browser|file|terminal\", "
-        "\"agent_name\": str, \"depends_on\": [keys]}]}. Split only when the "
+        "\"worker_type\": \"coding|research|browser|file|terminal|computer\", "
+        "\"agent_name\": str, \"depends_on\": [keys], \"done_when\": str, "
+        "\"on_fail\": \"stop|retry|continue\"}]}. Split only when the "
         "parts are genuinely separable (backend vs frontend, research vs "
-        "build). Keys are short lowercase words. Dependencies must form a DAG; "
-        "parts that can run at once should not depend on each other. Each "
-        "node's goal must be self-contained and say which folder it owns. "
+        "build, find the facts vs write them up). Keys are short lowercase words. "
+        "Dependencies must form a DAG; parts that can run at once should not "
+        "depend on each other - a part that needs another's result depends on "
+        "it and is given that result. Each node's goal must be self-contained "
+        "and say which folder it owns. done_when: one checkable line (\"report.md "
+        "lists 5 prices\"). on_fail: stop (what depends on it cannot go on), "
+        "retry (worth one more try), continue (nice to have). computer = the "
+        "person's apps by mouse and keyboard. "
         f"At most {MAX_NODES} nodes. No prose, no code fence."
     )
 
@@ -226,16 +250,17 @@ class ProviderDecomposer(Decomposer):
             if not isinstance(item, dict) or not item.get("goal"):
                 raise GraphError(f"node {i} has no goal")
             wt = str(item.get("worker_type") or "coding")
-            kind = {"research": TaskKind.RESEARCH, "browser": TaskKind.BROWSER,
-                    "file": TaskKind.FILE, "terminal": TaskKind.TERMINAL}.get(wt, TaskKind.CODING)
+            wt = wt if wt in WORKERS else "coding"
             nodes.append(TaskNode(
                 key=str(item.get("key") or f"n{i}").strip().lower()[:24],
                 title=str(item.get("title") or item["goal"])[:80],
                 goal=str(item["goal"]),
-                worker_type=wt if wt in ("coding", "research", "browser", "file", "terminal") else "coding",
-                kind=kind,
+                worker_type=wt,
+                kind=WORKERS[wt],
                 depends_on=[str(d).strip().lower()[:24] for d in (item.get("depends_on") or [])],
                 agent_name=str(item.get("agent_name") or ""),
+                done_when=str(item.get("done_when") or "")[:300],
+                on_fail=str(item.get("on_fail") or "stop").lower(),
             ))
         return TaskGraph(nodes, rationale=str(data.get("rationale") or ""))
 

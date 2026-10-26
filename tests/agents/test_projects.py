@@ -277,3 +277,51 @@ def test_a_child_is_never_decomposed_again(tmp_path):
         assert len(mgr.list_tasks()) == 4                   # parent + 3, no grandchildren
     finally:
         mgr.stop()
+
+
+def test_a_node_gets_its_inputs_and_its_failure_policy(tmp_path):
+    """OR-08: a node's result is the next node's input; "retry" runs a
+    failed node once more; "continue" lets what depends on it go on."""
+    from agents.core import Plan, Step, ToolCall
+    tries: dict[str, int] = {}
+    goals: dict[str, str] = {}
+
+    class _Planner(_SlowFolderPlanner):
+        async def plan(self, ctx):
+            key = ctx.task.metadata.get("node")
+            tries[key] = tries.get(key, 0) + 1
+            goals[key] = ctx.task.goal
+            if (key == "fetch" and tries[key] == 1) or key == "extras":
+                return Plan(task_id=ctx.task.id, steps=[Step("boom", tool_calls=[ToolCall("no_such_tool", {})])])
+            return Plan(task_id=ctx.task.id, steps=[
+                Step(f"make {key}", tool_calls=[ToolCall("create_folder", {"path": key})])])
+
+    mgr = build_agent_manager(workspace_root=str(tmp_path), in_memory=True, offline=True)
+    mgr.planner = mgr.orchestrator.planner = _Planner(delay=0.05)
+    mgr.orchestrator.max_replans = 0
+    mgr.start()
+    try:
+        graph = TaskGraph([
+            TaskNode("fetch", "Fetch prices", "find the prices", on_fail="retry", done_when="prices/ exists"),
+            TaskNode("extras", "Find extras", "nice to have", on_fail="continue"),
+            TaskNode("report", "Write report", "write it up", depends_on=["fetch", "extras"]),
+        ])
+        task = Task(title="Prices", goal="prices report", workspace=str(tmp_path))
+        parent = mgr.wait(mgr.submit_project(task, graph).id, 60)
+        assert parent.status is TaskStatus.COMPLETED, parent.error
+        assert tries == {"fetch": 2, "extras": 1, "report": 1}
+        assert "Done when: prices/ exists" in goals["fetch"]
+        assert "From 'Fetch prices'" in goals["report"], "the result before it is its input"
+        assert "✗ Find extras" in parent.result and "✓ Write report" in parent.result
+    finally:
+        mgr.stop()
+
+
+def test_the_model_may_plan_computer_nodes_with_proofs():
+    data = {"split": True, "nodes": [
+        {"key": "find", "goal": "find the cheapest flight", "worker_type": "browser", "done_when": "a price"},
+        {"key": "note", "goal": "put it in Notepad", "worker_type": "computer", "depends_on": ["find"],
+         "on_fail": "explode"}]}
+    g = ProviderDecomposer._to_graph(data)
+    assert g.nodes[1].kind is TaskKind.COMPUTER and g.nodes[1].on_fail == "stop"
+    assert g.nodes[0].done_when == "a price" and g.to_dict()["nodes"][1]["on_fail"] == "stop"
