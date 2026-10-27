@@ -12,6 +12,13 @@
 //   acting      a click or typing in that tab, when HeyTora asks - each one
 //               already approved by the person in HeyTora; password,
 //               one-time-code and card fields are never touched (CI-05)
+//   job tabs    (BR-03, after BeatBrowser's TaskSpaces) a job may open its own
+//               tabs in the background; it works only in those, or in the
+//               tab the person is looking at - never in another tab of
+//               theirs. Switching to a job's tab yourself is taking it back:
+//               HeyTora pauses that job. The job tabs are remembered across
+//               restarts and reported when HeyTora reconnects; closing a
+//               job closes only its own tabs.
 // The service worker may be stopped by the browser at any time; it comes
 // back on startup, on an alarm, and on any tab change, and reconnects.
 
@@ -98,6 +105,38 @@ function heytoraAct(action, ref, text, secretPattern) {
   return { ok: false, error: 'unknown action ' + action };
 }
 
+// -- job tabs (BR-03) -----------------------------------------------------------------
+
+const SPACES = 'heytora_spaces';
+
+async function loadSpaces(api) {
+  if (!api.storage || !api.storage.local) return {};
+  const got = await api.storage.local.get(SPACES);
+  return (got && got[SPACES]) || {};
+}
+
+async function saveSpaces(api, spaces) {
+  if (api.storage && api.storage.local) await api.storage.local.set({ [SPACES]: spaces });
+}
+
+async function listSpaces(api) {
+  // Every job tab, and whether it is still there (a browser restart gives
+  // tabs new ids: the old ones come back as gone).
+  const spaces = await loadSpaces(api);
+  const out = [];
+  for (const [tabId, s] of Object.entries(spaces)) {
+    let alive = true;
+    try { await api.tabs.get(Number(tabId)); } catch (e) { alive = false; }
+    out.push({ tabId: Number(tabId), job: s.job, url: s.url, alive });
+  }
+  return out;
+}
+
+async function ownerOf(api, tabId) {
+  const spaces = await loadSpaces(api);
+  return spaces[String(tabId)] ? spaces[String(tabId)].job : '';
+}
+
 // -- the connection to HeyTora ---------------------------------------------------------
 
 const MAX = 1000000;
@@ -130,11 +169,41 @@ async function reportTab(api, tab) {
 }
 
 async function handle(api, msg) {
+  try {
+    if (msg.type === 'open') {                           // a job's own tab, in the background
+      if (!hostOf(msg.url)) return { id: msg.id, ok: false, error: 'only http(s) pages open in a job tab' };
+      const tab = await api.tabs.create({ url: msg.url, active: false });
+      const spaces = await loadSpaces(api);
+      spaces[String(tab.id)] = { job: String(msg.job || ''), url: msg.url, at: Date.now() };
+      await saveSpaces(api, spaces);
+      return { id: msg.id, ok: true, tabId: tab.id };
+    }
+    if (msg.type === 'close_job') {                      // only that job's tabs
+      const spaces = await loadSpaces(api);
+      let closed = 0;
+      for (const [tabId, s] of Object.entries(spaces)) {
+        if (s.job !== String(msg.job || '')) continue;
+        try { await api.tabs.remove(Number(tabId)); closed += 1; } catch (e) {}
+        delete spaces[tabId];
+      }
+      await saveSpaces(api, spaces);
+      return { id: msg.id, ok: true, closed };
+    }
+    if (msg.type === 'spaces') return { id: msg.id, ok: true, spaces: await listSpaces(api) };
+  } catch (e) {
+    return { id: msg.id, ok: false, error: String(e && e.message || e) };
+  }
   let tabId = msg.tabId;
   if (tabId === null || tabId === undefined) {           // the tab they are looking at
     const [tab] = await api.tabs.query({ active: true, lastFocusedWindow: true });
     if (!tab) return { id: msg.id, ok: false, error: 'no tab is open' };
     tabId = tab.id;
+  } else {
+    const owner = await ownerOf(api, tabId);             // a named tab must be this job's own
+    if (!owner || owner !== String(msg.job || '')) {
+      return { id: msg.id, ok: false, error: 'that tab is not this job\'s - it works only in its own tabs ' +
+        'or the one they are looking at' };
+    }
   }
   try {
     if (msg.type === 'read') {
@@ -165,6 +234,7 @@ async function connect(api, makeSocket) {
       lastTab = '';
       const [tab] = await api.tabs.query({ active: true, lastFocusedWindow: true });
       reportTab(api, tab);
+      send({ type: 'spaces', spaces: await listSpaces(api) });     // BR-03: what jobs had open
       return;
     }
     if (msg.id !== undefined) send(await handle(api, msg));
@@ -182,7 +252,19 @@ function start(api, makeSocket) {
   api.tabs.onActivated.addListener(async ({ tabId }) => {
     go();
     try { reportTab(api, await api.tabs.get(tabId)); } catch (e) {}
+    const job = await ownerOf(api, tabId);                // they switched to a job's tab: theirs now
+    if (job) send({ type: 'taken', tabId, job });
   });
+  if (api.tabs.onRemoved) {
+    api.tabs.onRemoved.addListener(async (tabId) => {
+      const spaces = await loadSpaces(api);
+      const s = spaces[String(tabId)];
+      if (!s) return;
+      delete spaces[String(tabId)];
+      await saveSpaces(api, spaces);
+      send({ type: 'gone', tabId, job: s.job });
+    });
+  }
   api.tabs.onUpdated.addListener((tabId, info, tab) => {
     if (info.status === 'complete' && tab.active) reportTab(api, tab);
   });
@@ -190,7 +272,8 @@ function start(api, makeSocket) {
 }
 
 if (typeof module !== 'undefined') {
-  module.exports = { isSecretField, hostOf, knownHost, start, SECRET, _reset: () => { socket = null; config = null; lastTab = ''; } };
+  module.exports = { isSecretField, hostOf, knownHost, start, SECRET, handle, listSpaces,
+    _reset: () => { socket = null; config = null; lastTab = ''; } };
 } else {
   start(chrome, (url) => new WebSocket(url));
 }

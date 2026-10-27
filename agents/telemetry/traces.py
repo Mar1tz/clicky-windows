@@ -43,6 +43,9 @@ create table if not exists generations (
 create table if not exists scores (
     id integer primary key autoincrement, trace_id text, name text, value real, source text,
     comment text default '', at real);
+create table if not exists cases (
+    id integer primary key autoincrement, dataset text, trace_id text default '', question text default '',
+    window text default '', tools text default '[]', answer text default '', note text default '', at real);
 create index if not exists spans_trace on spans(trace_id);
 create index if not exists gens_trace on generations(trace_id);
 """
@@ -116,6 +119,28 @@ class TraceStore:
                     "values (?,?,?,?,?,?,?,?)", (new_id(), tid, "", phase, "phase", start, start + float(took),
                                                  "over budget" if phase in (over or []) else "ok"))
         return tid
+
+    # -- OB-02: what went wrong, kept as a test case ----------------------------
+
+    def flag_case(self, dataset: str, *, question: str = "", window: str = "", tools: list | None = None,
+                  answer: str = "", note: str = "", trace_id: str = "") -> int:
+        """A turn or a job that went wrong, for the evals (tools/voice_eval.py
+        --flagged) to try again on every change. Kept on this PC."""
+        with self._lock:
+            cur = self._db.execute(
+                "insert into cases (dataset, trace_id, question, window, tools, answer, note, at) "
+                "values (?,?,?,?,?,?,?,?)",
+                (dataset, trace_id, _clip(question), _clip(window), json.dumps(list(tools or [])), _clip(answer),
+                 _clip(note), time.time()))
+            self._db.commit()
+            return int(cur.lastrowid)
+
+    def cases(self, dataset: str = "") -> list[dict]:
+        rows = self._q("select * from cases" + (" where dataset=?" if dataset else "") + " order by at",
+                       (dataset,) if dataset else ())
+        for r in rows:
+            r["tools"] = json.loads(r.get("tools") or "[]")
+        return rows
 
     def score(self, trace_id: str, name: str, value: float, source: str, comment: str = "") -> None:
         self._x("insert into scores (trace_id, name, value, source, comment, at) values (?,?,?,?,?,?)",

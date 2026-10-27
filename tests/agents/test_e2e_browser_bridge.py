@@ -109,7 +109,7 @@ def test_the_real_extension_end_to_end(bridge, tmp_path, url, service):
     assert bridge.connected, proc.stderr.read() if proc.poll() is not None else "not connected"
     assert (bridge.tab or {}).get("service") == service
     if service:
-        page = bridge.request({"type": "read", "tabId": 7}, timeout=3)
+        page = bridge.request({"type": "read", "tabId": None}, timeout=3)      # the tab they are looking at
         assert page["ok"] and page["title"].endswith("Gmail") and page["fields"][0]["label"] == "Search mail"
     out, _ = proc.communicate(timeout=5)
     lines = [json.loads(line) for line in out.splitlines() if line.startswith("{")]
@@ -126,3 +126,64 @@ def test_password_code_and_card_fields_stay_theirs():
     out = subprocess.run(["node", "-e", script, str(HARNESS.parents[1] / "background.js")],
                          capture_output=True, text=True, timeout=10).stdout
     assert json.loads(out) == [True, True, True, True, True, False, False]
+
+
+# -- BR-03: job tabs -------------------------------------------------------------------
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="needs node")
+def test_a_job_works_only_in_its_own_tabs_and_closes_only_them():
+    out = json.loads(subprocess.run(["node", str(HARNESS.parent / "spaces.js")], capture_output=True, text=True,
+                                    timeout=15).stdout)
+    assert out["opened"] and out["badUrl"] is False and out["ownTab"] and out["activeTab"]
+    for refused in (out["otherJob"], out["theirTab"], out["noJob"]):
+        assert "not this job's" in refused
+    assert out["spaces"] == [{"tabId": 50, "job": "j1", "url": "https://shop.example.com/orders", "alive": True},
+                             {"tabId": 51, "job": "j1", "url": "https://shop.example.com/invoice", "alive": False}]
+    assert out["closed"] == 1 and out["theirsStill"] and out["left"] == 0
+
+
+def test_the_bridge_keeps_the_job_tabs_and_hears_one_taken_back(tmp_path):
+    b = BrowserBridge(tmp_path / "data", port=0)
+    taken = []
+    b.on_taken = lambda job, tab: taken.append((job, tab))
+    b._on_message({"type": "spaces", "spaces": [{"tabId": 50, "job": "j1", "url": "u", "alive": True},
+                                                 {"tabId": 51, "job": "j1", "url": "u2", "alive": False}]})
+    assert b.job_tab("j1") == 50 and b.job_tab("j2") is None, "a gone tab is never worked in"
+    b._on_message({"type": "taken", "tabId": 50, "job": "j1"})
+    b._on_message({"type": "gone", "tabId": 50, "job": "j1"})
+    assert taken == [("j1", 50)] and b.job_tab("j1") is None
+
+
+def test_tab_tools_work_in_the_jobs_own_tab(tmp_path, monkeypatch):
+    from agents.core import ToolContext
+    from agents.tools import browser_tab_tools as tt
+    from integrations import browser_bridge
+    b = BrowserBridge(tmp_path / "data", port=0)
+    b.connected = True
+    sent = []
+
+    async def ask(msg, timeout=15.0):
+        sent.append(msg)
+        return {"ok": True, "title": "t", "fields": [], "text": ""}
+    monkeypatch.setattr(b, "arequest", ask)
+    monkeypatch.setattr(browser_bridge, "_bridge", b)
+    ctx = ToolContext(workspace=str(tmp_path), task_id="j1")
+    asyncio.run(tt.TabRead().run({}, ctx))
+    b.spaces[50] = {"job": "j1", "url": "u", "alive": True}
+    asyncio.run(tt.TabRead().run({}, ctx))
+    assert sent[0]["tabId"] is None and sent[1] == {"type": "read", "tabId": 50, "job": "j1"}
+
+
+def test_the_doctor_says_what_is_wrong(tmp_path, monkeypatch):
+    import health
+    from integrations import browser_bridge
+    monkeypatch.setattr(browser_bridge, "_bridge", None)
+    assert health.browser_doctor()[2] == "bad"
+    b = BrowserBridge(tmp_path / "data", port=0)
+    b.port = 47124
+    monkeypatch.setattr(browser_bridge, "_bridge", b)
+    assert health.browser_doctor()[2] == "warn" and "not connected" in health.browser_doctor()[1]
+    b.connected, b.version = True, "0.0.1"
+    assert "reload it" in health.browser_doctor()[1]
+    b.version = browser_bridge.packaged_version()
+    assert health.browser_doctor()[2] == "ok"

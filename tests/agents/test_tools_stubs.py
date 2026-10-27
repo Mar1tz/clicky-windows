@@ -17,7 +17,7 @@ EXPECTED = {
     "browser": {"open_page", "extract_information", "click_element", "fill_field", "page_actions",
                 "browser_observe", "browser_act", "browser_extract",
                 "screenshot_page", "close_browser", "ask_to_sign_in",
-                "tab_read", "tab_click", "tab_type"},
+                "tab_open", "tab_read", "tab_click", "tab_type"},
     "computer": {"find_on_screen", "screenshot", "move_cursor", "click", "type_text",
                  "key_press", "open_app", "list_windows", "focus_window"},
     "spreadsheet": {"read_workbook", "write_workbook", "clean_data", "reconcile_sheets", "check_formulas",

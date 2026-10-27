@@ -184,13 +184,31 @@ def context_line(case: Case) -> str:
     return f"[context] Today is {datetime.now():%A, %B %d, %Y}. {line}"
 
 
+def flagged_cases() -> list[Case]:
+    """OB-02: every answer they corrected in the app, as a case. The right
+    tool is not known - any tool passes that check; the rest (short, no
+    narrating, no planning said aloud) hold as for every case, and the
+    report shows what it does now beside what it did then."""
+    import config
+    from agents.telemetry import TraceStore
+    db = config.data_dir() / "traces.db"
+    if not db.exists():
+        return []
+    out = []
+    for row in TraceStore(str(db)).cases("voice"):
+        if row.get("question"):
+            out.append(Case(f"flagged_{row['id']}", row["question"], row.get("window") or "", "opaque", [],
+                            {"*"}, forbid=set()))
+    return out
+
+
 def check(case: Case, said: str, answer: str, tools: list[str], args: list[dict] = ()) -> dict:
     """Every check, by name: True passed."""
     first = tools[0] if tools else "none"
     low = said.lower()
     look = case.look.get("say", "").lower()
     out = {
-        "tool": first in case.expect,
+        "tool": first in case.expect or "*" in case.expect,
         "no_forbidden": not (set(tools) & case.forbid),
         "short": 0 < sentences(said) <= 2,
         "no_let_me_after": not (tools and _LET_ME.search(answer)),
@@ -458,6 +476,8 @@ async def main():
     ap.add_argument("--prefill", type=int, default=9000, help="tokens of earlier chat before it (FS-08)")
     ap.add_argument("--compress", default="", help="TRIGGER,TARGET tokens for the session (FS-08)")
     ap.add_argument("--dry", action="store_true", help="print the questions and checks, free")
+    ap.add_argument("--flagged", action="store_true",
+                    help="also the answers they corrected in the app (OB-02, traces.db cases)")
     ap.add_argument("--only", default="", help="comma-separated case names")
     ap.add_argument("--max-dollars", type=float, default=0.25)
     ap.add_argument("--against", default="", help="an earlier report.json to compare with")
@@ -467,7 +487,7 @@ async def main():
                     help="try a variant of the speak-before-a-tool rule (SP-17)")
     args = ap.parse_args()
 
-    cases = CASES
+    cases = CASES + (flagged_cases() if args.flagged else [])
     if args.only:
         wanted = {n.strip() for n in args.only.split(",") if n.strip()}
         cases = [c for c in CASES if c.name in wanted]

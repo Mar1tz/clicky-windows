@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "HeyTora",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Lets HeyTora, on this PC, see which of your services a tab is and - when you ask her to do something there - read it and act in it, with your approval.",
   "background": { "service_worker": "background.js" },
   "permissions": ["tabs", "scripting", "storage", "alarms"],

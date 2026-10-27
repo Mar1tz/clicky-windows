@@ -853,6 +853,7 @@ class CompanionManager(QObject):
                     kinds=[EventKind.TASK_STATUS, EventKind.APPROVAL_REQUIRED])
                 mgr.events.subscribe(self._on_waitpoint, kinds=[EventKind.WAITPOINT])
                 mgr.personal_values = self._personal_values      # BR-01: {{user.email}} in a job's forms
+                self._wire_job_tabs(mgr)                         # BR-03: a tab taken back pauses its job
                 # OB-01: each spoken question's timings beside the jobs' traces.
                 tracer = getattr(mgr, "tracer", None)
                 if tracer is not None:
@@ -974,6 +975,30 @@ class CompanionManager(QObject):
             self._submit(self._reply_local(text))
         except Exception:
             _log.debug("agent announcement not spoken", exc_info=True)
+
+    def _wire_job_tabs(self, mgr) -> None:
+        """BR-03: they switched to a job's tab - it is theirs now. The job
+        pauses and Tora says how to hand it back; a closed job tab is said."""
+        try:
+            from integrations.browser_bridge import current
+            bridge = current()
+        except Exception:  # noqa: BLE001
+            return
+        if bridge is None:
+            return
+
+        def taken(job: str, tab: int) -> None:
+            task = mgr.get_task(job)
+            if task is None or task.status.is_terminal or not mgr.pause(job):
+                return
+            self._say_when_idle(f"You've taken the tab back - {task.title} is paused. Say carry on when "
+                                "you want me to go on.")
+
+        def gone(job: str, tab: int) -> None:
+            task = mgr.get_task(job)
+            if task is not None and not task.status.is_terminal:
+                _log.info("a tab of job %s was closed by them", job)
+        bridge.on_taken, bridge.on_gone = taken, gone
 
     @staticmethod
     def _personal_values() -> dict:
@@ -2228,13 +2253,30 @@ class CompanionManager(QObject):
         }
 
     _turn_tools: list = []
+    _answer_tools: list = []                 # OB-02: the same, kept until the answer is recorded
+    _last_turn: dict = {}
 
     def _noted(self, name: str, fn):
         """OR-03: which tools this answer used - the route the model took."""
         async def wrapped(args: dict) -> dict:
             self._turn_tools = [*self._turn_tools, name]
+            self._answer_tools = [*self._answer_tools, name]
             return await fn(args)
         return wrapped
+
+    def _flag_last_turn(self, note: str) -> bool:
+        """OB-02: the answer they just corrected becomes a test case for the
+        voice bench (tools/voice_eval.py --flagged). On this PC only."""
+        last, store = self._last_turn, getattr(getattr(self._agents, "tracer", None), "store", None)
+        if not last or store is None or time.monotonic() - last.get("at", 0) > 300:
+            return False
+        try:
+            store.flag_case("voice", question=last["question"], window=last["window"], tools=last["tools"],
+                            answer=last["answer"], note=note)
+        except Exception:  # noqa: BLE001 - a test case must never cost an answer
+            return False
+        self._last_turn = {}
+        return True
 
     def _log_route(self, heard: str) -> None:
         """OR-03/04: the decision table's route for what they said, beside
@@ -2255,6 +2297,8 @@ class CompanionManager(QObject):
         speed.mark("route", route=f"{d} model {took}")
         if routes.is_correction(heard):
             speed.mark("correction", corrected="yes")      # OR-18: the last answer missed
+            if self._flag_last_turn(f"they corrected it: {heard[:200]}"):
+                _log.info("the corrected answer is kept as a test case (OB-02)")
         _log.info("route: table %s - %s; model %s%s", d, d.words, took, "" if took == d.route else " (differ)")
 
     # ── PT-16: guide versus act ──────────────────────────────────────────────
@@ -3622,6 +3666,17 @@ class CompanionManager(QObject):
                     "steps_total": len(t.steps)}
 
         top = [t for t in mgr.list_tasks() if not (t.metadata or {}).get("parent_id")]
+        if action == "flag":
+            # OB-02: "that job went wrong - remember it": a test case with its trace.
+            jobs = [t for t in top if not wanted or wanted in t.title.lower()]
+            store = getattr(getattr(mgr, "tracer", None), "store", None)
+            if not jobs or store is None:
+                return {"error": "no job to flag"}
+            job = jobs[0]
+            store.flag_case("job", question=job.goal, tools=[s.title for s in job.steps], answer=job.error or
+                            job.result or "", note=str(args.get("answer") or "flagged by voice"), trace_id=job.id)
+            return {"ok": True, "flagged": job.title, "note": "Say it is noted for testing, in a few words."}
+
         if action == "answer":
             text = str(args.get("answer") or "").strip()
             if not text:
@@ -5755,6 +5810,10 @@ class CompanionManager(QObject):
             return
         title = active_window_title()
         ak = app_key(title)
+        # OB-02: what this answer was, in case the next words correct it.
+        self._last_turn = {"question": question, "answer": answer, "window": title,
+                           "tools": list(self._answer_tools), "at": time.monotonic()}
+        self._answer_tools = []
 
         history = self._app_memory.setdefault(ak, [])
         if question:

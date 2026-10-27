@@ -17,7 +17,7 @@ class BrowserWorker(Worker):
         "open_page", "extract_information", "click_element", "fill_field", "page_actions",
         "browser_observe", "browser_act", "browser_extract",
         "screenshot_page", "close_browser", "ask_to_sign_in",
-        "tab_read", "tab_click", "tab_type",
+        "tab_open", "tab_read", "tab_click", "tab_type",
     ]
 
     def system_prompt(self, ctx: AgentContext) -> str:

@@ -89,6 +89,28 @@ def connectors() -> list[Row]:
     return rows
 
 
+def browser_doctor() -> Row:
+    """BR-03: the browser companion - the bridge up, the extension online, and
+    the extension the version this HeyTora ships (else: reload it)."""
+    try:
+        from integrations import browser_bridge
+        bridge = browser_bridge.current()
+    except Exception:  # noqa: BLE001
+        return ("Browser companion", "Unknown", "warn")
+    if bridge is None or not bridge.port:
+        return ("Browser companion", "Off - the bridge did not start", "bad")
+    if not bridge.connected:
+        return ("Browser companion", f"Waiting on 127.0.0.1:{bridge.port} - the extension is not connected "
+                                     "(set it up, or open the browser)", "warn")
+    want = browser_bridge.packaged_version()
+    if want and bridge.version and bridge.version != want:
+        return ("Browser companion", f"Connected, but the extension is {bridge.version} and HeyTora ships "
+                                     f"{want} - reload it in the browser's extensions page", "warn")
+    jobs = sum(1 for s in bridge.spaces.values() if s.get("alive", True))
+    return ("Browser companion", f"Connected · {bridge.version or '?'}" + (f" · {jobs} job tab(s)" if jobs else ""),
+            "ok")
+
+
 def last_update() -> Row:
     try:
         from updates.service import updater
@@ -115,4 +137,4 @@ def _ago(seconds: float) -> str:
 
 
 def rows(folder: Path) -> list[Row]:
-    return [mic_permission(), disk(folder), *databases(folder), *connectors(), last_update()]
+    return [mic_permission(), disk(folder), *databases(folder), *connectors(), browser_doctor(), last_update()]

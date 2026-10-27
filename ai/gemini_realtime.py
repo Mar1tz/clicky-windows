@@ -614,11 +614,12 @@ def tool_declarations() -> list[dict]:
                 "properties": {
                     "action": {
                         "type": "string",
-                        "enum": ["status", "pause", "resume", "cancel", "approve", "deny", "answer"],
+                        "enum": ["status", "pause", "resume", "cancel", "approve", "deny", "answer", "flag"],
                     },
                     "answer": {
                         "type": "string",
-                        "description": "action answer: their answer to the job's question, in their words.",
+                        "description": ("action answer: their answer to the job's question. action flag "
+                                        "('that job went wrong, note it'): what went wrong."),
                     },
                     "task": {
                         "type": "string",

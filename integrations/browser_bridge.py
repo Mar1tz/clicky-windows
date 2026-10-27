@@ -23,7 +23,7 @@ import shutil
 import sys
 import threading
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 from integrations import providers
 
@@ -54,6 +54,13 @@ class BrowserBridge:
         self._ready = threading.Event()
         self.tab: Optional[dict] = None            # {tabId, host, service} of the active known tab
         self.connected = False
+        self.version = ""                          # the extension's, from its hello (BR-03 doctor)
+        # BR-03: the tabs jobs opened (tabId -> {job, url, alive}), as the
+        # extension last reported them, and who hears when the person takes
+        # a job's tab back or closes it.
+        self.spaces: dict[int, dict] = {}
+        self.on_taken: Optional[Callable[[str, int], None]] = None
+        self.on_gone: Optional[Callable[[str, int], None]] = None
 
     # -- settings: the token and the one extension let in ------------------------------------
 
@@ -136,6 +143,7 @@ class BrowserBridge:
             self._settings["extension_id"] = ext            # paired: from now on, only this one
             self._save()
         self._socket, self.connected = ws, True
+        self.version = str(hello.get("version") or "")
         await ws.send(json.dumps({"type": "welcome"}))
         log.info("browser companion connected (%s)", hello.get("version", "?"))
         try:
@@ -152,7 +160,24 @@ class BrowserBridge:
             self._pending.clear()
 
     def _on_message(self, msg: dict) -> None:
-        if msg.get("type") == "tab":
+        kind = msg.get("type")
+        if kind == "spaces":                       # BR-03: what jobs had open, after a reconnect
+            self.spaces = {int(s["tabId"]): {"job": str(s.get("job") or ""), "url": s.get("url", ""),
+                                             "alive": bool(s.get("alive", True))}
+                           for s in msg.get("spaces") or [] if s.get("tabId") is not None}
+            return
+        if kind in ("taken", "gone"):
+            tab, job = int(msg.get("tabId") or 0), str(msg.get("job") or "")
+            if kind == "gone":
+                self.spaces.pop(tab, None)
+            hook = self.on_taken if kind == "taken" else self.on_gone
+            if hook is not None and job:
+                try:
+                    hook(job, tab)
+                except Exception:  # noqa: BLE001 - a hook never breaks the bridge
+                    log.exception("browser %s hook failed", kind)
+            return
+        if kind == "tab":
             host = str(msg.get("host") or "")
             service = providers.service_for("https://" + host) if host else None
             self.tab = {"tabId": msg.get("tabId"), "host": host, "service": service} if service else None
@@ -187,6 +212,19 @@ class BrowserBridge:
         if self._loop is None:
             return {"ok": False, "error": "the browser bridge is not running"}
         return await asyncio.wrap_future(asyncio.run_coroutine_threadsafe(self._ask(msg, timeout), self._loop))
+
+
+    def job_tab(self, job: str) -> Optional[int]:
+        """The job's own tab that is still open (BR-03), newest first."""
+        tabs = [t for t, s in self.spaces.items() if s.get("job") == job and s.get("alive", True)]
+        return max(tabs) if tabs else None
+
+
+def packaged_version() -> str:
+    try:
+        return str(json.loads((source_dir() / "manifest.json").read_text(encoding="utf-8")).get("version") or "")
+    except (OSError, ValueError):
+        return ""
 
 
 def install(bridge: BrowserBridge, dest: Path) -> Path:
