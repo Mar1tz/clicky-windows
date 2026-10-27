@@ -509,7 +509,9 @@ class AgentManager:
             return None
 
     def task_from_intent(self, intent: Intent, text: str, *, workspace: Optional[str] = None) -> Task:
-        meta: dict[str, Any] = {"request": text, "reply": intent.reply}
+        from agents.understanding.typed import type_request
+        meta: dict[str, Any] = {"request": text, "reply": intent.reply,
+                                "intent": type_request(text, kind=intent.kind.value).to_dict()}   # OR-02
         if intent.workspace_hint:
             meta["subdir"] = intent.workspace_hint
         routed = dict(getattr(intent, "metadata", None) or {})
@@ -573,6 +575,14 @@ class AgentManager:
         now = datetime.now()
         lines: list[str] = [f"Today is {now:%A} {now.day} {now:%B %Y} ({now:%Y-%m-%d}), {now:%H:%M} local time. "
                             "A date given without a year is the next one to come."]
+        typed = (task.metadata or {}).get("intent")
+        if isinstance(typed, dict):
+            # OR-02: the request's parts as rules - "don't cc anyone" is not a hint.
+            from agents.understanding.typed import TypedIntent
+            try:
+                lines += TypedIntent(**typed).lines()
+            except TypeError:                       # an older job's shape
+                pass
         if task.kind in (TaskKind.COMPUTER, TaskKind.GENERAL):
             try:
                 from agents.tools.app_tools import installed_apps

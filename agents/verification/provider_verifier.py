@@ -130,7 +130,7 @@ class ProviderVerifier(Verifier):
         lines = [f"  [{s.status.value}] {s.title}" for s in done]
         results: list[ToolResult] = [r for s in done for r in s.results]
         calls = [c for s in done for c in s.tool_calls]
-        parts = [f"Goal: {ctx.task.goal}", *self._skill(ctx),
+        parts = [f"Goal: {ctx.task.goal}", *self._skill(ctx), *_typed(ctx),
                  "Steps taken:\n" + ("\n".join(lines) or "  (none)")]
         if ctx.task.worker_type in ("computer", "browser"):
             # Its work is on screen. Judged by the disk, "type a shopping list
@@ -271,6 +271,17 @@ def _open_windows(limit: int = 12) -> list[str]:
         return [w["title"][:80] for w in list_windows()[:limit]]
     except Exception:  # noqa: BLE001 - headless, or not Windows
         return []
+
+
+def _typed(ctx: AgentContext) -> list[str]:
+    """OR-02: the outcome wanted and the constraints given - judged too."""
+    typed = (getattr(ctx.task, "metadata", None) or {}).get("intent")
+    if not isinstance(typed, dict):
+        return []
+    out = [f"Outcome wanted: {typed.get('outcome', '')}"]
+    if typed.get("constraints"):
+        out.append("Constraints they gave - a broken one fails the job: " + "; ".join(typed["constraints"]))
+    return out
 
 
 def _one_line(text: Optional[str], limit: int = 120) -> str:

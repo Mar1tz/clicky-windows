@@ -3252,6 +3252,17 @@ class CompanionManager(QObject):
         if gaps:
             return {"error": (f"Ask them this one question, then call delegate_task again with the answers: "
                               f"{clarify.question(gaps)} Say what you will get ready meanwhile.")}
+        # OR-02: the request, typed - for the planner and the final check; a
+        # send, payment or deletion with something unknown in it asks first.
+        from agents.understanding.typed import type_request
+        typed = type_request(str(args.get("goal") or ""), kind=kind.value,
+                             resolved=("what they referred to (above)" if meta.get("reference") else
+                                       "the files given" if files else
+                                       "the earlier job" if follows is not None else ""))
+        meta["intent"] = typed.to_dict()
+        if typed.unknowns and typed.risk in ("send", "pay", "delete"):
+            return {"error": (f"Before starting, ask them in one short question: {' and '.join(typed.unknowns)}. "
+                              "Then call delegate_task again with it in the goal.")}
         if files:
             goal += "\n\nThe file(s) they mean - use these exact paths: " + "; ".join(files)
             meta["request"], meta["files"] = goal, files
