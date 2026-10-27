@@ -98,6 +98,38 @@ KEEP_FULL_RESULTS = 3
 TRIMMED_RESULT_CHARS = 240
 
 
+# EN-31, after OpenHands' condenser: past this much text, the older part
+# of a step's conversation becomes one note. No model call - each earlier
+# call keeps its line (what ran, what came back), only the bulk goes - so
+# a long job stops failing on context size and nothing is forgotten.
+CONDENSE_AT_CHARS = 120_000
+KEEP_RECENT = 10
+
+
+def condense(messages: list[ProviderMessage]) -> list[ProviderMessage]:
+    """The opening prompt, one note of what happened, the recent turns."""
+    if sum(len(m.content or "") for m in messages) < CONDENSE_AT_CHARS or len(messages) <= KEEP_RECENT + 2:
+        return messages
+    cut = len(messages) - KEEP_RECENT
+    while cut > 1 and messages[cut].role == "tool":       # never split a call from its result
+        cut -= 1
+    if cut <= 1:
+        return messages
+    lines = []
+    for m in messages[1:cut]:
+        if m.role == "assistant":
+            for c in m.tool_calls or []:
+                lines.append(f"- {c.tool_name}({str(c.arguments)[:120]})")
+        elif m.role == "tool":
+            body = (m.content or "").split("\n", 1)[-1].strip()
+            lines.append(f"  -> {' '.join(body.splitlines()[0].split())[:200] if body else '(no output)'}")
+        elif m.content and not m.content.startswith("[image"):
+            lines.append(f"- note: {' '.join(m.content.split())[:200]}")
+    note = ProviderMessage(role="user", content="Earlier in this step (condensed - each call and what it "
+                                                "returned, the bulk left out):\n" + "\n".join(lines))
+    return [messages[0], note, *messages[cut:]]
+
+
 def trim_history(messages: list[ProviderMessage]) -> list[ProviderMessage]:
     """Shorten old tool results and drop stale images, in place of a copy.
 
@@ -193,12 +225,15 @@ class Worker(BaseWorker):
         if skills:
             system = system + "\n\n" + "\n\n".join(skills)
         messages = [ProviderMessage(role="user", content=self._opening_prompt(step, ctx))]
+        messages += self._carried_on(step)
         tool_names = self.allowed_tool_names(ctx)
         specs = ctx.tools.specs(tool_names)
         tctx = ctx.tool_context()
+        nudged = False
 
         for _ in range(self.max_iterations):
             await ctx.control.checkpoint()
+            messages[:] = condense(messages)
             resp = await ctx.provider.complete(trim_history(messages), tools=specs, system=system)
 
             if not resp.tool_calls:
@@ -239,9 +274,48 @@ class Worker(BaseWorker):
                     step.status = StepStatus.FAILED
                     step.error = stop_reason
                     return
+            # EN-31: going round in circles - told once (after the turn, so no
+            # note lands between a call and its result), then the step ends
+            # for the planner to try another way (replan).
+            from agents.core.stream import answered, of_step, stuck
+            loop = stuck(answered(of_step(step)))
+            if loop and nudged:
+                step.status = StepStatus.FAILED
+                step.error = f"stuck: {loop}"
+                return
+            if loop:
+                nudged = True
+                messages.append(ProviderMessage(role="user", content=(
+                    f"You seem stuck - {loop}. Do something different, or finish the step and say "
+                    "plainly what is blocking it.")))
 
         step.status = StepStatus.FAILED
         step.error = f"max iterations ({self.max_iterations}) reached without completing"
+
+    RESUMED_NOTE = ("HeyTora restarted while you were on this step. The calls above already ran and their "
+                    "results are real. Carry on from there - do not redo what is done.")
+
+    @classmethod
+    def _carried_on(cls, step: Step) -> list[ProviderMessage]:
+        """EN-30: a resumed step's own history (agents/core/stream.py), so the
+        model carries on from what it did instead of thinking the step over
+        from the start. A call that never answered is left out: it is the
+        recovery's to judge (OR-31), not the model's to assume."""
+        from agents.core.stream import answered, of_step
+        done = answered(of_step(step))
+        if not done:
+            return []
+        calls = {c.id: c for c in step.tool_calls}
+        results = {r.call_id: r for r in step.results if r.call_id}
+        out: list[ProviderMessage] = []
+        for act, obs in done:
+            call, result = calls[act.call_id], results.get(act.call_id)
+            text = (result.output or result.error) if result is not None else obs.text
+            out.append(ProviderMessage(role="assistant", content="", tool_calls=[call]))
+            out.append(ProviderMessage(role="tool", tool_call_id=call.id,
+                                       content=as_data(call.tool_name, text or "(no output)")))
+        out.append(ProviderMessage(role="user", content=cls.RESUMED_NOTE))
+        return out
 
     # AG-05: what one turn may run side by side - reads of files, git and
     # workbooks, which change nothing and touch neither the screen nor an
