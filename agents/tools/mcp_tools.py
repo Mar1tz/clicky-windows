@@ -87,18 +87,47 @@ def detach(registry, server_name: str) -> int:
     return gone
 
 
+# CI-30, the tool router: a big server (GitHub has dozens of tools, a Zapier
+# link hundreds) would bury the planner and cost on every call. A job gets
+# the ones that fit its goal, best first, at most this many per server.
+MAX_PER_SERVER = 15
+_GOAL_STOP = {"the", "a", "an", "and", "or", "to", "of", "in", "on", "for", "my", "me", "it", "this", "that", "with",
+              "please", "can", "you", "i", "from", "at", "by", "is", "be", "all", "new"}
+
+
+def _words_of(text: str) -> set[str]:
+    text = re.sub(r"([a-z])([A-Z])", r"\1 \2", text or "")
+    return {w for w in re.findall(r"[a-z0-9]+", text.lower()) if len(w) > 1 and w not in _GOAL_STOP}
+
+
+def _fit(goal_words: set[str], tool) -> float:
+    return 2.0 * len(goal_words & _words_of(tool.remote)) + 0.5 * len(goal_words & _words_of(tool.spec.description))
+
+
 def for_goal(goal: str, registry) -> list[str]:
-    """The MCP tools of the servers a job names ("open an issue on github",
-    "my jira tickets" - a service's other names, integrations/catalog.py)."""
-    from integrations.catalog import names_for_jobs
-    words = set(re.findall(r"[a-z0-9]+", (goal or "").lower()))
+    """The MCP tools a job gets: of the servers its goal names ("open an issue
+    on github", "my jira tickets" - a service's other names, catalog.py),
+    and of a link server (Zapier, Composio) the tools that fit even when
+    the goal names only the app ("post in Slack"). Never more than
+    MAX_PER_SERVER of one server: the ones that fit the goal best."""
+    from integrations.catalog import SERVICES, names_for_jobs
+    words = _words_of(goal)
     known = names_for_jobs()
-    out = []
+    links = {s.id for s in SERVICES.values() if s.how == "link"}
+    servers: dict[str, list] = {}
     for name in registry.names():
-        if not name.startswith(PREFIX):
+        if name.startswith(PREFIX):
+            tool = registry.get(name)
+            cfg = getattr(getattr(tool, "server", None), "cfg", None)
+            if cfg is not None:
+                servers.setdefault(cfg.name, []).append(tool)
+    out: list[str] = []
+    for server, tools in servers.items():
+        named = bool((set(server.split("_")) | set(known.get(server, ()))) & words)
+        if not named and server not in links:
             continue
-        tool = registry.get(name)
-        server = getattr(getattr(tool, "server", None), "cfg", None)
-        if server is not None and (set(server.name.split("_")) | set(known.get(server.name, ()))) & words:
-            out.append(name)
+        ranked = sorted(tools, key=lambda t: -_fit(words, t))
+        if not named:
+            ranked = [t for t in ranked if _fit(words, t) >= 2.0]      # a link: only what the goal is about
+        out += [t.name for t in ranked[:MAX_PER_SERVER]]
     return out

@@ -193,6 +193,10 @@ def build_agent_manager(
     attach_skills(mgr, in_memory=in_memory, base_dir=None if in_memory else os.path.dirname(task_db))
     # OR-30: the app picks interrupted jobs up by itself; tests ask for it.
     mgr.auto_resume = not (offline or in_memory) if auto_resume is None else auto_resume
+    # OB-01: every job leaves a trace - in traces.db beside agents.db, kept on this PC.
+    from agents.telemetry import Tracer, TraceStore
+    trace_db = ":memory:" if in_memory else os.path.join(os.path.dirname(task_db), "traces.db")
+    mgr.tracer = Tracer(TraceStore(trace_db), mgr.events)
     return mgr
 
 

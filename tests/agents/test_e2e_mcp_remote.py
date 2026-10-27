@@ -298,3 +298,30 @@ def _loop():
         threading.Thread(target=loop.run_forever, daemon=True).start()
         _LOOP.append(loop)
     return _LOOP[0]
+
+
+def test_a_big_server_gives_a_job_only_the_tools_that_fit():
+    """CI-30: the tool router - never more than MAX_PER_SERVER of one server,
+    best fit first; a Zapier link's tools when the goal names only the app."""
+    reg = Registry()
+    many = [{"name": f"misc_tool_{i}", "description": "Something else"} for i in range(40)]
+    many.append({"name": "create_issue", "description": "Open a new issue in a repository"})
+    gh = SimpleNamespace(cfg=SimpleNamespace(name="github"), running=True, tools=many)
+    zap = SimpleNamespace(cfg=SimpleNamespace(name="zapier"), running=True, tools=[
+        {"name": "slack_send_channel_message", "description": "Post a message to a Slack channel"},
+        {"name": "gmail_find_email", "description": "Find an email in Gmail"}])
+    mcp_tools.attach_server(reg, gh)
+    mcp_tools.attach_server(reg, zap)
+    got = mcp_tools.for_goal("open an issue on github about the login bug", reg)
+    assert len(got) == mcp_tools.MAX_PER_SERVER and got[0] == "mcp_github_create_issue"
+    assert mcp_tools.for_goal("post the summary in slack", reg) == ["mcp_zapier_slack_send_channel_message"]
+    assert mcp_tools.for_goal("tidy my desktop", reg) == []
+
+
+def test_an_app_without_a_connection_goes_through_their_link(monkeypatch, tmp_path):
+    mgr, said, opened, board, started = _manager(monkeypatch, tmp_path)
+    out = asyncio.run(mgr._tool_connect_account({"service": "hubspot"}))
+    assert "No ready connection" in out["error"] and "Zapier" in out["ready"]
+    mgr._agents.mcp.servers["zapier"] = SimpleNamespace(running=True, tools=[], cfg=SimpleNamespace(name="zapier"))
+    out = asyncio.run(mgr._tool_connect_account({"service": "hubspot"}))
+    assert out["through"] == "Zapier" and "switch Hubspot on in Zapier" in out["note"]

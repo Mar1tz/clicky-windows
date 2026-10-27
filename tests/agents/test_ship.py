@@ -51,7 +51,8 @@ async def test_metered_provider_counts_and_publishes():
     p = MeteredProvider(_Costly(100), task, bus, TaskLimits())
     await p.complete([])
     await p.complete([])
-    assert task.metadata["usage"] == {"total_tokens": 200, "calls": 2}
+    usage = task.metadata["usage"]
+    assert (usage["total_tokens"], usage["calls"]) == (200, 2) and "cost_usd" in usage   # OB-01: and its cost
     assert [e.data["tokens"] for e in seen] == [100, 200]
     assert seen[-1].data["delta"] == 100
 

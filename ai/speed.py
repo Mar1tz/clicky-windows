@@ -127,20 +127,31 @@ def route(name: str) -> None:
             _turn.route = name
 
 
+# OB-01: who else hears of a finished turn - the app writes it as a voice
+# trace (agents/telemetry). Phases and timings only, never the words said.
+on_turn = None
+
+
 def finish(outcome: str = "answered") -> None:
     """The question is over: answered, unanswered, or nothing said."""
     with _lock:
-        _finish_locked(outcome)
+        record = _finish_locked(outcome)
+    hook = on_turn
+    if record is not None and hook is not None:
+        try:
+            hook(record)
+        except Exception:  # noqa: BLE001 - a trace must never cost an answer
+            _log.debug("voice trace not written", exc_info=True)
 
 
-def _finish_locked(outcome: str) -> None:
+def _finish_locked(outcome: str) -> Optional[dict]:
     global _turn
     t, _turn = _turn, None
     if t is None or "press" not in t.at:
-        return
+        return None
     t.at["done"] = _now()
     if outcome == "nothing said":
-        return
+        return None
     _roll_day()
     d = _today
     d.questions += 1
@@ -199,6 +210,8 @@ def _finish_locked(outcome: str) -> None:
     _log.info("turn timeline: %s", ", ".join(parts))
     if d.questions % SCORECARD_EVERY == 0:
         _log.info("speed today: %s", _scorecard_locked())
+    return {"route": t.route, "outcome": outcome, "phases": {k: round(v, 3) for k, v in measured.items()},
+            "over": over, "total_s": round(t.at["done"] - t.at["press"], 3)}
 
 
 _voice_ready_told = False

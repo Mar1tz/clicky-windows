@@ -853,6 +853,10 @@ class CompanionManager(QObject):
                     kinds=[EventKind.TASK_STATUS, EventKind.APPROVAL_REQUIRED])
                 mgr.events.subscribe(self._on_waitpoint, kinds=[EventKind.WAITPOINT])
                 mgr.personal_values = self._personal_values      # BR-01: {{user.email}} in a job's forms
+                # OB-01: each spoken question's timings beside the jobs' traces.
+                tracer = getattr(mgr, "tracer", None)
+                if tracer is not None:
+                    speed.on_turn = lambda rec: tracer.store.voice_turn(**rec)
                 mgr.events.subscribe(
                     lambda ev: self.sig_agent_notice.emit("Tora is in control", "Press Esc to stop her.")
                     if (ev.data or {}).get("takeover") else None,
@@ -2597,6 +2601,15 @@ class CompanionManager(QObject):
         svc = catalog.find(service)
         pasted = bool(args.get("pasted"))
         if svc is None and service not in ("custom", "mcp", "other", "url"):
+            # CI-30: no direct connection - a Zapier or Composio link they have
+            # reaches it once they switch the app on there.
+            links = [catalog.SERVICES[n].name for n, s in hub.servers.items()
+                     if n in catalog.SERVICES and catalog.SERVICES[n].how == "link" and s.running]
+            if links:
+                return {"ok": True, "through": links[0], "note": (
+                    f"{service.title()} has no direct connection, but their {links[0]} link reaches it: they "
+                    f"switch {service.title()} on in {links[0]}, and jobs that mention it can use it. Say so in "
+                    "one line.")}
             ready = ", ".join(s.name for s in catalog.SERVICES.values())
             return {"error": f"No ready connection for {service}.", "ready": ready,
                     "note": ("Say what can be connected. Zapier reaches thousands of apps (Slack, Outlook, "
@@ -2737,7 +2750,9 @@ class CompanionManager(QObject):
                 "can_connect": [s.name for s in catalog.SERVICES.values() if s.name.lower() not in linked],
                 "note": ("'connected' = real connections (APIs); apps_tora_controls_directly = apps she drives "
                          "through their own controls; anything else she can only work on screen. Any other "
-                         "service with an MCP server, or Zapier for thousands of apps, can be added.")}
+                         "service with an MCP server, or Zapier for thousands of apps, can be added. One that "
+                         "is 'not working' or needs signing in again (CI-30): offer once to reconnect it with "
+                         "connect_account, before a job that needs it fails.")}
 
     async def _tool_disconnect_account(self, args: dict) -> dict:
         from agents.tools import mcp_tools
@@ -3599,7 +3614,9 @@ class CompanionManager(QObject):
 
         def _summ(t):
             a = mgr.get_agent(t.agent_id or "")
+            spent = float(((t.metadata or {}).get("usage") or {}).get("cost_usd", 0.0))
             return {"task": t.title, "agent": a.spec.name if a else "", "status": t.status.value,
+                    "credits_used": round(spent * 100, 1),
                     "progress": int(t.progress * 100), "current": t.current_action,
                     "steps_done": sum(1 for s in t.steps if s.status.value == "done"),
                     "steps_total": len(t.steps)}
