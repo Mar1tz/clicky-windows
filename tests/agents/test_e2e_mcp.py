@@ -64,7 +64,8 @@ def test_a_server_is_started_and_its_tools_go_through_the_registry(tmp_path):
                 "Use github: create_issue with {'title': 'Login fails'}"]
             bad = await reg.execute(ToolCall("mcp_github_search_issues", {}), ctx)
             assert not bad.ok and "invalid arguments" in bad.error, "its schema is checked like any tool's"
-            assert mcp_tools.for_goal("open an issue on GitHub about the crash", reg) == names
+            picked = mcp_tools.for_goal("open an issue on GitHub about the crash", reg)
+            assert sorted(picked) == sorted(names) and picked[0] == "mcp_github_create_issue", "best fit first"
             assert mcp_tools.for_goal("write a poem", reg) == []
         finally:
             await hub.stop()

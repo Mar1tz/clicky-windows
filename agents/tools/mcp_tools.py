@@ -95,13 +95,17 @@ _GOAL_STOP = {"the", "a", "an", "and", "or", "to", "of", "in", "on", "for", "my"
               "please", "can", "you", "i", "from", "at", "by", "is", "be", "all", "new"}
 
 
-def _words_of(text: str) -> set[str]:
-    text = re.sub(r"([a-z])([A-Z])", r"\1 \2", text or "")
-    return {w for w in re.findall(r"[a-z0-9]+", text.lower()) if len(w) > 1 and w not in _GOAL_STOP}
+def _words_of(text: str, *, split_camel: bool = False) -> set[str]:
+    """Lower-case words. A tool's name splits at its capitals (createIssue);
+    the person's words never do - "GitHub" is one word, not "git hub"."""
+    if split_camel:
+        text = re.sub(r"([a-z])([A-Z])", r"\1 \2", text or "")
+    return {w for w in re.findall(r"[a-z0-9]+", (text or "").lower()) if len(w) > 1 and w not in _GOAL_STOP}
 
 
 def _fit(goal_words: set[str], tool) -> float:
-    return 2.0 * len(goal_words & _words_of(tool.remote)) + 0.5 * len(goal_words & _words_of(tool.spec.description))
+    return (2.0 * len(goal_words & _words_of(tool.remote, split_camel=True))
+            + 0.5 * len(goal_words & _words_of(tool.spec.description)))
 
 
 def for_goal(goal: str, registry) -> list[str]:
