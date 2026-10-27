@@ -1287,11 +1287,19 @@ class AgentManager:
                 self._status(run, TaskStatus.WAITING_APPROVAL)
             self.events.emit(EventKind.APPROVAL_REQUIRED, req.reason, task_id=task.id,
                              agent_id=task.agent_id, level="warn", data={"request": req.to_dict()})
+            # OR-32: a yes awaited is a waitpoint too - listed with the rest of
+            # what jobs wait for, ended with the answer (or the job).
+            from agents.core import WaitKind, WaitStatus
+            wp = self.waitpoints.create(WaitKind.APPROVAL, task.id, prompt=req.reason,
+                                        idempotency_key=f"approval:{req.id}")
             try:
                 ok = await fut
             finally:
                 with self._lock:
                     self._approvals.pop(req.id, None)
+                if wp.status is WaitStatus.WAITING:
+                    self.waitpoints.complete(wp.id, {"approved": bool(fut.done() and not fut.cancelled()
+                                                                    and fut.result())})
             self.events.emit(EventKind.APPROVAL_RESOLVED, "approved" if ok else "denied",
                              task_id=task.id, agent_id=task.agent_id,
                              data={"request_id": req.id, "approved": ok})

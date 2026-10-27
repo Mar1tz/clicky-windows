@@ -129,3 +129,25 @@ def test_a_job_lets_go_of_the_screen_while_it_waits(tmp_path):
     finally:
         w.POLL_S = 1.0
         mgr.stop()
+
+
+def test_an_approval_is_a_waitpoint_too(tmp_path):
+    """OR-32: a yes awaited is listed with what jobs wait for, and ends with the answer."""
+    from agents.bootstrap import build_agent_manager
+    from agents.core import ApprovalRequest, Task
+    mgr = build_agent_manager(workspace_root=str(tmp_path), in_memory=True, offline=True).start()
+    try:
+        task = Task(title="t", goal="g", workspace=str(tmp_path))
+        ask = mgr._approver_for(task)
+        req = ApprovalRequest(task_id=task.id, agent_id="", call=ToolCall("git_push", {}), reason="Push to main?")
+        fut = mgr.runtime.submit(ask(req))
+        deadline = time.time() + 5
+        while time.time() < deadline and not mgr.waitpoints.pending():
+            time.sleep(0.02)
+        [wp] = mgr.waitpoints.pending()
+        assert wp.kind is WaitKind.APPROVAL and wp.prompt == "Push to main?"
+        mgr.approve(req.id, True)
+        assert fut.result(5) is True
+        assert wp.status is WaitStatus.COMPLETED and wp.output == {"approved": True}
+    finally:
+        mgr.stop()
