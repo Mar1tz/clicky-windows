@@ -106,6 +106,7 @@ def build_agent_manager(
     max_concurrent: Optional[int] = None,
     auto_approve: Optional[bool] = None,
     offline: bool = False,
+    auto_resume: Optional[bool] = None,
 ) -> AgentManager:
     """Build the workforce. Anything left as None comes from the user's
     settings in config.py, so the settings page is not decorative.
@@ -190,6 +191,8 @@ def build_agent_manager(
         auto_approve=auto_approve,
     )
     attach_skills(mgr, in_memory=in_memory, base_dir=None if in_memory else os.path.dirname(task_db))
+    # OR-30: the app picks interrupted jobs up by itself; tests ask for it.
+    mgr.auto_resume = not (offline or in_memory) if auto_resume is None else auto_resume
     return mgr
 
 

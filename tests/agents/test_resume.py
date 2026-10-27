@@ -229,3 +229,53 @@ def test_create_file_is_idempotent_on_identical_content(tmp_path):
     assert again.ok and again.data.get("created") is False
     assert not differ.ok and "already exists" in differ.error
     assert (tmp_path / "a.txt").read_text(encoding="utf-8") == "hi"
+
+
+# -- OR-30: carrying on by itself ----------------------------------------------
+
+def _auto(tmp_path):
+    return build_agent_manager(workspace_root=str(tmp_path), db_path=str(tmp_path / "agents.db"),
+                               offline=True, auto_resume=True)
+
+
+def test_an_interrupted_job_carries_on_by_itself_once(tmp_path):
+    """OR-30: the app picks a cut-off job up where it stopped - nothing in
+    flight that could not run again - and a second interruption pauses it,
+    so a job that took HeyTora down cannot loop it."""
+    first = _manager(tmp_path).start()
+    try:
+        task = first.wait(first.submit(REQUEST).id, 60)
+        _stage_interruption(first.store, task, done=3)
+        _delete_outputs(task, tmp_path, from_step=3)
+    finally:
+        first.stop()
+
+    second = _auto(tmp_path).start()
+    try:
+        done = second.wait(task.id, 60)
+        assert done.status is TaskStatus.COMPLETED, done.error
+        assert done.metadata["auto_resumed"] == 1
+        _stage_interruption(second.store, done, done=3)
+    finally:
+        second.stop()
+
+    third = _auto(tmp_path).start()
+    try:
+        assert third.get_task(task.id).status is TaskStatus.PAUSED, "once - then the person decides"
+    finally:
+        third.stop()
+
+
+def test_a_job_on_their_screen_never_restarts_by_surprise(tmp_path):
+    first = _manager(tmp_path).start()
+    try:
+        task = first.wait(first.submit(REQUEST).id, 60)
+        task.kind = __import__("agents.core", fromlist=["TaskKind"]).TaskKind.COMPUTER
+        _stage_interruption(first.store, task, done=2)
+    finally:
+        first.stop()
+    second = _auto(tmp_path).start()
+    try:
+        assert second.get_task(task.id).status is TaskStatus.PAUSED
+    finally:
+        second.stop()

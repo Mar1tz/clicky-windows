@@ -214,6 +214,13 @@ class AgentManager:
     # -- recovery ------------------------------------------------------------
 
     INTERRUPTED_NOTE = "interrupted by restart"
+    # OR-30: a job HeyTora's stopping cut off carries on by itself - once - when
+    # what it was doing may simply run again (OR-31) and it does not work on
+    # the person's screen. Off for tests and offline runs (bootstrap turns it
+    # on for the app); a second interruption pauses it, so a job that took
+    # HeyTora down cannot loop it.
+    auto_resume: bool = False
+    AUTO_RESUMES = 1
 
     def recover(self) -> list[Task]:
         """Bring back tasks the previous process left unfinished.
@@ -229,6 +236,7 @@ class AgentManager:
         if self.store is None:
             return []
         recovered: list[Task] = []
+        carry_on: list[Task] = []
         in_flight = {TaskStatus.PENDING, TaskStatus.PLANNING, TaskStatus.RUNNING,
                      TaskStatus.VERIFYING, TaskStatus.WAITING_APPROVAL, TaskStatus.PAUSED,
                      TaskStatus.NEEDS_ATTENTION, TaskStatus.RETRY_WAIT, TaskStatus.WAITING_USER}
@@ -238,6 +246,8 @@ class AgentManager:
                 continue
             unsettled = (self._unsettled_effect(task)
                          if task.status in (TaskStatus.RUNNING, TaskStatus.VERIFYING) else None)
+            if unsettled is None and self._may_carry_on(task):
+                carry_on.append(task)
             if unsettled is not None:
                 # EN-07: the step died with a call in flight that could have
                 # changed something - re-running it could do it twice.
@@ -275,7 +285,26 @@ class AgentManager:
             recovered.append(task)
         if recovered:
             log.info("recovered %d unfinished task(s) from a previous run", len(recovered))
+        for task in carry_on:
+            task.metadata["auto_resumed"] = int(task.metadata.get("auto_resumed") or 0) + 1
+            if self._resume_recovered(task):
+                log.info("task %s (%s) carries on where it stopped", task.id, task.title)
+                self.events.emit(EventKind.LOG, f"Carrying on where it stopped: {task.title}",
+                                 task_id=task.id, agent_id=task.agent_id, data={"auto_resumed": True})
         return recovered
+
+    def _may_carry_on(self, task: Task) -> bool:
+        """OR-30: may this interrupted job go on without being asked?"""
+        if not self.auto_resume:
+            return False
+        if task.status not in (TaskStatus.PENDING, TaskStatus.PLANNING, TaskStatus.RUNNING,
+                               TaskStatus.VERIFYING, TaskStatus.RETRY_WAIT):
+            return False                              # paused, or waiting on the person: theirs to resume
+        if task.kind in (TaskKind.COMPUTER, TaskKind.BROWSER) or (task.metadata or {}).get("takeover"):
+            return False                              # never takes their screen back by surprise
+        if (task.metadata or {}).get("project") or (task.metadata or {}).get("parent_id"):
+            return False                              # a project's lead restarts its children itself
+        return int((task.metadata or {}).get("auto_resumed") or 0) < self.AUTO_RESUMES
 
     def _safe_list_agents(self) -> list[AgentState]:
         try:
@@ -286,11 +315,11 @@ class AgentManager:
 
     def _unsettled_effect(self, task: Task) -> Optional[dict]:
         """The call the running step started and never heard back from, when
-        its tool could change something (MEDIUM or HIGH risk): run a
-        command, push, click. None when every such call answered, or the
-        unanswered one only read. The TOOL_CALL event, committed before the
-        tool runs, is the record of intent (EN-06)."""
-        from agents.core import RiskLevel, StepStatus
+        its tool is not safe to run again (OR-31, ToolSpec.safe_to_replay):
+        run a command, push, click, type. None when every such call
+        answered, or the unanswered one may simply run again. The TOOL_CALL
+        event, committed before the tool runs, is the record of intent (EN-06)."""
+        from agents.core import StepStatus
         step = next((s for s in task.steps if s.status is StepStatus.RUNNING), None)
         if step is None or self.store is None:
             return None
@@ -310,8 +339,8 @@ class AgentManager:
             if call_id in answered:
                 continue
             name = call.get("tool_name") or ""
-            risk = self.tools.get(name).spec.risk if name in self.tools else RiskLevel.HIGH
-            if risk.rank >= RiskLevel.MEDIUM.rank:
+            safe = self.tools.get(name).spec.safe_to_replay() if name in self.tools else False
+            if not safe:
                 return {"tool": name, "arguments": call.get("arguments") or {}, "call_id": call_id,
                         "at": call.get("at")}
         return None
