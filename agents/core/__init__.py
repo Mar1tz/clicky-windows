@@ -11,7 +11,7 @@ from .models import (
     Event, EventKind, Finding, MemoryEntry, PermissionPolicy, Plan, ProviderCapabilities,
     ProviderMessage, ProviderResponse, RiskLevel, Step, StepStatus, Task,
     TaskKind, TaskStatus, ToolCall, ToolResult, ToolSpec, VerificationResult,
-    new_id, now,
+    WaitKind, Waitpoint, WaitStatus, new_id, now,
 )
 
 __all__ = [
@@ -27,5 +27,5 @@ __all__ = [
     "ConnectedAccount", "Event", "EventKind", "Finding", "MemoryEntry", "PermissionPolicy", "Plan",
     "ProviderCapabilities", "ProviderMessage", "ProviderResponse", "RiskLevel", "Step",
     "StepStatus", "Task", "TaskKind", "TaskStatus", "ToolCall", "ToolResult", "ToolSpec",
-    "VerificationResult", "new_id", "now",
+    "VerificationResult", "WaitKind", "Waitpoint", "WaitStatus", "new_id", "now",
 ]

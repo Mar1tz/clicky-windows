@@ -851,6 +851,7 @@ class CompanionManager(QObject):
                 mgr.events.subscribe(
                     self._on_agent_event,
                     kinds=[EventKind.TASK_STATUS, EventKind.APPROVAL_REQUIRED])
+                mgr.events.subscribe(self._on_waitpoint, kinds=[EventKind.WAITPOINT])
                 mgr.events.subscribe(
                     lambda ev: self.sig_agent_notice.emit("Tora is in control", "Press Esc to stop her.")
                     if (ev.data or {}).get("takeover") else None,
@@ -969,6 +970,18 @@ class CompanionManager(QObject):
         except Exception:
             _log.debug("agent announcement not spoken", exc_info=True)
 
+    def _on_waitpoint(self, ev) -> None:
+        """OR-32: a job asks the person something (ask_user) - Tora says it
+        aloud; the answer goes back through manage_agents."""
+        wp = (ev.data or {}).get("waitpoint") or {}
+        if wp.get("kind") != "answer" or wp.get("status") != "waiting":
+            return
+        mgr = self._agents
+        task = mgr.get_task((wp.get("task_ids") or [""])[0]) if mgr is not None else None
+        title = task.title if task is not None else "a job"
+        self._say_when_idle(f"A quick question for {title}: {wp.get('prompt', '')}")
+        self.sig_agent_notice.emit("A job has a question", "Tora asked it aloud - answer her, or open Agents.")
+
     def agent_context_line(self) -> str:
         """One line for the model's context so it can answer 'is my app
         ready?' and mention progress unprompted."""
@@ -993,6 +1006,13 @@ class CompanionManager(QObject):
         if recent:
             parts.append("Recently finished: " + "; ".join(
                 f"'{t.title}' {t.status.value}" for t in recent))
+        try:
+            asked = [w for w in mgr.waitpoints.pending() if w.kind.value == "answer"]
+        except Exception:  # noqa: BLE001 - an older manager
+            asked = []
+        if asked:
+            parts.append("A job is waiting for their answer to: " + "; ".join(w.prompt for w in asked[:3])
+                         + " - when they answer, call manage_agents with action answer")
         line = ""
         if parts:
             line = (" ".join(parts) + ". If the user asks how it is going, answer from this; "
@@ -3564,11 +3584,22 @@ class CompanionManager(QObject):
                     "steps_total": len(t.steps)}
 
         top = [t for t in mgr.list_tasks() if not (t.metadata or {}).get("parent_id")]
+        if action == "answer":
+            text = str(args.get("answer") or "").strip()
+            if not text:
+                return {"error": "say what their answer was"}
+            wp = mgr.answer(text)
+            if wp is None:
+                return {"error": "no job is waiting for an answer"}
+            return {"ok": True, "answered": wp.prompt, "note": "Say 'got it' in two words; the job goes on."}
+
         if action == "status":
             active = [_summ(t) for t in top if not t.status.is_terminal]
             recent = [_summ(t) for t in top if t.status.is_terminal][:3]
             pending = mgr.pending_approvals()
-            return {"ok": True, "active": active, "recent": recent,
+            waits = getattr(mgr, "waitpoints", None)
+            waiting = [f"{w.kind.value}: {w.prompt}" for w in waits.pending()] if waits is not None else []
+            return {"ok": True, "active": active, "recent": recent, "waiting_for": waiting,
                     "awaiting_approval": [p.reason for p in pending],
                     "note": ("Tell the user briefly. Nothing is running." if not active and not pending
                              else "Summarise in one breath.")}
@@ -3594,7 +3625,7 @@ class CompanionManager(QObject):
         target = candidates[0]
         done = {"pause": mgr.pause, "resume": mgr.resume, "cancel": mgr.cancel}.get(action)
         if done is None:
-            return {"error": "action must be status, pause, resume, cancel, approve or deny"}
+            return {"error": "action must be status, pause, resume, cancel, approve, deny or answer"}
         ok = done(target.id)
         return {"ok": bool(ok), "action": action, "task": target.title,
                 "status": (mgr.get_task(target.id) or target).status.value}

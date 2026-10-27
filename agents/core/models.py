@@ -43,6 +43,7 @@ class TaskStatus(str, Enum):
     NEEDS_ATTENTION = "needs_attention"
     RETRY_WAIT = "retry_wait"              # a passing fault (rate limit, dropped line): trying again shortly
     WAITING_USER = "waiting_user"          # a step only the user can do (sign in, a captcha); Resume goes on
+    WAITING = "waiting"                    # OR-32: on a time or an event (a waitpoint) - it goes on by itself
     REJECTED = "rejected"                  # the user said no to the plan
 
     @property
@@ -138,6 +139,7 @@ class EventKind(str, Enum):
     FINDING = "finding"                      # data: {"finding": Finding.to_dict()}
     LOG = "log"
     ERROR = "error"
+    WAITPOINT = "waitpoint"                  # data: {"waitpoint": Waitpoint.to_dict()} - made or ended (OR-32)
 
 
 # -- Serialisation helpers ---------------------------------------------------
@@ -213,6 +215,37 @@ class ToolSpec(_Serialisable):
         if self.replay_safe is not None:
             return self.replay_safe
         return self.risk.rank < RiskLevel.MEDIUM.rank
+
+
+class WaitKind(str, Enum):
+    """What a waitpoint waits for (OR-32, after trigger.dev's waitpoints)."""
+    APPROVAL = "approval"                  # the person's yes or no
+    ANSWER = "answer"                      # the person's answer to a question
+    TIME = "time"                          # a moment: 09:00, in two hours
+    EVENT = "event"                        # something happening: a file appears
+
+
+class WaitStatus(str, Enum):
+    WAITING = "waiting"
+    COMPLETED = "completed"
+    TIMED_OUT = "timed_out"
+    CANCELLED = "cancelled"
+
+
+@dataclass
+class Waitpoint(_Serialisable):
+    """One thing one or more jobs wait for (agents/manager/waitpoints.py)."""
+    kind: WaitKind
+    task_ids: list[str] = field(default_factory=list)
+    prompt: str = ""                       # what it waits for, in words: "until 09:00", the question
+    until: Optional[float] = None          # TIME: the moment; the others: when it gives up
+    condition: dict[str, Any] = field(default_factory=dict)   # EVENT: {"file": path}
+    idempotency_key: str = ""              # the same key while waiting = the same waitpoint
+    status: WaitStatus = WaitStatus.WAITING
+    output: Any = None                     # the answer, the yes/no, what happened
+    id: str = field(default_factory=new_id)
+    created_at: float = field(default_factory=now)
+    resolved_at: Optional[float] = None
 
 
 @dataclass

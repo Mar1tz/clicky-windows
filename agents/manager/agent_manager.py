@@ -193,6 +193,11 @@ class AgentManager:
         # so every session asked again about the same track skip and the
         # dialog became something to click past rather than read.
         self._desktop_grants: set[str] = _read_grants()
+        # OR-32: what jobs wait for - a time, a file, an answer, a yes.
+        from .waitpoints import Waitpoints
+        self.waitpoints = Waitpoints(self.events)
+        self.waitpoints.on_wait = self._on_wait
+        self.waitpoints.on_resume = self._on_wait_over
         self._grants: dict[str, set[str]] = {}          # task_id -> tools a human allowed for it
         self._store_unsub: Optional[Unsubscribe] = None
         self._events_unsub: Optional[Unsubscribe] = None
@@ -591,7 +596,47 @@ class AgentManager:
         skill = self.skill_for(task)
         skills = [skill.prompt()] if skill is not None else []
         return {"tool_names": self._tool_names_for(worker, spec),
-                "context_lines": lines, "skills": skills}
+                "context_lines": lines, "skills": skills, "waitpoints": self.waitpoints}
+
+    # -- waits (OR-32) -----------------------------------------------------------
+
+    def _on_wait(self, task_id: str, wp) -> None:
+        """A job starts waiting: it says on what, and a wait for a time or a
+        file lets go of the screen and the browser meanwhile."""
+        from agents.core import WaitKind
+        run = self._runs.get(task_id)
+        if run is None:
+            return
+        if wp.kind in (WaitKind.TIME, WaitKind.EVENT):
+            with self._lock:
+                self._release_claims(task_id)
+            self._status(run, TaskStatus.WAITING)
+        elif wp.kind is WaitKind.ANSWER:
+            self._status(run, TaskStatus.WAITING_USER)
+        run.task.current_action = f"Waiting {wp.prompt}" if wp.kind is not WaitKind.ANSWER \
+            else f"Asked you: {wp.prompt}"
+        self._start_next()                      # what it let go of may start another job
+
+    async def _on_wait_over(self, task_id: str, wp) -> None:
+        """Done waiting: the screen and the browser back - in turn - then on."""
+        from agents.core import WaitKind
+        run = self._runs.get(task_id)
+        if run is None or run.control.cancelled:
+            return
+        if wp.kind in (WaitKind.TIME, WaitKind.EVENT):
+            while True:
+                with self._lock:
+                    if not self._busy_claims(run.task):
+                        self._take_claims(run.task)
+                        break
+                run.task.current_action = "Waiting its turn for the screen or the browser"
+                await asyncio.sleep(0.5)
+        if run.task.status in (TaskStatus.WAITING, TaskStatus.WAITING_USER):
+            self._status(run, TaskStatus.RUNNING)
+
+    def answer(self, text: str, waitpoint_id: str = ""):
+        """The person's answer to a job's question (ask_user); the oldest open one unless named."""
+        return self.waitpoints.answer(text, waitpoint_id)
 
     @staticmethod
     def _context_lines_for(task: Task) -> list[str]:
@@ -946,6 +991,7 @@ class AgentManager:
                 self._runs.pop(ctx.task.id, None)
                 self._active.discard(ctx.task.id)
                 self._release_claims(ctx.task.id)
+            self.waitpoints.cancel_for(ctx.task.id)
             self._start_next()
 
     def get_task(self, task_id: str) -> Optional[Task]:
@@ -1264,7 +1310,11 @@ class AgentManager:
         # CI-18: a job that names one of the person's MCP servers ("on GitHub",
         # "in Notion") gets that server's tools beside its own.
         from agents.tools.mcp_tools import for_goal
+        from agents.tools.wait_tools import for_goal as waits_for
         extra = for_goal(task.goal, self.tools) if hasattr(self.tools, "names") else []
+        # OR-32: ask_user for every job; wait_until / wait_for_file when it waits.
+        names = set(self.tools.names()) if hasattr(self.tools, "names") else set()
+        extra += [n for n in waits_for(task.goal) if n in names]
         if extra:
             own = tools or list(getattr(self.workers.get(task.worker_type), "default_tools", []) or [])
             tools = own + [t for t in extra if t not in own]
@@ -1348,7 +1398,7 @@ class AgentManager:
         elif ev.kind is EventKind.TASK_STATUS:
             st = TaskStatus(ev.data.get("status", "running"))
             new = {TaskStatus.PAUSED: AgentStatus.PAUSED, TaskStatus.NEEDS_ATTENTION: AgentStatus.PAUSED,
-                   TaskStatus.WAITING_USER: AgentStatus.PAUSED,
+                   TaskStatus.WAITING_USER: AgentStatus.PAUSED, TaskStatus.WAITING: AgentStatus.PAUSED,
                    TaskStatus.COMPLETED: AgentStatus.IDLE,
                    TaskStatus.CANCELLED: AgentStatus.STOPPED, TaskStatus.REJECTED: AgentStatus.STOPPED,
                    TaskStatus.FAILED: AgentStatus.ERROR}.get(st, AgentStatus.RUNNING)

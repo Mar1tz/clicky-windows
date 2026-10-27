@@ -607,14 +607,18 @@ def tool_declarations() -> list[dict]:
             "description": (
                 "Check on or control background agents: how a build is going, "
                 "stop / pause / resume / cancel, approve / deny when one waits "
-                "for permission."
+                "for permission, answer when a job asked them a question."
             ),
             "parameters": {
                 "type": "object",
                 "properties": {
                     "action": {
                         "type": "string",
-                        "enum": ["status", "pause", "resume", "cancel", "approve", "deny"],
+                        "enum": ["status", "pause", "resume", "cancel", "approve", "deny", "answer"],
+                    },
+                    "answer": {
+                        "type": "string",
+                        "description": "action answer: their answer to the job's question, in their words.",
                     },
                     "task": {
                         "type": "string",

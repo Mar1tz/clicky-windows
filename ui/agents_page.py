@@ -45,6 +45,7 @@ def status_words(status: str) -> tuple[str, str]:
         "paused": ("Paused", T.WARN),
         "needs_attention": ("Needs you", T.WARN),
         "waiting_user": ("Your turn", T.WARN),
+        "waiting": ("Waiting", T.TEXT_DIM),
         "retry_wait": ("Trying again soon", T.TEXT_DIM),
         "rejected": ("Plan declined", T.TEXT_FAINT),
     }.get(status, (status.replace("_", " ").capitalize(), T.TEXT_DIM))

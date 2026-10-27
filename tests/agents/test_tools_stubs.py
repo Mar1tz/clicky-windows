@@ -24,6 +24,7 @@ EXPECTED = {
     "desktop": {"list_app_actions", "app_action", "ui_control", "open_link"},
     "design": {"render_design"},
     "devlink": {"devlink_context", "devlink_logs", "devlink_code"},
+    "wait": {"wait_until", "wait_for_file", "ask_user"},
 }
 
 

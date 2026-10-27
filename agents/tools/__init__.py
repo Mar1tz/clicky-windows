@@ -13,13 +13,13 @@ from __future__ import annotations
 
 from . import (
     app_tools, browser_tab_tools, browser_tools, computer_tools, control_tools, design_tools, devlink_tools,
-    file_tools, git_tools, spreadsheet_tools, terminal_tools, test_tools,
+    file_tools, git_tools, spreadsheet_tools, terminal_tools, test_tools, wait_tools,
 )
 from .base import Tool, make_spec
 from .registry import Registry
 
 _MODULES = (file_tools, spreadsheet_tools, design_tools, terminal_tools, test_tools, git_tools, browser_tools,
-            browser_tab_tools, app_tools, control_tools, computer_tools, devlink_tools)
+            browser_tab_tools, app_tools, control_tools, computer_tools, devlink_tools, wait_tools)
 
 
 def all_tools() -> list[Tool]:
