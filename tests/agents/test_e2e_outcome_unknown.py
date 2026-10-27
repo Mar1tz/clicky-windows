@@ -76,3 +76,19 @@ def test_the_page_says_needs_you_and_offers_resume():
     from ui.agents_page import status_words
     assert status_words("needs_attention")[0] == "Needs you"
     assert StepStatus.RUNNING                               # (imported for the staged step above)
+
+
+def test_what_may_run_again_is_said_by_the_tool_not_guessed_from_risk(tmp_path):
+    """OR-31: run_tests is MEDIUM but running it twice changes nothing - a
+    job cut off mid-run is simply paused; run_command stays "needs you"."""
+    task = _crash_mid_call(tmp_path, "run_tests", {})
+    second = _manager(tmp_path).start()
+    try:
+        back = second.get_task(task.id)
+        assert back.status is TaskStatus.PAUSED and "outcome_unknown" not in back.metadata
+        tools = second.tools
+        assert tools.get("run_tests").spec.safe_to_replay() and tools.get("open_app").spec.safe_to_replay()
+        assert not tools.get("type_text").spec.safe_to_replay() and not tools.get("git_push").spec.safe_to_replay()
+        assert tools.get("read_file").spec.safe_to_replay(), "SAFE and LOW: judged by risk, as before"
+    finally:
+        second.stop()

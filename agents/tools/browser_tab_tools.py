@@ -37,7 +37,7 @@ class TabRead(Tool):
         "tab_read",
         "Read the tab the person has open in their own browser (signed in as them): its title, text, and "
         "its fields, buttons and links, each with a ref for tab_click / tab_type. Read again after acting.",
-        risk=RiskLevel.MEDIUM, category=CATEGORY, properties={})
+        risk=RiskLevel.MEDIUM, category=CATEGORY, replay_safe=True, properties={})
 
     async def run(self, args: dict[str, Any], ctx: ToolContext) -> ToolResult:
         out = await _ask({"type": "read", "tabId": None})

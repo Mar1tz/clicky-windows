@@ -204,6 +204,15 @@ class ToolSpec(_Serialisable):
     # and, when set, how long the tool may run before it is stopped.
     max_output_chars: int = 60_000
     timeout_s: Optional[float] = None
+    # OR-31: may a call that never answered (HeyTora stopped mid-call) simply
+    # run again? None = judged by risk: SAFE and LOW only read or write the
+    # same thing again; MEDIUM and up may have changed something once already.
+    replay_safe: Optional[bool] = None
+
+    def safe_to_replay(self) -> bool:
+        if self.replay_safe is not None:
+            return self.replay_safe
+        return self.risk.rank < RiskLevel.MEDIUM.rank
 
 
 @dataclass

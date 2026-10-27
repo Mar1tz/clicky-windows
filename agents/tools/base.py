@@ -28,10 +28,11 @@ def make_spec(
     category: str,
     properties: Optional[dict[str, dict[str, Any]]] = None,
     required: Optional[list[str]] = None,
+    replay_safe: Optional[bool] = None,
 ) -> ToolSpec:
     """ToolSpec with a JSON-schema object built from `properties`."""
     return ToolSpec(
-        name=name, description=description, risk=risk, category=category,
+        name=name, description=description, risk=risk, category=category, replay_safe=replay_safe,
         parameters={
             "type": "object",
             "properties": dict(properties or {}),

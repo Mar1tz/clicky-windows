@@ -41,7 +41,7 @@ class McpTool(Tool):
                          + str(tool.get("description") or self.remote))[:900],
             parameters=schema if schema.get("type") == "object" else {"type": "object", "properties": {}},
             risk=RiskLevel.MEDIUM if self.read_only else RiskLevel.HIGH,
-            category=CATEGORY)
+            category=CATEGORY, replay_safe=self.read_only)
 
     def ask_reason_for(self, call) -> str:
         return f"Use {self.server.cfg.name}: {self.remote} with {str(call.arguments)[:200]}"

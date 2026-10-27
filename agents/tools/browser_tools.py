@@ -316,7 +316,7 @@ class _BrowserTool(Tool):
 class OpenPage(_BrowserTool):
     spec = make_spec(
         "open_page", "Open a URL in the agent browser and return its title and visible text.",
-        risk=RiskLevel.HIGH, category=CATEGORY,
+        risk=RiskLevel.HIGH, category=CATEGORY, replay_safe=True,
         properties={"url": {"type": "string", "description": "http(s):// or file:// URL."}},
         required=["url"],
     )
@@ -339,7 +339,7 @@ class ExtractInformation(_BrowserTool):
     spec = make_spec(
         "extract_information",
         "Read the current page: the visible text, or one element's text by CSS selector.",
-        risk=RiskLevel.HIGH, category=CATEGORY,
+        risk=RiskLevel.HIGH, category=CATEGORY, replay_safe=True,
         properties={
             "query": {"type": "string", "description": "What you are looking for (for your own notes)."},
             "selector": {"type": "string", "description": "CSS selector to read instead of the whole page."},
@@ -462,7 +462,7 @@ class FillField(_BrowserTool):
 class ScreenshotPage(_BrowserTool):
     spec = make_spec(
         "screenshot_page", "Save a PNG of the current page into the workspace.",
-        risk=RiskLevel.HIGH, category=CATEGORY,
+        risk=RiskLevel.HIGH, category=CATEGORY, replay_safe=True,
         properties={"path": {"type": "string", "description": "Where to save. Default screenshots/page.png"}},
     )
 

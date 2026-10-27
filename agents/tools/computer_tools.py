@@ -307,7 +307,7 @@ class FindOnScreen(Tool):
 class MoveCursor(_ComputerTool):
     spec = make_spec(
         "move_cursor", "Move the mouse to a named control or to coordinates.",
-        risk=RiskLevel.HIGH, category=CATEGORY, properties=_TARGET_PROPS,
+        risk=RiskLevel.HIGH, category=CATEGORY, replay_safe=True, properties=_TARGET_PROPS,
     )
 
     async def act(self, args, ctx):

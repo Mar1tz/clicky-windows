@@ -155,7 +155,7 @@ class InstallPackage(_ProcessTool):
         "Install packages with npm, pnpm, yarn or pip. The manager is auto-detected from "
         "lock files / package.json / requirements.txt in cwd unless given. With no packages, "
         "installs the project's declared dependencies.",
-        risk=RiskLevel.MEDIUM, category=CATEGORY,
+        risk=RiskLevel.MEDIUM, category=CATEGORY, replay_safe=True,
         properties={
             "packages": {"type": ["array", "string"], "items": {"type": "string"},
                          "description": "Package names (optionally with versions), list or space-separated."},

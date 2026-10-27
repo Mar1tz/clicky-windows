@@ -290,7 +290,7 @@ class OpenApp(Tool):
         "or bring it to the front if it is already open. One step - never press "
         "the Windows key and type to open an app. An editor (Notepad, Word, Excel) "
         "whose open window holds the person's own document gets a new window.",
-        risk=RiskLevel.MEDIUM, category=CATEGORY,
+        risk=RiskLevel.MEDIUM, category=CATEGORY, replay_safe=True,
         properties={"name": {"type": "string", "description": "e.g. 'Notepad', 'Devin', 'Chrome'."}},
         required=["name"],
     )

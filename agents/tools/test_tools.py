@@ -159,7 +159,7 @@ class RunTests(Tool):
         "run_tests",
         "Run the project's test suite and report failures precisely: test names, "
         "assertion messages and file:line. Detects pytest / npm test / vitest.",
-        risk=RiskLevel.MEDIUM, category=CATEGORY,
+        risk=RiskLevel.MEDIUM, category=CATEGORY, replay_safe=True,
         properties={
             "runner": {"type": "string", "enum": ["auto", "pytest", "npm", "vitest"],
                        "description": "Default auto-detect."},
