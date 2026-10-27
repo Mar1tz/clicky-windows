@@ -852,6 +852,7 @@ class CompanionManager(QObject):
                     self._on_agent_event,
                     kinds=[EventKind.TASK_STATUS, EventKind.APPROVAL_REQUIRED])
                 mgr.events.subscribe(self._on_waitpoint, kinds=[EventKind.WAITPOINT])
+                mgr.personal_values = self._personal_values      # BR-01: {{user.email}} in a job's forms
                 mgr.events.subscribe(
                     lambda ev: self.sig_agent_notice.emit("Tora is in control", "Press Esc to stop her.")
                     if (ev.data or {}).get("takeover") else None,
@@ -969,6 +970,26 @@ class CompanionManager(QObject):
             self._submit(self._reply_local(text))
         except Exception:
             _log.debug("agent announcement not spoken", exc_info=True)
+
+    @staticmethod
+    def _personal_values() -> dict:
+        """What a job's {{user.x}} placeholders stand for (BR-01): what HeyTora
+        already knows - their name and the email they signed in with. Put in
+        by the tool at the last moment; never in a prompt or a trace."""
+        out = {}
+        try:
+            name, _uses = cfg.profile()
+            if name:
+                out["name"] = name
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            from account.service import account
+            if account().signed_in() and account().email:
+                out["email"] = account().email
+        except Exception:  # noqa: BLE001
+            pass
+        return out
 
     def _on_waitpoint(self, ev) -> None:
         """OR-32: a job asks the person something (ask_user) - Tora says it

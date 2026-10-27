@@ -597,7 +597,19 @@ class AgentManager:
         skill = self.skill_for(task)
         skills = [skill.prompt()] if skill is not None else []
         return {"tool_names": self._tool_names_for(worker, spec),
-                "context_lines": lines, "skills": skills, "waitpoints": self.waitpoints}
+                "context_lines": lines, "skills": skills, "waitpoints": self.waitpoints,
+                "personal": self._personal()}
+
+    # BR-01: what {{user.email}} and friends stand for - set by the app (the
+    # companion knows their name and sign-in), read when a job starts.
+    personal_values: Optional[Callable[[], dict]] = None
+
+    def _personal(self) -> dict:
+        try:
+            return {str(k).lower(): str(v) for k, v in (self.personal_values() or {}).items() if v} \
+                if self.personal_values else {}
+        except Exception:  # noqa: BLE001 - no values: the tools say what is missing
+            return {}
 
     # -- waits (OR-32) -----------------------------------------------------------
 

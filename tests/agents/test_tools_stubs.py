@@ -14,7 +14,8 @@ EXPECTED = {
     "terminal": {"run_command", "install_package", "execute_script", "run_tests"},
     "git": {"git_init", "git_status", "git_diff", "git_log", "git_add", "git_commit",
             "git_branch", "git_push"},
-    "browser": {"open_page", "extract_information", "click_element", "fill_field",
+    "browser": {"open_page", "extract_information", "click_element", "fill_field", "page_actions",
+                "browser_observe", "browser_act", "browser_extract",
                 "screenshot_page", "close_browser", "ask_to_sign_in",
                 "tab_read", "tab_click", "tab_type"},
     "computer": {"find_on_screen", "screenshot", "move_cursor", "click", "type_text",
@@ -66,8 +67,11 @@ def test_risk_levels():
     assert risk["open_app"] is RiskLevel.MEDIUM and risk["focus_window"] is RiskLevel.LOW
     # Reading their own signed-in tab reads, it does not act (CI-04); acting there is HIGH and always asks.
     assert risk["tab_read"] is RiskLevel.MEDIUM
+    # Observing and extracting read the page already open, they never act or navigate (BR-02).
+    assert risk["browser_observe"] is RiskLevel.SAFE and risk["browser_extract"] is RiskLevel.SAFE
     for name in (EXPECTED["browser"] | EXPECTED["computer"]) - looking_only_or_asks - {"open_app", "focus_window",
-                                                                                       "tab_read"}:
+                                                                                       "tab_read", "browser_observe",
+                                                                                       "browser_extract"}:
         assert risk[name] is RiskLevel.HIGH, name
     for name in looking_only:
         assert risk[name] is RiskLevel.SAFE, name

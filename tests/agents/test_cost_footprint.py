@@ -62,9 +62,11 @@ def test_worker_tool_schemas_stay_within_budget():
     reg = default_registry()
     workers = default_workers()
     # file: 2200 + render_design (5 Oct 2026, ~350 - trimmed from 655), the File Agent's posters.
-    # browser: 700 + the person's own tab (tab_read/click/type, CI-04/05, 26 Oct 2026) - measured 843.
+    # browser: 700 + the person's own tab (tab_read/click/type, CI-04/05, 26 Oct 2026) - measured 843;
+    # + numbered controls and page_actions (BR-01, 27 Oct 2026) - measured 928;
+    # + observe / act / extract (BR-02, 27 Oct 2026) - measured 1145.
     budget = {"coding": 3000, "file": 2400, "terminal": 1300, "research": 700,
-              "browser": 900, "computer": 2100}
+              "browser": 1175, "computer": 2100}
     for worker_type, limit in budget.items():
         names = list(workers.get(worker_type).default_tools)
         # What a provider sends per tool (agents/providers: name, description,

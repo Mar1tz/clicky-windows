@@ -282,6 +282,82 @@ async def close_all() -> None:
     await close_shared()
 
 
+# -- BR-01, after browser-use: the page as numbered controls ---------------------
+#
+# The model reads a page as a short list of what can be used on it -
+# "[12] button "Send"", "[13] textbox "To" = "lee@..."" - and answers with a
+# number, never a CSS selector it guessed. Controls new since the last look
+# are starred. Data first, pixels last (a screenshot only when asked).
+
+MAX_CONTROLS = 150
+_INDEX_JS = """() => {
+  const sel = 'a[href],button,input:not([type=hidden]),select,textarea,[role=button],[role=link],' +
+              '[role=checkbox],[role=tab],[role=menuitem],[role=option],[contenteditable=""],' +
+              '[contenteditable=true],[onclick]';
+  document.querySelectorAll('[data-tora-idx]').forEach(e => e.removeAttribute('data-tora-idx'));
+  const out = []; let i = 0;
+  for (const el of document.querySelectorAll(sel)) {
+    const r = el.getBoundingClientRect(), st = getComputedStyle(el);
+    if (r.width < 2 || r.height < 2 || st.visibility === 'hidden' || st.display === 'none' || el.disabled) continue;
+    i += 1; el.setAttribute('data-tora-idx', String(i));
+    const tag = el.tagName.toLowerCase(), type = (el.getAttribute('type') || '').toLowerCase();
+    const role = el.getAttribute('role') || (tag === 'a' ? 'link' : tag === 'button' ? 'button' :
+      tag === 'select' ? 'select' : tag === 'textarea' ? 'textbox' :
+      tag === 'input' ? (['checkbox', 'radio', 'submit', 'button'].includes(type) ? type : 'textbox') : tag);
+    const lab = (el.getAttribute('aria-label') || (el.labels && el.labels[0] && el.labels[0].innerText) ||
+                 el.getAttribute('placeholder') || el.innerText || (type === 'password' ? '' : el.value) ||
+                 el.getAttribute('name') || el.id || '').trim().replace(/\\s+/g, ' ').slice(0, 80);
+    const value = ['input', 'textarea', 'select'].includes(tag) && type !== 'password' && !['submit', 'button'].includes(type)
+                  ? String(el.value || '').slice(0, 60) : '';
+    out.push({i, role, label: lab, value, secret: type === 'password'});
+    if (i >= %d) break;
+  }
+  return out;
+}""" % MAX_CONTROLS
+_seen: dict[str, set] = {}
+
+
+async def controls(page, ctx: ToolContext) -> tuple[list[dict], str]:
+    """(the controls, their lines) - numbered on the page itself, so a number
+    stays this element until the page is read again."""
+    items = await page.evaluate(_INDEX_JS)
+    key = _key(ctx)
+    before = _seen.get(key, set())
+    names = {f"{c['role']}|{c['label']}" for c in items}
+    lines = []
+    for c in items:
+        new = "*" if before and f"{c['role']}|{c['label']}" not in before else ""
+        value = f' = "{c["value"]}"' if c.get("value") else (" (password)" if c.get("secret") else "")
+        lines.append(f'{new}[{c["i"]}] {c["role"]} "{c["label"]}"{value}')
+    _seen[key] = names
+    return items, "\n".join(lines)
+
+
+def _by_index(page, index) -> "Any":
+    return page.locator(f'[data-tora-idx="{int(index)}"]')
+
+
+def fill_in(value: str, ctx: ToolContext) -> "tuple[str, str]":
+    """BR-01, the placeholders: the model writes {{user.email}}; the real value
+    is put in here, at the last moment, so it never sits in a prompt or a
+    trace. (real value, error)"""
+    import re as _re
+    personal = (ctx.extras or {}).get("personal") or {}
+    missing = []
+
+    def sub(m):
+        got = personal.get(m.group(1).lower())
+        if not got:
+            missing.append(m.group(1))
+            return m.group(0)
+        return str(got)
+    real = _re.sub(r"\{\{\s*user\.([a-z_]+)\s*\}\}", sub, value or "", flags=_re.I)
+    if missing:
+        return real, (f"HeyTora does not know their {', '.join(missing)} - ask_user for it, "
+                      "or leave the box for them")
+    return real, ""
+
+
 class _BrowserTool(Tool):
     """Common guard: Playwright present, page available, errors reported."""
 
@@ -332,7 +408,10 @@ class OpenPage(_BrowserTool):
             info["sign_in"] = True
             text = ("This page asks to sign in. Call ask_to_sign_in with this URL: the user signs in "
                     "themselves, once, and this browser remembers it. Never type a password.\n\n" + text)
-        return self.ok(text, **info)
+        items, lines = await controls(page, ctx)
+        if lines:
+            text += "\n\nControls (use their numbers; * = new since the last look):\n" + lines
+        return self.ok(text, controls=len(items), **info)
 
 
 class ExtractInformation(_BrowserTool):
@@ -368,30 +447,36 @@ class ExtractInformation(_BrowserTool):
 
 class ClickElement(_BrowserTool):
     spec = make_spec(
-        "click_element", "Click an element, by CSS selector or by its visible text.",
+        "click_element", "Click a control by its number (best), visible text or CSS selector.",
         risk=RiskLevel.HIGH, category=CATEGORY,
         properties={
-            "selector": {"type": "string", "description": "CSS selector."},
-            "text": {"type": "string", "description": "Visible text of a button or link."},
+            "index": {"type": "integer", "description": "12 for [12]."},
+            "text": {"type": "string"},
+            "selector": {"type": "string"},
         },
     )
 
     async def act(self, page, args, ctx):
         selector = str(args.get("selector") or "").strip()
         text = str(args.get("text") or "").strip()
-        if not selector and not text:
-            return self.fail("give a selector or the element's visible text")
-        loc = page.locator(selector) if selector else page.get_by_text(text, exact=False)
+        index = args.get("index")
+        if index is None and not selector and not text:
+            return self.fail("give the control's number, its visible text or a selector")
+        loc = (_by_index(page, index) if index is not None
+               else page.locator(selector) if selector else page.get_by_text(text, exact=False))
+        what = f"[{index}]" if index is not None else (selector or text)
         if await loc.count() == 0:
-            return self.fail(f"nothing to click for {selector or text!r}")
+            return self.fail(f"nothing to click for {what!r}" + (" - read the page again; numbers change"
+                                                              if index is not None else ""))
         await loc.first.click()
         try:
             await page.wait_for_load_state("domcontentloaded", timeout=5000)
         except Exception:  # noqa: BLE001 - not every click navigates
             pass
         info = await self.describe(page)
-        return self.ok(f"clicked {selector or text!r}; now at {info['title']} — {info['url']}",
-                       **info)
+        items, lines = await controls(page, ctx)
+        return self.ok(f"clicked {what!r}; now at {info['title']} — {info['url']}"
+                       + (f"\n\nControls:\n{lines}" if lines else ""), controls=len(items), **info)
 
 
 async def _value_of(locator) -> "str | None":
@@ -410,20 +495,29 @@ def _bare(text: str) -> str:
 
 class FillField(_BrowserTool):
     spec = make_spec(
-        "fill_field", "Type a value into an input, textarea or editable field.",
+        "fill_field", "Type into a box by its number (best) or CSS selector. Their details as "
+        "{{user.name}} / {{user.email}}: the real value goes in at the last moment.",
         risk=RiskLevel.HIGH, category=CATEGORY,
         properties={
-            "selector": {"type": "string", "description": "CSS selector of the field."},
-            "value": {"type": "string", "description": "Text to enter."},
-            "submit": {"type": "boolean", "description": "Press Enter afterwards. Default false."},
+            "index": {"type": "integer", "description": "13 for [13]."},
+            "selector": {"type": "string"},
+            "value": {"type": "string"},
+            "submit": {"type": "boolean", "description": "Press Enter after."},
         },
-        required=["selector", "value"],
+        required=["value"],
     )
 
     async def act(self, page, args, ctx):
         selector = str(args.get("selector") or "").strip()
-        value = str(args.get("value") or "")
-        loc = page.locator(selector)
+        index = args.get("index")
+        if index is None and not selector:
+            return self.fail("give the box's number or a selector")
+        shown_value = str(args.get("value") or "")
+        value, missing = fill_in(shown_value, ctx)
+        if missing:
+            return self.fail(missing)
+        loc = _by_index(page, index) if index is not None else page.locator(selector)
+        selector = f"[{index}]" if index is not None else selector
         if await loc.count() == 0:
             return self.fail(f"no field matches {selector!r}")
         kind = (await loc.first.get_attribute("type") or "").lower()
@@ -455,7 +549,7 @@ class FillField(_BrowserTool):
                 await page.wait_for_load_state("domcontentloaded", timeout=5000)
             except Exception:  # noqa: BLE001
                 pass
-        shown = "•" * min(len(value), 8) if kind == "password" else value[:60]
+        shown = "•" * min(len(value), 8) if kind == "password" else shown_value[:60]
         return self.ok(f"filled {selector!r} with {shown!r}", url=page.url, selector=selector)
 
 
@@ -559,6 +653,64 @@ class AskToSignIn(Tool):
                        site=site)
 
 
+class PageActions(_BrowserTool):
+    """BR-01: several steps in one go - fill three boxes and press Send -
+    each the same as its own tool, stopping early when the page changes
+    under them (it navigated, or its controls are not the ones read)."""
+    MAX = 5
+    spec = make_spec(
+        "page_actions",
+        "Up to 5 steps in order by control number; stops if the page changes.",
+        risk=RiskLevel.HIGH, category=CATEGORY,
+        properties={"actions": {"type": "array", "items": {"type": "object"},
+                                "description": "{do: click|fill|select|press, index, value}"}},
+        required=["actions"],
+    )
+
+    async def act(self, page, args, ctx):
+        actions = list(args.get("actions") or [])[:self.MAX]
+        if not actions:
+            return self.fail("no actions given")
+        start_url = page.url
+        done = []
+        for n, a in enumerate(actions):
+            do, index = str(a.get("do") or "").lower(), a.get("index")
+            if index is None:
+                return self.fail(f"action {n + 1} has no control number", done=done)
+            loc = _by_index(page, index)
+            if await loc.count() == 0:
+                break                                    # the page changed under the plan
+            if do == "click":
+                await loc.first.click()
+            elif do in ("fill", "type", "select"):
+                if (await loc.first.get_attribute("type") or "").lower() == "password":
+                    return self.fail("a password box is the person's to fill - ask_to_sign_in", done=done)
+                value, missing = fill_in(str(a.get("value") or ""), ctx)
+                if missing:
+                    return self.fail(missing, done=done)
+                if do == "select":
+                    await loc.first.select_option(label=value)
+                else:
+                    await loc.first.fill(value)
+            elif do == "press":
+                await loc.first.press(str(a.get("value") or "Enter"))
+            else:
+                return self.fail(f"unknown action {do!r} - click, fill, select or press", done=done)
+            done.append(f"{do} [{index}]")
+            if page.url != start_url:
+                break                                    # it navigated: read before going on
+        try:
+            await page.wait_for_load_state("domcontentloaded", timeout=3000)
+        except Exception:  # noqa: BLE001
+            pass
+        info = await self.describe(page)
+        items, lines = await controls(page, ctx)
+        left = len(actions) - len(done)
+        note = f" - stopped after {len(done)}: the page changed, read it before the rest" if left else ""
+        return self.ok(f"did {', '.join(done) or 'nothing'}{note}; now at {info['title']} — {info['url']}"
+                       + (f"\n\nControls:\n{lines}" if lines else ""), done=done, controls=len(items), **info)
+
+
 def tools() -> list[Tool]:
-    return [OpenPage(), ExtractInformation(), ClickElement(), FillField(),
+    return [OpenPage(), ExtractInformation(), ClickElement(), FillField(), PageActions(),
             ScreenshotPage(), CloseBrowser(), AskToSignIn()]

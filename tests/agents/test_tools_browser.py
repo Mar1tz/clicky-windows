@@ -271,3 +271,99 @@ def test_a_field_already_holding_the_value_is_not_typed_again(site, run):
     assert first.ok and not first.data.get("unchanged")
     again = run("fill_field", selector="#name", value="Tora")
     assert again.ok and again.data.get("unchanged") is True and "already holds" in again.output
+
+
+# -- BR-01: the page as numbered controls ----------------------------------------
+
+FORM = """<!doctype html><html><head><title>Contact</title></head><body>
+<label for="em">Email</label><input id="em" type="email">
+<input id="nm" type="text" placeholder="Your name" value="Sam">
+<button type="button" id="send" onclick="document.getElementById('out').innerText='sent:'+document.getElementById('em').value">Send</button>
+<input type="hidden" name="secret" value="x">
+<div id="out"></div></body></html>"""
+
+
+def _number(text, label):
+    import re
+    m = re.search(r"\[(\d+)\] \w+ \"" + re.escape(label), text)
+    assert m, text
+    return int(m.group(1))
+
+
+def test_a_page_reads_as_numbered_controls_and_is_used_by_number(tmp_path, run):
+    (tmp_path / "form.html").write_text(FORM, encoding="utf-8")
+    r = run("open_page", url=_url(tmp_path / "form.html"))
+    assert r.ok and "Controls (use their numbers" in r.output
+    assert '"Your name" = "Sam"' in r.output and "hidden" not in r.output.split("Controls")[1]
+    run.ctx.extras["personal"] = {"email": "sam@example.com"}
+    email, send = _number(r.output, "Email"), _number(r.output, "Send")
+    filled = run("fill_field", index=email, value="{{user.email}}")
+    assert filled.ok and "{{user.email}}" in filled.output and "sam@example.com" not in filled.output
+    clicked = run("click_element", index=send)
+    assert clicked.ok
+    out = run("extract_information", selector="#out")
+    assert out.ok and out.output == "sent:sam@example.com"
+
+
+def test_an_unknown_detail_is_asked_for_not_typed(tmp_path, run):
+    (tmp_path / "form.html").write_text(FORM, encoding="utf-8")
+    r = run("open_page", url=_url(tmp_path / "form.html"))
+    miss = run("fill_field", index=_number(r.output, "Email"), value="{{user.phone}}")
+    assert not miss.ok and "does not know their phone" in miss.error
+
+
+def test_several_steps_in_one_go(tmp_path, run):
+    (tmp_path / "form.html").write_text(FORM, encoding="utf-8")
+    r = run("open_page", url=_url(tmp_path / "form.html"))
+    done = run("page_actions", actions=[{"do": "fill", "index": _number(r.output, "Email"), "value": "a@b.co"},
+                                         {"do": "click", "index": _number(r.output, "Send")}])
+    assert done.ok and done.data["done"] == [f"fill [{_number(r.output, 'Email')}]",
+                                             f"click [{_number(r.output, 'Send')}]"]
+    assert run("extract_information", selector="#out").output == "sent:a@b.co"
+
+
+# -- BR-02: observe, act, extract; the action cache -------------------------------
+
+SHOP = """<!doctype html><html><head><title>Invoices</title></head><body>
+<table><tr><th>Month</th><th>Total</th></tr><tr><td>September</td><td>$120</td></tr>
+<tr><td>October</td><td>$95</td></tr></table>
+<p>Invoices are kept for two years.</p>
+<button type="button" onclick="document.getElementById('out').innerText='downloaded'">Download invoice</button>
+<button type="button">Download receipt</button>
+<input id="q" type="text" placeholder="Search invoices">
+<div id="out"></div></body></html>"""
+
+
+@pytest.fixture
+def fresh_cache():
+    from agents.tools import browser_verbs
+    browser_verbs.use_cache(browser_verbs.ActionCache())
+    yield browser_verbs
+    browser_verbs.use_cache(None)
+
+
+def test_observe_ranks_what_fits_and_extract_reads_tables(tmp_path, run, fresh_cache):
+    (tmp_path / "shop.html").write_text(SHOP, encoding="utf-8")
+    run("open_page", url=_url(tmp_path / "shop.html"))
+    seen = run("browser_observe", instruction="the download invoice button")
+    assert seen.ok and seen.output.splitlines()[0].endswith('"Download invoice" - click it')
+    data = run("browser_extract", instruction="invoice totals")
+    assert data.ok and data.data["tables"][0] == [{"Month": "September", "Total": "$120"},
+                                                   {"Month": "October", "Total": "$95"}]
+    assert "Invoices are kept for two years." in data.data["passages"]
+
+
+def test_act_does_the_clear_one_asks_when_unsure_and_remembers(tmp_path, run, fresh_cache):
+    (tmp_path / "shop.html").write_text(SHOP, encoding="utf-8")
+    run("open_page", url=_url(tmp_path / "shop.html"))
+    unsure = run("browser_act", instruction="download")
+    assert not unsure.ok and "call again with index" in unsure.error and len(unsure.data["candidates"]) == 2
+    pick = unsure.data["candidates"][0]
+    done = run("browser_act", instruction="download", index=pick)
+    assert done.ok and done.data["how"] == "named"
+    assert run("extract_information", selector="#out").output == "downloaded"
+    run("open_page", url=_url(tmp_path / "shop.html"))
+    again = run("browser_act", instruction="download")
+    assert again.ok and again.data["how"] == "remembered", "next time: no choosing"
+    typed = run("browser_act", instruction="the search box", value="October")
+    assert typed.ok and typed.data["how"] == "matched"

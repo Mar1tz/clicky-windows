@@ -154,7 +154,8 @@ class AgentContext:
             events=self.events, policy=self.agent.permissions, approver=self.approver,
             control=self.control,
             extras={"goal": self.task.goal,      # what the job may touch (e.g. a document it names)
-                    "waitpoints": (self.extras or {}).get("waitpoints")},   # OR-32: the wait tools' hub
+                    "waitpoints": (self.extras or {}).get("waitpoints"),   # OR-32: the wait tools' hub
+                    "personal": (self.extras or {}).get("personal") or {}},   # BR-01: {{user.x}} values
         )
 
     def progress(self, action: str, fraction: Optional[float] = None) -> None:
