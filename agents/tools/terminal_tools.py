@@ -115,7 +115,55 @@ class _ProcessTool(Tool):
         return float(value) if value else default
 
 
-class RunCommand(_ProcessTool):
+# EN-32, after OpenHands' confirmation mode: what makes one command risky,
+# whatever the job's ceiling. Rated by rules, before it runs; a match asks
+# the person every time (Registry.execute, ApprovalRequest.dangerous).
+_DANGER = [
+    (r"\brm\s+-[a-z]*r|\b(del|erase)\b[^\n]*\s/[sq]\b|\b(rmdir|rd)\b[^\n]*\s/s\b|"
+     r"\bremove-item\b[^\n]*-(recurse|force)\b|\bshutil\.rmtree\b|\bos\.remove\b", "deletes files or folders"),
+    (r"\b(curl|wget|iwr|irm|invoke-webrequest|invoke-restmethod)\b[^|\n]*\|\s*(sh|bash|iex|"
+     r"invoke-expression|powershell|pwsh|python)\b", "runs a script straight from the internet"),
+    (r"\b(invoke-expression|iex)\b", "runs code it builds as it goes"),
+    (r"\bgit\s+push\b", "pushes to a remote"),
+    (r"\breg(\.exe)?\s+(add|delete|import)\b|\b(set|new|remove)-itemproperty\b[^\n]*\b(hklm|hkcu|hkey_)",
+     "changes the Windows registry"),
+    (r"\b(shutdown|restart-computer|stop-computer)\b", "shuts down or restarts the PC"),
+    (r"\bschtasks\b[^\n]*/create|\b(new|register)-scheduledtask\b", "schedules something to run later"),
+    (r"\bset-executionpolicy\b", "changes PowerShell's safety setting"),
+    (r"\bnet\s+(user|localgroup)\b", "changes Windows accounts"),
+    (r"\b(npm|pnpm|yarn)\s+publish\b|\btwine\s+upload\b|\bcargo\s+publish\b", "publishes a package"),
+]
+_WRITES = re.compile(r"(?<![<>])>{1,2}|\b(copy|xcopy|robocopy|move|mv|cp|set-content|add-content|out-file|"
+                     r"new-item|mkdir|md|ren|rename-item)\b", re.I)
+_ABS_PATH = re.compile(r"(?<![\w])([a-z]:\\[^\s\"'|<>]+)", re.I)
+
+
+def command_danger(command: str, workspace: str = "", roots: tuple = ()) -> str:
+    """What makes this command risky, in words ("deletes files or folders"), or ""."""
+    text = command or ""
+    for pattern, words in _DANGER:
+        if re.search(pattern, text, re.I):
+            return words
+    if workspace and _WRITES.search(text):
+        homes = [os.path.normcase(os.path.abspath(r)) for r in (workspace, *roots) if r]
+        for path in _ABS_PATH.findall(text):
+            full = os.path.normcase(os.path.abspath(path))
+            if not any(full == h or full.startswith(h.rstrip("\\/") + os.sep) for h in homes):
+                return f"writes outside the job's folder ({path})"
+    return ""
+
+
+class _Rated:
+    """A command tool that rates each call (EN-32)."""
+    ARG = "command"
+
+    def danger_for_call(self, call, ctx) -> str:
+        text = str((call.arguments or {}).get(self.ARG) or "")
+        roots = tuple(getattr(getattr(ctx, "policy", None), "workspace_roots", None) or ())
+        return command_danger(text, getattr(ctx, "workspace", ""), roots)
+
+
+class RunCommand(_Rated, _ProcessTool):
     spec = make_spec(
         "run_command",
         "Run a shell command in the workspace and return its output and exit code. "
@@ -232,7 +280,9 @@ def _detect_manager(cwd: str) -> Optional[str]:
     return None
 
 
-class ExecuteScript(_ProcessTool):
+class ExecuteScript(_Rated, _ProcessTool):
+    ARG = "code"
+
     spec = make_spec(
         "execute_script",
         "Run a snippet of Python, PowerShell or Node.js code. The code is written to a "

@@ -10,6 +10,7 @@ Rules for changing this file (manager-owned):
 """
 from __future__ import annotations
 
+import re
 import time
 import uuid
 from dataclasses import asdict, dataclass, field, fields, is_dataclass
@@ -192,6 +193,28 @@ def _coerce(type_hint: Any, value: Any) -> Any:
 
 # -- Tools -------------------------------------------------------------------
 
+# Words of a fault that passes by itself: a rate limit, a busy server, a
+# dropped line (the same family as the orchestrator's step-level retry, EN-05).
+TRANSIENT = re.compile(r"\b(429|502|503|504)\b|rate.?limit|overloaded|temporarily|unavailable|"
+                       r"timed out|connection (reset|aborted|error|closed|refused)|disconnected", re.I)
+
+
+@dataclass
+class RetryPolicy(_Serialisable):
+    """OR-33, after trigger.dev: how a tool call that failed for a passing
+    reason is tried again, right there - before the step fails and a replan
+    spends a model call rewriting a good plan."""
+    attempts: int = 2                      # tries in all, the first included
+    backoff_s: float = 0.5                 # before the 2nd try; doubled after each
+    on: tuple = ("timeout", "transient")   # which failures count
+
+    def retries(self, error_class: str, error: str) -> bool:
+        if error_class in ("unknown_tool", "invalid_input", "permission"):
+            return False                   # the model's mistake or a refusal: never waited out
+        return (("timeout" in self.on and error_class == "timeout")
+                or ("transient" in self.on and bool(TRANSIENT.search(error or ""))))
+
+
 @dataclass
 class ToolSpec(_Serialisable):
     """What the registry publishes and what providers see as a function
@@ -210,6 +233,15 @@ class ToolSpec(_Serialisable):
     # run again? None = judged by risk: SAFE and LOW only read or write the
     # same thing again; MEDIUM and up may have changed something once already.
     replay_safe: Optional[bool] = None
+    # OR-33: how a passing failure is tried again. None = by replay safety:
+    # a tool that may run again gets RetryPolicy(); any other is never
+    # repeated blindly (one attempt).
+    retry: Optional[RetryPolicy] = None
+
+    def retry_policy(self) -> RetryPolicy:
+        if self.retry is not None:
+            return self.retry
+        return RetryPolicy() if self.safe_to_replay() else RetryPolicy(attempts=1)
 
     def safe_to_replay(self) -> bool:
         if self.replay_safe is not None:
@@ -351,6 +383,10 @@ class ApprovalRequest(_Serialisable):
     # which runs the call only if it still matches, and only while fresh.
     payload_hash: str = ""
     decided_at: Optional[float] = None
+    # EN-32: what makes this one call dangerous (a command that deletes,
+    # pushes, edits the registry). Then no per-task grant and no auto-approve
+    # covers it: the person sees it and says yes, every time.
+    dangerous: str = ""
 
 
 @dataclass

@@ -9,7 +9,7 @@ from .interfaces import (
 from .models import (
     AgentSpec, AgentState, AgentStatus, ApprovalRequest, Check, ConnectedAccount,
     Event, EventKind, Finding, MemoryEntry, PermissionPolicy, Plan, ProviderCapabilities,
-    ProviderMessage, ProviderResponse, RiskLevel, Step, StepStatus, Task,
+    ProviderMessage, ProviderResponse, RetryPolicy, RiskLevel, Step, StepStatus, Task,
     TaskKind, TaskStatus, ToolCall, ToolResult, ToolSpec, VerificationResult,
     WaitKind, Waitpoint, WaitStatus, new_id, now,
 )
@@ -25,7 +25,7 @@ __all__ = [
     # models
     "AgentSpec", "AgentState", "AgentStatus", "ApprovalRequest", "Check",
     "ConnectedAccount", "Event", "EventKind", "Finding", "MemoryEntry", "PermissionPolicy", "Plan",
-    "ProviderCapabilities", "ProviderMessage", "ProviderResponse", "RiskLevel", "Step",
+    "ProviderCapabilities", "ProviderMessage", "ProviderResponse", "RetryPolicy", "RiskLevel", "Step",
     "StepStatus", "Task", "TaskKind", "TaskStatus", "ToolCall", "ToolResult", "ToolSpec",
     "VerificationResult", "WaitKind", "Waitpoint", "WaitStatus", "new_id", "now",
 ]

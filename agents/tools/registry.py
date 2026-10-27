@@ -155,15 +155,25 @@ class Registry(ToolRegistry):
 
         result = await self._execute(call, ctx)
         tool = self._tools.get(call.tool_name)
-        if (not result.ok and error_class(result) == "timeout" and tool is not None
-                and tool.spec.risk is RiskLevel.SAFE):
-            # OR-14: a read that only ran out of time gets one more go; a call
-            # that could change something is never repeated blindly.
-            await asyncio.sleep(RETRY_PAUSE_S)
+        # OR-14 / OR-33: a passing failure (a timeout, a rate limit, a dropped
+        # line) of a tool that may run again is tried again here, backing off;
+        # a call that could change something is never repeated blindly.
+        policy = tool.spec.retry_policy() if tool is not None else None
+        tries = 1
+        while (not result.ok and policy is not None and tries < policy.attempts
+               and policy.retries(error_class(result), result.error or "")):
+            await asyncio.sleep(RETRY_PAUSE_S * (2 ** (tries - 1)) * (policy.backoff_s / 0.5))
+            if ctx.control is not None:
+                await ctx.control.checkpoint()
+            tries += 1
             result = await self._execute(call, ctx)
             result.data["retried"] = True
+            result.data["attempts"] = tries
         if not result.ok:
             result.data.setdefault("error_class", error_class(result))
+        if tool is not None:
+            from . import plugins
+            result = plugins.after(call, result, ctx)
         # Tools build results without knowing the call (see base.Tool);
         # stamp identity here so nothing downstream has to trust them.
         result.call_id = call.id
@@ -195,6 +205,23 @@ class Registry(ToolRegistry):
             refused.data["error_class"] = "permission"
             return refused
 
+        # EN-32: plugins may refuse a call outright (never let one skip its
+        # approval), and a tool may say this one call is dangerous - then the
+        # person is asked whatever the policy, grant or take-over says.
+        from . import plugins
+        veto = plugins.before(call, ctx)
+        if veto:
+            refused = ToolResult.failure(call, f"blocked: {veto}")
+            refused.data["error_class"] = "blocked"
+            return refused
+        danger = ""
+        rate = getattr(tool, "danger_for_call", None)
+        if callable(rate):
+            try:
+                danger = str(rate(call, ctx) or "")
+            except Exception:  # noqa: BLE001 - a check that breaks asks, it never waves through
+                danger = "could not be checked"
+
         # `always_ask` is a hard floor a tool can declare for itself: no
         # policy, ceiling or standing approval ever lets it run unasked.
         # Computer control uses it - moving the user's own mouse is not a
@@ -223,7 +250,7 @@ class Registry(ToolRegistry):
             # per click while it lasts. A SENSITIVE tool still asks below.
             from agents.tools.computer_tools import kill_switch
             granted = not kill_switch.tripped
-        if (always_ask and not granted) or sensitive or not (ctx.policy.allows(spec) or granted):
+        if danger or (always_ask and not granted) or sensitive or not (ctx.policy.allows(spec) or granted):
             default_reason = f"{spec.name} always needs a human: it controls your mouse and keyboard"
             per_call = getattr(tool, "ask_reason_for", None)
             reason = ""
@@ -234,10 +261,13 @@ class Registry(ToolRegistry):
                     reason = ""
             reason = reason or ((getattr(tool, "ask_reason", "") or default_reason)
                                 if (always_ask or sensitive) else _deny_reason(spec, ctx.policy))
+            if danger:
+                reason = f"Risky - this {danger}. {reason}"
             request = ApprovalRequest(task_id=ctx.task_id or "", agent_id=ctx.agent_id or "",
                                       call=call, reason=reason, sensitive=sensitive, grant_key=grant_key,
                                       confirm_word=(getattr(tool, "confirm_word", "") or "CONFIRM")
-                                      if sensitive else "", payload_hash=payload_hash(call))
+                                      if sensitive else "", payload_hash=payload_hash(call),
+                                      dangerous=danger)
             try:
                 approved = bool(await ctx.approver(request))
             except asyncio.CancelledError:

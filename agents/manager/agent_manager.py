@@ -184,6 +184,7 @@ class AgentManager:
         self._active: set[str] = set()                  # task ids actually running
         self._queue: list[tuple] = []                   # (ctx, worker, run) waiting
         self._held: dict[str, str] = {}                 # OR-10: claim -> the task holding it
+        self._queued: dict[str, set[str]] = {}          # OR-33: queue -> the tasks in it
         self._runs: dict[str, _Run] = {}                # task_id -> run
         self._agents: dict[str, AgentState] = {}        # agent_id -> state
         self._tasks: dict[str, Task] = {}               # task_id -> task (incl. finished)
@@ -930,18 +931,42 @@ class AgentManager:
             out.append("browser")
         if task.worker_type == "computer":
             out.append("screen")
+        queue = self.QUEUE_OF.get(task.worker_type)
+        if queue:
+            out.append("queue:" + queue)
         return out
 
+    # OR-33, after trigger.dev's named queues: beyond the one-holder claims
+    # (the screen, the browser, a folder), how many jobs of a kind run at
+    # once - four on the network, two heavy local runs (builds, installs:
+    # the terminal worker). Coding jobs mostly wait on a model and stay
+    # under max_concurrent alone. A job waits its turn; it never fails for one.
+    QUEUE_LIMITS = {"network": 4, "cpu": 2}
+    QUEUE_OF = {"research": "network", "browser": "network", "terminal": "cpu"}
+
     def _busy_claims(self, task: Task) -> list[str]:
-        return [c for c in self._claims(task) if self._held.get(c, task.id) != task.id]
+        busy = []
+        for c in self._claims(task):
+            if c.startswith("queue:"):
+                others = self._queued.get(c, set()) - {task.id}
+                if len(others) >= self.QUEUE_LIMITS.get(c[6:], 1):
+                    busy.append(c)
+            elif self._held.get(c, task.id) != task.id:
+                busy.append(c)
+        return busy
 
     def _take_claims(self, task: Task) -> None:
         for c in self._claims(task):
-            self._held[c] = task.id
+            if c.startswith("queue:"):
+                self._queued.setdefault(c, set()).add(task.id)
+            else:
+                self._held[c] = task.id
 
     def _release_claims(self, task_id: str) -> None:
         for c in [c for c, holder in self._held.items() if holder == task_id]:
             del self._held[c]
+        for holders in self._queued.values():
+            holders.discard(task_id)
 
     @staticmethod
     def _claim_words(claim: str) -> str:
@@ -949,6 +974,10 @@ class AgentManager:
             return "the browser (one job uses it at a time)"
         if claim == "screen":
             return "the screen (one job drives the mouse at a time)"
+        if claim == "queue:network":
+            return "other jobs on the internet (four at a time)"
+        if claim == "queue:cpu":
+            return "other builds (two at a time)"
         return "another job working in the same folder"
 
     def _start_next(self) -> None:
@@ -1152,7 +1181,7 @@ class AgentManager:
           * a plan, while "Show me the plan before anything runs" is on -
             that is its own, more particular, request to be asked.
         """
-        return (self.auto_approve and not req.sensitive
+        return (self.auto_approve and not req.sensitive and not req.dangerous
                 and req.call.tool_name not in ("approve_plan", "take_control"))
 
     def pending_approvals(self) -> list[ApprovalRequest]:
@@ -1262,8 +1291,8 @@ class AgentManager:
     def _approver_for(self, task: Task) -> Callable[[ApprovalRequest], Any]:
         async def _ask(req: ApprovalRequest) -> bool:
             granted = self.granted_for_task(task.id)
-            if not req.sensitive and (req.call.tool_name in granted
-                                      or (req.grant_key and req.grant_key in granted)):
+            if not req.sensitive and not req.dangerous and (req.call.tool_name in granted
+                                                            or (req.grant_key and req.grant_key in granted)):
                 self.events.emit(EventKind.APPROVAL_RESOLVED, "approved (granted for this task)",
                                  task_id=task.id, agent_id=task.agent_id,
                                  data={"request_id": req.id, "approved": True, "granted": True})
