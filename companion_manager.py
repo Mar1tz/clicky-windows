@@ -852,7 +852,7 @@ class CompanionManager(QObject):
                     self._on_agent_event,
                     kinds=[EventKind.TASK_STATUS, EventKind.APPROVAL_REQUIRED])
                 mgr.events.subscribe(self._on_waitpoint, kinds=[EventKind.WAITPOINT])
-                mgr.personal_values = self._personal_values      # BR-01: {{user.email}} in a job's forms
+                mgr.personal_values = self._personal_with_facts  # BR-01 + MEM-01: {{user.phone}} too
                 self._wire_job_tabs(mgr)                         # BR-03: a tab taken back pauses its job
                 # OB-01: each spoken question's timings beside the jobs' traces.
                 tracer = getattr(mgr, "tracer", None)
@@ -976,6 +976,30 @@ class CompanionManager(QObject):
         except Exception:
             _log.debug("agent announcement not spoken", exc_info=True)
 
+    def _learn_from(self, said: str) -> None:
+        """MEM-01: plain statements of fact in what they said ("Lee's email is
+        ...", "my phone number is ...") into the facts that know when they
+        were true - by rules, no model call, never anything secret-looking."""
+        facts = getattr(self._agents, "facts", None) if self._agents is not None else None
+        if facts is None:
+            return
+        from agents.memory.extract import from_words
+        found = from_words(said)
+        if not found:
+            return
+        at = time.time()                           # when it was said, whichever write lands first
+
+        def write() -> None:
+            try:
+                episode = facts.episode("voice", said, at=at)
+                for f in found:
+                    if facts.learn(f.subject, f.predicate, f.value, f.text, kind=f.kind, episode=episode,
+                                   source="voice", at=at):
+                        _log.info("learned: %s %s", f.subject, f.predicate)
+            except Exception:  # noqa: BLE001 - a fact never costs an answer
+                _log.debug("fact not kept", exc_info=True)
+        threading.Thread(target=write, name="facts", daemon=True).start()
+
     def _wire_job_tabs(self, mgr) -> None:
         """BR-03: they switched to a job's tab - it is theirs now. The job
         pauses and Tora says how to hand it back; a closed job tab is said."""
@@ -1018,6 +1042,18 @@ class CompanionManager(QObject):
                 out["email"] = account().email
         except Exception:  # noqa: BLE001
             pass
+        return out
+
+    def _personal_with_facts(self) -> dict:
+        """_personal_values plus what they told Tora about themselves (MEM-01)."""
+        out = self._personal_values()
+        facts = getattr(self._agents, "facts", None) if self._agents is not None else None
+        if facts is not None:
+            for key in ("email", "phone", "address", "birthday", "company", "job_title", "website"):
+                if key not in out:
+                    value = facts.current("me", key)
+                    if value:
+                        out[key] = value
         return out
 
     def _on_waitpoint(self, ev) -> None:
@@ -5191,16 +5227,21 @@ class CompanionManager(QObject):
         query = str(args.get("query") or "").strip()
         if not query:
             return {"error": "no query given"}
+        facts = getattr(self._agents, "facts", None) if self._agents is not None else None
+        known = []
+        if facts is not None:
+            try:
+                known = [f.line() for f in await asyncio.to_thread(facts.recall, query)]   # MEM-01: current only
+            except Exception:  # noqa: BLE001
+                known = []
         hits = await gemini_memory.recall(query, k=5)
-        if not hits:
+        if not hits and not known:
             return {"found": False}
-        return {
-            "found": True,
-            "passages": [
-                {"text": h.text[:1200], "from": h.source or h.kind}
-                for h in hits
-            ],
-        }
+        out = {"found": True, "passages": [{"text": h.text[:1200], "from": h.source or h.kind} for h in hits]}
+        if known:
+            out["facts"] = known
+            out["note"] = "facts are current (a newer value replaced any older one); prefer them."
+        return out
 
     # ── Input sources ─────────────────────────────────────────────────────────
 
@@ -5820,6 +5861,9 @@ class CompanionManager(QObject):
             history.append(Message(role="user", content=question))
         history.append(Message(role="assistant", content=answer))
         self._app_memory[ak] = history[-20:]
+
+        if question and not (self._privacy_guard and is_sensitive_window(title)):
+            self._learn_from(question)
 
         if self._journal_enabled and not self._quiz_mode and question:
             def write() -> None:

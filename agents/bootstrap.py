@@ -197,6 +197,9 @@ def build_agent_manager(
     from agents.telemetry import Tracer, TraceStore
     trace_db = ":memory:" if in_memory else os.path.join(os.path.dirname(task_db), "traces.db")
     mgr.tracer = Tracer(TraceStore(trace_db), mgr.events)
+    # MEM-01: facts that know when they were true, beside the notes in agent_memory.db.
+    from agents.memory.facts import FactStore
+    mgr.facts = FactStore(mem_db)
     return mgr
 
 
