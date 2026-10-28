@@ -278,6 +278,13 @@ DARK = Palette(
 EASE_POINTS = ((0.22, 1.0), (0.36, 1.0))
 DURATION_FAST = 160
 DURATION = 260
+# The shape growing out of the pill and back (DESIGN.md §2): it grows in the
+# first 60% of SHAPE_OPEN, the content fades in over the last 60%.
+SHAPE_OPEN = 250
+SHAPE_CLOSE = 180
+# The pill's black glass (ui/flow_bar.py); the shape grows out of it into
+# the theme's ground.
+PILL = "#000000"
 
 
 def ease():

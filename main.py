@@ -603,10 +603,42 @@ def main():
     tray.on_open_app_page.connect(_open_app)
     tray.panel_visible = panel.isVisible
 
+    # The shape (ui/shape.py, DESIGN.md §1): a click on the resting pill
+    # grows it into the app, beside the pill. Built on the first click. Until
+    # it has every page (DESIGN.md §13) the app window above stays, from the
+    # tray, and the shape's Settings and Upgrade open it.
+    shape = {}
+
+    def _from_shape(key: str):
+        """What the shape has no page of its own for yet: the app window."""
+        if key == "invite":
+            _open_app()
+            if "w" in app_window:
+                app_window["w"].open_free_month()
+        else:
+            _open_app(key)
+
+    def _toggle_shape():
+        try:
+            if "s" not in shape:
+                from ui.app_bridge import AppBridge
+                from ui.shape import Shape
+                shape["s"] = Shape(AppBridge(manager, tray, panel), open_app=_from_shape)
+            flow.close_card()
+            shape["s"].toggle(*flow.pill_geometry())
+        except Exception:                 # noqa: BLE001 - a click still does what it did
+            import logging as _lg
+            _lg.getLogger("tora").exception("could not open the shape")
+            manager.start_hands_free()
+
+    flow.click_opens = True
+    flow.open_requested.connect(_toggle_shape)
+
     # Light/dark: the Settings choice, or Windows' own when it is "system".
     # Every surface that styles itself from app_theme restyles in place.
     app_theme.on_change(tray.retheme)
     app_theme.on_change(lambda: app_window["w"].retheme() if "w" in app_window else None)
+    app_theme.on_change(lambda: shape["s"].retheme() if "s" in shape else None)
 
     def _windows_theme_changed(*_):
         if cfg.theme() == "system":

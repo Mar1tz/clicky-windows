@@ -379,9 +379,9 @@ as she talks.
 | Step | Scope | Status |
 |---|---|---|
 | 0 | This document | Done |
-| 1 | The shape: a click on the pill grows it open (§2), with the current pages inside at first | Next |
-| 2 | Settings inside it: the sidebar, the page pattern (§4), the old tabs regrouped | |
-| 3 | Home, Chat and Insights tabs; running-job cards beside the shape | |
+| 1 | The shape: a click on the pill grows it open (§2) - `ui/shape.py`, `ui/shape_pages.py`. Home is its own; the app window's pages need a 1040 px column and can't be squeezed into 520, so Insights, Jobs, Settings, Upgrade and Invite & earn open the app window until each is rebuilt | Built; needs a live run |
+| 2 | Settings inside it: the sidebar, the page pattern (§4), the old tabs regrouped | Next |
+| 3 | Chat and Insights tabs, Jobs; running-job cards beside the shape | |
 | 4 | The Plans card; Invite & Earn as a settings page | |
 | 5 | New pages: Voice (speed, voice tiles), Dictation (language, dictionary), Routines | |
 | 6 | Onboarding restyled (§10); the old app window, settings window and referral window deleted | |

@@ -379,6 +379,7 @@ class FlowBar(QObject):
     cancel_requested = pyqtSignal()     # ✕ while listening
     done_requested = pyqtSignal()       # ✓ while listening: that's the question
     talk_requested = pyqtSignal()       # a click on the resting pill: listen, hands-free
+    open_requested = pyqtSignal()       # ... or, with click_opens, open the shape (ui/shape.py)
     dock_changed = pyqtSignal(str)      # dragged to another side: keep it
 
     def __init__(self, dock: str = DEFAULT_DOCK, hotkey: str = "Ctrl + Win"):
@@ -415,6 +416,9 @@ class FlowBar(QObject):
         self._card_glide: Optional[tuple[QPoint, QPoint, float]] = None   # (from, to, since)
         self._mic_on = False             # WX-05: a microphone stream is open
         self._screen_at = 0.0            # when the screen was last looked at (monotonic)
+        # A click on the resting pill opens the shape (open_requested) instead
+        # of listening - set by main.py once the shape is wired (DESIGN.md §11).
+        self.click_opens = False
 
         self.pill = _Pill(self)
         self._hotkey = hotkey
@@ -679,7 +683,11 @@ class FlowBar(QObject):
         elif done is not None and done.contains(pos):
             self.done_requested.emit()
         elif self._state == "idle":
-            self.talk_requested.emit()
+            (self.open_requested if self.click_opens else self.talk_requested).emit()
+
+    def pill_geometry(self) -> tuple[str, QRectF]:
+        """(edge, the pill's rectangle on screen) - what the shape grows out of."""
+        return self._edge, self.pill.pill_rect().translated(QPointF(self.pill.pos()))
 
     # ── animation ───────────────────────────────────────────────────────────────
     def _look(self) -> str:
