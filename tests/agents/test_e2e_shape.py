@@ -110,6 +110,11 @@ def test_escape_and_the_pill_again_shrink_it(shape, qapp):
     assert not shape.is_open() and not shape.isVisible()
     shape._closed_at = time.monotonic() - 1
     shape.toggle("bottom", _pill_at("bottom"))
+    shape.show_settings()
+    shape.toggle("bottom", _pill_at("bottom"))
+    assert not shape.is_open(), "the pill shrinks it from Settings too"
+    shape._closed_at = time.monotonic() - 1
+    shape.toggle("bottom", _pill_at("bottom"))
     assert shape.is_open()
     shape.toggle("bottom", _pill_at("bottom"))
     assert not shape.is_open()
@@ -134,8 +139,74 @@ def test_home_is_its_own_and_the_rest_opens_the_app_window(shape):
     assert isinstance(shape.stack.currentWidget(), HomeTab), "the tab stays on Home"
     assert shape._tabs["home"].isChecked()
     assert not shape.is_open(), "it steps aside for the app window"
+
+
+# ── Settings, inside it ────────────────────────────────────────────────────
+
+def test_the_gear_grows_it_into_settings_and_escape_steps_back(shape):
+    from PyQt6.QtCore import QEvent, Qt
+    from PyQt6.QtGui import QKeyEvent
+    from ui import shape as S
+    esc = QKeyEvent(QEvent.Type.KeyPress, Qt.Key.Key_Escape, Qt.KeyboardModifier.NoModifier)
+    pill = _pill_at("bottom")
+    shape.open_from("bottom", pill)
+    shape.gear.click()
+    assert shape.mode == "settings" and shape.gear.isChecked()
+    body = shape._full().translated(shape.x(), shape.y())
+    assert (body.width(), body.height()) == (S.SETTINGS_W, S.SETTINGS_H)
+    assert body.bottom() < pill.top(), "still beside the pill"
+    assert shape.current_setting() == "account"
+    shape.keyPressEvent(esc)
+    assert shape.mode == "open" and shape._tabs["home"].isChecked()
+    assert (shape._full().width(), shape._full().height()) == (S.OPEN_W, S.OPEN_H)
+    shape.keyPressEvent(esc)
+    assert shape.mode == "closed" and not shape.isVisible()
+
+
+def test_upgrade_opens_plans_and_home_comes_back(shape):
+    shape.open_from("bottom", _pill_at("bottom"))
     shape.upgrade.click()
-    assert shape.opened[-1] == "settings/plans"
+    assert shape.mode == "settings" and shape.current_setting() == "plans"
+    assert shape.opened == [], "Plans is in the shape now, not the app window"
+    shape._tabs["home"].click()
+    assert shape.mode == "open"
+
+
+def test_every_settings_row_is_a_page_titled_as_its_row(shape, qapp):
+    """Measured in the app's own font, as main.py loads it: the fallback
+    face is wider, and a model name like gemini-3.1-flash-tts-preview
+    alone takes 364px in it."""
+    from ui import shape as S
+    from ui import tokens
+    tokens.load_fonts()
+    shape.open_from("bottom", _pill_at("bottom"))
+    shape.show_settings()
+    for _heading, rows in S.SETTINGS:
+        for key, name, _icon in rows:
+            if key == "invite":
+                continue
+            shape.select(key)
+            qapp.processEvents()
+            page = shape.settings_stack.currentWidget()
+            assert shape.current_setting() == key and page.HEADING == name
+            inner = page.body.widget().minimumSizeHint().width()
+            assert inner <= S.SETTINGS_W - S.NAV_W, f"{key} needs {inner}px"
+
+
+def test_invite_and_earn_opens_the_referral_window(shape):
+    shape.open_from("bottom", _pill_at("bottom"))
+    shape.show_settings()
+    shape.select("invite")
+    assert shape.opened == ["invite"] and not shape.is_open()
+
+
+def test_small_dialogs_sit_over_settings(shape):
+    """Change shortcut, Sign out?, Delete account: settings_tabs puts them
+    over `window()._settings` when it shows."""
+    shape.open_from("bottom", _pill_at("bottom"))
+    shape.show_settings("general")
+    tab = shape.settings_stack.currentWidget()
+    assert tab.window() is shape and shape._settings.isVisible()
 
 
 def test_home_fits_the_shape(shape, qapp):

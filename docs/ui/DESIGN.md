@@ -130,6 +130,11 @@ open size.
 What each page holds is in HEYCLICKY_REFERENCE.md §4, mapped to the tabs it
 replaces (`ui/settings_tabs.py`).
 
+**For now** (step 2) the sidebar holds the app's existing tabs, regrouped:
+Account, Usage, Plans, General (the System tab), Privacy, Invite & Earn ·
+TORA: Shortcut & mic, Memory · WORK: Agents, Code editors, Advanced.
+Step 5 splits and rebuilds them into the pages above.
+
 ## 5. Plans
 
 A card over the shape, from **Upgrade** or Account → Upgrade. A Monthly /
@@ -380,7 +385,7 @@ as she talks.
 |---|---|---|
 | 0 | This document | Done |
 | 1 | The shape: a click on the pill grows it open (§2) - `ui/shape.py`, `ui/shape_pages.py`. Home is its own; the app window's pages need a 1040 px column and can't be squeezed into 520, so Insights, Jobs, Settings, Upgrade and Invite & earn open the app window until each is rebuilt | Built; needs a live run |
-| 2 | Settings inside it: the sidebar, the page pattern (§4), the old tabs regrouped | Next |
+| 2 | Settings inside it: the gear (and Upgrade, on Plans) grows the shape to 820 × 660; the sidebar holds the app's ten settings tabs, regrouped (`shape.SETTINGS`), each titled as its row; Escape steps back a size; Invite & Earn still opens the referral window. The tray's Settings still opens the app window's | Built; needs a live run |
 | 3 | Chat and Insights tabs, Jobs; running-job cards beside the shape | |
 | 4 | The Plans card; Invite & Earn as a settings page | |
 | 5 | New pages: Voice (speed, voice tiles), Dictation (language, dictionary), Routines | |

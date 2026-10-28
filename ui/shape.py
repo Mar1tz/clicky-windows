@@ -1,25 +1,36 @@
-"""The shape: HeyTora's one home, grown out of the pill (DESIGN.md §1-§3).
+"""The shape: HeyTora's one home, grown out of the pill (DESIGN.md §1-§4).
 
 A click on the resting pill (ui/flow_bar.py) grows it, beside the pill and
-towards the middle of the screen, into a small app: tabs along its top,
-Upgrade and Settings on the right, the page under them. Escape, a click
-somewhere else, or the pill again shrinks it back. Closing never stops a job.
+towards the middle of the screen, into a small app; the gear grows it again
+into Settings. Escape steps back a size (Settings -> open -> the pill); a
+click somewhere else, or the pill again, shrinks it away. Closing never
+stops a job.
 
-    pill ( ● )  ->  ┌ [Home][Insights][Jobs] ········ [Upgrade][⚙] ┐
+    pill ( ● )  ->  ┌ [Home][Insights][Jobs] ········ [Upgrade][⚙] ┐   open
                     │                 the page                     │
+                    │ [Invite & earn]                     [Jobs +] │
                     └──────────────────────────────────────────────┘
+                ->  ┌ [Home][Insights][Jobs] ············ [Upgrade][⚙] ┐   settings
+                    │ Account      │                                  │
+                    │ ...          │   the settings page              │
+                    │ HeyTora 1.x  │                                  │
+                    └─────────────────────────────────────────────────┘
 
-The window is made at the full size once and stays still; what grows is the
-shape painted inside it, from the pill's own rectangle to the whole window,
-in the pill's black turning into the theme's ground. Resizing a Windows
-window every frame flickers; painting does not. The page fades in over the
-last part, lifted 6 px into place.
+The top bar is the same at both sizes, as HeyClicky's is: Home goes back
+from Settings, the gear is lit while in it.
 
-Step 1 of the revamp (DESIGN.md §13): Home is the shape's own
-(ui/shape_pages.py). The app window's pages are built for a 1040 px column
-and cannot be squeezed into 520, so until each has its shape-sized page,
-its tab - Insights, Jobs - and the gear, Upgrade and Invite & earn open the
-app window there (`open_app`), and the shape steps aside.
+Every change of size is one move from rectangle `a` to rectangle `b` (on
+the screen): pill -> open, open -> settings, settings -> open, and back to
+the pill. The window is set once per move to cover both and stays still;
+what grows is the shape painted inside it. Resizing a Windows window every
+frame flickers; painting does not. The page fades in over the last part,
+lifted 6 px into place.
+
+What the shape has no page of its own for yet (DESIGN.md §13) opens the app
+window there (`open_app`) and the shape steps aside: the app window's
+pages are built for a 1040 px column and cannot be squeezed into 520.
+Settings holds the app's settings tabs (ui/settings_tabs.py), regrouped;
+step 5 gives them HeyClicky's page pattern.
 """
 from __future__ import annotations
 
@@ -28,39 +39,69 @@ import sys
 import time
 from typing import Callable, Optional
 
-from PyQt6.QtCore import QPointF, QRect, QRectF, Qt, QTimer, QVariantAnimation
+from PyQt6.QtCore import QRectF, Qt, QTimer, QVariantAnimation
 from PyQt6.QtGui import QColor, QGuiApplication, QPainter, QPen
-from PyQt6.QtWidgets import (QAbstractButton, QButtonGroup, QGraphicsOpacityEffect, QHBoxLayout,
+from PyQt6.QtWidgets import (QApplication, QButtonGroup, QFrame, QGraphicsOpacityEffect, QHBoxLayout,
                              QStackedWidget, QVBoxLayout, QWidget)
 
 from ui import app_theme as T
 from ui import kit, tokens
-from ui.app_shell import IconButton
-from ui.app_widgets import button
+from ui.app_shell import IconButton, NavItem
+from ui.app_widgets import button, label
 from ui.flow_bar import place_card
 
 OPEN_W, OPEN_H = 520, 420           # DESIGN.md §2
+SETTINGS_W, SETTINGS_H = 820, 660
+NAV_W = 196
 PAD = 24                            # room around the shape in its window, for the shadow
 LIFT = 6                            # the page rises this far as it fades in
 TOP_BAR_H = 52
+FOOT_H = 52
 # A click outside closes the shape - and that click may be on the pill,
 # which would open it again at once. A toggle this soon after is that click.
 REOPEN_GUARD_S = 0.35
 
-FOOT_H = 52
-
-# (key, icon, name) - the tabs, left to right. A key in PAGES is the shape's
-# own page; any other opens the app window there (app_pages.PAGES keys).
+# (key, icon, name) - the tabs, left to right. A key in _pages() is the
+# shape's own page; any other opens the app window there (app_pages.PAGES keys).
 TABS = (
     ("home", "home", "Home"),
     ("insights", "insights", "Insights"),
     ("agents", "agents", "Jobs"),
 )
 
+# The settings sidebar (DESIGN.md §4): (group, ((key, name, icon), ...)).
+# A key of settings_tabs.TABS is that tab, in the shape; "invite" opens the
+# referral window. Step 2 of the revamp: the app's tabs, regrouped; step 5
+# splits them into HeyClicky's pages (Voice, Microphone, Shortcuts...).
+SETTINGS = (
+    ("", (
+        ("account", "Account", "circle-user-round"),
+        ("usage", "Usage", "chart-column"),
+        ("plans", "Plans", "credit-card"),
+        ("system", "General", "monitor"),
+        ("privacy", "Privacy", "shield-check"),
+        ("invite", "Invite & Earn", "gift"),
+    )),
+    ("TORA", (
+        ("general", "Shortcut & mic", "keyboard"),
+        ("memory", "Memory", "book-open"),
+    )),
+    ("WORK", (
+        ("agents", "Agents", "bot"),
+        ("devlink", "Code editors", "code"),
+        ("advanced", "Advanced", "wrench"),
+    )),
+)
+
 
 def _pages() -> dict:
     from ui.shape_pages import HomeTab
     return {"home": HomeTab}
+
+
+def _settings_kinds() -> dict:
+    from ui.settings_tabs import TABS as SETTINGS_TABS
+    return {key: cls for _sec, rows in SETTINGS_TABS for key, _w, _i, cls in rows}
 
 
 def animations_on() -> bool:
@@ -83,6 +124,11 @@ def _part(t: float, start: float, length: float) -> float:
     return max(0.0, min(1.0, (t - start) / length))
 
 
+def _lerp(a: QRectF, b: QRectF, g: float) -> QRectF:
+    return QRectF(a.x() + (b.x() - a.x()) * g, a.y() + (b.y() - a.y()) * g,
+                  a.width() + (b.width() - a.width()) * g, a.height() + (b.height() - a.height()) * g)
+
+
 class _Tab(IconButton):
     """A tab in the top bar: the title bar's icon button, on a plate while chosen."""
 
@@ -102,10 +148,10 @@ class _Tab(IconButton):
 
 
 class Shape(QWidget):
-    """open_from(edge, pill) / shrink() / toggle(edge, pill). `bridge` is the
-    app's AppBridge; `open_app(key)` opens the app window at a page key
-    ("insights", "agents/job/<id>", "settings/plans", "invite") for what the
-    shape has no page of its own for yet."""
+    """open_from(edge, pill) / show_settings(key) / back() / shrink() /
+    toggle(edge, pill). `bridge` is the app's AppBridge; `open_app(key)`
+    opens the app window at a page key ("insights", "agents/job/<id>",
+    "invite") for what the shape has no page of its own for yet."""
 
     def __init__(self, bridge, open_app: Optional[Callable[[str], None]] = None):
         super().__init__()
@@ -115,18 +161,21 @@ class Shape(QWidget):
         self.setWindowFlags(Qt.WindowType.FramelessWindowHint | Qt.WindowType.Tool
                             | Qt.WindowType.WindowStaysOnTopHint)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
-        self.resize(OPEN_W + 2 * PAD, OPEN_H + 2 * PAD)
 
-        self._t = 0.0                       # 0 = the pill, 1 = open
-        self._from = QRectF()               # the pill, in this window's coordinates
-        self._opening = False
+        self.mode = "closed"                 # closed | open | settings
+        self._edge = "bottom"
+        self._pill = QRectF()                # global
+        self._a = self._b = QRectF()         # the move: from a to b, global
+        self._from_pill = True               # a (or, shrinking, the end) is the pill
+        self._t = 0.0                        # 0 = at a, 1 = at b
         self._closed_at = 0.0
         self._anim: Optional[QVariantAnimation] = None
         self._pages: dict[str, QWidget] = {}
+        self._tabs_built: dict[str, QWidget] = {}
         self._pending: set[str] = set()
         self._refresh = QTimer(self)
         self._refresh.setSingleShot(True)
-        self._refresh.setInterval(150)      # one redraw per burst, as the app window
+        self._refresh.setInterval(150)       # one redraw per burst, as the app window
         self._refresh.timeout.connect(self._refresh_now)
         bridge.changed.connect(self._on_changed)
 
@@ -137,16 +186,17 @@ class Shape(QWidget):
         lay.setContentsMargins(0, 0, 0, 0)
         lay.setSpacing(0)
         lay.addWidget(self._build_top_bar())
-        self.stack = QStackedWidget()
-        lay.addWidget(self.stack, 1)
-        lay.addWidget(self._build_foot())
+        self.views = QStackedWidget()
+        self.views.addWidget(self._build_open_view())
+        self.views.addWidget(self._build_settings_view())
+        lay.addWidget(self.views, 1)
         self._fade = QGraphicsOpacityEffect(self.body)
         self._fade.setOpacity(0.0)
         self.body.setGraphicsEffect(self._fade)
         self.body.hide()
         self.show_tab(TABS[0][0])
 
-    # ── the top bar and the foot ─────────────────────────────────────────────
+    # ── the top bar ──────────────────────────────────────────────────────────
     def _build_top_bar(self) -> QWidget:
         bar = QWidget()
         bar.setFixedHeight(TOP_BAR_H)
@@ -164,39 +214,119 @@ class Shape(QWidget):
             self._tabs[key] = tab
         lay.addStretch(1)
         self.upgrade = button("Upgrade", "primary")
-        self.upgrade.clicked.connect(lambda: self._elsewhere("settings/plans"))
+        self.upgrade.clicked.connect(lambda: self.show_settings("plans"))
         lay.addWidget(self.upgrade)
-        gear = IconButton("settings", "Settings")
-        gear.clicked.connect(lambda: self._elsewhere("settings/general"))
-        lay.addWidget(gear)
+        self.gear = _Tab("settings", "Settings")
+        self.gear.clicked.connect(lambda: self.show_settings())
+        group.addButton(self.gear)
+        lay.addWidget(self.gear)
         return bar
 
-    def _build_foot(self) -> QWidget:
+    # ── the open size: a page and the foot ───────────────────────────────────
+    def _build_open_view(self) -> QWidget:
+        view = QWidget()
+        lay = QVBoxLayout(view)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(0)
+        self.stack = QStackedWidget()
+        lay.addWidget(self.stack, 1)
         foot = QWidget()
         foot.setFixedHeight(FOOT_H)
-        lay = QHBoxLayout(foot)
-        lay.setContentsMargins(16, 0, 16, 12)
+        row = QHBoxLayout(foot)
+        row.setContentsMargins(16, 0, 16, 12)
         invite = button("Invite && earn", "ghost")        # && - a lone & would underline the e
         invite.clicked.connect(lambda: self._elsewhere("invite"))
-        lay.addWidget(invite)
-        lay.addStretch(1)
+        row.addWidget(invite)
+        row.addStretch(1)
         jobs = button("Jobs +", "ghost")
         jobs.clicked.connect(lambda: self._elsewhere("agents"))
-        lay.addWidget(jobs)
-        return foot
+        row.addWidget(jobs)
+        lay.addWidget(foot)
+        return view
 
-    def _elsewhere(self, key: str) -> None:
-        """What the shape has no page for yet: the app window, there."""
-        self.shrink()
-        self.open_app(key)
+    # ── the settings size: the sidebar and a tab ─────────────────────────────
+    def _build_settings_view(self) -> QWidget:
+        view = QWidget()
+        # Small dialogs from a tab (Change shortcut, Sign out?, Delete
+        # account) sit over `window()._settings` when it shows (settings_tabs).
+        self._settings = view
+        lay = QHBoxLayout(view)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(0)
+        nav = QWidget()
+        nav.setFixedWidth(NAV_W)
+        col = QVBoxLayout(nav)
+        col.setContentsMargins(10, 4, 10, 14)
+        col.setSpacing(2)
+        self._rows: dict[str, NavItem] = {}
+        group = QButtonGroup(self)
+        group.setExclusive(True)
+        for heading, rows in SETTINGS:
+            if heading:
+                col.addSpacing(10)
+                head = label(heading, "sectionTitle")
+                head.setContentsMargins(12, 0, 0, 4)
+                col.addWidget(head)
+            for key, name, icon_name in rows:
+                row = NavItem(icon_name, name, lambda: 1.0)     # painted text: a lone & is fine
+                row.clicked.connect(lambda _c=False, k=key: self.select(k))
+                group.addButton(row)
+                col.addWidget(row)
+                self._rows[key] = row
+        col.addStretch(1)
+        self._version = label("", "faint")
+        self._version.setContentsMargins(12, 0, 0, 0)
+        col.addWidget(self._version)
+        lay.addWidget(nav)
+        rule = QFrame()
+        rule.setObjectName("vr")
+        rule.setFixedWidth(1)
+        lay.addWidget(rule)
+        self.settings_stack = QStackedWidget()
+        lay.addWidget(self.settings_stack, 1)
+        return view
+
+    def select(self, key: str) -> None:
+        """A settings page, built the first time it is asked for."""
+        if key == "invite":
+            self._elsewhere("invite")
+            return
+        kinds = _settings_kinds()
+        if key not in kinds:
+            key = "account"
+        page = self._tabs_built.get(key)
+        if page is None:
+            # Titled as its row is named here ("Shortcut & mic", not the
+            # app window's "General"), so the two never disagree.
+            name = next(n for _h, rows in SETTINGS for k, n, _i in rows if k == key)
+            cls = kinds[key]
+            page = type(cls.__name__, (cls,), {"HEADING": name})(self.bridge)
+            page.navigate.connect(self._navigate)
+            self._tabs_built[key] = page
+            self.settings_stack.addWidget(page)
+            self.body.setStyleSheet(T.qss())    # polish the new page's labels at the right size
+        else:
+            page.refresh()
+        self.settings_stack.setCurrentWidget(page)
+        self._rows[key].setChecked(True)
+
+    def current_setting(self) -> str:
+        page = self.settings_stack.currentWidget()
+        return next((k for k, w in self._tabs_built.items() if w is page), "")
+
+    def _version_text(self) -> None:
+        try:
+            v = self.bridge.version()
+        except Exception:  # noqa: BLE001
+            v = ""
+        self._version.setText(f"HeyTora {v}" if v else "HeyTora")
 
     # ── pages ────────────────────────────────────────────────────────────────
     def show_tab(self, key: str) -> None:
         kinds = _pages()
         if key not in kinds:
             # Not built for the shape yet: the tab stays where it was.
-            if self._current():
-                self._tabs[self._current()].setChecked(True)
+            self._check_tabs()
             self._elsewhere(key)
             return
         page = self._pages.get(key)
@@ -210,6 +340,15 @@ class Shape(QWidget):
             page.refresh()
         self.stack.setCurrentWidget(page)
         self._tabs[key].setChecked(True)
+        if self.mode == "settings":
+            self._move_to("open")
+
+    def _check_tabs(self) -> None:
+        """Light the tab for where the shape is: the gear in Settings."""
+        if self.mode == "settings":
+            self.gear.setChecked(True)
+        elif self._current():
+            self._tabs[self._current()].setChecked(True)
 
     def _current(self) -> str:
         page = self.stack.currentWidget()
@@ -218,8 +357,15 @@ class Shape(QWidget):
     def _navigate(self, key: str) -> None:
         if key in _pages():
             self.show_tab(key)
+        elif key.startswith("settings"):
+            self.show_settings(key.partition("/")[2] or "account")
         else:
             self._elsewhere(key)
+
+    def _elsewhere(self, key: str) -> None:
+        """What the shape has no page for yet: the app window, there."""
+        self.shrink()
+        self.open_app(key)
 
     def _on_changed(self, topic: str) -> None:
         self._pending.add(topic)
@@ -230,23 +376,33 @@ class Shape(QWidget):
         if not self.isVisible():
             return
         topics, self._pending = self._pending, set()
-        page = self.stack.currentWidget()
+        page = (self.settings_stack if self.mode == "settings" else self.stack).currentWidget()
         if page is not None and getattr(page, "LIVE", False) and set(getattr(page, "TOPICS", ())) & topics:
             partial = getattr(page, "refresh_topics", None)
             partial(topics) if partial is not None else page.refresh()
 
     def retheme(self) -> None:
         self.body.setStyleSheet(T.qss())
-        page = self.stack.currentWidget()
-        if page is not None:
-            page.refresh()
+        for stack in (self.stack, self.settings_stack):
+            page = stack.currentWidget()
+            if page is not None:
+                page.refresh()
         for w in self.findChildren(QWidget):
             w.update()
         self.update()
 
-    # ── opening and closing ──────────────────────────────────────────────────
+    # ── sizes ────────────────────────────────────────────────────────────────
     def is_open(self) -> bool:
-        return self.isVisible() and self._opening
+        return self.mode != "closed"
+
+    def _rect(self, mode: str) -> QRectF:
+        """Where `mode` sits on the screen: beside the pill, towards the middle."""
+        if mode == "closed":
+            return QRectF(self._pill)
+        w, h = (SETTINGS_W, SETTINGS_H) if mode == "settings" else (OPEN_W, OPEN_H)
+        screen = QGuiApplication.screenAt(self._pill.center().toPoint()) or QGuiApplication.primaryScreen()
+        x, y = place_card(self._edge, self._pill, screen.availableGeometry(), w, h)
+        return QRectF(round(x), round(y), w, h)
 
     def toggle(self, edge: str, pill: QRectF) -> None:
         if self.is_open():
@@ -256,29 +412,60 @@ class Shape(QWidget):
 
     def open_from(self, edge: str, pill: QRectF) -> None:
         """Grow out of `pill` (global coordinates), docked on `edge`."""
-        screen = QGuiApplication.screenAt(pill.center().toPoint()) or QGuiApplication.primaryScreen()
-        x, y = place_card(edge, pill, screen.availableGeometry(), OPEN_W, OPEN_H)
-        self.move(int(round(x)) - PAD, int(round(y)) - PAD)
-        self._from = pill.translated(-self.x(), -self.y())
-        self.body.setGeometry(self._full().toRect())
-        if self._fade.opacity() == 0.0:      # first time, or after a close
-            self._t = 0.0
-        self._opening = True
+        self._edge, self._pill = edge, QRectF(pill)
         self.show()
         self.raise_()
         self.activateWindow()
         page = self.stack.currentWidget()
         if page is not None and getattr(page, "LIVE", False):
             page.refresh()
-        self._run(1.0, tokens.SHAPE_OPEN)
+        self._move_to("open")
+
+    def show_settings(self, key: str = "account") -> None:
+        if self.mode == "closed":
+            return
+        self._version_text()
+        self.select(key)
+        self._move_to("settings")
+
+    def back(self) -> None:
+        """Escape: Settings -> open -> the pill."""
+        if self.mode == "settings":
+            self._move_to("open")
+        else:
+            self.shrink()
 
     def shrink(self) -> None:
         """Back into the pill."""
-        if not self._opening:
+        if self.mode == "closed":
             return
-        self._opening = False
         self._closed_at = time.monotonic()
-        self._run(0.0, tokens.SHAPE_CLOSE)
+        self._move_to("closed")
+
+    def _move_to(self, mode: str) -> None:
+        """One move: from where the shape is now to `mode`'s rectangle."""
+        was = self.mode
+        if mode == was and self._t >= 1.0:
+            return
+        now = self._now_rect() if was != "closed" else QRectF(self._pill)
+        self.mode = mode
+        if mode == "closed":
+            # Shrinking is growing backwards: from the pill to here, t 1 -> 0.
+            self._a, self._b, self._from_pill, self._t = QRectF(self._pill), now, True, 1.0
+            target = 0.0
+            ms = tokens.SHAPE_CLOSE
+        else:
+            self._a, self._b, self._from_pill = now, self._rect(mode), was == "closed"
+            self._t, target, ms = 0.0, 1.0, tokens.SHAPE_OPEN
+            self.views.setCurrentIndex(1 if mode == "settings" else 0)
+        self._check_tabs()
+        span = self._a.united(self._b).adjusted(-PAD, -PAD, PAD, PAD).toRect()
+        self.setGeometry(span)
+        self.body.setGeometry(self._local(self._b).toRect())
+        self._run(target, ms)
+
+    def _now_rect(self) -> QRectF:
+        return _lerp(self._a, self._b, self._grow())
 
     def _run(self, to: float, ms: int) -> None:
         if self._anim is not None:
@@ -294,6 +481,9 @@ class Shape(QWidget):
         a.start()
         self._anim = a
 
+    def _grow(self) -> float:
+        return tokens.ease().valueForProgress(_part(self._t, 0.0, 0.6))
+
     def _step(self, t: float) -> None:
         self._t = t
         fade = tokens.ease().valueForProgress(_part(t, 0.4, 0.6))
@@ -302,28 +492,37 @@ class Shape(QWidget):
         # can soften text on a scaled screen.
         self._fade.setEnabled(fade < 1.0)
         self.body.setVisible(fade > 0.0)
-        full = self._full().toRect()
+        full = self._local(self._b).toRect()
         self.body.move(full.x(), full.y() + round(LIFT * (1.0 - fade)))
         self.update()
-        if t <= 0.0 and not self._opening:
+        if t <= 0.0 and self.mode == "closed":
             self.hide()
+        elif t >= 1.0 and self.mode != "closed":
+            # Landed: the window shrinks to the shape again.
+            span = self._b.adjusted(-PAD, -PAD, PAD, PAD).toRect()
+            if self.geometry() != span:
+                self.setGeometry(span)
+                self.body.setGeometry(self._local(self._b).toRect())
+                self.update()
+
+    def _local(self, r: QRectF) -> QRectF:
+        return r.translated(-self.x(), -self.y())
 
     def _full(self) -> QRectF:
-        return QRectF(PAD, PAD, OPEN_W, OPEN_H)
+        """Where the shape ends up, in this window."""
+        return self._local(self._b)
 
     def shape_rect(self) -> QRectF:
-        """Where the shape is painted now: the pill, the full size, or between."""
-        g = tokens.ease().valueForProgress(_part(self._t, 0.0, 0.6))
-        a, b = self._from if not self._from.isNull() else self._full(), self._full()
-        return QRectF(a.x() + (b.x() - a.x()) * g, a.y() + (b.y() - a.y()) * g,
-                      a.width() + (b.width() - a.width()) * g, a.height() + (b.height() - a.height()) * g)
+        """Where the shape is painted now, in this window."""
+        return self._local(self._now_rect())
 
     # ── painting and keys ────────────────────────────────────────────────────
     def paintEvent(self, _e) -> None:
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
         r = self.shape_rect()
-        g = tokens.ease().valueForProgress(_part(self._t, 0.0, 0.6))
+        # How much of the pill is left: all of it at the pill, none once grown.
+        g = self._grow() if self._from_pill else 1.0
         radius = min(r.height(), r.width()) / 2 * (1 - g) + tokens.RADIUS_LG * g
         kit.soft_shadow(p, r, radius, "float", strength=g)
         p.setBrush(kit.mix(tokens.PILL, T.BG, g))
@@ -333,12 +532,27 @@ class Shape(QWidget):
 
     def keyPressEvent(self, e) -> None:
         if e.key() == Qt.Key.Key_Escape:
-            self.shrink()
+            self.back()
             return
         super().keyPressEvent(e)
 
     def changeEvent(self, e) -> None:
         # A click somewhere else: the shape goes, as a menu does.
-        if e.type() == e.Type.ActivationChange and not self.isActiveWindow() and self._opening:
-            QTimer.singleShot(0, lambda: self.shrink() if not self.isActiveWindow() else None)
+        if e.type() == e.Type.ActivationChange and not self.isActiveWindow() and self.is_open():
+            QTimer.singleShot(0, self._left)
         super().changeEvent(e)
+
+    def _left(self) -> None:
+        """Focus went elsewhere - unless to something of the shape's own (a
+        folder picker, Edit what Tora remembers) or a dropdown's list."""
+        if self.isActiveWindow() or not self.is_open():
+            return
+        app = QApplication.instance()
+        if app is not None and (app.activeModalWidget() is not None or app.activePopupWidget() is not None):
+            return
+        w = app.activeWindow() if app is not None else None
+        while w is not None:
+            if w is self:
+                return
+            w = w.parentWidget()
+        self.shrink()
