@@ -12,7 +12,7 @@ code editors as data instead of screenshots — see `docs/devlink/DEVLINK.md`.
 
 ## Multi-session development protocol
 
-Four Claude Code sessions work in **this same folder, on `main`**. The
+Four Claude Code sessions work in **this same folder, on `dev`**. The
 manager session (`clicky-windows-main-0f`) plans, assigns, reviews and
 pushes. Three worker sessions build. Conflicts are prevented by
 **directory ownership**, not by branches — so the rules below matter.
@@ -62,8 +62,15 @@ Rules:
 ### Running things
 
 ```
-python main.py                      # the app
+python tools/dev.py                 # the app, against a LOCAL Supabase (docs/LOCAL_DEV.md)
+python tools/dev.py reset           # local database: every migration again, then the seed
 python -m pytest tests/agents -q    # agent tests
 ```
+
+HeyTora has real users. `python main.py` on its own talks to the **live**
+service - use `tools/dev.py`. Never run `supabase db push`, `supabase
+functions deploy` or anything with `--linked` / `--project-ref` against live
+while developing; live changes only on a release. Work is on `dev`; `main`
+is what users have.
 
 `.env` holds real keys and is git-ignored — never read it into a commit.

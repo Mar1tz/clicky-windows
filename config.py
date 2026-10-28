@@ -120,10 +120,18 @@ def data_dir() -> Path:
 
     Decided once per run (see _settle_data_dir), so every part of the app
     agrees on it even when an old folder could not be moved yet.
+
+    TORA_DATA_DIR replaces it (tools/dev.py: HeyTora-dev), so a run against
+    the local database never signs the installed app out of the live one.
     """
     global _DATA_DIR
     if _DATA_DIR is None:
-        _DATA_DIR = _settle_data_dir(_appdata_base())
+        own = os.environ.get("TORA_DATA_DIR", "").strip()
+        if own:
+            _DATA_DIR = Path(own)
+            _DATA_DIR.mkdir(parents=True, exist_ok=True)
+        else:
+            _DATA_DIR = _settle_data_dir(_appdata_base())
     return _DATA_DIR
 
 
