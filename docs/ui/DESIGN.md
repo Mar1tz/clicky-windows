@@ -6,281 +6,139 @@ change this document first, in its own commit, and say why. Without that,
 we end up redesigning the same screens over and over.
 
 The values live in `ui/tokens.py`; the stylesheet in `ui/app_theme.py`.
-The website's equivalents are in `heytora-web/src/styles/globals.css` and
-`heytora-web/src/components/home/*.tsx`.
+The website's equivalents are in `heytora-web/src/styles/globals.css`.
+What we took from HeyClicky, page by page with screenshots, is in
+[HEYCLICKY_REFERENCE.md](HEYCLICKY_REFERENCE.md).
 
 ---
 
-## 1. The idea in one line
+## 1. The idea
 
-> **Raycast's restraint in the window, the website's colour in the content,
-> Wispr Flow's onboarding as the model for ours.**
+> **HeyTora lives in one place: the pill. Click it and it grows into the
+> app; close it and it shrinks back. There is no separate app window.**
 
-- **Frame (Raycast).** The window, sidebar, page headers, rows, buttons and
-  inputs stay plain: neutral, quiet, dense enough to scan. Most good Windows
-  apps look like this, and the window has to sit beside other apps for hours
-  without tiring the eye.
-- **Content (heytora.com, after Calendly).** Colour belongs to *things*: a
-  capability, a pack, an onboarding step. Each gets a gradient from the
-  site's own families (§4) and keeps it everywhere it appears. Colour is
-  never decoration on the frame.
-- **Onboarding (Wispr Flow).** A phase bar, questions beside a picture,
-  and tests you pass by doing the real thing. §7.
+- **The structure is HeyClicky's.** One shape that grows to the size the
+  job needs, tabs along its top, settings in a sidebar inside it, plans as
+  a card over it. They are the closest product to ours, and their pages
+  show more of what matters with less.
+- **The look is ours.** Our colours and our accent blue, Plus Jakarta
+  Sans, and light and dark mode following Settings → Appearance. Nothing of
+  HeyClicky's name, mascot, wording or prices.
+- **It moves.** The pill can be dragged to any side of any screen (as the
+  flow bar can today), and the app grows from there towards the middle of
+  the screen. HeyClicky's notch is fixed at the top. Ours goes where the
+  person wants it.
 
-If a screen has colour in its frame or a flat grey content card where a
-pack or capability is the subject, it is off-brief.
+## 2. The three sizes
 
-## 2. Two kinds of surface
-
-| | **Solid** | **Glass** |
+| Size | What it is | About |
 |---|---|---|
-| What | A window you work in | Anything floating over the desktop |
-| Where | App window, onboarding, sign-in, dialogs | Floating panel, the pill and its result card (§7A), captions, cursor speech bubble, tray popup (the right-click menu on the taskbar icon) |
-| Theme | Follows Settings → Appearance (light = site's soft grey, dark = site's black) | Always dark glass, in both themes. It sits over unknown content, and dark glass reads over anything |
-| Recipe | `T.BG` ground, `T.SURFACE` cards, hairline `T.BORDER` | Fill `rgba(18, 18, 22, 235)`, 1px edge `rgba(255, 255, 255, 0.10)`, radius 16 (14 for the tray popup), soft shadow. This is the floating panel's look today (`ui/panel.py` paintEvent) |
+| **Pill** | At rest on its edge. Shows what Tora is doing: listening bars, thinking dots, speaking (§7A). A soft glow while an agent job runs | 46 × 10 at rest |
+| **Open** | Tabs and the page. What you see when you click the pill | 520 × 420 |
+| **Settings** | The same shape, grown, with the settings sidebar | 820 × 660 |
 
-Glass never appears inside the app window: no translucent cards, no blurred
-sidebars. Real Windows blur (DWM acrylic) is a possible later upgrade to the
-glass recipe. It is not a reason to put glass anywhere new.
+Plus one card that sits **over** the shape: **Plans** (from Upgrade,
+anywhere).
 
-## 3. Layout of a page
+**How it grows.** The pill's black shape grows out from the edge, then the
+content fades in and settles:
 
-- **Header: the title and nothing else.** 26px bold on the left, the page's
-  actions on the right. **No description line.** If a page needs explaining,
-  the explanation belongs in its empty state, where it helps the person who
-  needs it. Repeated on every visit, it's noise.
-- **Sidebar:** see §3B. Selected row: a neutral `NAV_PLATE`, icon in the
-  accent blue.
-- **Content:** one column of cards, 32px gutter, 16px between cards. Lists are
-  rows divided by hairlines inside a card, not a card per row.
-- **Empty states** are written, not blank: what this page will show, and the
-  one thing to say or click to get there.
-- **Window title:** "HeyTora". Never the page name plus the app name. Qt
-  appends `applicationDisplayName` to every window title, so set the title
-  once.
+| Time | What happens |
+|---|---|
+| 0–150 ms | The shape grows from the pill to the full size, on `tokens.ease()` |
+| 100–250 ms | The content fades in and lifts 6 px into place |
+| close | The same, reversed, in 180 ms |
 
-## 3B. The shell and the page map (after Wispr Flow)
+Open → Settings grows the same way, from the open size. Nothing slides
+across the screen and nothing bounces. With Windows' animation effects off,
+it appears at once.
 
-Built in `ui/app_window.py` (layout), `ui/app_shell.py` (painted rows and
-title bar buttons), `ui/app_popover.py` (the cards), `ui/window_frame.py`
-(our own title bar on a real Windows window).
+**It opens towards the middle of the screen.** Docked at the top it grows
+down; at the bottom, up; on the left, rightwards; on the right, leftwards.
+Its centre stays level with the pill, and it is moved back inside the
+screen if it would run off it.
+
+**It closes** with Escape, a click outside, the pill again, or the tray.
+Closing never stops a job.
+
+**Light and dark.** At rest the pill is dark in both themes: it sits over
+unknown content, and dark reads over anything. As it grows it takes the
+theme's colours (`T.BG`, `T.SURFACE`): white and soft grey in light, black
+in dark.
+
+The tray icon stays, because people on Windows expect one. Left-click
+opens the shape; the right-click menu is short (open, pause, quit).
+
+## 3. Open: the tabs
 
 ```
-┌─[▥][◯]──────────────────────────── [●Listening] [🔔] ─ ▢ ✕ ┐
-│ heytora      ╭───────────────────────────────────────────╮ │
-│ ⌂ Home       │ Hey Dylan, just hold [Ctrl + Win] and ask │ │
-│ ✦ Tora       │                                           │ │
-│ ▥ Insights   │ …the page…                                │ │
-│ ◇ Agents     │                                           │ │
-│ 🎁 Free month │                                           │ │
-│ ⚙ Settings   │                                           │ │
-│ ? Help       ╰───────────────────────────────────────────╯ │
-└────────────────────────────────────────────────────────────┘
+ [Home][Chat][Insights]                     [Upgrade][⚙]
+                 Evening, Dylan.
+                 1 job working
+        ┌──────────────────────────────┐
+        │  the newest result           │      ▢ Working · <job>   ← beside the shape
+        └──────────────────────────────┘
+ [Invite & earn]                                 [Jobs +]
 ```
 
-- **One ground, one panel.** The title bar and the sidebar are `FRAME`; the
-  pages sit on a raised panel (`BG`, `RADIUS_LG`) inset from it, lifted by
-  a soft shadow in light (painted by the window under it, not a graphics
-  effect) and a hairline in dark, where a shadow does not show.
-- **Our own title bar.** Top left: the sidebar button, then the profile.
-  Top right: Tora's state (only while she is not idle), the bell, then
-  minimise / maximise / close drawn as Windows 11 draws them. The window
-  is still a real Windows window - it snaps, resizes, has the shadow and
-  rounded corners, and hovering maximise offers snap layouts.
-- **The sidebar opens and shuts.** Open: the wordmark and icon + name rows.
-  Shut: the app icon and icon rows, each naming itself on hover. It slides
-  on the site's curve; the choice is remembered (`TORA_SIDEBAR`). Below
-  1100px wide it shuts by itself and opens again when there is room.
-- **Icons:** Lucide outlines (`assets/icons`, ISC), 18px, one stroke
-  weight. A new icon is a file there plus a line in `app_widgets.ICONS`.
-- **No header bar on a page.** A page has a title and its actions; Home
-  greets instead ("Hey Dylan, just hold [Ctrl + Win] and ask").
-- **Cards from the shell** are solid (they open over the app, not the
-  desktop): **profile** (name, email, plan and use, free month, manage
-  account, sign out), **notifications** (TODO: agent tasks and approvals,
-  progress, usage, achievements - the bell and its dot are ready), **free
-  month** (coming soon), **help** (contact support, problem report, keys
-  and diagnostics).
+- **Top bar:** the tabs on the left as small icon buttons (the chosen one
+  on a `NAV_PLATE`). On the right, **Upgrade** (a primary pill; on Max it
+  says nothing and is gone) and the **gear** (Settings).
+- **Home:** the greeting with the person's name and one line of live
+  status ("1 job working", "Ready"). Then **one** large card: the newest
+  finished thing (a job's result with its preview and one button, or the
+  last answer). With nothing yet, it teaches: the shortcut as a keycap and
+  three things to try asking.
+- **Chat:** everything asked, by voice or typed, newest at the bottom.
+  At the foot, a big **Hold [keys] to talk** button and an **Ask Tora…**
+  box side by side. Empty, it says in one line what will be here.
+- **Insights:** our Insights page (time Tora worked for you, things she
+  handled, what she knows, streak, usage, agents), in the shape's width.
+  The journal (everything asked, reviews) is reached from here.
+- **Footer:** **Invite & earn** on the left, **Jobs +** on the right (the
+  agents board: running, needs your OK, history).
+- **Running jobs** sit as small cards beside the shape, on the side away
+  from the edge: "Working", the job's name, a thin progress line. They are
+  there whenever the shape is open; clicking one opens it in Jobs.
 
-**The page map.** Each row holds a full page's worth; nothing is a tab
-with two settings on it.
+## 4. Settings
 
-| Row | What it is | Made from |
-|---|---|---|
-| Home | Greeting, measured stats, one hero card, recent activity by day | Home + Journal's history |
-| Agents | Background work: plans, progress, approvals | Agents |
-| Journal | What you learned, walkthroughs worth keeping | Journal |
-| Tora | Make her yours: voice, colour, how she teaches and answers | Tutor + Voice |
-| Get a free month | Referral - coming soon | new |
-| Settings | Opens a dialog with its own menu: General, Privacy, Models, Account, Advanced | Settings + Setup + Models |
-| Help | Support, a problem report, keys and diagnostics | new |
+The gear grows the shape to the Settings size. A sidebar on the left in
+three groups, the version at its foot:
 
-## 3C. A page (after Wispr Flow's pages)
+| Group | Pages |
+|---|---|
+| (top) | Account, General, Invite & Earn |
+| **TORA** | Voice, Microphone, Dictation, Shortcuts, Cursor, Memory |
+| **WORK** | Integrations, Agents, Routines, Skills, Code editors |
 
-Built from `ui/app_parts.py`. Home is the template; every page follows it.
+Privacy is a section of General. Back (top left) or Escape returns to the
+open size.
 
-**The page map, revised.** Journal stops being a page: what you asked goes
-to Home, review and saved walkthroughs to **Learn**.
+**Every settings page reads the same:**
 
-| Page | Wispr | Top card | Under it |
-|---|---|---|---|
-| Home | Dictation | Up next (running · review · try asking) | side card (questions, walkthroughs, day streak; plan or review); everything asked, by day |
-| Insights | Insights | (none - the tiles are the top) | **Time Tora worked for you** (lead tile: walkthrough guiding time + finished agent jobs' run time, both recorded; a week of bars, this week on last) · **Things Tora handled** (Ask answered / Show walked through / Do agent jobs finished, one split bar) · **What Tora knows** (facts her remember tool kept, the two newest, documents attached) · where you use Tora · streak (current, longest, active days) · monthly usage (one overall bar, then each allowance) · agents (finished, didn't finish, running, how long they ran). Only what HeyTora records: no time saved, no words per minute, no percentiles; an estimate would have to say it is one |
-| Agents | Notetaker | "Tora works while you don't." | "give her a first job" card, running, approvals, past tasks |
-| Learn | Dictionary / Snippets | "Keep what she taught you." | review, saved walkthroughs, recorded lessons, captured workflows |
-| Packs | Transforms | "Tora, for your work." | a grid of pack cards; "more packs coming" |
-| Tora | Style | "Make her yours." | voice carousel, colour, teaching style, how she answers, instructions |
+- A **title** (`Page title`, §5) and **one grey line** under it saying
+  what the page is for.
+- Sections with a small **CAPS label** above a rounded `SURFACE` block.
+- In a block, **rows**: a title, at most one grey line under it, and the
+  control on the right (switch, button, chips, keycaps). Rows are split by
+  hairlines. Nothing in a block is another block.
+- Choices that are pictures are **tiles** (voices, cursor colours,
+  languages): the chosen one has an accent ring and a tick.
+- Longer notes go in one small grey line under the block.
 
-Sidebar extra (later): a **Get started** checklist - first question, a
-walkthrough, her voice, a pack, an agent's first job - each ticked from
-real data, gone when all are.
+What each page holds is in HEYCLICKY_REFERENCE.md §4, mapped to the tabs it
+replaces (`ui/settings_tabs.py`).
 
-**Rules.**
+## 5. Plans
 
-- **One level of container.** Nothing in a card is a card. Containers are
-  filled (`SURFACE` on the panel), never filled *and* outlined.
-- **A centred column**, at most `T.COLUMN_W` (1040px) wide. The title is in
-  it and scrolls with the page.
-- **The top of a page does something - no decorative hero.** Two tries
-  at a picture there (a capability gradient with a tour scene; the site's
-  mesh with its tagline) read as a website banner pasted into an app, so
-  the space holds the page's most useful thing instead. On Home that is
-  **Up next**: what is running (progress, Open Agents); else the review
-  that is due (question, Show answer, I knew it / Not yet); else three
-  things to try asking, picked from what they said they do at first launch
-  (`app_pages.TRY_ASKING`). A plain `SURFACE` card, `RADIUS_XL`, beside the
-  side card. Other pages get their own useful top card when they are built.
-- **The listening pop.** A short earcon the moment she listens
-  (`ui/sounds.py`, `assets/sounds/*.wav` made by `make_sounds.py`); the
-  user picks Bubble, Bloop, Select, Spark, Chime or Off on the Tora page.
-- **Two columns on Home**, as Wispr's: Up next and the history on the
-  left; the numbers on the right, **sticky** - level with Up next, then
-  held 20px from the top while the history scrolls (`PageBody.set_aside`).
-- **The history has no cap**: 100 rows, the next 100 as the end comes up.
-  **Search** is an icon on the first day's row that slides open into a
-  field; it matches question or answer, and Escape or leaving it empty
-  closes it.
-- **Insights shows its numbers as charts**, Wispr's way: questions a day
-  as bars (21 days, today in the accent), what is remembered as a half
-  gauge, each app's share as a bar, the streak calendar, the plan as
-  meters. They **grow in when the page opens** - each chart a `Grows`
-  (`ui/app_parts.py`) on the site's curve, a beat after the one before -
-  and never replay on a live redraw.
-- **Cards are filled, lists are a hairline.** Up next and the numbers are
-  `SURFACE` plates; the history is a 1px `BORDER` round rows on the page's
-  own ground, so the cards lead and the list recedes. (Wispr's way round -
-  a near-white page with the site's soft grey on the cards - was tried:
-  see the A/B in the session notes.)
-- **Lists are one container** with hairline rows; the row under the
-  pointer tints and shows its actions (copy...); a click opens it.
-  Section labels ("TODAY") sit outside, above.
-- **Quiet when fine.** No "Connected" pill, no "Nothing running": a banner
-  only when she can't answer, a "Happening now" list only while something is.
-- **Empty states are written**: what will be here and the one thing to do.
+A card over the shape, from **Upgrade** or Account → Upgrade. A Monthly /
+Yearly switch, then Free, Pro and Max side by side: name, price, one line
+of who it is for, three ticked allowances in credits, one button. The
+current plan is marked. The words and prices are ours (`settings_tabs.PLANS`,
+heytora-web `site.ts`).
 
-## 3D. Settings (after Wispr Flow's)
-
-A dialog over the app, not a page: the app dims behind it, a rounded card
-with a menu down its left (the page's soft grey) and one tab at a time on
-white. Escape or a click on the dimmed app closes it. Built in
-`ui/settings_dialog.py`; the tabs are `ui/settings_tabs.py`.
-
-| Section | Tab | What is in it |
-|---|---|---|
-| Settings | General | Shortcut (Change), microphone (Change), always listening, how she answers (Live / Classic) · theme |
-| | System | Start with Windows, the floating panel · sounds (the listening pop) · updates |
-| | Agents | When they ask you (approve automatically - its limits in its one line -, show the plan first, run without asking up to) · Where they work (workspace: Open, Change) · Limits for each job (jobs at once, time, tokens - fixed choices) · Where their requests go (each endpoint; Manage opens the editor in a dialog) · History (clear). Every choice saves at once and reaches the running agents (`bridge.set_agent_rail`); no Save button, no embedded panel |
-| | Advanced | API keys · models in use (read-only, refresh) · diagnostics · report, setup again · Quit |
-| Account | Account | Profile (name, email, picture) · how Tora thinks (your plan or your own key) · Sign out · Delete account (type your email to confirm; the server deletes it and everything that cascades from it, refuses while a paid plan is active; then back to sign-in) |
-| | Usage | This month on the plan: each allowance with a bar (amber from 80%), today, overall use, when it starts again · Change plan · Manage on heytora.com |
-| | Plans & billing | Free, Pro, Max side by side - the website's words and prices (`settings_tabs.PLANS`, from heytora-web `site.ts`), yours marked · billing on heytora.com |
-| | Data & privacy | What she looks at · what she keeps (journal on/off, on this PC only, download, delete) · desktop actions allowed · Privacy policy, Terms |
-
-Account follows Wispr's order: who you are, what you pay, what is kept.
-
-**How a tab reads** (`ui/settings_parts.py`, after Wispr's System page): a
-group's name sits above a soft block (`Group`); each row is a title in
-14px semibold ink, **at most one short line** under it in 13px, and the
-control (`SettingRow`) - never a card title, a subtitle and then rows that
-each carry a heading and a sentence. Longer caveats go in one small note
-under the block. General's Shortcut shows the keys as keycaps and Change
-opens a small dialog where the new keys are pressed (checked, then live:
-`main.py` rebinds only its own hook); Microphone's Change lists each mic
-once as a card, the chosen one with a live level. A dropdown never changes
-when the page is scrolled over it (`Select.wheelEvent`).
-The footer is the version and a cloud: ticked when up to date, an arrow
-when an update is waiting. A group on a tab is a filled block in the
-page's soft grey on the dialog's white, rows split by hairlines.
-`show_page("settings/<tab>")` opens a tab; `"setup"` is Advanced. The
-Tora page keeps only what makes her yours: voice, teaching style,
-instructions.
-
-## 3E. The Tora page - make her yours
-
-Second in the sidebar (Home, **Tora**, Insights, Agents). The Journal
-has no row: Home shows everything asked and the next review, and the full
-review list is Home's "Review now".
-
-Four tabs of its own (Wispr's Style page: words on a hairline, the one
-you are on underlined): **Voice & look** (1-3), **How she works** (4-5),
-**Skills** (7), **Teach her** (6).
-
-1. **Her voice** - the first launch's carousel: her name, audio bars that
-   move with the clip, arrows; settling on one (0.7 s) saves it.
-2. **Her colour** - her cursor, breathing, in the chosen colour, and the
-   swatches; applied to the live cursor at once.
-3. **Her sound** - the listening pop as chips; picking one plays it (moved
-   here from Settings > System).
-4. **Her modes** - tiles, two by two: Slow mode, Advance by itself, Quiz
-   mode, Code mode. The tile is the switch and fills with a pale accent
-   while on.
-5. **Instructions for Tora** - only the user's own words, added after her
-   prompt on every answer (config._instructions_from_env).
-6. **Teach her how you work** - Record a lesson · Show her what you did.
-7. **Her skills** (`ui/skills_page.py`, docs/agents/SKILLS.md) - how you
-   like jobs done. A hairline list: the starter skills and yours ("Yours",
-   "Edited"), "Used when…", a schedule and when it last ran; a switch on
-   each; hover for Edit. New skill opens the editor over the window: Name,
-   Use it when…, one growing box for the steps and what to know, then Apps,
-   Always ask me before and Runs by itself (all optional). Files that could
-   not be read are listed with why. A finished job's details offer
-   "Save as a skill": a draft from its plan, in the same editor.
-
-## 3F. The Agents page
-
-`ui/agents_page.py`. The app's own components, drawn from the workforce
-through the bridge; the workforce's floating panels (agents/ui, worker 1)
-stay for the tray. Two columns, as Home:
-
-- **Give Tora a job** - a box that grows, three example jobs, Start. A job
-  that reads as a question is said so; one a skill describes runs as that
-  skill.
-- **Needs your OK** - only while an agent waits: what it wants, for which
-  job, Approve / Deny on the page (a sensitive one needs its typed word).
-  The approval window still opens; whichever answer comes first counts.
-- **Working now** - a card per running job: step n of m, what it is
-  doing, progress, how long it has run, Pause/Resume, Stop.
-- **History** - the hairline list by day: how each job ended and how long
-  it ran; hover for Open its folder; click for details.
-- **Aside** (sticky) - this month's jobs finished / didn't finish /
-  running, run time, approve-automatically state, Agent settings.
-- **Details** slide in from the right over the page: what you asked, the
-  plan as a checklist (done, on now, waiting, failed), the live activity
-  log (the workforce's own, restyled), the result or why it stopped,
-  Open folder, Run again or Stop - and, when it went well, Save as a skill.
-
-Later, if wanted: a map of a project's agents in the details (the data -
-a lead job, its agents and who waits on whom - is already recorded).
-
-## 3G. Packs - removed
-
-Packs were replaced by skills on 6 Oct 2026 (docs/agents/SKILLS.md): the
-Packs page, a pack's page and their sidebar rows are gone, and old links to
-them open the Tora page's Skills tab. The onboarding's "Made for your
-work" cards are skill cards now (`SkillCard`, colours `tokens.WORK_TILES`):
-the starter skills for the work you pick, which finishing turns on.
-
-## 3A. Where the values live
+## 6. Where the values live
 
 Every colour, radius, shadow and button size is a name in **`ui/tokens.py`**;
 **`ui/kit.py`** is how they are drawn (the tween, colour mix, font, and the
@@ -297,16 +155,15 @@ together.
 | `LOGO_BLUE` | `#00B6FD` | The wordmark's swoosh, and the first stop of the ribbon |
 | `ICON_BLUE` | `#009EFD` | The app icon (`assets/brand/heytora-icon.svg`); lives in that file |
 
-`BLUE_TINT` / `BLUE_TINT_DARK` fill a chosen chip or card; `ON_COLOUR`
-(white) is type and glyphs on a blue, a pack tile or a deep gradient.
+`BLUE_TINT` / `BLUE_TINT_DARK` fill a chosen chip or tile; `ON_COLOUR`
+(white) is type and glyphs on a blue or a deep gradient.
 
-**Frame vs paper.** The *frame* (window, sidebar, page ground, the app's
-own cards and controls) follows light/dark through `app_theme` (`T.BG`,
-`T.SURFACE`, `T.TEXT`...). *Paper* is content the app draws - the equation
-card, the peeker's card, pack and capability cards on a gradient, the
-windows in the tour scenes - and stays light in both themes (`PAPER.card`,
-`.ink`, `.dim`, `.faint`, `.line`, `.edge`...). `STAGE` is the one dark
-moment in the light flow ("Nice job.").
+**Frame vs paper.** The *frame* (the shape, its pages, cards and controls)
+follows light/dark through `app_theme` (`T.BG`, `T.SURFACE`, `T.TEXT`...).
+*Paper* is content the app draws - the equation card, the peeker's card,
+skill cards on a gradient, the windows in the tour scenes - and stays light
+in both themes (`PAPER.card`, `.ink`, `.dim`, `.faint`, `.line`,
+`.edge`...). `STAGE` is the one dark moment in the light flow ("Nice job.").
 
 **Depicted apps keep their own colours.** A picture of someone else's
 app - the tour's music player, spreadsheet, PDF, album covers, the
@@ -317,42 +174,40 @@ florist's site - wears that app's colours, and they live in one map,
 
 | | Values | Use |
 |---|---|---|
-| Radius | `RADIUS_SM` 8 · `MD` 12 · `LG` 16 · `XL` 20 · `pill(h)` | inputs and cells · cards, chips, wells · floating cards and pictured windows · the one card a screen is about · buttons |
-| Button height | `BUTTON_H` sm 30 · md 34 · lg 44 | answers inside a card · the app · a screen's one action |
-| Shadow | `SHADOW` card · float · hero | a drawn card on colour · tests, popups, pickers · sign-in, You're set, Personalize |
+| Radius | `RADIUS_SM` 8 · `MD` 12 · `LG` 16 · `XL` 20 · `pill(h)` | inputs and cells · rows' blocks, chips, tiles · the shape, floating cards · the one card a screen is about · buttons |
+| Button height | `BUTTON_H` sm 30 · md 34 · lg 44 | inside a row · the app · a screen's one action |
+| Shadow | `SHADOW` card · float · hero | a drawn card on colour · the shape, popups, pickers · sign-in, You're set |
 
 A pill's radius is `pill(h)` = one under half the height: Qt drops a
 radius above half and the button goes square.
 
-The families (`CAPABILITY`, `STEP`, `WORK_TILES`, `SCENE_LOOKS`, `VOICE_COLOURS`)
-and the ribbon (`RIBBON`, `RIBBON_POOLS`, `RIBBON_FILLED`) are in tokens.py
-too, copied from heytora-web.
+The families (`CAPABILITY`, `STEP`, `WORK_TILES`, `SCENE_LOOKS`,
+`VOICE_COLOURS`) and the ribbon (`RIBBON`, `RIBBON_POOLS`, `RIBBON_FILLED`)
+are in tokens.py too, copied from heytora-web.
 
-## 4. Colour
+## 7. Colour
 
 ### Frame
 Neutral only: `T.BG`, `T.SURFACE`, `T.BORDER`, `T.TEXT*`. The single accent
 is the **cursor blue `#3380FF`**. It is used for:
 
-- primary buttons
+- primary buttons (Upgrade, Hold to talk, a page's one action)
 - switches that are on
-- the selected nav item
-- focus rings
-- links
-- progress
-- the "active" dot
+- the selected tab and sidebar row's icon
+- chosen tiles and chips (ring and tick)
+- focus rings, links, progress, the "active" dot
 
 Nothing else in the frame carries a hue.
 
 Status colours (`OK`, `WARN`, `DANGER`) are for status only: a failed task,
-a used-up plan. They are never used for decoration.
+a used-up plan, Delete account. They are never used for decoration.
 
 ### Content: the site's gradient families
 Copied from heytora-web, and moved into `ui/tokens.py` as named values when
 first used. Same names, same hexes, so the app and site stay in step.
 
 **Capabilities** (`home/what-gradient.tsx`): one family each, used wherever
-that capability is the subject (Home, walkthrough cards, Tutor):
+that capability is the subject:
 
 | Capability | Wash | Blobs |
 |---|---|---|
@@ -362,12 +217,12 @@ that capability is the subject (Home, walkthrough cards, Tutor):
 | Do it | `#D6F4F0` | `#7FB6FF` `#39D5C6` `#2FB8C8` `#8FE8D6` `#BDF2E6` |
 | Build it | `#FBF3DD` | `#9CE9DA` `#FFE08A` `#F6B96B` `#FFF0C4` `#B6EE7A` |
 
-**Packs** (`home/packs.tsx`): a two-stop 145° gradient icon tile with a
-white glyph. Used on the onboarding's "Made for your work" cards:
+**Work tiles** (`WORK_TILES`, from the site's `home/packs.tsx`): a two-stop
+145° gradient icon tile with a white glyph, on skill cards:
 
-| Pack icon | From → to |
+| Icon | From → to |
 |---|---|
-| ledger (Accounting) | `#00B6FD` → `#3D7BFF` |
+| ledger | `#00B6FD` → `#3D7BFF` |
 | briefcase | `#FFA24C` → `#FF6B6B` |
 | spanner | `#F7CE5B` → `#F29B38` |
 | banknote | `#39D5C6` → `#1FA88F` |
@@ -391,20 +246,18 @@ white glyph. Used on the onboarding's "Made for your work" cards:
 | 4 | `#2FD0C0` `#B6EE7A` `#7CC8FF` `#D6F7EE` |
 
 ### Rules for content colour
-1. **A thing keeps its colour.** Accounting is cyan→blue on Extensions, on
-   its page, and on its agents' cards. Never re-pick per screen.
-2. **Gradients fill a whole surface:** a hero card, an icon tile, an
-   onboarding visual. Never a gradient border, gradient text, or a tinted
-   row.
+1. **A thing keeps its colour.** A skill or capability has the same colour
+   everywhere it appears. Never re-pick per screen.
+2. **Gradients fill a whole surface:** the Home result card, an icon tile,
+   an onboarding visual. Never a gradient border, gradient text, or a
+   tinted row.
 3. **Type on a gradient** is near-black (`#292929`) on the pale families and
-   white only on the deep ones (pack tiles). Check contrast. White on the
+   white only on the deep ones (work tiles). Check contrast. White on the
    site's `#00B6FD` fails.
-4. **At most one large gradient per screen.** Small pack tiles can repeat.
-   The Home hero is the large one on Home. A second large one turns colour
-   into wallpaper.
+4. **At most one large gradient per screen.** Small tiles can repeat.
 5. Gradients look the same in light and dark: they are content, not frame.
 
-## 5. Type
+## 8. Type
 
 Plus Jakarta Sans everywhere (bundled, `assets/fonts`, SIL OFL), unhinted
 with +0.3px tracking at body sizes (`tokens.app_font()`). Bold gets bolder
@@ -412,205 +265,125 @@ as type grows. Labels are the only uppercase, the only positive tracking.
 
 | Tier | Size | Weight | Tracking |
 |---|---|---|---|
-| Page title | 28 | 700 | -0.4px |
-| Card title | 15 | 600 | -0.15px |
-| Body | 13 | 400 | +0.3px |
-| Secondary | 12 | 400 | +0.3px |
+| Greeting (Home) | 22 | 700 | -0.3px |
+| Page title (Settings) | 22 | 700 | -0.3px |
+| Card / row title | 14 | 600 | -0.1px |
+| Body, the grey line | 13 / 12 | 400 | +0.3px |
 | Label (uppercase) | 10 | 600 | +1.5px |
 | Metric | 28 | 700 | -0.4px |
 | Onboarding title | 30 | 700 | -0.5px |
 
+The shape is smaller than the old window, so the titles are smaller too.
+
 Sentence case with full stops in copy ("Never leave the screen."), as on the
 site. No exclamation marks. No emoji in UI text.
 
-## 6. Components and motion
+## 9. Components
 
 - **Buttons** are full pills. One primary (blue) per view; the rest are
-  outline pills. Destructive = red outline, never red fill.
-- **Switches** slide on the site's curve. **Cards**: 12px radius, hairline,
-  no shadow. Shadows are for floating things only.
-- **Keycaps** (the site's scarce mark): a plate with a 2px side hairline.
-  One per screen at most: the hotkey in onboarding, the hotkey on Home. A
-  shortcut mentioned elsewhere is set as an uppercase label, not a cap.
+  outline pills. Destructive = red text or red outline, never red fill.
+- **Switches** slide on the site's curve.
+- **Blocks** (settings sections, the result card): `SURFACE`, `RADIUS_MD`,
+  no outline in light, a hairline in dark. Shadows are for the shape and
+  what floats.
+- **Keycaps:** a plate with a 2px side hairline. On Shortcuts, on Home's
+  empty state, on the Hold to talk button.
+- **Tiles:** a square-ish `SURFACE` cell, icon over name over a two-word
+  feel; chosen = accent ring and a tick in the corner.
+- **Chips:** pill-shaped, `SURFACE`; chosen = `BLUE_TINT` fill.
+- **Icons:** Lucide outlines (`assets/icons`, ISC), 18px in the sidebar and
+  top bar, 16px in rows. A new icon is a file there plus a line in
+  `app_widgets.ICONS`.
 - **Motion** uses `tokens.ease()` = the site's `cubic-bezier(0.22, 1, 0.36,
-  1)`: 160ms for small state changes, 260ms for panels and steps.
-  Things fade and settle; they don't bounce or slide across the screen.
-  Respect Windows' "animation effects" off.
+  1)`: 160 ms for small state changes, 250 ms for the shape (§2) and page
+  changes inside it (a cross-fade, no slide). Respect Windows' "animation
+  effects" off.
+- **The listening pop** (`ui/sounds.py`): a short sound the moment she
+  listens; Bubble, Bloop, Select, Spark, Chime or Off, chosen on Voice.
 
-## 7. Onboarding (after Wispr Flow)
+## 10. Onboarding
 
-The model is Wispr Flow's Windows onboarding (walked through 2 Oct 2026,
-15 screens). We take its **structure and its demos**. Its visual details
-stay out: the serif display face, the purple, the black buttons, the
-hand-drawn illustrations. Ours are §4–§6.
+Built: `ui/setup_wizard.py`, `ui/onboarding_parts.py`. It keeps its flow
+and is restyled to the settings page pattern (§4): step dots and **Skip**
+at the top, one question as the title, one grey line, the live test, a
+picker under it, **Continue**.
 
-### 7.1 What Wispr Flow does, and what we take
-
-| # | Their pattern | Take it? |
-|---|---|---|
-| 1 | **A phase bar across the top**: SIGN UP › PERMISSIONS › SET UP › LEARN › PERSONALIZE in tracked caps, with a thin accent line under it that grows with progress. You always know where you are and how much is left, without "step 7 of 14". | Yes. Our label tier (§5), the accent line in cursor blue. |
-| 2 | **Two layouts, chosen by what the step is.** *Questions* use a split: a left column (title, one line, choices, full-width Continue pinned to the bottom) beside a right-hand picture panel. *Tests* use a centred layout: title, one line, then a single floating white card holding the live test. | Yes. Exactly these two layouts, nothing else. |
-| 3 | **The picture panel reacts to the answer.** Pick "Dictation" and its polaroid comes forward in colour while "Notetaker" stays grey; pick both and both light up. | Yes. Our panel is the step's gradient (§4) with the chosen capability's or pack's card coming forward. |
-| 4 | **Choices are chips or option cards**, and Continue stays greyed out until something is chosen. A chosen chip or card fills with a pale accent. | Yes. Pale fill = `ACCENT_SOFT`. |
-| 5 | **Every test is a real action with a yes/no question about what you saw.** "Do you see purple bars while you speak?" [Change microphone] [Yes]. "Does the button turn purple while pressing it?" with a keycap that lights while held, an alternative shortcut and "Edit shortcut". | Yes. This is the heart of it. Our questions: "Do the bars move when you talk?", "Does the key light up while you hold it?" |
-| 6 | **The Learn step is the product working inside a pretend app.** A fake Slack thread ("Hey Dylan, what's up?"); you hold the key, speak, and your words appear in the reply box. Skip sits top-right. | Yes. Ours: a pretend screen where you ask Tora something and she points at the answer with the real cursor (§7.2, step 7). |
-| 7 | **The payoff screen flips to dark** for the celebration: "Nice job!", your own measured speed against the average, a playful drawing. | Yes to the flip and to measuring something real. No to inventing numbers: we show only what we measured in their session (§8: no invented stats). |
-| 8 | A savings calculator ("29 hours a week!") driven by a slider. | No. It's a projected claim, and the site's rule is no stat we can't stand behind. |
-| 9 | **The background on test screens is the brand mark**, huge and at very low contrast (their logo's loops). | Yes. Ours is the logo's swoosh, at `BORDER` contrast. |
-| 10 | Privacy as two option cards ("Improve the model" / "Don't use my data"), with "change this later in Settings". | Yes, as our trust step: what Tora sees and when. |
-| 11 | Survey questions: where you heard about us, what you do for work, where you type. | Partly. "What do you do?" earns its place because it picks the packs we switch on (Accounting…). Where you heard about us: one optional screen at most. |
-| 12 | Ends on a referral card ("Give a month of Pro"). | Later, once the site's referral system exists (heytora-web REFERRAL-PLAN.md). |
-| 13 | Constant furniture: Back top-left, a Help pill bottom-left, a language picker top-right. | Back and Help, yes. Language: no, Tora is English-only today. |
-| 14 | Before the app opens, the download page tells you what to do in three steps, with an animation of the installer. | Yes, but it's the website's job (heytora-web), not the app's. |
-
-### 7.2 Our flow (built: `ui/setup_wizard.py`, `ui/onboarding_parts.py`)
-
-The steps prove what Tora is, rather than copying another app's list: she
-hears you, the key works, she sees and points, she explains and draws.
-Q = split question layout, T = centred test layout.
+The steps prove what Tora is: she hears you, the key works, she sees and
+points, she explains and draws. Q = a question beside a picture, T = a
+centred test.
 
 | Phase | Page id | Screen | Layout | What proves it |
 |---|---|---|---|---|
 | Sign up | `connect` | Sign in to HeyTora: a centred card with the logo, on the ribbon | T | Signed in. Continue is locked until then |
-| | `welcome` | Hi, I'm Tora. Picture: the website's five "What it does" scenes, moving (`ui/tour_scenes.py`, a port of heytora-web `home/tour-scenes.tsx`) | Q | Get started |
-| | `work` | Tell us about yourself: name, and what you do (chips). Matching pack cards slide in, in colour | Q | A chip |
-| Permissions | `privacy` | We look when you ask. Not before. The one real control: **Skip private windows** (the `privacy_guard` switch). Picture: the website's peeker, asleep on the claim, waking while the pointer is on the card | Q | A choice |
-| | `mic` | Test your microphone: "Do the bars move when you talk?" | T | [Change microphone] [Yes] |
+| | `welcome` | Hi, I'm Tora. Picture: the website's five "What it does" scenes, moving (`ui/tour_scenes.py`) | Q | Get started |
+| | `work` | Tell us about yourself: name, and what you do (chips). Matching skill cards slide in, in colour | Q | A chip |
+| Permissions | `privacy` | We look when you ask. Not before. The one real control: **Skip private windows** (`privacy_guard`) | Q | A choice |
+| | `mic` | First, can I hear you? Live bars, what it heard, the mic picker | T | [Change microphone] [Yes] |
 | Set up | `ready` | Getting Tora ready (only when opened by the sign-in gate) | T | The app has started |
 | | `shortcut` | Test your shortcut: "Does the key light up while you hold it?" | T | The key lit at least once |
-| Learn | `try` | Ask Tora about this: a worked sum with one wrong line. Said in full: "Hey Tora, what's wrong with this equation?" | T | Tora pointed (timed). Skip |
+| Learn | `try` | Ask Tora about this: a worked sum with one wrong line | T | Tora pointed (timed). Skip |
 | | `payoff` | Nice job (dark): only what was measured. Left out if nothing was | T | None, a moment |
-| Personalize | `voice` | Pick her voice: one voice at a time, big, its waveform in its own colour moving with the real clip; arrows or ←/→. Nothing else on the page | T | A choice |
-| | `personal` | Make her yours: her colour (six swatches, a live pointer), start with Windows, always listening, floating panel, how she answers (Live / Classic) | T | Choices |
-| | `done` | You're set: one card - an encouraging word (be curious; anything on screen is fair game), the hotkey keycap, Open HeyTora - on the ribbon filled with the site's colours | T | Opens the app on Home |
+| Personalize | `voice` | Pick her voice: one at a time, big, its waveform moving with the real clip | T | A choice |
+| | `personal` | Make her yours: her colour, start with Windows, always listening | T | Choices |
+| | `done` | You're set: the hotkey keycap, and **Open HeyTora**, which grows the pill open for the first time | T | Opens the shape on Home |
 
-**The words hide while the shortcut is held.** On a Learn screen the
-heading and "Hold Ctrl + Win and ask Tora: ..." fade out the moment Tora
-starts listening, and come back if nothing came of it. Tora reads the
-whole screen, and with the instruction showing she read it out instead
-of looking at the sum.
-
-**Not in the onboarding, on purpose.** "What should Tora help with?"
-(she does all of it anyway) and the approvals choice ("ask first" stays
-the default, in Settings; the moment to ask is the first time an agent
-needs it). A "use my data to improve Tora" choice waits until there is
-such a thing to switch.
-
-**Two halves.** The sign-in gate shows this window before the overlay,
-hotkey and voice exist. Up to `mic` it needs nothing else. Leaving `mic`
-emits `ready`, the gate lets the app start, and `main.py` calls
-`attach(live)` on the same window, which moves on to `shortcut`.
-Opened from a running app (the tray's "Run setup again"), `attach` has
-already happened and `ready` is skipped. After a sign-out, the gate opens
-it at `connect` only, and signing in finishes it.
-
-**The Learn asks are real asks.** They count against the user's plan like
-any other question, so the first launch is no way around the limits.
-
-**Voices and colour.** The 12 hellos are recorded once by whoever
-releases (`assets/voices/make_voices.py`) and ship with the app: choosing
-a voice never spends a talk message. Tora's colour (`TORA_CURSOR_COLOUR`)
-changes only her pointer; the app's accent stays the cursor blue.
-
-**The shortcut test borrows the hotkey.** While `shortcut` is up,
-`main.py` routes the hotkey to the window (`claim_hotkey`), so holding it
-lights the key without starting a conversation. The Learn screens do not
-borrow it: there the real Tora answers, from a real screenshot of the
-pretend app, and the real cursor points. That uses one or two of the
-user's talk messages.
-
-Rules that carry over from Wispr Flow:
+Rules that stay:
 
 - Continue is disabled until the step is answered or proven.
-- Back on every screen after the first.
-- Skip only on Learn screens.
-- Any test can be redone from Settings.
-- Every Learn demo uses the **real** overlay and voice, not a recording.
+- Back on every screen after the first. Skip only on Learn screens.
+- Every Learn demo uses the **real** overlay and voice, not a recording,
+  and counts against the plan like any other question.
+- **The words hide while the shortcut is held** on a Learn screen, so Tora
+  looks at the sum instead of reading the instruction out.
+- **The shortcut test borrows the hotkey** (`claim_hotkey`), so holding it
+  lights the key without starting a conversation.
+- **Two halves.** The sign-in gate shows the window before the overlay,
+  hotkey and voice exist. Leaving `mic` emits `ready`; `main.py` calls
+  `attach(live)` on the same window.
+- **Voices** are recorded once by whoever releases
+  (`assets/voices/make_voices.py`) and ship with the app: choosing a voice
+  never spends a talk message.
+- **Drawing after a screen look:** for 20 s after look_at_screen highlights
+  something, coordinate drawings are skipped; anchored ones still draw
+  (companion_manager `_tool_draw`).
 
-### 7.4 One Learn step
+## 11. The pill
 
-Two second demos were tried and dropped. A triangle ("teach me how to
-find the missing side") sent Tora into planning an app walkthrough
-against a screen with no controls, and she stalled. A settings card of
-real switches worked but added length without proving anything new. The
-equation alone proves she sees, points and explains.
+Built as the flow bar (`ui/flow_bar.py`, wired in `main.py`): resting pill;
+bars while listening (✕ and ✓ when hands-free); faint dots and a turning
+circle while thinking; her voice in the bars and the answer card while she
+speaks. Dragged, it snaps to the nearest side of any monitor and stays there
+(`TORA_FLOW_DOCK`). Two small lights sit off its ends: red while a
+microphone stream is open, blue for two seconds after the screen was looked
+at.
 
-**Drawing after a screen look.** On the equation she boxed the wrong
-line correctly (look_at_screen finds it in the image) and then drew a
-red circle around nothing: a `draw` call with coordinates the voice model
-made up, since look_at_screen answers in words. For 20 s after
-look_at_screen highlights something, coordinate drawings are skipped;
-anchored ones (`[CIRCLE:@Save]`) still draw (companion_manager
-`_tool_draw`). A drawing counts as an answer on the Learn screen, as a
-point does.
+What changes: a **click** on the pill (not a drag) grows it into the shape
+(§2). The answer card stays as it is, a fixed-size card that doesn't grow
+as she talks.
 
-### 7.3 Decided
+## 12. What we don't do
 
-- **Picture panel:** the step's gradient (§4) with something that answers
-  the choices: the carousel, pack cards, capability cards, the peeker, the
-  desktop. No illustrations for now. The carousel's images are PNGs in
-  `assets/onboarding/` (drawn by `assets/onboarding/make_slides.py`); a
-  real screenshot saved under the same name replaces one.
-- **Motion:** every choice animates on the site's curve (chips and cards
-  fill, ticks draw, pack cards slide in, capability cards lift). The test
-  screens' ground is HeyTora's ribbon in the site's cyan, blue and violet.
-- **No "where did you hear about us?"** screen.
-- **Payoff font:** Plus Jakarta Sans throughout; the moment comes from
-  scale and the dark flip, not a serif.
-
-## 7A. The floating pill (after Wispr Flow)
-
-Seen in Wispr Flow (2 Oct 2026), for stage 5. **Built 4 Oct 2026 as the
-flow bar** (`ui/flow_bar.py`, wired in `main.py`), shown live first and
-approved: resting pill; bars while listening (✕ and ✓ when hands-free: a
-tap of the shortcut, the wake word, or a click on the pill); faint dots and
-a turning circle while thinking; her voice in the bars and the answer card
-(fixed size, its text rolling in time with her voice, ✕, Copy) while she
-speaks. Dragged, it snaps to the nearest side of any monitor, anywhere
-along it - upright on the left and right, the card opening towards the
-middle - and stays there (`TORA_FLOW_DOCK`). Her words go to the card; the
-top island (`ui/caption.py`) is kept, unused for now. Not built: the ghost
-snap targets and the pop sound below.
-
-- **Small at rest.** A black pill, about 46 × 16 px, with a row of dots,
-  at the bottom centre of the screen. It grows into the waveform while
-  listening.
-- **Movable, with snap targets.** While dragged, grey ghost pills show
-  where it can land: left edge, right edge and bottom centre. Easy to
-  understand at a glance. It never floats anywhere else.
-- **A result card when something is said.** A dark glass card above the
-  pill: logo top-left, a short hint top-right, the text, a Copy button,
-  a close ✕. For Tora this is the answer text (and what she did). It
-  replaces the always-on captions, which become optional (Settings).
-- **A pop sound** when the pill opens. Short, soft, satisfying. One
-  sound for open; nothing for every state change.
-
-## 8. What we don't do
-
-- Glass inside the app window. Colour in the frame. Gradient text or borders.
-- A description line under page titles.
+- A separate app window, a separate settings window, a separate referral
+  window. Everything is the shape.
+- Colour in the frame beyond the accent. Gradient text or borders.
 - More than one large gradient per screen.
+- Surfaces that grow while Tora talks.
 - Emoji, exclamation marks, "unlock", "supercharge", "seamless".
 - macOS window chrome or traffic-light dots (heytora-web BRAND.md §1).
+- HeyClicky's name, mascot, sample content, wording or prices.
 - A new colour, font or radius that isn't in `ui/tokens.py`. If one is
   needed, add it there and here, together.
 
-## 9. Order of work
+## 13. Order of work
 
-| Stage | Scope | Status |
+| Step | Scope | Status |
 |---|---|---|
-| 1 | Tokens, fonts, light/dark, main window restyle, tray click + popup | Done |
-| 4 | Onboarding rebuilt to §7 | Built; needs a live run on a clean profile |
-| 2 | Frame: title-only headers, window title, Home hero gradient card | Folded into A1 / A4 |
-| 3 | Content colour: pack tiles on Extensions/Accounting/Agents, capability colours | |
-| 4A | Consolidation: every value into `ui/tokens.py`, one `ui/kit.py`, a test that keeps it (§3A) | Done |
-| A1 | App shell (§3B): own title bar, sidebar that opens and shuts, page map, no description lines, Home greeting, profile / notifications / free month / help cards | Done |
-| A1b | Page template (§3C): hero, side card, history list, centred column, no outlined cards; Home rebuilt | Done |
-| A2 | Settings as a dialog (§3D) - Done; was: Settings as a dialog with its own menu (General, Privacy, Models, Account, Advanced); Setup and Models leave the sidebar | Next |
-| A3 | Notifications feed: agent tasks, approvals, progress, usage, achievements | |
-| A3b | Insights page (§3C), `ui/insights_data.py` | Done |
-| A4 | Agents, Learn (Journal leaves the sidebar), Packs, Tora - each on the §3C template | |
-| A5 | Home extras: replay a walkthrough from history (needs a manager entry point), Get started checklist | |
-| 5 | Glass and the pill: §7A pill with snap targets, result card, pop sound, captions optional; tray popup to glass; panel, captions and buddy onto shared tokens; `agents/ui/orbs.py` (worker 1) | |
+| 0 | This document | Done |
+| 1 | The shape: a click on the pill grows it open (§2), with the current pages inside at first | Next |
+| 2 | Settings inside it: the sidebar, the page pattern (§4), the old tabs regrouped | |
+| 3 | Home, Chat and Insights tabs; running-job cards beside the shape | |
+| 4 | The Plans card; Invite & Earn as a settings page | |
+| 5 | New pages: Voice (speed, voice tiles), Dictation (language, dictionary), Routines | |
+| 6 | Onboarding restyled (§10); the old app window, settings window and referral window deleted | |
 
-Each stage: a mock-up screenshot first, then code, then this table updated.
+Each step: a screenshot first, then code, then this table updated.

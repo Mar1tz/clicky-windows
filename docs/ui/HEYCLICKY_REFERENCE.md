@@ -277,12 +277,10 @@ direction is replaced by this one.
 
 ---
 
-## 8. Still to decide
+## 8. Decided (28 Oct 2026)
 
-- **Colours:** HeyClicky is black with a pale-blue accent (Upgrade,
-  toggles, selected chips). Do we use that, or keep HeyTora's colours in
-  their layout?
-- **Light mode:** HeyClicky shows only dark. Ours follows Windows today.
-  Keep light mode?
-- **Where the shape sits:** top-centre like theirs, or should people be
-  able to move it (some laptops have the webcam/taskbar there)?
+- **Colours:** ours. HeyTora's accent blue and our colours in their layout.
+- **Light and dark:** both stay, following Settings → Appearance.
+- **Where the shape sits:** wherever the person drags it, as our pill does
+  today. It grows from there towards the middle of the screen. The rules
+  are in `DESIGN.md` §1–§2.
