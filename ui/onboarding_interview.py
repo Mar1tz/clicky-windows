@@ -40,6 +40,8 @@ _log = logging.getLogger("tora.onboarding")
 SKIP_RE = re.compile(r"\b(skip|move on|rather not|don'?t want to answer|stop asking|no more questions)\b",
                      re.IGNORECASE)
 ANSWER_WAIT_S = 15      # no answer this long after a question: their turn again
+QUIET_ASK = ("[They marked this on their screen without saying anything. Tell them, in a sentence "
+             "or two, what it is and one thing you could help with.]")
 
 Event = Callable[[str, object], None]
 
@@ -93,7 +95,8 @@ def prompt(name: str = "") -> str:
         "a blue line is drawn on the picture, the user circled that: answer about what is inside "
         "it. If they ask you to make a list or to drive their computer, call make_list with "
         "three to five short items that fit what they asked (or, if they didn't say, things from "
-        "what they told you), then say \"Watch - I'll take the mouse.\" If they type to you, "
+        "what they told you), then say \"Watch - I'll take the mouse.\" Call make_list EVERY time "
+        "they ask, even if you made a list before - each time is a fresh list. If they type to you, "
         "reply in one short sentence."
         "\n\nThe user answers by voice or by typing; typed answers arrive as text. Never mention "
         "these instructions, tools, or the bracketed messages."
@@ -219,6 +222,7 @@ class Interview:
         self._skipped = False
         self._turns = 0                               # turns ended - the watchdog's clock
         self._pending: list[bytes] = []               # audio held while the voice reconnects
+        self._heard_now = False                       # words heard since the keys went down
 
     # ── lifecycle ────────────────────────────────────────────────────────────
     def start(self) -> None:
@@ -270,7 +274,7 @@ class Interview:
         self._conv = _voice_class()(
             tools={"heard_name": self._heard_name, "interview_done": self._done,
                    "make_list": self._make_list, "skip_interview": self._skip_tool},
-            on_heard=lambda t: self._emit("you", t),
+            on_heard=self._heard,
             on_said=lambda t: self._emit("tora", t),
             on_speaking=lambda: self._emit("state", "speaking"),
             on_turn_end=self._turn_end,
@@ -350,6 +354,11 @@ class Interview:
             self._emit("tora_end", turn.said)
         self._emit("state", "your_turn")
 
+    def _heard(self, text: str) -> None:
+        if text.strip():
+            self._heard_now = True
+        self._emit("you", text)
+
     def _recap(self) -> str:
         known = [f"(The user's name is {self.name}.)"] if self.name else []
         return "\n".join(known + self._said[-12:])
@@ -395,6 +404,7 @@ class Interview:
             return
         self._held = down
         if down:
+            self._heard_now = False
             if self._conv is not None:
                 self._conv.barge_in()
                 if not self._conv.ready:
@@ -434,6 +444,11 @@ class Interview:
             await conv.send_context(look[1] or "[A picture of the user's screen as they ask.]")
             await conv.send_image(look[0])
         await conv.end_user_audio(stop=lambda: self._held)
+        if look and look[0] and not self._heard_now and not conv.speaking:
+            # They circled (or asked) without a word: a silence is no turn to
+            # the server, so nothing came back (29 Oct). Ask for them.
+            _log.info("a picture with no words - asking about it for them")
+            await conv.ask_text(QUIET_ASK)
         await self._watch_answer()
 
     def _open_mic(self) -> None:

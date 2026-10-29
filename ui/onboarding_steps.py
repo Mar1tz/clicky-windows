@@ -597,7 +597,10 @@ class TrailOverlay(QWidget):
         if screen is not None:
             self.setGeometry(screen.geometry())
         self.points = []
+        self.update()
         self.show()
+        from ui.onboarding_shape import keep_out_of_pictures
+        keep_out_of_pictures(self)              # it is drawn on her picture already
 
     def add(self, global_pos: QPointF) -> None:
         if not self.points or (global_pos - self.points[-1]).manhattanLength() >= 2:
@@ -626,15 +629,17 @@ class TrailOverlay(QWidget):
 
 
 class _AsksAboutScreen(_HeldKeys):
-    """Hold the keys and ask about your screen: the panel steps aside, she
-    is handed the screen as the question ends (with what they circled, when
-    TRAIL), and it comes back once she has answered. Proven by her answer -
+    """Hold the keys and ask about your screen: she is handed the screen as
+    the question ends - with what they circled, when TRAIL. The panel stays
+    where it is (keep_out_of_pictures leaves it out of her picture), and the
+    line they drew stays until she has answered. Saying nothing is fine:
+    she is asked about what they marked (QUIET_ASK). Proven by her answer -
     or, with no voice, by trying."""
 
     HOLD_S = 0.4
     TRAIL = False
     NOTE = "[The user is asking about their screen; this picture is their screen right now.]"
-    BACK_AFTER_S = 25       # back even if no answer comes
+    LINE_STAYS_S = 25       # the line goes after her answer, or after this
 
     def __init__(self):
         super().__init__()
@@ -667,9 +672,9 @@ class _AsksAboutScreen(_HeldKeys):
         if self.trail is not None:
             self.trail.hide()
 
-    def _aside(self, on: bool) -> None:
-        if self.panel is not None:
-            self.panel.step_aside(on)
+    def _clear_line(self) -> None:
+        if self.trail is not None:
+            self.trail.hide()
 
     def _track(self) -> None:
         from PyQt6.QtGui import QCursor
@@ -686,7 +691,6 @@ class _AsksAboutScreen(_HeldKeys):
         if down:
             self._down_at = now
             self.reply.setText("")
-            self._aside(True)
             if self.TRAIL:
                 self.trail = self.trail or TrailOverlay()
                 self.trail.begin()
@@ -700,17 +704,15 @@ class _AsksAboutScreen(_HeldKeys):
         long_enough = held >= self.HOLD_S and (not self.TRAIL or self.drew())
         look = (screen_picture(self.trail.points if self.TRAIL and self.trail else ()), self.NOTE) \
             if long_enough else None
-        if self.trail is not None:
-            self.trail.hide()
         if self._voice is not None:
             self._voice.hold(False, look=look)
         if not long_enough:
-            self._aside(False)
+            self._clear_line()
             self.status.setText(self.TOO_SHORT)
             return
         self._asked = True
         self.status.setText("Thinking…")
-        QTimer.singleShot(self.BACK_AFTER_S * 1000, lambda: self._aside(False))
+        QTimer.singleShot(self.LINE_STAYS_S * 1000, self._clear_line)
 
     TOO_SHORT = "Hold them a little longer while you ask."
 
@@ -722,10 +724,10 @@ class _AsksAboutScreen(_HeldKeys):
         elif kind == "tora_end" and self._asked:
             self.reply.setText(" ".join(str(value).split()))
             self.status.setText("That's me, on your screen.")
-            self._aside(False)
+            QTimer.singleShot(1500, self._clear_line)
             self.done()
         elif kind == "state" and value == "offline":
-            self._aside(False)
+            self._clear_line()
             self.status.setText("I can't reach my voice right now - try it any time after the tour.")
             self.done()
 
@@ -895,12 +897,21 @@ class ListWindow(QFrame):
     def items(self) -> list[tuple[str, bool]]:
         return [(t.text(), t.isChecked()) for t in self.ticks]
 
+    def clear(self) -> None:
+        for tick in self.ticks:
+            self.rows.removeWidget(tick)
+            tick.deleteLater()
+        self.ticks = []
+        self.box.clear()
+
 
 class DriveStep(_HeldKeys):
     """Ask her to make a list and she takes the mouse: it glides to "Your
     list", the items are typed in and two are ticked off. Her voice chooses
     the items (make_list); the moving and typing happen here. Esc, or
-    moving the mouse, gives it back at once."""
+    moving the mouse, gives it back at once - and asking again starts a
+    fresh list. If she answers an ask without making one (29 Oct: the second
+    time she only talked), it drives anyway: an ask never does nothing."""
 
     TITLE = "I can drive your computer too"
     LINES = ("Ask me to do it and I'll take the mouse while you watch. Move it any time "
@@ -938,7 +949,8 @@ class DriveStep(_HeldKeys):
         self._clock = QTimer(self)
         self._clock.setInterval(16)
         self._clock.timeout.connect(self.tick)
-        self._asked_by_click = False
+        self._waiting = False                # asked, and no list from her yet
+        self._last: list[str] = []
 
     def enter(self) -> None:
         super().enter()
@@ -955,13 +967,16 @@ class DriveStep(_HeldKeys):
     def hold(self, down: bool, now: Optional[float] = None) -> None:
         for cap in self.keys:
             cap.set_lit(down)
-        if self._voice is not None and not self.driving:
+        if self.driving:
+            return                            # the keys don't talk over her driving
+        if self._voice is not None:
             self._voice.hold(down)
         if not down:
+            self._waiting = True
             self.status.setText("Thinking…")
 
     def _ask_by_click(self) -> None:
-        self._asked_by_click = True
+        self._waiting = True
         self.status.setText("Thinking…")
         if self._voice is not None:
             self._voice.type(self.ASK)
@@ -972,16 +987,26 @@ class DriveStep(_HeldKeys):
         if self.panel is None or self.panel.step() is not self:
             return
         if kind == "list":
-            self.drive(list(value))
-        elif kind == "state" and value == "offline" and not self.driving and not self.ready:
-            self.drive(self.PLAIN)
+            self._waiting = False
+            self._last = list(value)
+            self.drive(self._last)
+        elif kind == "tora_end" and self._waiting and not self.driving:
+            # Her answer came and no list with it: drive anyway, after her words.
+            self._waiting = False
+            QTimer.singleShot(self.AFTER_WORDS_MS, lambda: self.drive(self._last or self.PLAIN))
+        elif kind == "state" and value == "offline" and self._waiting and not self.driving:
+            self._waiting = False
+            self.drive(self._last or self.PLAIN)
+
+    AFTER_WORDS_MS = 600
 
     # ── driving ──────────────────────────────────────────────────────────────
     def drive(self, items: Sequence[str]) -> None:
         """Plan the moves - to the box, each item typed and added, two ticked
         - and start."""
-        if self.driving:
-            return
+        if self.driving or (self.panel is not None and self.panel.step() is not self):
+            return                                # under way, or they have moved on
+        self.list.clear()                         # each ask is a fresh list
         plan: list[tuple] = []
         for item in list(items)[:5]:
             plan += [("glide", "box"), ("type", item), ("add",)]
@@ -1023,7 +1048,7 @@ class DriveStep(_HeldKeys):
         if not self.driving:
             return
         if self._theirs():
-            self.take_back("It's yours again - that's how quickly you can take over.")
+            self.take_back("It's yours again - that's how quickly you can take over. Ask me again any time.")
             return
         if not self._plan:
             self.take_back("Done. That's what taking the mouse looks like.")

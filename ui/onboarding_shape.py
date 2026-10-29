@@ -58,6 +58,21 @@ def free_voice(on: bool) -> None:
         pass
 
 
+def keep_out_of_pictures(window: QWidget) -> bool:
+    """On screen, but not in a screenshot: the tour stays where it is while
+    they ask about their screen (29 Oct: hiding it was in the way), and the
+    picture she is handed is theirs alone. Windows 10 2004 and later
+    (WDA_EXCLUDEFROMCAPTURE); elsewhere nothing changes."""
+    import sys
+    if sys.platform != "win32":
+        return False
+    try:
+        import ctypes
+        return bool(ctypes.windll.user32.SetWindowDisplayAffinity(int(window.winId()), 0x11))
+    except Exception:  # noqa: BLE001
+        return False
+
+
 class Step(QWidget):
     """One step. Subclasses fill `body` and call `done()` when it is proven
     (Continue lights up); `enter()` / `leave()` start and stop what is live."""
@@ -292,15 +307,6 @@ class OnboardingPanel(QWidget):
         self._shrink()
         self.completed.emit()
 
-    def step_aside(self, on: bool) -> None:
-        """Out of the way while she looks at their screen - the screen she
-        reads is theirs, not the tour - and back when she has answered."""
-        if on:
-            self.hide()
-        else:
-            self.show()
-            self.raise_()
-
     def attach(self, live) -> None:
         """The running app (the wizard's interface): steps that need it look
         for it here."""
@@ -334,6 +340,7 @@ class OnboardingPanel(QWidget):
         self.body.setGeometry(self._local(self._b).toRect())
         self._step_to(0.0)
         self.show()
+        keep_out_of_pictures(self)
         self.raise_()
         self.activateWindow()
         self._show_step(0)

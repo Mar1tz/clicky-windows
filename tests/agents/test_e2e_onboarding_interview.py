@@ -135,8 +135,12 @@ def test_the_screen_goes_to_her_before_the_question_ends(monkeypatch):
 
         async def end_user_audio(self, stop=None):
             sent.append(("end",))
+
+        async def ask_text(self, text):
+            sent.append(("ask", text))
     iv = Interview(lambda *_a: None)
     iv._conv = Conv()
+    iv._heard("what is this?")
     asyncio.run(iv._release(("JPEG", "[look]")))
     assert sent == [("context", "[look]"), ("image", "JPEG"), ("end",)]
     sent.clear()
@@ -214,3 +218,31 @@ def test_holding_the_keys_reopens_a_closed_voice():
     iv._open_mic = lambda: None
     iv.hold(True)
     assert ran == ["_ensure"]
+
+
+def test_a_circle_with_no_words_is_still_answered(monkeypatch):
+    import ui.onboarding_interview as I
+    monkeypatch.setattr(I, "ANSWER_WAIT_S", 0)
+    sent = []
+
+    class Conv:
+        ready = True
+        speaking = False
+
+        def barge_in(self): pass
+        async def send_context(self, text): pass
+        async def send_image(self, jpeg): pass
+
+        async def end_user_audio(self, stop=None):
+            sent.append("end")
+
+        async def ask_text(self, text):
+            sent.append(text)
+    iv, _events = _engine()
+    iv._conv = Conv()
+    iv._open_mic = lambda: None
+    iv._run = lambda coro: coro.close()
+    iv.hold(True)                                  # held, circled, said nothing
+    iv._held = False
+    asyncio.run(iv._release(("JPEG", "[circled]")))
+    assert sent == ["end", I.QUIET_ASK], "29 Oct: a silent circle got nothing back"

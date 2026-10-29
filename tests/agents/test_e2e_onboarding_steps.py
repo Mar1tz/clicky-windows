@@ -307,25 +307,37 @@ def test_the_help_question_comes_from_the_interview(panel):
     assert St.HelpStep.suggest([]) == "What am I looking at here?"
 
 
-def test_asking_about_the_screen_steps_aside_and_hands_her_the_screen(panel):
+def test_asking_about_the_screen_keeps_the_panel_and_hands_her_the_screen(panel):
     import ui.onboarding_steps as St
     help_ = _to_step(panel, St.HelpStep)
-    asides = []
-    panel.step_aside = asides.append
+    panel.show()
     help_.hold(True, 10.0)
-    assert asides == [True], "out of the way: the screen she reads is theirs"
+    assert panel.isVisible(), "it stays put (29 Oct) - left out of her picture instead"
     help_.hold(False, 12.0)
     assert panel.voice.calls[-1] == ("hold", False, ("jpeg:0", St.HelpStep.NOTE))
     assert not panel.go.isEnabled(), "proven by her answer"
     panel.voice.say("tora_end", "That's VS Code - the red line means a typo.")
-    assert asides == [True, False] and panel.go.isEnabled()
-    assert "VS Code" in help_.reply.text()
+    assert panel.go.isEnabled() and "VS Code" in help_.reply.text()
+
+
+def test_the_circle_stays_until_she_answers(panel):
+    from PyQt6.QtCore import QPointF
+    import ui.onboarding_steps as St
+    circle = _to_step(panel, St.CircleStep)
+    circle.hold(True, 10.0)
+    circle._follow.stop()
+    for x, y in ((100, 100), (180, 100), (180, 160), (100, 160)):
+        circle.trail.add(QPointF(x, y))
+    circle.hold(False, 12.0)
+    assert circle.trail.isVisible(), "the line they drew doesn't vanish as they let go"
+    panel.voice.say("tora_end", "That's your revenue for the quarter.")
+    circle._clear_line()
+    assert not circle.trail.isVisible()
 
 
 def test_a_brush_of_the_keys_sends_no_picture(panel):
     import ui.onboarding_steps as St
     help_ = _to_step(panel, St.HelpStep)
-    panel.step_aside = lambda on: None
     help_.hold(True, 10.0)
     help_.hold(False, 10.1)
     assert panel.voice.calls[-1] == ("hold", False) and "longer" in help_.status.text()
@@ -335,7 +347,6 @@ def test_circling_draws_a_line_and_she_gets_it_on_the_picture(panel):
     from PyQt6.QtCore import QPointF
     import ui.onboarding_steps as St
     circle = _to_step(panel, St.CircleStep)
-    panel.step_aside = lambda on: None
     assert circle.demo._timer.isActive(), "her demo loops while the step is up"
     circle.hold(True, 10.0)
     circle._follow.stop()                          # the test draws, not the real mouse
@@ -348,7 +359,6 @@ def test_circling_draws_a_line_and_she_gets_it_on_the_picture(panel):
 def test_no_circle_is_not_the_step_done(panel):
     import ui.onboarding_steps as St
     circle = _to_step(panel, St.CircleStep)
-    panel.step_aside = lambda on: None
     circle.hold(True, 10.0)
     circle._follow.stop()
     circle.hold(False, 12.0)
@@ -437,3 +447,31 @@ def test_asking_her_to_skip_keeps_what_she_learned(panel, qapp, monkeypatch):
     assert saved == [got] and panel.go.isEnabled()
     panel.voice.say("skip", got)
     assert saved == [got], "once"
+
+
+def test_asking_again_after_taking_it_back_drives_again(panel, qapp, monkeypatch):
+    import ui.onboarding_steps as St
+    drive = _to_step(panel, St.DriveStep)
+    drive.AFTER_WORDS_MS = 0
+    panel.voice.say("list", ["One", "Two", "Three"])
+    monkeypatch.setattr(drive, "_theirs", lambda: True)
+    drive.tick()                                    # they moved the mouse
+    assert not drive.driving and "Ask me again" in drive.status.text()
+    monkeypatch.setattr(drive, "_theirs", lambda: False)
+    drive.hold(True)
+    drive.hold(False)                               # "do it again"
+    panel.voice.say("tora_end", "Sure, here we go!")   # ... and she only talked
+    _run_timers(qapp, 100)
+    _drive_all(drive)
+    assert [t for t, _ in drive.list.items()] == ["One", "Two", "Three"], "a fresh list, not six"
+
+
+def test_her_list_wins_over_driving_anyway(panel, qapp):
+    import ui.onboarding_steps as St
+    drive = _to_step(panel, St.DriveStep)
+    drive.instead.click()
+    panel.voice.say("list", ["Pay rent"])
+    panel.voice.say("tora_end", "Watch - I'll take the mouse.")
+    _run_timers(qapp, 50)
+    _drive_all(drive)
+    assert drive.list.items() == [("Pay rent", True)]
