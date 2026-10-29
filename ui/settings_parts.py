@@ -19,7 +19,7 @@ from __future__ import annotations
 from typing import Callable, Optional
 
 from PyQt6.QtCore import QRect, QRectF, Qt, QTimer, pyqtSignal
-from PyQt6.QtGui import QColor, QKeySequence, QPainter
+from PyQt6.QtGui import QColor, QFont, QKeySequence, QPainter
 from PyQt6.QtWidgets import QFrame, QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget
 
 from ui import app_theme as T
@@ -31,17 +31,25 @@ from ui.app_widgets import Switch, button, icon, label
 
 class SettingRow(QFrame):
     """A title, at most one short line under it, and the control. With a
-    switch, `.switch` is it (and clicking the words flips it too)."""
+    switch, `.switch` is it (and clicking the words flips it too). With
+    `on_click` the whole row opens something, a chevron at its end.
+
+    Compact, as HeyClicky's rows are (29 Oct 2026, heyclicky2.0.mp4): a
+    13 px title, a faint 12 px line, 12 px top and bottom."""
+
+    PAD = (16, 11, 14, 11)
 
     def __init__(self, title: str, desc: str = "", control: Optional[QWidget] = None,
-                 *, first: bool = False):
+                 *, first: bool = False, on_click: Optional[Callable[[], None]] = None,
+                 chevron: bool = True):
         super().__init__()
         self.setObjectName("setRowFirst" if first else "setRow")
+        self._on_click = on_click
         lay = QHBoxLayout(self)
-        lay.setContentsMargins(20, 16, 20, 16)
-        lay.setSpacing(16)
+        lay.setContentsMargins(*self.PAD)
+        lay.setSpacing(14)
         text = QVBoxLayout()
-        text.setSpacing(3)
+        text.setSpacing(2)
         self.title = label(title, "setTitle", wrap=True)
         text.addWidget(self.title)
         self.desc = None
@@ -52,10 +60,18 @@ class SettingRow(QFrame):
         self.switch: Optional[Switch] = control if isinstance(control, Switch) else None
         if control is not None:
             lay.addWidget(control, 0, Qt.AlignmentFlag.AlignVCenter)
+        if on_click is not None:
+            self.setCursor(Qt.CursorShape.PointingHandCursor)
+        if on_click is not None and chevron:
+            more = QLabel()
+            more.setPixmap(icon("chevron-right", T.TEXT_FAINT, 14))
+            lay.addWidget(more, 0, Qt.AlignmentFlag.AlignVCenter)
 
     def mouseReleaseEvent(self, e) -> None:
-        if (self.switch is not None and e.button() == Qt.MouseButton.LeftButton
-                and self.rect().contains(e.position().toPoint())):
+        inside = e.button() == Qt.MouseButton.LeftButton and self.rect().contains(e.position().toPoint())
+        if inside and self._on_click is not None:
+            self._on_click()
+        elif inside and self.switch is not None:
             self.switch.setChecked(not self.switch.isChecked())
         super().mouseReleaseEvent(e)
 
@@ -69,12 +85,20 @@ class Group(QWidget):
         super().__init__()
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
-        outer.setSpacing(10)
+        outer.setSpacing(6)
         if name or trailing is not None:
             head = QHBoxLayout()
-            head.setContentsMargins(2, 0, 0, 0)
+            head.setContentsMargins(4, 0, 0, 0)
             if name:
-                head.addWidget(label(name, "setGroup"), 0, Qt.AlignmentFlag.AlignBottom)
+                # A small capitals label over the block, as HeyClicky's "VOICE"
+                # - not a bold heading: the page has one title, at the top.
+                # Drawn in capitals, kept as written: what reads it (a screen
+                # reader, a test) gets the words, not shouting.
+                cap = label(name, "setGroup")
+                f = cap.font()
+                f.setCapitalization(QFont.Capitalization.AllUppercase)
+                cap.setFont(f)
+                head.addWidget(cap, 0, Qt.AlignmentFlag.AlignBottom)
             head.addStretch(1)
             if trailing is not None:
                 head.addWidget(trailing)
@@ -92,12 +116,26 @@ class Group(QWidget):
         self._rows.addWidget(r)
         return r
 
+    def link(self, title: str, desc: str, opened: Callable[[], None]) -> SettingRow:
+        """A row that opens something else (a page, a site): a chevron."""
+        r = SettingRow(title, desc, first=self._rows.count() == 0, on_click=opened)
+        self._rows.addWidget(r)
+        return r
+
+    def choice(self, title: str, desc: str, picked: Callable[[], None], mark: QWidget) -> SettingRow:
+        """One of a list to pick from (a microphone): its mark first, the
+        whole row clickable, no chevron - it is chosen here, not opened."""
+        r = SettingRow(title, desc, first=self._rows.count() == 0, on_click=picked, chevron=False)
+        r.layout().insertWidget(0, mark, 0, Qt.AlignmentFlag.AlignVCenter)
+        self._rows.addWidget(r)
+        return r
+
     def toggle(self, title: str, desc: str, on: bool, changed: Callable[[bool], None]) -> SettingRow:
         sw = Switch(on)
         sw.toggled.connect(changed)
         return self.row(title, desc, sw)
 
-    def add(self, widget: QWidget, margins: tuple = (20, 16, 20, 16)) -> QWidget:
+    def add(self, widget: QWidget, margins: tuple = (16, 12, 16, 12)) -> QWidget:
         """Something that is not a row (an embedded editor), in the block."""
         holder = QWidget()
         holder.setObjectName("setRowFirst" if self._rows.count() == 0 else "setRow")

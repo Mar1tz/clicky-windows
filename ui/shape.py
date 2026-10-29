@@ -41,12 +41,12 @@ from typing import Callable, Optional
 
 from PyQt6.QtCore import QEasingCurve, QPoint, QPointF, QRectF, QSize, Qt, QTimer, QVariantAnimation
 from PyQt6.QtGui import QColor, QGuiApplication, QPainter, QPainterPath, QPen, QPixmap, QRegion
-from PyQt6.QtWidgets import (QApplication, QButtonGroup, QFrame, QGraphicsOpacityEffect, QHBoxLayout,
+from PyQt6.QtWidgets import (QAbstractButton, QApplication, QButtonGroup, QFrame, QGraphicsOpacityEffect, QHBoxLayout,
                              QStackedWidget, QVBoxLayout, QWidget)
 
 from ui import app_theme as T
 from ui import kit, tokens
-from ui.app_shell import IconButton, NavItem
+from ui.app_shell import IconButton
 from ui.app_widgets import Meter, button, label
 from ui.flow_bar import place_card
 
@@ -88,16 +88,14 @@ TABS = (
 )
 
 # The settings sidebar (DESIGN.md §4): (group, ((key, name, icon), ...)).
-# Step 5a: HeyClicky's pages, one thing each (ui/shape_settings.py), made
-# from what the app already has. A key of shape_settings.PAGES is one of
-# those; any other is an app window settings tab; "invite" is the referral
-# panel. Not yet: Dictation (step 5b).
+# Thirteen rows, as light as HeyClicky's eleven (heyclicky2.0.mp4: "ours is
+# very, very full ... it feels very squashed"). A key of shape_settings.PAGES
+# is one of its pages; any other is an app window settings tab; "invite" is
+# the referral panel.
 SETTINGS = (
     ("", (
         ("account", "Account", "circle-user-round"),
-        ("plans", "Plans", "credit-card"),
         ("system", "General", "monitor"),
-        ("privacy", "Privacy", "shield-check"),
         ("invite", "Invite & Earn", "gift"),
     )),
     ("TORA", (
@@ -113,10 +111,40 @@ SETTINGS = (
         ("agents", "Agents", "bot"),
         ("routines", "Routines", "clock"),
         ("skills", "Skills", "blocks"),
-        ("devlink", "Code editors", "code"),
-        ("advanced", "Advanced", "wrench"),
     )),
 )
+
+# Pages one step in, with no row of their own: (name, the row lit while on
+# them). Plans opens from Upgrade and Account's Change plan; Privacy and
+# Advanced from rows at the foot of General; Code editors from Integrations.
+INNER = {
+    "plans": ("Plans", "account"),
+    "privacy": ("Privacy", "system"),
+    "advanced": ("Advanced", "system"),
+    "devlink": ("Code editors", "integrations"),
+}
+
+# The grey line under each page's title, HeyClicky's way ("Your plan,
+# usage, and account."): what the page is for, in a few words.
+LEDES = {
+    "account": "Your plan, this month's use, and your account.",
+    "system": "How HeyTora behaves on your PC.",
+    "invite": "Give a friend Pro for 14 days; get a free month.",
+    "voice": "The voice Tora answers in, and how she answers.",
+    "microphone": "Which microphone Tora listens through.",
+    "shortcuts": "The keys that summon Tora.",
+    "cursor": "The Tora cursor that lives on your screen.",
+    "style": "How she teaches, and what she always keeps in mind.",
+    "memory": "What Tora remembers about you, and where it came from.",
+    "integrations": "Apps her jobs can reach into.",
+    "agents": "Where agents work, and how much rope they get.",
+    "routines": "Things Tora does on repeat, on this PC.",
+    "skills": "How you like jobs done - and showing her how you work.",
+    "plans": "Free, Pro and Max - and your billing.",
+    "privacy": "What Tora looks at, and what she keeps.",
+    "advanced": "Your own keys, the models in use, diagnostics.",
+    "devlink": "Your code editors, read as data instead of screenshots.",
+}
 
 
 # The app window's settings tabs that step 5a split or folded in, for what
@@ -180,6 +208,49 @@ class _Tab(IconButton):
             p.drawRoundedRect(QRectF(self.rect()), tokens.RADIUS_SM, tokens.RADIUS_SM)
             p.end()
         super().paintEvent(event)
+
+
+class _NavRow(QAbstractButton):
+    """A settings sidebar row, light as HeyClicky's: a small grey icon, 13 px
+    words, a soft plate while chosen - not the app window's big rows."""
+
+    H = 30
+    ICON = 15
+
+    def __init__(self, icon_name: str, text: str):
+        super().__init__()
+        self._icon, self._text = icon_name, text
+        self.setCheckable(True)
+        self.setFixedHeight(self.H)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setAccessibleName(text)
+        self._hover = False
+
+    def enterEvent(self, e) -> None:
+        self._hover = True
+        self.update()
+
+    def leaveEvent(self, e) -> None:
+        self._hover = False
+        self.update()
+
+    def paintEvent(self, _e) -> None:
+        from ui.app_widgets import icon
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        r = QRectF(self.rect())
+        if self.isChecked() or self._hover:
+            p.setPen(Qt.PenStyle.NoPen)
+            p.setBrush(QColor(T.NAV_PLATE if self.isChecked() else T.NAV_HOVER))
+            p.drawRoundedRect(r, tokens.RADIUS_SM, tokens.RADIUS_SM)
+        ink = T.TEXT if self.isChecked() else T.TEXT_DIM
+        y = (self.height() - self.ICON) // 2
+        p.drawPixmap(10, y, icon(self._icon, ink, self.ICON, self.devicePixelRatioF()))
+        p.setPen(QColor(ink))
+        p.setFont(kit.font(13, 600 if self.isChecked() else 500))
+        p.drawText(r.adjusted(10 + self.ICON + 10, 0, -6, 0),
+                   Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft, self._text)
+        p.end()
 
 
 class _JobCard(QFrame):
@@ -326,18 +397,18 @@ class Shape(QWidget):
         nav.setFixedWidth(NAV_W)
         col = QVBoxLayout(nav)
         col.setContentsMargins(10, 4, 10, 14)
-        col.setSpacing(2)
-        self._rows: dict[str, NavItem] = {}
+        col.setSpacing(1)
+        self._rows: dict[str, _NavRow] = {}
         group = QButtonGroup(self)
         group.setExclusive(True)
         for heading, rows in SETTINGS:
             if heading:
-                col.addSpacing(10)
+                col.addSpacing(12)
                 head = label(heading, "sectionTitle")
-                head.setContentsMargins(12, 0, 0, 4)
+                head.setContentsMargins(10, 0, 0, 4)
                 col.addWidget(head)
             for key, name, icon_name in rows:
-                row = NavItem(icon_name, name, lambda: 1.0)     # painted text: a lone & is fine
+                row = _NavRow(icon_name, name)
                 row.clicked.connect(lambda _c=False, k=key: self.select(k))
                 group.addButton(row)
                 col.addWidget(row)
@@ -359,15 +430,26 @@ class Shape(QWidget):
         """A settings page, built the first time it is asked for."""
         kinds = _settings_kinds()
         key = MOVED.get(key, key)
-        if key not in kinds or key not in self._rows:
+        if key not in kinds or (key not in self._rows and key not in INNER):
             key = "account"
         page = self._tabs_built.get(key)
         if page is None:
-            # Titled as its row is named here ("Shortcut & mic", not the
-            # app window's "General"), so the two never disagree.
-            name = next(n for _h, rows in SETTINGS for k, n, _i in rows if k == key)
+            # Titled as its row is named here (not the app window's tab
+            # names), so the two never disagree; its line under the title.
+            name = INNER[key][0] if key in INNER else next(
+                n for _h, rows in SETTINGS for k, n, _i in rows if k == key)
             cls = kinds[key]
             page = type(cls.__name__, (cls,), {"HEADING": name})(self.bridge)
+            if hasattr(page, "body"):
+                # Title and its line close together, near the top, as
+                # HeyClicky's: the app window's pages open 34 px down.
+                head = page.body.top.itemAt(0).widget() if page.body.top.count() else None
+                if head is not None and head.layout() is not None:
+                    head.layout().setContentsMargins(0, 18, 0, 0)
+                if key in LEDES:
+                    lede = label(LEDES[key], "pageLede", wrap=True)
+                    lede.setContentsMargins(0, 0, 0, 6)
+                    page.body.top.addWidget(lede)
             page.navigate.connect(self._navigate)
             self._tabs_built[key] = page
             self.settings_stack.addWidget(page)
@@ -375,7 +457,7 @@ class Shape(QWidget):
         else:
             page.refresh()
         self.settings_stack.setCurrentWidget(page)
-        self._rows[key].setChecked(True)
+        self._rows[INNER[key][1] if key in INNER else key].setChecked(True)
 
     def current_setting(self) -> str:
         page = self.settings_stack.currentWidget()

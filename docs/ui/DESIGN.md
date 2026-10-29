@@ -111,32 +111,38 @@ opens the shape; the right-click menu is short (open, pause, quit).
 
 ## 4. Settings
 
-The gear grows the shape to the Settings size. A sidebar on the left in
-three groups, the version at its foot:
+The gear grows the shape to the Settings size. A light sidebar on the left
+(13 px words, 15 px grey icons, 30 px rows, a soft plate while chosen -
+`shape._NavRow`), thirteen rows in three groups, the version at its foot:
 
-| Group | Pages |
+| Group | Rows |
 |---|---|
 | (top) | Account, General, Invite & Earn |
-| **TORA** | Voice, Microphone, Dictation, Shortcuts, Cursor, Memory |
-| **WORK** | Integrations, Agents, Routines, Skills, Code editors |
+| **TORA** | Voice, Microphone, Shortcuts, Cursor, Style, Memory |
+| **WORK** | Integrations, Agents, Routines, Skills |
 
-Privacy is a section of General. Back (top left) or Escape returns to the
-open size.
+Four pages sit **one step in**, with no row (`shape.INNER`), the row they
+are under lit while they show: Plans (Upgrade, Account's Change plan),
+Privacy and Advanced (rows at the foot of General), Code editors (a row in
+Integrations). The owner, 29 Oct 2026, of sixteen rows: "very, very full
+... it feels very squashed".
 
-**Every settings page reads the same:**
+**Every settings page reads the same** (heyclicky2.0.mp4):
 
-- A **title** (`Page title`, §5) and **one grey line** under it saying
-  what the page is for.
-- Sections with a small **CAPS label** above a rounded `SURFACE` block.
-- In a block, **rows**: a title, at most one grey line under it, and the
-  control on the right (switch, button, chips, keycaps). Rows are split by
-  hairlines. Nothing in a block is another block.
-- Choices that are pictures are **tiles** (voices, cursor colours,
-  languages): the chosen one has an accent ring and a tick.
-- Longer notes go in one small grey line under the block.
-
-What each page holds is in HEYCLICKY_REFERENCE.md §4, mapped to the tabs it
-replaces (`ui/settings_tabs.py`).
+- A **title** (22 px) and **one grey line** under it (`shape.LEDES`).
+- Small **caps labels** over each block (drawn in capitals by the font;
+  the text stays as written).
+- **Blocks** of `SURFACE`, rounded; in a block, **rows**: a 13 px title, a
+  faint 12 px line, the control at the end. A row that opens something
+  has a chevron (`Group.link`); a row that is one of a list to pick from
+  has its round mark first and no chevron (`Group.choice`).
+- Choices that are pictures are **tiles** (`ui/shape_widgets.py`): her
+  cursor in each colour, glowing; each voice with its colour's waveform,
+  name and Google's word for how it sounds. The chosen one has an accent
+  ring and a tick.
+- **Keys** are keycaps at the row's end, beside Change.
+- **No row of long buttons:** a row each, with a short button (they need
+  more width than the shape has in a wider font).
 
 **Step 5a** (`ui/shape_settings.py`) split the app's tabs into these pages,
 each made of parts the app already had - borrowed, not copied:

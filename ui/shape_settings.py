@@ -5,9 +5,10 @@ and a Tora page holding the rest.
 
 Nothing here is new behaviour. Each page is made of the parts the app
 window already has - its settings tabs' groups and the Tora page's cards
-(the voice carousel, her colour, her sound, her modes, her instructions,
-teaching her) - borrowed, not copied, so the two windows stay the same
-until the app window goes (DESIGN.md §13).
+(her sound, her modes, her instructions, teaching her) - borrowed, not
+copied. Voice, Cursor, Microphone and Shortcuts are laid out as
+HeyClicky's are (heyclicky2.0.mp4): tiles, a list, keys at the row's end
+(ui/shape_widgets.py).
 
 Integrations and Routines (step 5b) show what was only reachable by voice
 before: the connections (integrations/) and the skills that run by
@@ -24,8 +25,6 @@ from ui.app_pages import ToraPage
 from ui.app_widgets import Select, Switch, button, label
 from ui.settings_tabs import AccountTab, GeneralTab, SystemTab, Tab, UsageTab, _ask
 
-
-CAROUSEL_W = 480
 
 
 class _Later:
@@ -64,7 +63,8 @@ class AccountPage(AccountTab):
 
 class GeneralPage(SystemTab):
     """How HeyTora behaves on the PC: starting with Windows, the floating
-    panel, how it looks, and keeping itself up to date."""
+    panel, how it looks, keeping itself up to date - and, one step in,
+    Privacy and Advanced (they have no sidebar rows of their own)."""
 
     HEADING = "General"
 
@@ -81,100 +81,244 @@ class GeneralPage(SystemTab):
             lambda k: br.set_theme(keys[k]) if 0 <= k < len(keys) else None)
         look.row("Theme", "", theme)
         self.body.add(look)
+        more = Group("More")
+        more.link("Privacy", "What Tora looks at, and what she keeps.",
+                  lambda: self.navigate.emit("settings/privacy"))
+        more.link("Advanced", "Your own keys, the models in use, diagnostics.",
+                  lambda: self.navigate.emit("settings/advanced"))
+        self.body.add(more)
 
 
 # ── TORA ──────────────────────────────────────────────────────────────────────
 
+def _grid(tiles: list, columns: int) -> QWidget:
+    from PyQt6.QtWidgets import QGridLayout
+    box = QWidget()
+    grid = QGridLayout(box)
+    grid.setContentsMargins(0, 0, 0, 0)
+    grid.setSpacing(8)
+    for i, tile in enumerate(tiles):
+        grid.addWidget(tile, i // columns, i % columns)
+    return box
+
+
+def _keys(names: list[str]) -> QWidget:
+    """Keycaps in a row, no stretch: they sit at a row's end."""
+    box = QWidget()
+    row = QHBoxLayout(box)
+    row.setContentsMargins(0, 0, 0, 0)
+    row.setSpacing(4)
+    for k in names:
+        row.addWidget(label(k, "keycapSmall"))
+    return box
+
+
 class VoicePage(_Later, Tab):
-    """Her voice (the carousel: hear each, stop on hers), the sound the
-    moment she listens, and how she answers."""
+    """Her voice as tiles (HeyClicky's way: tap one to hear it - it is hers
+    from the next answer), the sound the moment she listens, and how she
+    answers."""
 
     HEADING = "Voice"
-    VOICE_WAIT_MS = ToraPage.VOICE_WAIT_MS
-    _voice = ToraPage._voice
     _sound = ToraPage._sound
 
     def build(self) -> None:
+        from audio.tts.gemini_tts import VOICES
+        from ui import tokens
         from ui.settings_parts import Group
+        from ui.shape_widgets import VoiceTile
         br = self.bridge
-        self.body.add(self._voice())
-        # The first launch's 560 px is wider than a settings page here; the
-        # carousel draws from its own width, arrows and all.
-        self.carousel.setFixedWidth(CAROUSEL_W)
+        now = _ask(br, "voice", "") or ""
+        voices = list(VOICES) + ([now] if now and now not in VOICES else [])
+        self.tiles = []
+        for i, name in enumerate(voices):
+            tile = VoiceTile(name, tokens.VOICE_COLOURS[i % len(tokens.VOICE_COLOURS)])
+            tile.setChecked(name == now)
+            tile.clicked.connect(lambda _c=False, n=name: self._pick(n))
+            self.tiles.append(tile)
+        self.body.add(label("VOICE", "setGroup"))
+        self.body.add(_grid(self.tiles, 4))
+        self.body.add(label("Tap a voice to hear it. It is hers from the next answer.", "setNote"))
         self.body.add(self._sound())
         answers = Group("How she answers")
         routes = ("realtime", "cascade")
         route = Select("Live - answers in about a second",
-                       "Classic - transcribe, think, then speak", width=300)
+                       "Classic - transcribe, think, then speak", width=280)
         route.setCurrentIndex(routes.index(br.route()) if br.route() in routes else 0)
         route.currentIndexChanged.connect(
             lambda k: br.set_route(routes[k]) if 0 <= k < 2 else None)
         answers.row("Answers", "", route)
         self.body.add(answers)
 
+    def _pick(self, name: str) -> None:
+        from ui.onboarding_parts import play_voice
+        for tile in self.tiles:
+            tile.setChecked(tile.name == name)
+        play_voice(name)                         # the bundled hello: no talk message spent
+        _ask(self.bridge, "set_voice", None, name)
+
 
 class MicrophonePage(GeneralTab):
-    """Which microphone she listens through, and listening for her name."""
+    """Which microphone she listens through - every one listed, the chosen
+    one ticked - a test with live bars, and listening for her name."""
 
     HEADING = "Microphone"
+    TEST_S = 8.0
 
     def build(self) -> None:
         from ui.settings_parts import Group
+        from ui.shape_widgets import LevelBars, Radio
         br = self.bridge
-        mic = Group("Input")
-        change = button("Change")
-        change.clicked.connect(self._open_mic)
-        mic.row("Microphone", self._mic_words(), change)
-        mic.toggle("Always listening", "Say “Tora” to start - no shortcut needed.",
-                   br.switch("wake_word"), lambda on: br.set_switch("wake_word", on))
-        self.body.add(mic)
+        self._stop_test()
+        mics = _ask(br, "mics", []) or []
+        now = _ask(br, "mic_index", None)
+        chosen = now if any(i == now for i, _n, _d in mics) else next((i for i, _n, d in mics if d), None)
+        self._device = chosen
+        pick = Group("Input device")
+        if not mics:
+            pick.row("No microphone found", "Plug one in, then open this page again.")
+        for index, name, default in mics:
+            pick.choice(name, "System default" if default else "", lambda i=index: self._pick(i),
+                        Radio(index == chosen))
+        self.body.add(pick)
+        test = Group("Test")
+        self.bars = LevelBars()
+        go = button("Test microphone")
+        go.clicked.connect(self._test)
+        row = test.row("Test microphone", "Speak normally - the bars move as Tora hears you.",
+                       _row_controls(self.bars, go))
+        row.setObjectName("setRowFirst")
+        self.body.add(test)
+        listen = Group("Listening")
+        listen.toggle("Always listening", "Say “Tora” to start - no shortcut needed.",
+                      br.switch("wake_word"), lambda on: br.set_switch("wake_word", on))
+        self.body.add(listen)
+
+    def _pick(self, index: int) -> None:
+        _ask(self.bridge, "set_mic", None, index)
+        self._later(self.refresh)
+
+    def _test(self) -> None:
+        """Listen on the chosen microphone for TEST_S, the bars moving."""
+        import time
+        self._stop_test()
+        if self._device is None:
+            return
+        try:
+            import numpy as np
+            import sounddevice as sd
+            level = [0.0]
+
+            def hear(data, _frames, _time, _status):
+                level[0] = float(np.sqrt(np.mean(np.square(data.astype("float32")))))
+            self._stream = sd.InputStream(device=self._device, channels=1, samplerate=16000,
+                                          dtype="float32", callback=hear)
+            self._stream.start()
+        except Exception:  # noqa: BLE001 - still bars: the microphone could not be opened
+            self._stream = None
+            return
+        until = time.monotonic() + self.TEST_S
+        self._timer = QTimer(self)
+        self._timer.setInterval(60)
+
+        def tick() -> None:
+            if time.monotonic() > until or not self.isVisible():
+                self._stop_test()
+                return
+            self.bars.level += (min(1.0, level[0] * 9) - self.bars.level) * 0.5
+            self.bars.update()
+        self._timer.timeout.connect(tick)
+        self._timer.start()
+
+    def _stop_test(self) -> None:
+        timer, self._timer = getattr(self, "_timer", None), None
+        if timer is not None:
+            timer.stop()
+        stream, self._stream = getattr(self, "_stream", None), None
+        if stream is not None:
+            try:
+                stream.stop()
+                stream.close()
+            except Exception:  # noqa: BLE001
+                pass
+        bars = getattr(self, "bars", None)
+        if bars is not None:
+            try:
+                bars.level = 0.0
+                bars.update()
+            except RuntimeError:                 # the page was rebuilt meanwhile
+                pass
+
+    def hideEvent(self, e) -> None:
+        self._stop_test()
+        super().hideEvent(e)
 
 
 class ShortcutsPage(GeneralTab):
-    """The keys that summon her, as keycaps."""
+    """The keys that summon her: each row its keys as keycaps and Change at
+    the end, HeyClicky's way; Reset to defaults under them."""
 
     HEADING = "Shortcuts"
+    DEFAULT = "ctrl+win"
 
     def build(self) -> None:
-        from ui.settings_parts import Group, keycaps
+        from ui.settings_parts import Group
         br = self.bridge
         talk = Group("Talk to Tora")
         change = button("Change")
         change.clicked.connect(self._open_shortcut)
-        row = talk.row("Push to talk", "Hold to talk to her; let go to send. A quick tap: she "
-                                       "listens until you stop.", change)
-        keys = QHBoxLayout()
-        keys.setSpacing(6)
-        keys.addWidget(keycaps(_ask(br, "hotkey_keys", []) or [br.hotkey() or "Ctrl + Win"]))
-        keys.addStretch(1)
-        row.layout().itemAt(0).layout().addLayout(keys)
+        held = _ask(br, "hotkey_keys", []) or [br.hotkey() or "Ctrl + Win"]
+        talk.row("Push to talk", "Hold to talk; let go to send. A quick tap: she listens until you stop.",
+                 _row_controls(_keys(held), change))
         cursor = Group("Her cursor")
-        hide = cursor.row("Show or hide her cursor", "From anywhere, any time.")
-        hide_keys = QHBoxLayout()
-        hide_keys.addWidget(keycaps([k.strip().capitalize() for k in
-                                     str(_ask(br, "cursor_hotkey", "Win + Alt + H")).split("+")]))
-        hide_keys.addStretch(1)
-        hide.layout().itemAt(0).layout().addLayout(hide_keys)
+        cursor.row("Show or hide her cursor", "From anywhere, any time.",
+                   _keys([k.strip().capitalize() for k in
+                          str(_ask(br, "cursor_hotkey", "Win + Alt + H")).split("+")]))
         self.body.add(talk)
         self.body.add(cursor)
+        reset = Group()
+        undo = button("Reset", "ghost")
+        undo.clicked.connect(self._reset)
+        reset.row("Reset to defaults", "Push to talk goes back to Ctrl + Win.", undo)
+        self.body.add(reset)
+
+    def _reset(self) -> None:
+        _ask(self.bridge, "set_hotkey", None, self.DEFAULT)
+        self._later(self.refresh)
 
 
 class CursorPage(_Later, Tab):
-    """The cursor that lives on the screen with yours: its colour, whether it
-    shows, and how what she points at is drawn."""
+    """Her cursor's colour as tiles - her own cursor, glowing in each - and
+    whether it shows, and how what she points at is drawn."""
 
     HEADING = "Cursor"
     TOPICS = frozenset({"cursor"})
-    _colour = ToraPage._colour
 
     def build(self) -> None:
+        from ui import tokens
         from ui.settings_parts import Group
+        from ui.shape_widgets import CursorTile
         br = self.bridge
-        self.body.add(self._colour())
-        trail = Group("Pointing")
-        trail.toggle("Trail as a line", "Show what you point at with a smooth line instead of mist.",
-                     br.switch("trail_line"), lambda on: br.set_switch("trail_line", on))
-        self.body.add(trail)
+        now = _ask(br, "cursor_colour", "blue") or "blue"
+        self.tiles = []
+        for key, name, hex_colour in tokens.CURSOR_COLOURS:
+            tile = CursorTile(key, name, hex_colour)
+            tile.setChecked(key == now)
+            tile.clicked.connect(lambda _c=False, k=key: self._pick(k))
+            self.tiles.append(tile)
+        self.body.add(label("COLOUR", "setGroup"))
+        self.body.add(_grid(self.tiles, len(self.tiles)))
+        seen = Group("Visibility")
+        keys = _ask(br, "cursor_hotkey", "Win + Alt + H")
+        seen.toggle("Show her cursor", f"Off: only her bar shows. {keys} switches it any time.",
+                    bool(_ask(br, "cursor_shown", True)), lambda on: _ask(br, "set_cursor_shown", None, on))
+        seen.toggle("Trail as a line", "Show what you point at with a smooth line instead of mist.",
+                    br.switch("trail_line"), lambda on: br.set_switch("trail_line", on))
+        self.body.add(seen)
+
+    def _pick(self, key: str) -> None:
+        for tile in self.tiles:
+            tile.setChecked(tile.key == key)
+        _ask(self.bridge, "set_cursor_colour", None, key)
 
 
 class StylePage(_Later, Tab):
@@ -273,9 +417,13 @@ class IntegrationsPage(Tab):
         custom.clicked.connect(lambda: self._connect({"id": "custom", "name": "Your server"}, pasted=True))
         add.row("Custom connector", "Any service with an MCP server: copy its https:// address, then "
                                     "press Add.", custom)
+        editors = Group("Code editors")
+        editors.link("VS Code and its forks", "Read as data - your file, errors, terminal - instead of "
+                                              "screenshots.", lambda: self.navigate.emit("settings/devlink"))
         if not data.get("running"):
             add.note("Tora's jobs aren't running, so only Google can be connected right now.")
         self.body.add(add)
+        self.body.add(editors)
         self.note = label(self._said, "setNote", wrap=True)
         self.note.setVisible(bool(self._said))
         self.body.add(self.note)

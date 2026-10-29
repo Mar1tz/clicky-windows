@@ -475,6 +475,21 @@ MODEL_ROLES = (("realtime", "Conversation", "Hears you and answers, live"),
                ("embed", "Memory", "Finding what she remembers"))
 
 
+MODEL_W = 210        # a model's name at a row's end: longer ones end in "…"
+
+
+def _elided(text: str, width: int) -> QWidget:
+    """A name that cannot wrap (gemini-3.1-flash-tts-preview has no spaces),
+    shortened with "…" to `width` and whole on hover. Unshortened, a long
+    one - or the wider fallback font - pushed the page past the shape."""
+    from PyQt6.QtGui import QFontMetrics
+    lab = label(text, "setDesc")
+    lab.setToolTip(text)
+    lab.setMaximumWidth(width)
+    lab.setText(QFontMetrics(lab.font()).elidedText(text, Qt.TextElideMode.ElideMiddle, width))
+    return lab
+
+
 class AdvancedTab(Tab):
     HEADING = "Advanced"
     TOPICS = frozenset({"state", "account", "agents"})
@@ -511,7 +526,7 @@ class AdvancedTab(Tab):
         roles = br.models()
         for role, job, why in MODEL_ROLES:
             if role in roles:
-                models.row(job, why, label(roles[role], "setDesc"))
+                models.row(job, why, _elided(roles[role], MODEL_W))
         models.note("Set in .env; the list refreshes itself weekly.")
         self.body.add(models)
 
@@ -521,21 +536,20 @@ class AdvancedTab(Tab):
         checks.note("What is working right now. Nothing here goes online.")
         self.body.add(checks)
 
-        foot = QHBoxLayout()
-        foot.setSpacing(10)
-        wizard = button("Run the setup wizard again")
+        # A row each, short buttons at their ends (HeyClicky's Support): three
+        # long buttons side by side needed 605 px of the shape's 624, and
+        # more than it has in a wider font.
+        help_ = Group("Help")
+        wizard = button("Run again")
         wizard.clicked.connect(br.run_setup)
-        foot.addWidget(wizard)
-        report = button("Save diagnostics report", "primary")
+        help_.row("Setup", "The first launch's steps: sign-in, microphone, shortcut, her voice.", wizard)
+        report = button("Save")
         report.clicked.connect(br.save_report)
-        foot.addWidget(report)
-        foot.addStretch(1)
-        quit_ = button("Quit HeyTora", "danger")
+        help_.row("Diagnostics report", "What is working and what isn't, in a file to send us.", report)
+        quit_ = button("Quit", "danger")
         quit_.clicked.connect(br.quit)
-        foot.addWidget(quit_)
-        wrap = QWidget()
-        wrap.setLayout(foot)
-        self.body.add(wrap)
+        help_.row("Quit HeyTora", "Closes it until you open it again.", quit_)
+        self.body.add(help_)
 
 
 # ── Account ───────────────────────────────────────────────────────────────────
@@ -604,7 +618,7 @@ class AccountTab(Tab):
         else:
             own = button("Use my own key")
             own.clicked.connect(lambda: (br.set_access_mode("own_key"), br.run_setup()))
-            access.row("Your HeyTora plan", "Answers count towards your plan (see Usage).", own)
+            access.row("Your HeyTora plan", "Answers count towards your plan.", own)
         self.body.add(access)
 
         foot = QHBoxLayout()
@@ -817,17 +831,13 @@ class PlansTab(Tab):
         self._st, self._summary, self._mine = st, summary, mine
         self._busy: Optional[_Background] = None
 
-        box = QFrame()
-        box.setObjectName("plansBox")
+        # Three cards side by side with room between them, yours outlined in
+        # the accent (HeyClicky's plan card, docs/ui/HEYCLICKY_REFERENCE.md §3).
+        box = QWidget()
         row = QHBoxLayout(box)
         row.setContentsMargins(0, 0, 0, 0)
-        row.setSpacing(0)
-        for i, plan in enumerate(PLANS):
-            if i:
-                line = QFrame()
-                line.setObjectName("vr")
-                line.setFixedWidth(1)
-                row.addWidget(line)
+        row.setSpacing(10)
+        for plan in PLANS:
             # A plan cancelled but not yet ended is offered again: Resume keeps it.
             yours = plan["key"] == mine and not own_key
             ending = yours and bool(summary.get("plan_cancel_at"))
@@ -871,8 +881,9 @@ class PlansTab(Tab):
                     buy = button(f"{int(pack['credits']):,} credits - {pack['label']}")
                     buy.clicked.connect(lambda _=False, b=buy, p=pack: self._buy_credits(b, p))
                     packs_row.addWidget(buy)
-                billing.row("Credits", (credits_words(summary) or "") +
-                            ". Added credits never expire and are used after the month's.",
+                words = credits_words(summary) or ""
+                billing.row("Credits", (words + ". " if words else "") +
+                            "Added credits never expire and are used after the month's.",
                             packs if packs_row.count() else None)
             if summary.get("billing"):
                 manage = button("Manage billing")
@@ -978,24 +989,30 @@ class PlansTab(Tab):
         from PyQt6.QtWidgets import QLabel
         from ui.app_widgets import icon
         from PyQt6.QtWidgets import QSizePolicy
-        col = QWidget()
+        from PyQt6.QtWidgets import QFrame
+        col = QFrame()
+        col.setObjectName("planCard")
+        col.setProperty("mine", "true" if current else "false")
         # Three equal columns, whatever is in them (the flag widened Pro).
         col.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
         lay = QVBoxLayout(col)
-        lay.setContentsMargins(22, 20, 22, 20)
+        lay.setContentsMargins(18, 18, 18, 18)
         lay.setSpacing(4)
-        top = QHBoxLayout()
-        top.addWidget(label(plan["audience"], "faint"))
-        top.addStretch(1)
-        if plan.get("flag"):
-            top.addWidget(label(plan["flag"], "planFlag"))
-        lay.addLayout(top)
+        lay.addWidget(label(plan["audience"], "faint", wrap=True))
         lay.addSpacing(8)
-        lay.addWidget(label(plan["name"], "planName"))
+        # The flag beside the name, as HeyClicky's "Pro [Popular]": beside
+        # the audience line it cut "Best for everyday use" short.
+        name = QHBoxLayout()
+        name.setSpacing(8)
+        name.addWidget(label(plan["name"], "planName"))
+        if plan.get("flag"):
+            name.addWidget(label(plan["flag"], "planFlag"), 0, Qt.AlignmentFlag.AlignVCenter)
+        name.addStretch(1)
+        lay.addLayout(name)
         price = QHBoxLayout()
         price.setSpacing(4)
         price.addWidget(label(plan["price"], "planPrice"), 0, Qt.AlignmentFlag.AlignBaseline)
-        price.addWidget(label("/month", "dim"), 0, Qt.AlignmentFlag.AlignBaseline)
+        price.addWidget(label("/mo", "dim"), 0, Qt.AlignmentFlag.AlignBaseline)
         price.addStretch(1)
         lay.addLayout(price)
         lay.addWidget(label(plan["detail"], "dim"))

@@ -232,13 +232,13 @@ def qss() -> str:
     }}
     /* A tab's groups (ui/settings_parts.py): a name above a soft block, rows of a
        title and at most one short line, larger and darker than a page's rows. */
-    QLabel#setGroup {{ font-size: 15px; font-weight: 700; }}
+    QLabel#setGroup {{ font-size: 10px; font-weight: 600; color: {TEXT_FAINT}; letter-spacing: 1.5px; }}
     QFrame#setBlock {{ background: {BG}; border: none; border-radius: {RADIUS + 0}px; }}
     QFrame#setRow {{ background: transparent; border: none; border-top: 1px solid {BORDER}; }}
     QFrame#setRowFirst {{ background: transparent; border: none; }}
     QWidget#setRow {{ border-top: 1px solid {BORDER}; }}
-    QLabel#setTitle {{ font-size: 14px; font-weight: 600; background: transparent; }}
-    QLabel#setDesc  {{ color: {TEXT_DIM}; font-size: 13px; background: transparent; }}
+    QLabel#setTitle {{ font-size: 13px; font-weight: 600; background: transparent; }}
+    QLabel#setDesc  {{ color: {TEXT_FAINT}; font-size: 12px; background: transparent; }}
     QLabel#setNote  {{ color: {TEXT_FAINT}; font-size: 12px; }}
     QLabel#keycapSmall {{
         background: {SURFACE}; border: 1px solid {BORDER_STRONG}; border-radius: 6px;
@@ -299,6 +299,9 @@ def qss() -> str:
     QLabel#emptySub   {{ color: {TEXT_DIM}; font-size: 13px; }}
     QFrame#planCard {{ background: {SURFACE}; border: 1px solid transparent; border-radius: {RADIUS_CARD}px; }}
     QFrame#planCard[mine="true"] {{ border: 1px solid {ACCENT}; }}
+    QWidget#shapeBody QFrame#setBlock {{ background: {SURFACE}; }}
+    QWidget#shapeBody QLabel#pageTitle {{ font-size: 22px; }}
+    QWidget#shapeBody QLabel#pageLede {{ color: {TEXT_FAINT}; font-size: 12px; }}
     QFrame#jobCard {{ background: {BG}; border: 1px solid {BORDER}; border-radius: {RADIUS_CARD}px; }}
     QFrame#jobCard QLabel#rowTitle {{ font-size: 13px; }}
     QFrame#chatAsked {{ background: {ACCENT_SOFT}; border: none; border-radius: {RADIUS_CARD}px; }}
