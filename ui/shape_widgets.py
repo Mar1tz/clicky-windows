@@ -108,12 +108,58 @@ class CursorTile(_Tile):
 
 
 class VoiceTile(_Tile):
-    """A voice: a little waveform in its colour, its name, how it sounds."""
+    """A voice: a little waveform in its colour, its name, how it sounds.
+    While its hello plays the waveform moves with the clip itself - its
+    loudness, 30 times a second (`play(envelope)`) - and settles after."""
+
+    FPS = 30
+    REST = (6, 12, 18, 10, 14)            # the bars at rest, px
 
     def __init__(self, name: str, colour: str):
         super().__init__(f"{name} - tap to hear")
         self.name, self.colour = name, colour
         self.setMinimumSize(96, 76)
+        self._envelope: list[float] = []
+        self._frame = 0
+        self._timer = None
+
+    def play(self, envelope: list[float]) -> None:
+        from PyQt6.QtCore import QTimer
+        self._envelope, self._frame = list(envelope), 0
+        if self._timer is None:
+            self._timer = QTimer(self)
+            self._timer.setInterval(1000 // self.FPS)
+            self._timer.timeout.connect(self._tick)
+        if self._envelope:
+            self._timer.start()
+
+    def stop(self) -> None:
+        if self._timer is not None:
+            self._timer.stop()
+        self._envelope = []
+        self.update()
+
+    def playing(self) -> bool:
+        return bool(self._envelope) and self._frame < len(self._envelope)
+
+    def _tick(self) -> None:
+        self._frame += 1
+        if not self.playing():
+            self.stop()
+            return
+        self.update()
+
+    def bar_heights(self) -> list[float]:
+        """The bars now: at rest, or each lifted by the clip's loudness here,
+        the outer ones a moment behind the middle so it ripples."""
+        if not self.playing():
+            return [float(h) for h in self.REST]
+        out = []
+        for i, rest in enumerate(self.REST):
+            k = max(0, self._frame - abs(i - 2))
+            level = self._envelope[min(k, len(self._envelope) - 1)]
+            out.append(4.0 + level * 24.0 * (0.6 + 0.4 * rest / 18))
+        return out
 
     def paintEvent(self, _e) -> None:
         p = QPainter(self)
@@ -122,7 +168,7 @@ class VoiceTile(_Tile):
         cx = r.center().x()
         p.setPen(Qt.PenStyle.NoPen)
         p.setBrush(QColor(self.colour))
-        for i, h in enumerate((6, 12, 18, 10, 14)):           # her waveform, small
+        for i, h in enumerate(self.bar_heights()):              # her waveform, small
             x = cx - 13 + i * 6
             p.drawRoundedRect(QRectF(x, r.top() + 24 - h / 2, 3, h), 1.5, 1.5)
         p.setPen(QColor(T.TEXT))

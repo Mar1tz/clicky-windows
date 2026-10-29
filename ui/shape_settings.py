@@ -150,10 +150,14 @@ class VoicePage(_Later, Tab):
         self.body.add(answers)
 
     def _pick(self, name: str) -> None:
-        from ui.onboarding_parts import play_voice
+        from ui.onboarding_parts import _clip_envelope, play_voice
         for tile in self.tiles:
             tile.setChecked(tile.name == name)
-        play_voice(name)                         # the bundled hello: no talk message spent
+            if tile.name != name:
+                tile.stop()
+        if play_voice(name):                     # the bundled hello: no talk message spent
+            tile = next(t for t in self.tiles if t.name == name)
+            tile.play(_clip_envelope(name))      # its waveform moves with the clip
         _ask(self.bridge, "set_voice", None, name)
 
 
@@ -269,6 +273,10 @@ class ShortcutsPage(GeneralTab):
         held = _ask(br, "hotkey_keys", []) or [br.hotkey() or "Ctrl + Win"]
         talk.row("Push to talk", "Hold to talk; let go to send. A quick tap: she listens until you stop.",
                  _row_controls(_keys(held), change))
+        tap = Switch(br.switch("type_tap"))
+        tap.toggled.connect(lambda on: br.set_switch("type_tap", on))
+        talk.row("Type to Tora", "Tap Ctrl twice: HeyTora opens on Chat, ready to type.",
+                 _row_controls(_keys(["Ctrl", "Ctrl"]), tap))
         cursor = Group("Her cursor")
         cursor.row("Show or hide her cursor", "From anywhere, any time.",
                    _keys([k.strip().capitalize() for k in
@@ -371,6 +379,25 @@ def _row_controls(*widgets) -> QWidget:
     return box
 
 
+# What stands in for a logo where a service has none of its own.
+NO_LOGO = {"files": "folder-open", "custom": "link", "composio": "blocks"}
+LOGO_PX = 22
+
+
+def _mark(row, service: str):
+    """The service's logo before its name (assets/logos), or a plain icon."""
+    from PyQt6.QtCore import Qt
+    from PyQt6.QtWidgets import QLabel
+    from ui import app_theme as T
+    from ui.app_widgets import icon, logo
+    mark = QLabel()
+    mark.setFixedSize(LOGO_PX + 6, LOGO_PX)
+    pix = logo(service, LOGO_PX, mark.devicePixelRatioF())
+    mark.setPixmap(pix if pix is not None else icon(NO_LOGO.get(service, "link"), T.TEXT_DIM, 18))
+    row.layout().insertWidget(0, mark, 0, Qt.AlignmentFlag.AlignVCenter)
+    return row
+
+
 class IntegrationsPage(Tab):
     """Apps her jobs can reach: what is connected (Disconnect), and what can
     be (Connect) - the same tools as "Tora, connect Notion", so the page and
@@ -404,7 +431,7 @@ class IntegrationsPage(Tab):
         for c in data.get("connected") or []:
             off = button("Disconnect", "ghost")
             off.clicked.connect(lambda _c=False, c=c: self._disconnect(c))
-            have.row(c["name"], c["detail"], off)
+            _mark(have.row(c["name"], c["detail"], off), c["id"])
         if not data.get("connected"):
             have.row("Nothing yet", "Connect one below - or ask Tora: “connect Notion”.")
         self.body.add(have)
@@ -412,11 +439,11 @@ class IntegrationsPage(Tab):
         for s in data.get("available") or []:
             go = button("Connect")
             go.clicked.connect(lambda _c=False, s=s: self._connect(s))
-            add.row(s["name"], (s.get("gives") or "").capitalize(), go)
+            _mark(add.row(s["name"], (s.get("gives") or "").capitalize(), go), s["id"])
         custom = button("Add")
         custom.clicked.connect(lambda: self._connect({"id": "custom", "name": "Your server"}, pasted=True))
-        add.row("Custom connector", "Any service with an MCP server: copy its https:// address, then "
-                                    "press Add.", custom)
+        _mark(add.row("Custom connector", "Any service with an MCP server: copy its https:// address, "
+                                          "then press Add.", custom), "custom")
         editors = Group("Code editors")
         editors.link("VS Code and its forks", "Read as data - your file, errors, terminal - instead of "
                                               "screenshots.", lambda: self.navigate.emit("settings/devlink"))

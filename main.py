@@ -68,6 +68,7 @@ class _Shortcuts(QObject):
     """Global shortcuts fire on the keyboard hook's thread; these signals
     bring them to Qt's, where the screen may be changed."""
     toggle_cursor = pyqtSignal()
+    type_to_tora = pyqtSignal()
 
 
 class _PowerEvents(QAbstractNativeEventFilter):
@@ -951,6 +952,27 @@ def main():
     shortcuts = _Shortcuts(app)
     shortcuts.toggle_cursor.connect(lambda: _show_cursor(not cfg.cursor_shown()))
     cursor_key = KeyShortcut(cfg.cursor_hotkey(), shortcuts.toggle_cursor.emit)
+
+    # Ctrl, Ctrl: the shape opens on Chat, the box ready to type in
+    # (Settings > Shortcuts can switch it off - read at each tap).
+    def _type_to_tora():
+        if not cfg.switch("type_tap"):
+            return
+        try:
+            if "s" not in shape:
+                _toggle_shape()                    # builds and opens it
+            shape["s"].open_to_type(*flow.pill_geometry())
+        except Exception:  # noqa: BLE001 - a tap never breaks anything
+            import logging as _lg
+            _lg.getLogger("tora").exception("could not open the shape to type")
+    shortcuts.type_to_tora.connect(_type_to_tora)
+    from hotkey import DoubleTap
+    type_tap = DoubleTap(shortcuts.type_to_tora.emit)
+    try:
+        type_tap.start()
+    except Exception:  # noqa: BLE001
+        import logging as _lg
+        _lg.getLogger("tora").warning("could not watch for Ctrl, Ctrl", exc_info=True)
     try:
         cursor_key.start()
     except Exception:  # noqa: BLE001 - a bad saved shortcut must not stop HeyTora

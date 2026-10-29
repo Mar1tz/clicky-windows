@@ -593,6 +593,9 @@ class Config:
         # Settings > Updates: a downloaded update installs by itself - the
         # next time HeyTora starts, or as it is quit (updates/service.py).
         "auto_update":   ("TORA_AUTO_UPDATE", True),
+        # Settings > Shortcuts: Ctrl tapped twice opens the shape to type to
+        # Tora (hotkey.DoubleTap; HeyClicky's "Text mode").
+        "type_tap":      ("TORA_TYPE_TAP", True),
         # Settings > Code editors (devlink/): connectors may reach HeyTora.
         # On - each workspace still reads nothing until it is allowed there.
         "devlink":       ("TORA_DEVLINK", True),

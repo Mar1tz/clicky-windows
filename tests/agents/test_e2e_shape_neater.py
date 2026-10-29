@@ -154,3 +154,18 @@ def test_a_choice_row_has_no_chevron_and_a_link_row_has_one():
     has_pixmap = lambda row: any(l.pixmap() is not None and not l.pixmap().isNull()  # noqa: E731
                                  for l in row.findChildren(QLabel))
     assert has_pixmap(link) and not has_pixmap(choice)
+
+
+def test_a_voice_tiles_waveform_moves_with_its_clip(qapp):
+    """HeyClicky's sound animations: the bars follow the hello as it plays."""
+    from ui.shape_widgets import VoiceTile
+    tile = VoiceTile("Aoede", "#FF9A3C")
+    rest = tile.bar_heights()
+    tile.play([0.1, 0.9, 1.0, 0.2, 0.0])
+    tile._frame = 2
+    loud = tile.bar_heights()
+    assert loud != rest and max(loud) > max(rest), "lifted by the clip"
+    assert loud[2] >= loud[0], "the middle leads, the outer ones follow"
+    for _ in range(10):
+        tile._tick()
+    assert not tile.playing() and tile.bar_heights() == rest, "settles when the clip ends"

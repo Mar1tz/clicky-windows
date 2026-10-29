@@ -243,7 +243,7 @@ class AppBridge(QObject):
             self.tray.apply_switch(name, bool(on))
         self.changed.emit("switches")
 
-    READ_WHERE_USED = ("trail_line", "memory")
+    READ_WHERE_USED = ("trail_line", "memory", "type_tap")
 
     # ── memory (EN-15) ───────────────────────────────────────────────────────
 

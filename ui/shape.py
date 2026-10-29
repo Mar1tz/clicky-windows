@@ -626,6 +626,17 @@ class Shape(QWidget):
         if self.mode == "open" and self._t == 0.0 and self._from_pill:
             self._run(1.0, tokens.SHAPE_OPEN)
 
+    def open_to_type(self, edge: str, pill: QRectF) -> None:
+        """Ctrl, Ctrl: open (if it is not) on Chat, its box ready to type in."""
+        if not self.is_open():
+            self.open_from(edge, pill)
+        self.show_tab("chat")
+        self.raise_()
+        self.activateWindow()
+        page = self._pages.get("chat")
+        if page is not None:
+            QTimer.singleShot(0, page.ask_box.setFocus)
+
     def show_settings(self, key: str = "account") -> None:
         if self.mode == "closed":
             return
