@@ -144,6 +144,8 @@ class Scheduler:
             log.exception("job %s could not build its task", job.id)
             return None
         task.metadata.setdefault("scheduled_job", job.id)
+        if (extra or {}).get("slot"):                       # one job per slot, however often it is fired
+            task.metadata.setdefault("idempotency_key", f"schedule:{job.id}:{extra['slot']}")
         task.metadata.setdefault("trigger", job.trigger.describe() if hasattr(job.trigger, "describe") else "")
         late = (extra or {}).get("late_by_s")
         if late:
@@ -190,6 +192,12 @@ class Scheduler:
                 return None
             due = {"slot": slot.isoformat(timespec="minutes")}
             if now - slot_ts >= LATE_S:
+                if getattr(job.trigger, "missed", "run_once") == "skip":
+                    # Missed while the PC was off, and this one is no use late.
+                    self._state.setdefault(job.id, {})["last_fired"] = slot_ts
+                    self._save()
+                    log.info("scheduled %s: the %s run was missed - skipped (missed: skip)", job.id, due["slot"])
+                    return None
                 due["late_by_s"] = round(now - slot_ts)
             return due
         if kind == "folder":

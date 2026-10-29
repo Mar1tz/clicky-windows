@@ -25,6 +25,7 @@ import contextvars
 import logging
 import math
 import os
+import hashlib
 import re
 import threading
 import time
@@ -3415,10 +3416,19 @@ class CompanionManager(QObject):
         hint = str(args.get("workspace_hint") or "").strip().strip("'\"")
         if hint and not files and follows is None:
             meta["subdir"] = hint
+        # The same request said once but sent twice: one job (idempotency key).
+        said = " ".join(str(args.get("goal") or "").lower().split())
+        meta["idempotency_key"] = "voice:" + hashlib.sha1(f"{said}|{workspace}".encode()).hexdigest()[:16]
+        meta["idempotency_ttl_s"] = 30.0          # a double call is seconds apart; asked again later is new
         task = Task(title=title, goal=goal, workspace=workspace,
                     kind=kind, worker_type=self._WORKER_FOR_KIND.get(kind.value, "coding"),
                     metadata=meta)
         try:
+            finder = getattr(self._agents, "existing_for", None)
+            same = finder(meta["idempotency_key"], 30.0) if callable(finder) else None
+            if same is not None:
+                return {"ok": True, "already_running": same.id, "title": same.title,
+                        "note": f"That job ({same.title}) was just started - say so in one line; nothing new."}
             task = self._agents.submit_task(task)
         except Exception as e:
             _log.exception("delegate_task failed")

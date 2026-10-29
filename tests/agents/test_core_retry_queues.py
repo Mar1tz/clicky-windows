@@ -77,3 +77,43 @@ def test_jobs_wait_their_turn_in_a_named_queue(tmp_path):
     assert not mgr._busy_claims(research), "another queue is not held up"
     mgr._release_claims(builds[0].id)
     assert not mgr._busy_claims(builds[2])
+
+
+def test_the_same_job_twice_is_one_job(tmp_path):
+    """After trigger.dev's idempotency keys: the same key while its job runs,
+    or within its window, returns that job; after the window it is new."""
+    from agents.bootstrap import build_agent_manager
+    from agents.core import now
+    mgr = build_agent_manager(workspace_root=str(tmp_path), in_memory=True, offline=True).start()
+    try:
+        a = mgr.submit_task(Task(title="a", goal="make a folder called Keys", workspace=str(tmp_path),
+                                 metadata={"idempotency_key": "voice:k1", "idempotency_ttl_s": 30.0}))
+        b = mgr.submit_task(Task(title="a", goal="make a folder called Keys", workspace=str(tmp_path),
+                                 metadata={"idempotency_key": "voice:k1", "idempotency_ttl_s": 30.0}))
+        assert b.id == a.id
+        mgr.wait(a.id, 30)
+        a.created_at = now() - 60
+        c = mgr.submit_task(Task(title="a", goal="make a folder called Keys", workspace=str(tmp_path),
+                                 metadata={"idempotency_key": "voice:k1", "idempotency_ttl_s": 30.0}))
+        assert c.id != a.id, "asked again after it finished, outside the window: a new job"
+    finally:
+        mgr.stop()
+
+
+def test_a_slot_fired_twice_starts_one_job(tmp_path):
+    from datetime import datetime
+    from agents.manager.scheduler import ScheduledJob, Scheduler
+    from agents.skills.schedule import Schedule
+    from agents.bootstrap import build_agent_manager
+    mgr = build_agent_manager(workspace_root=str(tmp_path), in_memory=True, offline=True).start()
+    try:
+        sched = Scheduler(mgr, state_path=str(tmp_path / "s.json"))
+        job = ScheduledJob("j", "J", Schedule(every="daily", at="08:00"),
+                           lambda extra: (Task(title="J", goal="make a folder called Slot", workspace=str(tmp_path)),
+                                          None))
+        slot = {"slot": datetime(2026, 10, 27, 8, 0).isoformat(timespec="minutes")}
+        first, second = sched.fire(job, extra=slot), sched.fire(job, extra=slot)
+        assert first.id == second.id
+        mgr.wait(first.id, 30)
+    finally:
+        mgr.stop()

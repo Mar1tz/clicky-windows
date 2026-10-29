@@ -108,6 +108,18 @@ def _fit(goal_words: set[str], tool) -> float:
             + 0.5 * len(goal_words & _words_of(tool.spec.description)))
 
 
+def hints_for(tool_names: list[str], registry) -> list[str]:
+    """How the services behind these tools are best used (catalog.py hints)."""
+    from integrations.catalog import SERVICES
+    servers = set()
+    for name in tool_names:
+        if name.startswith(PREFIX) and name in registry:
+            cfg = getattr(getattr(registry.get(name), "server", None), "cfg", None)
+            if cfg is not None:
+                servers.add(cfg.name)
+    return [SERVICES[s].hint for s in sorted(servers) if s in SERVICES and SERVICES[s].hint]
+
+
 def for_goal(goal: str, registry) -> list[str]:
     """The MCP tools a job gets: of the servers its goal names ("open an issue
     on github", "my jira tickets" - a service's other names, catalog.py),
