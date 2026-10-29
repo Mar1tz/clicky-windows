@@ -259,11 +259,69 @@ def test_every_settings_row_is_a_page_titled_as_its_row(shape, qapp):
             assert inner <= S.SETTINGS_W - S.NAV_W, f"{key} needs {inner}px"
 
 
-def test_invite_and_earn_opens_the_referral_window(shape):
+def _wait(qapp, until, s=3.0):
+    import time as _t
+    end = _t.monotonic() + s
+    while not until() and _t.monotonic() < end:
+        qapp.processEvents()
+        _t.sleep(0.01)
+    return until()
+
+
+def test_invite_and_earn_is_the_referral_panel_as_a_settings_page(shape, qapp, monkeypatch):
+    """The owner kept our referral design - the gift card, how it works,
+    Refer / Past referrals / Apply referral - over HeyClicky's (29 Oct)."""
+    from PyQt6.QtGui import QGuiApplication
+    from ui.referral_window import GiftCard
+    st = {"code": "DYLANH4821", "link": "heytora.co.za/r/DYLANH4821", "friends": [
+        {"name": "Sam", "status": "joined", "asked": 6}], "months_waiting": 1, "months_used": 0,
+        "new_account": False}
+    monkeypatch.setattr(shape.bridge, "referral_status", lambda: dict(st))
     shape.open_from("bottom", _pill_at("bottom"))
-    shape.show_settings()
-    shape.select("invite")
-    assert shape.opened == ["invite"] and not shape.is_open()
+    shape.show_settings("invite")
+    assert shape.mode == "settings" and shape.opened == [], "in the shape, not a window of its own"
+    page = shape.settings_stack.currentWidget()
+    assert page.HEADING == "Invite & Earn"
+    panel = page.panel
+    assert _wait(qapp, lambda: panel._state is not None), "loaded off the UI thread"
+    assert page.findChild(GiftCard) is not None, "the gift card"
+    assert panel.link_edit.text() == "heytora.co.za/r/DYLANH4821"
+    panel.copy_btn.click()
+    assert QGuiApplication.clipboard().text() == "heytora.co.za/r/DYLANH4821"
+    panel._show("past")
+    from PyQt6.QtWidgets import QLabel
+    words = " ".join(l.text() for l in page.findChildren(QLabel))
+    assert "Joined · 6 of 15 questions" in words
+
+
+def test_the_foot_opens_invite_in_settings(shape, monkeypatch):
+    monkeypatch.setattr(shape.bridge, "referral_status", lambda: {"code": "X", "link": "x"})
+    shape.open_from("bottom", _pill_at("bottom"))
+    foot_invite = next(b for b in shape.findChildren(__import__("PyQt6.QtWidgets", fromlist=["QPushButton"]).QPushButton)
+                       if b.text().startswith("Invite"))
+    foot_invite.click()
+    assert shape.mode == "settings" and shape.current_setting() == "invite"
+
+
+def test_upgrade_is_gone_on_max_and_on_their_own_key(shape, monkeypatch):
+    def state(plan, mode="account"):
+        return lambda: {"signed_in": True, "mode": mode, "summary": {"plan": plan}}
+    for plan, mode, shown in (("free", "account", True), ("pro", "account", True),
+                              ("max", "account", False), ("free", "own_key", False)):
+        monkeypatch.setattr(shape.bridge, "account_state", state(plan, mode))
+        shape._upgrade_shown()
+        assert (not shape.upgrade.isHidden()) == shown, (plan, mode)
+
+
+def test_the_plans_are_three_cards_yours_outlined(shape, qapp, monkeypatch):
+    from PyQt6.QtWidgets import QFrame
+    monkeypatch.setattr(shape.bridge, "account_state",
+                        lambda: {"signed_in": True, "mode": "account", "summary": {"plan": "pro"}})
+    shape.open_from("bottom", _pill_at("bottom"))
+    shape.show_settings("plans")
+    cards = [f for f in shape.settings_stack.currentWidget().findChildren(QFrame) if f.objectName() == "planCard"]
+    assert len(cards) == 3
+    assert [c.property("mine") for c in cards] == ["false", "true", "false"]
 
 
 def test_small_dialogs_sit_over_settings(shape):

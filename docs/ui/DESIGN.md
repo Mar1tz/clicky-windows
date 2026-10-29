@@ -145,11 +145,22 @@ Step 5 splits and rebuilds them into the pages above.
 
 ## 5. Plans
 
-A card over the shape, from **Upgrade** or Account → Upgrade. A Monthly /
-Yearly switch, then Free, Pro and Max side by side: name, price, one line
-of who it is for, three ticked allowances in credits, one button. The
-current plan is marked. The words and prices are ours (`settings_tabs.PLANS`,
-heytora-web `site.ts`).
+**Upgrade** (gone on Max, and on their own Gemini key) grows the shape into
+Settings on **Plans**. Free, Pro and Max are three cards side by side with
+room between them: who it is for, the name with its flag ("Pro [Popular]"),
+the price "/mo", one line, the ticked allowances in credits, one button.
+The current plan is outlined in the accent and its button says "Your
+plan". Billing (renewal, credit packs, Manage billing) is under the cards.
+The words and prices are ours (`settings_tabs.PLANS`, heytora-web
+`site.ts`). No Monthly / Yearly switch: there are no yearly prices.
+
+**Invite & Earn** is a settings page too (the foot's **Invite & earn**, or
+the sidebar) - and **ours, not HeyClicky's**: the owner preferred our
+referral design (29 Oct 2026). The offer in one line, then Refer (the gift
+card, how it works, your link with Copy, months waiting), Past referrals
+(each friend and how close they are) and Apply referral (a friend's code,
+for a new account). It is `referral_window.ReferralPanel`, the same panel
+the app window's referral window shows.
 
 ## 6. Where the values live
 
@@ -397,7 +408,7 @@ as she talks.
 | 3 | Tabs Home · Chat · Insights (`ui/shape_pages.py`): Chat is everything asked, newest at the bottom, and **Talk to Tora** (the shape steps aside, then she listens hands-free); Insights is the four measured numbers and this month on the plan, "All of Insights" opening the app window's page; up to three running-job cards beside the open shape, on the side away from the pill. Not yet: a typed **Ask** box - the app has no typed way into a conversation, so it needs work in companion_manager first | Built; needs a live run |
 | 3b | Typed questions: **Ask Tora…** beside Talk in Chat. Enter tucks the shape away (she reads their screen, not HeyTora's), then `CompanionManager.ask_typed` asks it as a spoken question is asked - it stops an answer under way, counts as a talk message, goes to the live session with the screen line (`RealtimeConversation.ask_text`), or the slow route without one or when the session never answers - and she answers aloud with her words on the card; it is kept in the journal. Only the history redraws, so a question half typed survives | Built; needs a live run |
 | 3c | **Jobs** is the fourth tab (Home · Chat · Insights · Jobs); the foot's **New job +** opens it with the job box ready. Give Tora a job (a question is pointed to Chat) · Needs your OK (Approve / Deny, a sensitive one with its typed word) · Working now (step, what it is doing, progress, Pause / Resume, Stop) · History. Each part redraws only when what it lists changes, so progress never wipes what is being typed. A job's details (plan, log, folder) still open in the app window | Built; needs a live run |
-| 4 | The Plans card; Invite & Earn as a settings page | |
+| 4 | Plans as three cards, yours outlined, Upgrade gone on Max (§5); Invite & Earn as a settings page (§5) - the referral window is no longer opened from the shape | Built; needs a live run |
 | 5 | New pages: Voice (speed, voice tiles), Dictation (language, dictionary), Routines | |
 | 6 | Onboarding restyled (§10); the old app window, settings window and referral window deleted | |
 
