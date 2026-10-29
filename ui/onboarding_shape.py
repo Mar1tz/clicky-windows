@@ -46,6 +46,18 @@ HEAD_H = 44
 SIDE_W = 96
 
 
+def free_voice(on: bool) -> None:
+    """While the tour is up her voice is free (migration 0014): the account
+    asks for onboarding passes, and the server decides how many it gives."""
+    try:
+        from account.service import account
+        if on and not account().signed_in():
+            return
+        account().onboarding(on)
+    except Exception:  # noqa: BLE001 - an own key, or no account at all
+        pass
+
+
 class Step(QWidget):
     """One step. Subclasses fill `body` and call `done()` when it is proven
     (Continue lights up); `enter()` / `leave()` start and stop what is live."""
@@ -55,12 +67,15 @@ class Step(QWidget):
     WIDE = False
     # Continue lit from the start: a step with nothing to prove.
     READY = False
+    # What the button says on this step ("Show me" on the first).
+    GO = "Continue"
 
     finished = pyqtSignal()                  # done: Continue may be pressed
 
     def __init__(self):
         super().__init__()
         self.ready = self.READY
+        self.panel: Optional["OnboardingPanel"] = None     # set when it is shown
         outer = QVBoxLayout(self)
         outer.setContentsMargins(32, 6, 32, 0)
         outer.setSpacing(6)
@@ -160,10 +175,12 @@ class OnboardingPanel(QWidget):
         self._t = 0.0
         self._anim: Optional[QVariantAnimation] = None
         self._pill = QRectF()
+        self.live = None                            # the running app, once attach() is called
 
         self.body = QWidget(self)
         self.body.setObjectName("obBody")
-        self.body.setStyleSheet(T.qss() + stylesheet())
+        from ui import onboarding_steps
+        self.body.setStyleSheet(T.qss() + stylesheet() + onboarding_steps.stylesheet())
         lay = QVBoxLayout(self.body)
         lay.setContentsMargins(16, 10, 16, 22)
         lay.setSpacing(0)
@@ -239,7 +256,9 @@ class OnboardingPanel(QWidget):
         self.dots.update()
         self.back_button.setVisible(i > 0)
         self._light()
+        self.go.setText(self.step().GO)
         self.step_changed.emit(i)
+        self.step().panel = self
         self.step().enter()
 
     def _light(self) -> None:
@@ -266,6 +285,7 @@ class OnboardingPanel(QWidget):
 
     def finish(self) -> None:
         self.step().leave()
+        free_voice(False)
         if not self._sent_ready:
             self._sent_ready = True
             self.ready.emit()
@@ -276,6 +296,9 @@ class OnboardingPanel(QWidget):
         """The running app (the wizard's interface): steps that need it look
         for it here."""
         self.live = live
+        hook = getattr(self.step(), "attached", None)
+        if hook is not None:
+            hook()
 
     # ── sizes and motion ─────────────────────────────────────────────────────
     def _rect_for(self, step: Step) -> QRectF:
@@ -296,6 +319,7 @@ class OnboardingPanel(QWidget):
             g = QGuiApplication.primaryScreen().availableGeometry()
             pill = QRectF(g.center().x() - 23, g.top() + 12, 46, 10)
         self._pill = QRectF(pill)
+        free_voice(True)
         self.setGeometry(self._span().toRect())        # once: it never moves while it grows
         self._a, self._b, self._from_pill = QRectF(self._pill), self._rect_for(self.steps[0]), True
         self.body.setGeometry(self._local(self._b).toRect())
@@ -423,7 +447,8 @@ if __name__ == "__main__":
     from PyQt6.QtWidgets import QApplication
     app = QApplication(sys.argv)
     tokens.load_fonts()
-    panel = OnboardingPanel(stand_ins())
+    from ui.onboarding_steps import phase_b
+    panel = OnboardingPanel(phase_b() + stand_ins()[2:])
     panel.completed.connect(lambda: QTimer.singleShot(400, app.quit))
     panel.open_from()
     sys.exit(app.exec())

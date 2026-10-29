@@ -102,9 +102,10 @@ Settings.
   pass on the server (a migration and a function change, built and tested
   against the local Supabase, released with the app). Without it, a spoken
   interview could use much of a Free plan's 50 credits.
-- **Her face is Tora's own cursor:** the blue pointer and its "Tora"
-  bubble that already lives on screen. It breathes, speaks and points in
-  the interview, and it's what people see every day after.
+- **No face.** HeyClicky has a mascot; HeyTora has no character, and
+  that's fine for now. Her cursor is not dressed up as one (the owner, 29
+  Oct 2026, changing the earlier choice). The interview is her voice and
+  her lines as chat bubbles.
 - **Of ours, only "Pick her voice" stays.** The welcome scenes, the
   privacy step (Skip private windows stays on by default, in Settings →
   Privacy) and the "Nice job" screen go.
@@ -118,7 +119,7 @@ Each phase is usable on its own; the old onboarding stays until the last.
 | Phase | What |
 |---|---|
 | A | **Built.** The frame (`ui/onboarding_shape.py`): the panel grows out of the pill like the shape does, to the middle of the screen; narrow (480) or wide (720) steps; Back, step dots, a sound switch, Skip; Continue lit only when the step is proven; the wizard's `completed` / `ready` / `attach`. `python -m ui.onboarding_shape` shows it with stand-in steps. The pill's glow (`tokens.STATE_GLOW`, `FlowBar.glow`): violet thinking, amber speaking, teal listening, following the voice |
-| B | Show me around · Can I hear you? · This is how you talk to me (hold the keys, say your name) |
-| C | The free onboarding pass (server, local first) · I'm curious about you: the spoken interview, Tora's cursor as its face, answers into her memory and the starter skills |
+| B | **Built** (`ui/onboarding_steps.py`). **Hi, I'm Tora**: her hello played from the bundled clip (no talk message), Show me - no character on screen. **First, can I hear you?**: bars that rise with the voice, the "Testing, testing" bubble, the microphone as a chip that lists the others; proven by half a second of speech. **This is how you talk to me**: the user's own keys as keycaps that light while held, "Hi Tora!"; proven by a real hold and release; the shortcut borrowed from the running app while the step is up. Hearing the name waits for phase C (it needs the free pass) |
+| C | **Built.** **The free onboarding pass**: migration 0014 adds an "onboarding" window - never a talk message, never on the credits, three per account ever, 20 minutes and six passes each, no ticket; the function's voice-pass takes `{onboarding: true}` and says `onboarding_used` after three. The app asks for it only from the tour's own voice (`account.service.TOUR_VOICE`), so the app's standby voice beside it is counted as usual; a server without 0014 simply gives a normal pass. Tried on the local Supabase: three tours then refused, six passes a window, nothing in usage_costs, talk unchanged. **The tour's voice** (`ui/onboarding_interview.py`): one live session for the talk step and the interview, with only two tools - `heard_name` and `interview_done` - so what she learns comes back structured. **This is how you talk to me** now hears the name ("Hi Tora, I'm …") and she says hello by it; the hold alone still proves the step offline. **I'm curious about you** (wide): four questions out loud, her lines and yours as chat bubbles, a status line, answer by holding the keys or typing; the answers become the profile (name, work), the starter skills for that work, and facts in her memory. No voice: it says so and lets them carry on |
 | D | Here's how I'd help you (a question from the interview, on their screen) · Circle anything (live) · I can drive your computer (our own list window) · Type: Ctrl, Ctrl |
 | E | One more thing: jobs from the interview as "Ready to start" cards on Home · Pick her voice · Plans · the old onboarding removed |

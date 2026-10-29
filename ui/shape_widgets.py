@@ -183,23 +183,41 @@ class VoiceTile(_Tile):
 
 
 class LevelBars(QWidget):
-    """Bars that move with the microphone: `level` 0-1, set by the page."""
+    """Bars that move with the microphone: `level` 0-1, set by the page.
+    Small in Settings; `big` in the first launch, where the middle bars
+    stand taller as the voice lifts them (HeyClicky's "can I hear you")."""
 
     BARS = 18
 
-    def __init__(self):
+    def __init__(self, bars: int = BARS, big: bool = False):
         super().__init__()
         self.level = 0.0
-        self.setFixedSize(self.BARS * 7, 22)
+        self.bars, self.big = bars, big
+        self._step, self._w, self._h = (11, 6, 44) if big else (7, 4, 16)
+        self.setFixedSize(bars * self._step, self._h + 6)
+
+    def heights(self) -> list[float]:
+        """Each bar's height now: all the same, small ones; big ones rise
+        in the middle with the level."""
+        if not self.big:
+            return [float(self._h)] * self.bars
+        mid = (self.bars - 1) / 2
+        out = []
+        for i in range(self.bars):
+            near = 1.0 - abs(i - mid) / mid
+            out.append(self._h * (0.32 + 0.68 * min(1.0, self.level * (0.45 + 0.9 * near))))
+        return out
 
     def paintEvent(self, _e) -> None:
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
-        lit = round(self.level * self.BARS)
+        lit = round(self.level * self.bars)
         p.setPen(Qt.PenStyle.NoPen)
-        for i in range(self.BARS):
-            p.setBrush(QColor(T.ACCENT if i < lit else T.BORDER_STRONG))
-            p.drawRoundedRect(QRectF(i * 7, 3, 4, 16), 2, 2)
+        cy = self.height() / 2
+        for i, h in enumerate(self.heights()):
+            on = (self.level > 0.04) if self.big else i < lit
+            p.setBrush(QColor(T.ACCENT if on else T.BORDER_STRONG))
+            p.drawRoundedRect(QRectF(i * self._step, cy - h / 2, self._w, h), self._w / 2, self._w / 2)
         p.end()
 
 
