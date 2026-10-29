@@ -409,3 +409,118 @@ def test_a_question_half_typed_survives_the_history_redrawing(shape):
     chat.refresh()
     assert chat.ask_box.text() == "What does this cla"
     assert chat.lay.count() == 2, "one history, one box - not a pile of them"
+
+
+# ── Jobs, in the shape (29 Oct 2026) ───────────────────────────────────────
+
+class _Agents:
+    """The workforce, as the Jobs tab reads it through the bridge."""
+
+    def __init__(self):
+        self.approvals_ = [{"id": "a1", "reason": "Send the email to Sam", "task": "Reply to Sam",
+                            "tool": "gmail_send", "sensitive": True, "confirm_word": "SEND"}]
+        self.running_ = [{"id": "t1", "title": "Tidy my downloads", "doing": "Moving files",
+                          "step": 2, "total": 5, "progress": 0.3, "status": "running"}]
+        self.tasks_ = [{"id": "t0", "title": "Compare laptops", "status": "completed", "when": 0.0}]
+        self.calls = []
+
+    def install(self, bridge, monkeypatch):
+        monkeypatch.setattr(bridge, "approvals", lambda: list(self.approvals_))
+        monkeypatch.setattr(bridge, "running", lambda: [dict(j) for j in self.running_])
+        monkeypatch.setattr(bridge, "tasks", lambda limit=8: list(self.tasks_))
+        monkeypatch.setattr(bridge, "agents", lambda: [])
+        for name in ("answer_approval", "pause_job", "resume_job", "stop_job"):
+            monkeypatch.setattr(bridge, name, lambda *a, n=name: self.calls.append((n,) + a) or True)
+        monkeypatch.setattr(bridge, "give_job", lambda text: self.calls.append(("give_job", text))
+                            or (("chat", "") if text.endswith("?") else ("started", text)))
+
+
+def _jobs(shape, monkeypatch):
+    work = _Agents()
+    work.install(shape.bridge, monkeypatch)
+    shape.open_from("bottom", _pill_at("bottom"))
+    shape.show_tab("agents")
+    return shape.stack.currentWidget(), work
+
+
+def test_jobs_is_a_tab_of_its_own_and_new_job_opens_it_ready(shape, monkeypatch):
+    from ui.shape_pages import JobsTab
+    work = _Agents()
+    work.install(shape.bridge, monkeypatch)
+    shape.open_from("bottom", _pill_at("bottom"))
+    shape._new_job()
+    assert isinstance(shape.stack.currentWidget(), JobsTab) and shape._tabs["agents"].isChecked()
+    assert shape.opened == [], "no app window"
+
+
+def test_a_job_is_started_and_a_question_is_sent_to_chat(shape, monkeypatch):
+    page, work = _jobs(shape, monkeypatch)
+    page.job_box.setText("Build a site for my coffee shop")
+    page.job_box.returnPressed.emit()
+    assert ("give_job", "Build a site for my coffee shop") in work.calls
+    assert page.job_box.text() == "" and "Started" in page.note.text()
+    page.job_box.setText("What is a pivot table?")
+    page.job_box.returnPressed.emit()
+    assert "Chat" in page.note.text() and page.job_box.text() == "What is a pivot table?"
+
+
+def test_a_sensitive_approval_sends_its_typed_word(shape, monkeypatch):
+    from PyQt6.QtWidgets import QLineEdit, QPushButton
+    page, work = _jobs(shape, monkeypatch)
+    card = page._parts["approvals"].itemAt(1).widget()
+    word = card.findChild(QLineEdit)
+    word.setText("SEND")
+    approve = next(b for b in card.findChildren(QPushButton) if b.text() == "Approve")
+    work.approvals_.clear()
+    approve.click()
+    assert ("answer_approval", "a1", True, "SEND") in work.calls
+
+
+def test_progress_never_wipes_what_is_being_typed(shape, monkeypatch):
+    """Running jobs report progress all the time."""
+    from PyQt6.QtWidgets import QLineEdit
+    page, work = _jobs(shape, monkeypatch)
+    page.job_box.setText("Rename my ph")
+    word = page._parts["approvals"].itemAt(1).widget().findChild(QLineEdit)
+    word.setText("SE")
+    work.running_[0]["progress"] = 0.8
+    page.refresh()
+    page.refresh()
+    assert page.job_box.text() == "Rename my ph"
+    assert page._parts["approvals"].itemAt(1).widget().findChild(QLineEdit) is word and word.text() == "SE"
+    assert abs(page._meters["t1"]._f - 0.8) < 1e-6, "the progress moved, in place"
+
+
+def test_pause_stop_and_history(shape, monkeypatch):
+    from PyQt6.QtWidgets import QPushButton
+    page, work = _jobs(shape, monkeypatch)
+    card = page._parts["running"].itemAt(1).widget()
+    buttons = {b.text(): b for b in card.findChildren(QPushButton)}
+    buttons["Pause"].click()
+    buttons["Stop"].click()
+    assert ("pause_job", "t1") in work.calls and ("stop_job", "t1") in work.calls
+    row = page._parts["history"].itemAt(1).widget()
+    row._on_click()
+    assert shape.opened == ["agents/job/t0"], "its details: the app window's, for now"
+
+
+def test_with_nothing_at_all_jobs_says_what_it_is_for(shape, monkeypatch):
+    page, work = _jobs(shape, monkeypatch)
+    work.approvals_.clear(), work.running_.clear(), work.tasks_.clear()
+    page.refresh()
+    assert page._parts["history"].count() == 1
+    assert page._parts["approvals"].count() == 0 and page._parts["running"].count() == 0
+
+
+def test_jobs_loads_before_the_app_window_ever_has():
+    """agents_page and app_pages import each other: the Jobs tab, first in a
+    fresh process, must not start the circle at the wrong end."""
+    import subprocess
+    import sys
+    code = ("import os; os.environ['QT_QPA_PLATFORM']='offscreen';"
+            "from PyQt6.QtWidgets import QApplication; app = QApplication([]);"
+            "from ui.shape_pages import _status_words; print(_status_words()('running')[0])")
+    out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True,
+                         cwd=str(__import__('pathlib').Path(__file__).resolve().parents[2]))
+    assert out.returncode == 0, out.stderr[-600:]
+    assert out.stdout.strip() == "Working"

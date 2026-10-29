@@ -84,6 +84,7 @@ TABS = (
     ("home", "home", "Home"),
     ("chat", "chat", "Chat"),
     ("insights", "insights", "Insights"),
+    ("agents", "agents", "Jobs"),
 )
 
 # The settings sidebar (DESIGN.md §4): (group, ((key, name, icon), ...)).
@@ -112,8 +113,8 @@ SETTINGS = (
 
 
 def _pages() -> dict:
-    from ui.shape_pages import ChatTab, HomeTab, InsightsTab
-    return {"home": HomeTab, "chat": ChatTab, "insights": InsightsTab}
+    from ui.shape_pages import ChatTab, HomeTab, InsightsTab, JobsTab
+    return {"home": HomeTab, "chat": ChatTab, "insights": InsightsTab, "agents": JobsTab}
 
 
 def _settings_kinds() -> dict:
@@ -289,8 +290,8 @@ class Shape(QWidget):
         invite.clicked.connect(lambda: self._elsewhere("invite"))
         row.addWidget(invite)
         row.addStretch(1)
-        jobs = button("Jobs +", "ghost")
-        jobs.clicked.connect(lambda: self._elsewhere("agents"))
+        jobs = button("New job +", "ghost")
+        jobs.clicked.connect(self._new_job)
         row.addWidget(jobs)
         lay.addWidget(foot)
         return view
@@ -393,6 +394,13 @@ class Shape(QWidget):
         self._tabs[key].setChecked(True)
         if self.mode == "settings":
             self._move_to("open")
+
+    def _new_job(self) -> None:
+        """New job +: the Jobs tab, its box ready to type in."""
+        self.show_tab("agents")
+        page = self._pages.get("agents")
+        if page is not None:
+            page.focus_job_box()
 
     def _check_tabs(self) -> None:
         """Light the tab for where the shape is: the gear in Settings."""

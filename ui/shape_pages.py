@@ -357,3 +357,237 @@ class InsightsTab(ShapePage):
         col.addLayout(row)
         col.addStretch(1)
         self.lay.addWidget(_scroller(inner), 1)
+
+
+# ── Jobs ──────────────────────────────────────────────────────────────────────
+
+HISTORY_LIMIT = 8
+ENDED_STATUSES = ("completed", "failed", "cancelled", "rejected")
+
+
+def _status_words():
+    """agents_page.status_words. app_pages first: it imports agents_page
+    at its foot, and agents_page imports it at its head - loaded the other
+    way round (the Jobs tab before the app window ever opened) the import
+    went in a circle and failed."""
+    from ui import app_pages  # noqa: F401
+    from ui.agents_page import status_words
+    return status_words
+
+
+def history(tasks: list[dict]) -> list[dict]:
+    """The jobs that have ended, newest first (tasks() is newest first)."""
+    return [t for t in tasks if t.get("status") in ENDED_STATUSES][:HISTORY_LIMIT]
+
+
+class JobsTab(ShapePage):
+    """Give Tora a job, answer what her agents wait on, watch what runs,
+    look back at what ended - the app window's Agents page, in the shape.
+
+    Running jobs report progress all the time, and a redraw would wipe a
+    job half described or a confirm word half typed: the job box is built
+    once, and each part redraws only when what it lists has changed (its
+    signature); a running job's progress moves in place."""
+
+    TOPICS = frozenset({"agents"})
+    MARGINS = (0, 0, 0, 0)
+
+    def __init__(self, bridge):
+        self._built = False
+        super().__init__(bridge)
+
+    def build(self) -> None:
+        inner = QWidget()
+        self.col = QVBoxLayout(inner)
+        self.col.setContentsMargins(20, 4, 20, 12)
+        self.col.setSpacing(8)
+        self.col.addWidget(label("GIVE TORA A JOB", "sectionTitle"))
+        row = QHBoxLayout()
+        row.setSpacing(8)
+        self.job_box = QLineEdit()
+        self.job_box.setPlaceholderText("Build a one-page site for my coffee shop…")
+        self.job_box.setMaxLength(ASK_MAX)
+        self.job_box.returnPressed.connect(self._give)
+        row.addWidget(self.job_box, 1)
+        start = button("Start", "primary")
+        start.clicked.connect(self._give)
+        row.addWidget(start)
+        self.col.addLayout(row)
+        self.note = label("", "cardSub", wrap=True)
+        self.note.hide()
+        self.col.addWidget(self.note)
+        self._parts: dict[str, QVBoxLayout] = {}
+        self._signatures: dict[str, tuple] = {}
+        self._meters: dict = {}
+        for part in ("approvals", "running", "history"):
+            holder = QVBoxLayout()
+            holder.setSpacing(8)
+            self.col.addLayout(holder)
+            self._parts[part] = holder
+        self.col.addStretch(1)
+        self.lay.addWidget(_scroller(inner), 1)
+        self._built = True
+        self._fill()
+
+    def refresh(self) -> None:
+        if not self._built:
+            super().refresh()
+        else:
+            self._fill()
+
+    def focus_job_box(self) -> None:
+        self.job_box.setFocus()
+
+    # ── the parts ──
+    def _fill(self) -> None:
+        approvals = self._call("approvals", [])
+        running = self._call("running", [])
+        ended = history(self._call("tasks", [], 50))
+        self._part("approvals", tuple(a.get("id") for a in approvals),
+                   lambda: ([label("NEEDS YOUR OK", "sectionTitle")] if approvals else [])
+                   + [self._approval(a) for a in approvals])
+        self._part("running", tuple((j.get("id"), j.get("status"), j.get("step"), j.get("doing")) for j in running),
+                   lambda: ([label("WORKING NOW", "sectionTitle")] if running else [])
+                   + [self._running(j) for j in running])
+        for j in running:                              # progress moves in place
+            meter = self._meters.get(j.get("id"))
+            if meter is not None:
+                meter.set_fraction(float(j.get("progress") or 0.0))
+        if ended:
+            make = lambda: [label("HISTORY", "sectionTitle")] + [self._ended(t) for t in ended]  # noqa: E731
+        elif not running and not approvals:
+            make = lambda: [self._empty()]  # noqa: E731
+        else:
+            make = list
+        self._part("history", tuple((t.get("id"), t.get("status")) for t in ended) or (bool(running or approvals),),
+                   make)
+
+    def _part(self, name: str, signature: tuple, make) -> None:
+        if name in self._signatures and self._signatures[name] == signature:
+            return
+        self._signatures[name] = signature
+        holder = self._parts[name]
+        while holder.count():
+            w = holder.takeAt(0).widget()
+            if w is not None:
+                w.hide()
+                w.setParent(None)
+                w.deleteLater()
+        if name == "running":
+            self._meters = {}
+        for w in make():
+            holder.addWidget(w)
+
+    def _empty(self) -> QWidget:
+        box = QFrame()
+        box.setObjectName("card")
+        lay = QVBoxLayout(box)
+        lay.setContentsMargins(16, 14, 16, 14)
+        lay.addWidget(label("Tora works while you don't.", "cardTitle"))
+        lay.addWidget(label("Give her a job above. She plans it, asks before anything that "
+                            "pays, sends or deletes, and tells you when it's done.", "cardSub", wrap=True))
+        return box
+
+    def _approval(self, a: dict) -> QWidget:
+        box = QFrame()
+        box.setObjectName("card")
+        lay = QVBoxLayout(box)
+        lay.setContentsMargins(14, 12, 14, 12)
+        lay.setSpacing(6)
+        lay.addWidget(label(_clip(a.get("reason", ""), 200), "rowTitle", wrap=True))
+        sub = (a.get("task") or "") + (" · " if a.get("task") else "") + (a.get("tool") or "")
+        lay.addWidget(label(sub, "cardSub", wrap=True))
+        row = QHBoxLayout()
+        word = None
+        if a.get("sensitive"):
+            word = QLineEdit()
+            word.setPlaceholderText(f"Type {a.get('confirm_word') or 'the word'} to approve")
+            row.addWidget(word, 1)
+        else:
+            row.addStretch(1)
+        yes, no = button("Approve", "primary"), button("Deny", "ghost")
+        yes.clicked.connect(lambda: self._answer(a["id"], True, word.text() if word else ""))
+        no.clicked.connect(lambda: self._answer(a["id"], False))
+        row.addWidget(yes)
+        row.addWidget(no)
+        lay.addLayout(row)
+        return box
+
+    def _answer(self, request_id: str, yes: bool, word: str = "") -> None:
+        self._call("answer_approval", False, request_id, yes, word)
+        self._signatures.pop("approvals", None)
+        self._fill()
+
+    def _running(self, j: dict) -> QWidget:
+        status_words = _status_words()
+        box = QFrame()
+        box.setObjectName("card")
+        lay = QVBoxLayout(box)
+        lay.setContentsMargins(14, 12, 14, 12)
+        lay.setSpacing(5)
+        top = QHBoxLayout()
+        top.addWidget(label(_clip(j.get("title", "Job"), 70), "rowTitle", wrap=True), 1)
+        paused = j.get("status") == "paused"
+        flip = button("Resume" if paused else "Pause", "ghost")
+        flip.clicked.connect(lambda: self._job_call("resume_job" if paused else "pause_job", j["id"]))
+        stop = button("Stop", "ghost")
+        stop.clicked.connect(lambda: self._job_call("stop_job", j["id"]))
+        top.addWidget(flip)
+        top.addWidget(stop)
+        lay.addLayout(top)
+        step = f"Step {j['step']} of {j['total']}" if j.get("total") else status_words(j.get("status", ""))[0]
+        doing = j.get("doing") or ""
+        lay.addWidget(label(step + (f" · {_clip(doing, 80)}" if doing else ""), "cardSub", wrap=True))
+        meter = Meter(float(j.get("progress") or 0.0), height=4)
+        self._meters[j.get("id")] = meter
+        lay.addWidget(meter)
+        return box
+
+    def _job_call(self, name: str, task_id: str) -> None:
+        self._call(name, False, task_id)
+        self._signatures.pop("running", None)
+        self._fill()
+
+    def _ended(self, t: dict) -> QWidget:
+        status_words = _status_words()
+        row = _Clickable(lambda i=t.get("id"): self.navigate.emit(f"app/agents/job/{i}"))
+        row.setObjectName("card")
+        lay = QHBoxLayout(row)
+        lay.setContentsMargins(14, 10, 14, 10)
+        lay.addWidget(label(_clip(t.get("title", "Job"), 60), "rowTitle"), 1)
+        words = status_words(t.get("status", ""))[0]
+        when = float(t.get("when") or 0.0)
+        lay.addWidget(label(words + (f" · {_ago(when).lower()}" if when > 0 else ""), "cardSub"))
+        return row
+
+    def _give(self) -> None:
+        text = self.job_box.text().strip()
+        if not text:
+            return
+        kind, said = self._call("give_job", ("error", "The agents did not start."), text)
+        if kind == "started":
+            self.job_box.clear()
+            self._say(f"Started: {said}.")
+        elif kind == "chat":
+            self._say("That reads as a question. Ask it in Chat and Tora answers it.")
+        else:
+            self._say(f"Couldn't start it: {said}")
+        self._fill()
+
+    def _say(self, text: str) -> None:
+        self.note.setText(text)
+        self.note.show()
+
+
+class _Clickable(QFrame):
+    """A row that opens something when clicked: a job's details, for now
+    the app window's (they hold the plan, the log and its folder)."""
+
+    def __init__(self, on_click):
+        super().__init__()
+        self._on_click = on_click
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+
+    def mouseReleaseEvent(self, e) -> None:
+        if e.button() == Qt.MouseButton.LeftButton:
+            self._on_click()
