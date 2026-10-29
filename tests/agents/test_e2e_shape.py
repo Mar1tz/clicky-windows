@@ -324,11 +324,20 @@ def test_the_plans_are_three_cards_yours_outlined(shape, qapp, monkeypatch):
     assert [c.property("mine") for c in cards] == ["false", "true", "false"]
 
 
+def test_old_tab_names_land_on_their_new_pages(shape):
+    """The app window's General was split, its Usage folded into Account."""
+    shape.open_from("bottom", _pill_at("bottom"))
+    shape.show_settings("general")
+    assert shape.current_setting() == "shortcuts"
+    shape.show_settings("usage")
+    assert shape.current_setting() == "account"
+
+
 def test_small_dialogs_sit_over_settings(shape):
     """Change shortcut, Sign out?, Delete account: settings_tabs puts them
     over `window()._settings` when it shows."""
     shape.open_from("bottom", _pill_at("bottom"))
-    shape.show_settings("general")
+    shape.show_settings("shortcuts")
     tab = shape.settings_stack.currentWidget()
     assert tab.window() is shape and shape._settings.isVisible()
 
@@ -582,3 +591,20 @@ def test_jobs_loads_before_the_app_window_ever_has():
                          cwd=str(__import__('pathlib').Path(__file__).resolve().parents[2]))
     assert out.returncode == 0, out.stderr[-600:]
     assert out.stdout.strip() == "Working"
+
+
+def test_account_shows_the_month_on_the_plan_when_signed_in(shape, qapp, monkeypatch):
+    """HeyClicky's Account: the plan and its use first. Signed out, the
+    usage part was never drawn - and a name it needed went unnoticed."""
+    from PyQt6.QtWidgets import QLabel
+    summary = {"plan": "pro", "plan_name": "Pro", "plan_status": "active",
+               "limits": {"talk": 450, "agent": 100}, "usage": {"talk": 120, "agent": 12}}
+    monkeypatch.setattr(shape.bridge, "account_state", lambda: {
+        "signed_in": True, "mode": "account", "email": "you@example.com", "configured": True,
+        "error": "", "busy": False, "fresh": True, "own_key": False, "website": "", "summary": summary})
+    monkeypatch.setattr(shape.bridge, "refresh_account", lambda force=False: None)
+    shape.open_from("bottom", _pill_at("bottom"))
+    shape.show_settings("account")
+    page = shape.settings_stack.currentWidget()
+    words = " ".join(l.text() for l in page.findChildren(QLabel))
+    assert "you@example.com" in words and "Questions" in words

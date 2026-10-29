@@ -88,28 +88,38 @@ TABS = (
 )
 
 # The settings sidebar (DESIGN.md §4): (group, ((key, name, icon), ...)).
-# A key of settings_tabs.TABS is that tab, in the shape; "invite" opens the
-# referral window. Step 2 of the revamp: the app's tabs, regrouped; step 5
-# splits them into HeyClicky's pages (Voice, Microphone, Shortcuts...).
+# Step 5a: HeyClicky's pages, one thing each (ui/shape_settings.py), made
+# from what the app already has. A key of shape_settings.PAGES is one of
+# those; any other is an app window settings tab; "invite" is the referral
+# panel. Not yet: Dictation, Integrations, Routines (step 5b).
 SETTINGS = (
     ("", (
         ("account", "Account", "circle-user-round"),
-        ("usage", "Usage", "chart-column"),
         ("plans", "Plans", "credit-card"),
         ("system", "General", "monitor"),
         ("privacy", "Privacy", "shield-check"),
         ("invite", "Invite & Earn", "gift"),
     )),
     ("TORA", (
-        ("general", "Shortcut & mic", "keyboard"),
+        ("voice", "Voice", "megaphone"),
+        ("microphone", "Microphone", "mic"),
+        ("shortcuts", "Shortcuts", "keyboard"),
+        ("cursor", "Cursor", "sparkles"),
+        ("style", "Style", "graduation-cap"),
         ("memory", "Memory", "book-open"),
     )),
     ("WORK", (
         ("agents", "Agents", "bot"),
+        ("skills", "Skills", "blocks"),
         ("devlink", "Code editors", "code"),
         ("advanced", "Advanced", "wrench"),
     )),
 )
+
+
+# The app window's settings tabs that step 5a split or folded in, for what
+# still asks for them by name ("settings/usage" from a plan's note).
+MOVED = {"general": "shortcuts", "usage": "account"}
 
 
 def _pages() -> dict:
@@ -118,8 +128,13 @@ def _pages() -> dict:
 
 
 def _settings_kinds() -> dict:
+    from ui.referral_window import invite_page
     from ui.settings_tabs import TABS as SETTINGS_TABS
-    return {key: cls for _sec, rows in SETTINGS_TABS for key, _w, _i, cls in rows}
+    from ui.shape_settings import PAGES
+    kinds = {key: cls for _sec, rows in SETTINGS_TABS for key, _w, _i, cls in rows}
+    kinds.update(PAGES)
+    kinds["invite"] = invite_page()
+    return kinds
 
 
 def animations_on() -> bool:
@@ -287,7 +302,7 @@ class Shape(QWidget):
         row = QHBoxLayout(foot)
         row.setContentsMargins(16, 0, 16, 12)
         invite = button("Invite && earn", "ghost")        # && - a lone & would underline the e
-        invite.clicked.connect(lambda: self._elsewhere("invite"))
+        invite.clicked.connect(lambda: self.show_settings("invite"))
         row.addWidget(invite)
         row.addStretch(1)
         jobs = button("New job +", "ghost")
@@ -340,11 +355,9 @@ class Shape(QWidget):
 
     def select(self, key: str) -> None:
         """A settings page, built the first time it is asked for."""
-        if key == "invite":
-            self._elsewhere("invite")
-            return
         kinds = _settings_kinds()
-        if key not in kinds:
+        key = MOVED.get(key, key)
+        if key not in kinds or key not in self._rows:
             key = "account"
         page = self._tabs_built.get(key)
         if page is None:
@@ -395,6 +408,16 @@ class Shape(QWidget):
         if self.mode == "settings":
             self._move_to("open")
 
+    def _upgrade_shown(self) -> None:
+        """Upgrade, unless there is nothing to upgrade to (Max), or no plan
+        to upgrade (their own Gemini key)."""
+        try:
+            st = self.bridge.account_state() or {}
+        except Exception:  # noqa: BLE001 - shown: Plans says what applies
+            st = {}
+        plan = ((st.get("summary") or {}).get("plan") or "").lower() if st.get("signed_in") else ""
+        self.upgrade.setVisible(plan != "max" and st.get("mode") != "own_key")
+
     def _new_job(self) -> None:
         """New job +: the Jobs tab, its box ready to type in."""
         self.show_tab("agents")
@@ -444,6 +467,8 @@ class Shape(QWidget):
         if not self.isVisible():
             return
         topics, self._pending = self._pending, set()
+        if "account" in topics:
+            self._upgrade_shown()
         if "agents" in topics or "state" in topics:
             self._place_jobs()
         page = (self.settings_stack if self.mode == "settings" else self.stack).currentWidget()
@@ -490,6 +515,7 @@ class Shape(QWidget):
         jumped 30 px on close, 28 Oct). Its see-through parts let clicks
         through to what is under them."""
         self._edge, self._pill = edge, QRectF(pill)
+        self._upgrade_shown()
         span = self._pill.united(self._rect("open")).united(self._rect("settings"))
         self.setGeometry(span.adjusted(-PAD, -PAD, PAD, PAD).toRect())
         self.mode = "open"
@@ -518,9 +544,6 @@ class Shape(QWidget):
 
     def show_settings(self, key: str = "account") -> None:
         if self.mode == "closed":
-            return
-        if key == "invite":
-            self._elsewhere("invite")
             return
         self._version_text()
         self._move_to("settings", key)

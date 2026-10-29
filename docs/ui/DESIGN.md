@@ -138,10 +138,29 @@ open size.
 What each page holds is in HEYCLICKY_REFERENCE.md §4, mapped to the tabs it
 replaces (`ui/settings_tabs.py`).
 
-**For now** (step 2) the sidebar holds the app's existing tabs, regrouped:
-Account, Usage, Plans, General (the System tab), Privacy, Invite & Earn ·
-TORA: Shortcut & mic, Memory · WORK: Agents, Code editors, Advanced.
-Step 5 splits and rebuilds them into the pages above.
+**Step 5a** (`ui/shape_settings.py`) split the app's tabs into these pages,
+each made of parts the app already had - borrowed, not copied:
+
+| Page | What is on it | From |
+|---|---|---|
+| Account | This month on the plan (Change plan), then profile, how Tora thinks, sign out, delete | Usage + Account tabs |
+| Plans, Privacy, Invite & Earn | as they were (§5) | their tabs |
+| General | Start with Windows, the floating panel, updates, theme | System + General tabs |
+| Voice | Her voice (the carousel, 480 px here), her sound, how she answers | Tora page + General tab |
+| Microphone | The microphone (Change), always listening | General tab |
+| Shortcuts | Push to talk as keycaps (Change), show/hide her cursor | General tab |
+| Cursor | Her colour, show her cursor, trail as a line | Tora page + General tab |
+| Style | Her modes, instructions for Tora | Tora page |
+| Memory, Agents, Code editors, Advanced | as they were | their tabs |
+| Skills | Her skills, then record a lesson / show her what you did | Tora page |
+
+Old names still asked for land on the new page (`shape.MOVED`: General ->
+Shortcuts, Usage -> Account).
+
+**Step 5b**, when there is something behind them: Dictation (a language, a
+dictionary), Integrations (connect Gmail, Calendar, Notion... - the
+connections exist in `integrations/`, with no page yet), Routines (the
+scheduler exists, with no page yet), a speech speed, a captions switch.
 
 ## 5. Plans
 
@@ -409,7 +428,8 @@ as she talks.
 | 3b | Typed questions: **Ask Tora…** beside Talk in Chat. Enter tucks the shape away (she reads their screen, not HeyTora's), then `CompanionManager.ask_typed` asks it as a spoken question is asked - it stops an answer under way, counts as a talk message, goes to the live session with the screen line (`RealtimeConversation.ask_text`), or the slow route without one or when the session never answers - and she answers aloud with her words on the card; it is kept in the journal. Only the history redraws, so a question half typed survives | Built; needs a live run |
 | 3c | **Jobs** is the fourth tab (Home · Chat · Insights · Jobs); the foot's **New job +** opens it with the job box ready. Give Tora a job (a question is pointed to Chat) · Needs your OK (Approve / Deny, a sensitive one with its typed word) · Working now (step, what it is doing, progress, Pause / Resume, Stop) · History. Each part redraws only when what it lists changes, so progress never wipes what is being typed. A job's details (plan, log, folder) still open in the app window | Built; needs a live run |
 | 4 | Plans as three cards, yours outlined, Upgrade gone on Max (§5); Invite & Earn as a settings page (§5) - the referral window is no longer opened from the shape | Built; needs a live run |
-| 5 | New pages: Voice (speed, voice tiles), Dictation (language, dictionary), Routines | |
+| 5a | Settings split into HeyClicky's pages from what exists (§4) | Built; needs a live run |
+| 5b | Dictation, Integrations, Routines, speech speed, captions - each needs its feature first | |
 | 6 | Onboarding restyled (§10); the old app window, settings window and referral window deleted | |
 
 Each step: a screenshot first, then code, then this table updated.
