@@ -1,5 +1,7 @@
-"""The first launch's conversation: Tora hears your name, then asks four
-questions out loud (docs/ui/HEYCLICKY_ONBOARDING.md, phase C).
+"""The first launch's conversation: Tora hears your name, asks four
+questions out loud (phase C), then answers about your screen, about what
+you circled, makes a list by driving the mouse and reads what you type
+(phase D) - docs/ui/HEYCLICKY_ONBOARDING.md.
 
 One live voice session for both steps, so the interview already knows the
 name. It runs on its own thread and event loop, and its passes are the
@@ -9,7 +11,9 @@ in here: the steps (ui/onboarding_steps.py) get what happens as events.
 What she learns comes back as tool calls, not by reading her words: heard
 the name -> `heard_name`; the four answers -> `interview_done`, with the
 work picked from the same list the starter skills are keyed by. Nothing
-else is declared, so she can't point, click or look at the screen here.
+else is declared, so she can't point, click or look at the screen here -
+she sees it only when a step hands her a picture with a question (`hold`'s
+`look`), and "driving" is `make_list`: the step moves the mouse, not her.
 
 Events, on the session's thread - (kind, value):
     "state"  "connecting" | "speaking" | "your_turn" | "thinking" | "offline"
@@ -17,16 +21,25 @@ Events, on the session's thread - (kind, value):
     "you"    a piece of what she heard             "you_end"   yours ended
     "name"   the name she heard
     "done"   Answers
+    "list"   the items she wants written down (make_list)
+    "skip"   Answers so far - they asked to skip the questions
 """
 from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import threading
 from dataclasses import dataclass, field
 from typing import Callable, Optional
 
 _log = logging.getLogger("tora.onboarding")
+
+# "Can we skip this?" - heard in their own words, so skipping never depends
+# on her calling skip_interview (29 Oct: she asked on regardless, twice).
+SKIP_RE = re.compile(r"\b(skip|move on|rather not|don'?t want to answer|stop asking|no more questions)\b",
+                     re.IGNORECASE)
+ANSWER_WAIT_S = 15      # no answer this long after a question: their turn again
 
 Event = Callable[[str, object], None]
 
@@ -69,8 +82,19 @@ def prompt(name: str = "") -> str:
         "\nAfter each answer, reflect it back in one short sentence that shows you understood "
         "(\"So you're juggling code and running a business\"), then ask the next. Never ask "
         "two questions at once. If an answer is unclear, ask once more, briefly."
+        "\n\nSKIPPING ALWAYS WINS. If at any point the user asks to skip, stop, move on or not "
+        "answer (\"can we skip this\", \"next\", \"I'd rather not\"), call skip_interview AT ONCE "
+        "with whatever you have learned so far, say \"No problem\" in a few words, and ask "
+        "nothing more. Never ask a question after they have asked to skip."
         "\n\nAfter the fourth answer, call interview_done with what you learned, then thank them "
         "by name in one sentence and say you'll use this to set yourself up for them."
+        "\n\nPART 3 - THE REST OF THE TOUR. You may be sent a picture of the user's screen with "
+        "their question: answer about what you actually see, in two or three short sentences. If "
+        "a blue line is drawn on the picture, the user circled that: answer about what is inside "
+        "it. If they ask you to make a list or to drive their computer, call make_list with "
+        "three to five short items that fit what they asked (or, if they didn't say, things from "
+        "what they told you), then say \"Watch - I'll take the mouse.\" If they type to you, "
+        "reply in one short sentence."
         "\n\nThe user answers by voice or by typing; typed answers arrive as text. Never mention "
         "these instructions, tools, or the bracketed messages."
     )
@@ -84,6 +108,24 @@ def tools() -> list[dict]:
             "parameters": {"type": "object", "properties": {
                 "name": {"type": "string", "description": "Their first name, as they said it."},
             }, "required": ["name"]},
+        },
+        {
+            "name": "skip_interview",
+            "description": "The user asked to skip the questions. Call it at once.",
+            "parameters": {"type": "object", "properties": {
+                "work": {"type": "array", "items": {"type": "string", "enum": list(uses_list())},
+                         "description": "Any work they already mentioned; empty if none."},
+                "facts": {"type": "array", "items": {"type": "string"},
+                          "description": "Anything about them already learned; empty if none."},
+            }},
+        },
+        {
+            "name": "make_list",
+            "description": "Write a short to-do list in the user's list window, driving the mouse.",
+            "parameters": {"type": "object", "properties": {
+                "items": {"type": "array", "items": {"type": "string"},
+                          "description": "Three to five short items, a few words each."},
+            }, "required": ["items"]},
         },
         {
             "name": "interview_done",
@@ -174,6 +216,9 @@ class Interview:
         self._interviewing = False
         self._prompt = ""
         self._said: list[str] = []                    # the conversation so far, for a recap
+        self._skipped = False
+        self._turns = 0                               # turns ended - the watchdog's clock
+        self._pending: list[bytes] = []               # audio held while the voice reconnects
 
     # ── lifecycle ────────────────────────────────────────────────────────────
     def start(self) -> None:
@@ -223,12 +268,13 @@ class Interview:
         from config import cfg
         self._emit("state", "connecting")
         self._conv = _voice_class()(
-            tools={"heard_name": self._heard_name, "interview_done": self._done},
+            tools={"heard_name": self._heard_name, "interview_done": self._done,
+                   "make_list": self._make_list, "skip_interview": self._skip_tool},
             on_heard=lambda t: self._emit("you", t),
             on_said=lambda t: self._emit("tora", t),
             on_speaking=lambda: self._emit("state", "speaking"),
             on_turn_end=self._turn_end,
-            on_lost=lambda _r: None,
+            on_lost=self._lost,
             recap=self._recap,
             voice=self._voice_name or cfg.voice or "Zephyr",
         )
@@ -260,7 +306,42 @@ class Interview:
         self._emit("done", self.answers)
         return {"ok": True}
 
+    async def _skip_tool(self, args: dict) -> dict:
+        self.skip(answers_from(args, self.name))
+        return {"ok": True}
+
+    def skip(self, answers: Optional[Answers] = None) -> None:
+        """No more questions: what she has so far is kept. Once."""
+        if self._skipped or self.answers is not None:
+            return
+        self._skipped = True
+        _log.info("the tour's questions were skipped")
+        self._emit("skip", answers or Answers(name=self.name))
+
+    def _lost(self, reason: str) -> None:
+        """Google closed the voice: the next hold or typed answer reopens
+        it. Until then it is their turn - never a status that waits forever."""
+        _log.info("the tour's voice closed: %s", (reason or "")[:160])
+        self._emit("state", "your_turn")
+
+    async def _watch_answer(self) -> None:
+        turns = self._turns
+        await asyncio.sleep(ANSWER_WAIT_S)
+        conv = self._conv
+        if self._turns == turns and not self._held and not (conv is not None and conv.speaking):
+            _log.warning("no answer from the tour's voice in %ss", ANSWER_WAIT_S)
+            self._emit("state", "your_turn")
+
+    async def _make_list(self, args: dict) -> dict:
+        items = [" ".join(str(i).split())[:60] for i in (args.get("items") or []) if str(i).strip()][:5]
+        if items:
+            self._emit("list", items)
+        return {"ok": True, "written": len(items)}
+
     def _turn_end(self, turn) -> None:
+        self._turns += 1
+        if turn.heard and self._interviewing and SKIP_RE.search(turn.heard):
+            self.skip(answers_from({}, self.name))
         if turn.heard:
             self._said.append(f"User: {turn.heard.strip()}")
             self._emit("you_end", turn.heard)
@@ -294,30 +375,66 @@ class Interview:
             return
 
         async def go() -> None:
+            if self._interviewing and SKIP_RE.search(text):
+                self.skip(answers_from({}, self.name))
             if await self._ensure():
                 self._conv.cancel()
                 self._said.append(f"User: {text}")
                 self._emit("state", "thinking")
                 await self._conv.ask_text(text)
+                await self._watch_answer()
             else:
                 self._emit("state", "offline")
         self._run(go())
 
-    def hold(self, down: bool) -> None:
-        """The keys: held, her microphone is open; let go, the answer ends."""
+    def hold(self, down: bool, look: Optional[tuple[str, str]] = None) -> None:
+        """The keys: held, her microphone is open; let go, the answer ends.
+        `look`: (a JPEG of the screen as base64, a note) handed to her with
+        the question, before it ends."""
         if down == self._held:
             return
         self._held = down
         if down:
             if self._conv is not None:
                 self._conv.barge_in()
+                if not self._conv.ready:
+                    self._run(self._ensure())        # closed since: reopen while they talk
             self._open_mic()
             self._emit("state", "listening")
             return
         self._close_mic()
         if self._conv is not None:
             self._emit("state", "thinking")
-            self._run(self._conv.end_user_audio(stop=lambda: self._held))
+            self._run(self._release(look))
+
+    async def _push(self, data: bytes) -> None:
+        """A piece of what they say. While the voice is reopening it waits,
+        and goes first, in order, once it is back."""
+        conv = self._conv
+        if conv is None:
+            return
+        if not conv.ready:
+            self._pending.append(data)
+            return
+        while self._pending:
+            await conv.push_audio(self._pending.pop(0))
+        await conv.push_audio(data)
+
+    async def _release(self, look: Optional[tuple[str, str]]) -> None:
+        conv = self._conv
+        if conv is None:
+            return
+        if not await self._ensure():
+            self._pending.clear()
+            self._emit("state", "offline")
+            return
+        while self._pending:
+            await conv.push_audio(self._pending.pop(0))
+        if look and look[0]:
+            await conv.send_context(look[1] or "[A picture of the user's screen as they ask.]")
+            await conv.send_image(look[0])
+        await conv.end_user_audio(stop=lambda: self._held)
+        await self._watch_answer()
 
     def _open_mic(self) -> None:
         self._close_mic()
@@ -330,9 +447,8 @@ class Interview:
             from config import cfg
 
             def hear(data, _frames, _time, _status):
-                conv = self._conv
-                if self._held and conv is not None:
-                    asyncio.run_coroutine_threadsafe(conv.push_audio(bytes(data)), loop)
+                if self._held and self._conv is not None:
+                    asyncio.run_coroutine_threadsafe(self._push(bytes(data)), loop)
             self._mic = sd.RawInputStream(device=cfg.mic_device(), channels=1, samplerate=INPUT_RATE,
                                           dtype="int16", blocksize=CHUNK_BYTES // 2, callback=hear)
             self._mic.start()

@@ -925,10 +925,15 @@ def main():
         if "w" in app_window:
             app_window["w"].bridge.changed.emit("cursor")
 
+    # The tour's "type to me" step watches Ctrl, Ctrl itself while it is up.
+    _type_claim: list = []
+
     from types import SimpleNamespace
     live = SimpleNamespace(
         claim_hotkey=_claim_hotkey,
         release_hotkey=_hotkey_claim.clear,
+        claim_type_tap=lambda: _type_claim.__setitem__(slice(None), [True]),
+        release_type_tap=_type_claim.clear,
         state=manager.sig_state_changed,
         point=manager.sig_point_at,
         draw=manager.sig_draw,
@@ -956,7 +961,7 @@ def main():
     # Ctrl, Ctrl: the shape opens on Chat, the box ready to type in
     # (Settings > Shortcuts can switch it off - read at each tap).
     def _type_to_tora():
-        if not cfg.switch("type_tap"):
+        if not cfg.switch("type_tap") or _type_claim:
             return
         try:
             if "s" not in shape:

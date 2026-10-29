@@ -36,11 +36,15 @@ class FakeVoice:
     def begin_interview(self):
         self.calls.append("interview")
 
-    def hold(self, down):
-        self.calls.append(("hold", down))
+    def hold(self, down, look=None):
+        self.calls.append(("hold", down) if look is None else ("hold", down, look))
 
     def type(self, text):
         self.calls.append(("type", text))
+
+    def skip(self):
+        self.calls.append("skip")
+        self.say("skip", None)
 
 
 @pytest.fixture
@@ -55,7 +59,11 @@ def panel(qapp, monkeypatch):
                         staticmethod(lambda: [(0, "Built-in", True), (3, "Headset", False)]))
     monkeypatch.setattr(St.MicStep, "_open", lambda self, device: None)
     monkeypatch.setattr(St, "Interview", FakeVoice)
-    p = O.OnboardingPanel(St.phase_b())
+    monkeypatch.setattr(St, "screen_picture", lambda trail=(): f"jpeg:{len(trail)}")
+    monkeypatch.setattr(St.DriveStep, "MOVE_MOUSE", False)
+    import hotkey
+    monkeypatch.setattr(hotkey.DoubleTap, "start", lambda self: None)   # no real keyboard hook
+    p = O.OnboardingPanel(St.steps())
     p.played = played
     yield p
     p.step().leave()
@@ -275,3 +283,157 @@ def test_the_tour_ends_her_voice(panel):
     panel.next()
     panel.skip()
     assert panel.voice.calls[-1] == "stop"
+
+
+# ── phase D ────────────────────────────────────────────────────────────────
+
+def _to_step(panel, cls):
+    """Straight to a step: each one before it marked proven."""
+    panel.open_from()
+    while not isinstance(panel.step(), cls):
+        panel.step().done()
+        panel.next()
+    return panel.step()
+
+
+def test_the_help_question_comes_from_the_interview(panel):
+    import ui.onboarding_steps as St
+    from ui.onboarding_interview import Answers
+    from ui.setup_wizard import TRY
+    panel.open_from()
+    St.tour_voice(panel).answers = Answers(uses=["Developer"])
+    help_ = _to_step(panel, St.HelpStep)
+    assert TRY["Developer"] in help_.suggestion.text.text()
+    assert St.HelpStep.suggest([]) == "What am I looking at here?"
+
+
+def test_asking_about_the_screen_steps_aside_and_hands_her_the_screen(panel):
+    import ui.onboarding_steps as St
+    help_ = _to_step(panel, St.HelpStep)
+    asides = []
+    panel.step_aside = asides.append
+    help_.hold(True, 10.0)
+    assert asides == [True], "out of the way: the screen she reads is theirs"
+    help_.hold(False, 12.0)
+    assert panel.voice.calls[-1] == ("hold", False, ("jpeg:0", St.HelpStep.NOTE))
+    assert not panel.go.isEnabled(), "proven by her answer"
+    panel.voice.say("tora_end", "That's VS Code - the red line means a typo.")
+    assert asides == [True, False] and panel.go.isEnabled()
+    assert "VS Code" in help_.reply.text()
+
+
+def test_a_brush_of_the_keys_sends_no_picture(panel):
+    import ui.onboarding_steps as St
+    help_ = _to_step(panel, St.HelpStep)
+    panel.step_aside = lambda on: None
+    help_.hold(True, 10.0)
+    help_.hold(False, 10.1)
+    assert panel.voice.calls[-1] == ("hold", False) and "longer" in help_.status.text()
+
+
+def test_circling_draws_a_line_and_she_gets_it_on_the_picture(panel):
+    from PyQt6.QtCore import QPointF
+    import ui.onboarding_steps as St
+    circle = _to_step(panel, St.CircleStep)
+    panel.step_aside = lambda on: None
+    assert circle.demo._timer.isActive(), "her demo loops while the step is up"
+    circle.hold(True, 10.0)
+    circle._follow.stop()                          # the test draws, not the real mouse
+    for x, y in ((100, 100), (180, 100), (180, 160), (100, 160), (100, 100)):
+        circle.trail.add(QPointF(x, y))
+    circle.hold(False, 12.0)
+    assert panel.voice.calls[-1] == ("hold", False, ("jpeg:5", St.CircleStep.NOTE))
+
+
+def test_no_circle_is_not_the_step_done(panel):
+    import ui.onboarding_steps as St
+    circle = _to_step(panel, St.CircleStep)
+    panel.step_aside = lambda on: None
+    circle.hold(True, 10.0)
+    circle._follow.stop()
+    circle.hold(False, 12.0)
+    assert panel.voice.calls[-1] == ("hold", False) and "Draw round" in circle.status.text()
+
+
+def _drive_all(drive):
+    for _ in range(200):
+        if not drive.driving:
+            break
+        drive.tick()
+
+
+def test_she_makes_the_list_she_chose(panel):
+    import ui.onboarding_steps as St
+    drive = _to_step(panel, St.DriveStep)
+    panel.voice.say("list", ["Call the bank", "Send the invoice", "Water plants"])
+    assert drive.driving and "Esc" in drive.status.text()
+    _drive_all(drive)
+    assert drive.list.items() == [("Call the bank", True), ("Send the invoice", True),
+                                  ("Water plants", False)]
+    assert panel.go.isEnabled()
+
+
+def test_the_link_asks_her_without_talking_and_offline_she_still_drives(panel):
+    import ui.onboarding_steps as St
+    drive = _to_step(panel, St.DriveStep)
+    drive.instead.click()
+    assert panel.voice.calls[-1] == ("type", St.DriveStep.ASK)
+    panel.voice.say("state", "offline")
+    _drive_all(drive)
+    assert [t for t, _ in drive.list.items()] == St.DriveStep.PLAIN
+
+
+def test_moving_the_mouse_takes_it_back(panel, monkeypatch):
+    import ui.onboarding_steps as St
+    drive = _to_step(panel, St.DriveStep)
+    drive.drive(["One", "Two"])
+    monkeypatch.setattr(drive, "_theirs", lambda: True)
+    drive.tick()
+    assert not drive.driving and "yours again" in drive.status.text() and panel.go.isEnabled()
+
+
+def test_ctrl_ctrl_opens_the_box_and_she_answers(panel):
+    import ui.onboarding_steps as St
+    claimed = []
+    from types import SimpleNamespace
+    panel.attach(SimpleNamespace(claim_type_tap=lambda: claimed.append("claim"),
+                                 release_type_tap=lambda: claimed.append("release")))
+    typed = _to_step(panel, St.TypeStep)
+    assert claimed == ["claim"], "the app's Ctrl Ctrl doesn't open the shape too"
+    assert typed.box.isHidden()
+    typed.tapped.emit()
+    assert not typed.box.isHidden()
+    typed.box.setText("hi there")
+    typed._send()
+    assert panel.voice.calls[-1] == ("type", "hi there") and not panel.go.isEnabled()
+    panel.voice.say("tora_end", "Hi! Got your message.")
+    assert panel.go.isEnabled() and typed.reply.text() == "Hi! Got your message."
+    panel.back()
+    assert claimed[-1] == "release"
+
+
+# ── skipping the questions (29 Oct: "can we please skip" twice, and she asked on) ──
+
+def test_the_skip_link_stops_her_and_moves_on(panel, qapp):
+    import ui.onboarding_steps as St
+    iv = _to_interview(panel)
+    iv.MOVE_ON_MS = 0
+    iv.skip_link.click()
+    assert "skip" in panel.voice.calls, "she is told too, so she stops asking"
+    assert "move on" in iv.status.text()
+    _run_timers(qapp, 100)
+    assert isinstance(panel.step(), St.HelpStep), "on to the next step by itself"
+
+
+def test_asking_her_to_skip_keeps_what_she_learned(panel, qapp, monkeypatch):
+    import ui.onboarding_steps as St
+    from ui.onboarding_interview import Answers
+    saved = []
+    monkeypatch.setattr(St, "save", saved.append)
+    iv = _to_interview(panel)
+    iv.MOVE_ON_MS = 10_000
+    got = Answers(name="Dylan", uses=["Developer"])
+    panel.voice.say("skip", got)
+    assert saved == [got] and panel.go.isEnabled()
+    panel.voice.say("skip", got)
+    assert saved == [got], "once"

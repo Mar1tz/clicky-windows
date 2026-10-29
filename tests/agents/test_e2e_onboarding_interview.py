@@ -18,10 +18,10 @@ def test_her_instructions_hold_the_name_and_the_four_questions():
     assert "heard_name" in words and "interview_done" in words and "[interview]" in words
 
 
-def test_she_has_only_the_tours_two_tools():
+def test_she_has_only_the_tours_own_tools():
     from ui.onboarding_interview import _voice_class, tools
     names = [f["name"] for f in tools()[0]["functionDeclarations"]]
-    assert names == ["heard_name", "interview_done"], "no pointing, clicking or looking here"
+    assert names == ["heard_name", "skip_interview", "make_list", "interview_done"], "no pointing, clicking or looking"
     voice = _voice_class()(tools={})
     assert voice._setup("hi")["tools"] == tools()
 
@@ -29,7 +29,7 @@ def test_she_has_only_the_tours_two_tools():
 def test_the_work_she_picks_is_from_the_skills_list():
     from ui.onboarding_interview import tools
     from ui.setup_wizard import USES
-    done = tools()[0]["functionDeclarations"][1]
+    done = tools()[0]["functionDeclarations"][3]
     assert done["parameters"]["properties"]["work"]["items"]["enum"] == list(USES)
 
 
@@ -106,3 +106,111 @@ def test_typing_without_a_voice_says_offline():
         time.sleep(0.01)
     iv._loop.call_soon_threadsafe(iv._loop.stop)
     assert events == [("state", "offline")]
+
+
+def test_the_list_she_makes_is_cleaned():
+    from ui.onboarding_interview import Interview
+    events = []
+    iv = Interview(lambda kind, value: events.append((kind, value)))
+    out = asyncio.run(iv._make_list({"items": ["  Call   the bank ", "", "x" * 90] + ["more"] * 5}))
+    assert events == [("list", ["Call the bank", "x" * 60, "more", "more", "more"])]
+    assert out == {"ok": True, "written": 5}
+
+
+def test_the_screen_goes_to_her_before_the_question_ends(monkeypatch):
+    import ui.onboarding_interview as I
+    monkeypatch.setattr(I, "ANSWER_WAIT_S", 0)
+    from ui.onboarding_interview import Interview
+    sent = []
+
+    class Conv:
+        ready = True
+        speaking = False
+
+        async def send_context(self, text):
+            sent.append(("context", text))
+
+        async def send_image(self, jpeg):
+            sent.append(("image", jpeg))
+
+        async def end_user_audio(self, stop=None):
+            sent.append(("end",))
+    iv = Interview(lambda *_a: None)
+    iv._conv = Conv()
+    asyncio.run(iv._release(("JPEG", "[look]")))
+    assert sent == [("context", "[look]"), ("image", "JPEG"), ("end",)]
+    sent.clear()
+    asyncio.run(iv._release(None))
+    assert sent == [("end",)], "a plain answer: no picture"
+
+
+# ── never stuck, and skipping always wins (29 Oct) ──────────────────────────────
+
+def _engine():
+    from ui.onboarding_interview import Interview
+    events = []
+    return Interview(lambda kind, value: events.append((kind, value))), events
+
+
+def test_skip_in_their_own_words_is_heard_without_her():
+    from types import SimpleNamespace
+    iv, events = _engine()
+    iv._interviewing = True
+    iv._turn_end(SimpleNamespace(heard="Can we please skip this?", said=""))
+    iv._turn_end(SimpleNamespace(heard="can we please skip", said=""))
+    assert [k for k, _v in events].count("skip") == 1
+    iv2, events2 = _engine()
+    iv2._interviewing = True
+    iv2._turn_end(SimpleNamespace(heard="I skipped breakfast and code all day", said=""))
+    assert "skip" not in [k for k, _v in events2]
+
+
+def test_her_skip_tool_keeps_what_she_had():
+    iv, events = _engine()
+    iv.name = "Dylan"
+    asyncio.run(iv._skip_tool({"work": ["Developer"], "facts": ["Builds HeyTora"]}))
+    kind, answers = events[-1]
+    assert kind == "skip" and answers.uses == ["Developer"] and answers.name == "Dylan"
+
+
+def test_a_closed_voice_is_their_turn_not_a_wait():
+    iv, events = _engine()
+    iv._lost("server closed the session")
+    assert events == [("state", "your_turn")]
+
+
+def test_no_answer_is_their_turn_again(monkeypatch):
+    import ui.onboarding_interview as I
+    monkeypatch.setattr(I, "ANSWER_WAIT_S", 0)
+    iv, events = _engine()
+    iv._conv = type("C", (), {"speaking": False})()
+    asyncio.run(iv._watch_answer())
+    assert events == [("state", "your_turn")]
+
+
+def test_what_they_say_while_she_reopens_is_kept_in_order():
+    sent = []
+
+    class Conv:
+        ready = False
+
+        async def push_audio(self, data):
+            sent.append(data)
+    iv, _events = _engine()
+    iv._conv = Conv()
+    asyncio.run(iv._push(b"1"))
+    asyncio.run(iv._push(b"2"))
+    assert sent == [], "held while she is away"
+    iv._conv.ready = True
+    asyncio.run(iv._push(b"3"))
+    assert sent == [b"1", b"2", b"3"]
+
+
+def test_holding_the_keys_reopens_a_closed_voice():
+    iv, _events = _engine()
+    ran = []
+    iv._conv = type("C", (), {"ready": False, "barge_in": lambda self: None})()
+    iv._run = lambda coro: (ran.append(coro.__name__), coro.close())
+    iv._open_mic = lambda: None
+    iv.hold(True)
+    assert ran == ["_ensure"]

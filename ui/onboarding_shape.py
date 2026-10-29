@@ -292,6 +292,15 @@ class OnboardingPanel(QWidget):
         self._shrink()
         self.completed.emit()
 
+    def step_aside(self, on: bool) -> None:
+        """Out of the way while she looks at their screen - the screen she
+        reads is theirs, not the tour - and back when she has answered."""
+        if on:
+            self.hide()
+        else:
+            self.show()
+            self.raise_()
+
     def attach(self, live) -> None:
         """The running app (the wizard's interface): steps that need it look
         for it here."""
@@ -447,8 +456,12 @@ if __name__ == "__main__":
     from PyQt6.QtWidgets import QApplication
     app = QApplication(sys.argv)
     tokens.load_fonts()
-    from ui.onboarding_steps import phase_b
-    panel = OnboardingPanel(phase_b() + stand_ins()[2:])
+    import logging
+    from config import data_dir
+    logging.basicConfig(filename=str(data_dir() / "onboarding-preview.log"), level=logging.INFO,
+                        format="%(asctime)s %(levelname)-7s %(name)s: %(message)s")
+    from ui.onboarding_steps import steps
+    panel = OnboardingPanel(steps() + stand_ins()[3:])
     panel.completed.connect(lambda: QTimer.singleShot(400, app.quit))
     panel.open_from()
     sys.exit(app.exec())
