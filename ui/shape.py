@@ -406,10 +406,13 @@ class Shape(QWidget):
         return next((k for k, w in self._pages.items() if w is page), "")
 
     def _navigate(self, key: str) -> None:
-        if key == "talk":
-            # Out of the picture first: she looks at the screen.
+        if key == "talk" or key.startswith("ask:"):
+            # Out of the picture first: she looks at the screen - theirs, not
+            # this one - and its window must be gone from the front for that.
+            text = key[len("ask:"):]
             self.shrink()
-            QTimer.singleShot(tokens.SHAPE_CLOSE + 60, self.bridge.talk)
+            QTimer.singleShot(tokens.SHAPE_CLOSE + 60,
+                              (lambda: self.bridge.ask(text)) if text else self.bridge.talk)
         elif key.startswith("app/"):
             self._elsewhere(key[len("app/"):])           # the app window's own page, by name
         elif key in _pages():

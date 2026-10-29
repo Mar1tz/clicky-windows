@@ -5498,6 +5498,86 @@ class CompanionManager(QObject):
             # onto the next question: a fresh session instead.
             self._submit(self._restart_realtime())
 
+    # ── Typed questions (the shape's Chat, ui/shape_pages.py) ────────────────
+
+    def ask_typed(self, text: str) -> None:
+        """A question typed instead of said. Any thread. It is a question
+        like any other: it stops an answer under way (_claim_begin), counts
+        as a talk message, goes to the live session - or the slow route
+        when there is none - and is answered aloud with her words on the
+        card, and kept in the journal. The shape has stepped aside first,
+        so the screen she reads is theirs, not HeyTora's."""
+        text = (text or "").strip()
+        if not text or not self._claim_begin():
+            return
+        self._submit(self._typed_turn(text))
+
+    async def _typed_turn(self, text: str) -> None:
+        # What _begin_capture does for a spoken question, but the microphone.
+        self._end_claimed = True                  # nothing to release: no key, no mic
+        try:
+            from audio.playback import stop_audio
+            stop_audio()
+        except Exception:  # noqa: BLE001
+            pass
+        if self._idle_s() > self.IDLE_FRESH_S:
+            self._forget_conversation()
+        self._last_talk_at = time.monotonic()
+        if self._realtime is not None:
+            self._realtime.cancel()
+        self._rt_audio.clear()
+        self._heard_buf = []
+        self._pointed_this_turn = False
+        self._request_serial += 1
+        self._trace_readings = []
+        self._rt_question_pcm = None
+        speed.begin()
+        self._emit_state(AppState.THINKING)
+        if self._is_new_question():
+            self._new_talk()
+        question = self._question_no
+        _log.info("typed question (%d chars)", len(text))
+        if cfg.realtime() and cfg.has_key():
+            conv = self._realtime
+            if conv is None or (not conv.ready and not conv.connecting):
+                self._get_realtime()
+                conv = self._realtime
+                self._rt_on_demand = True
+                self._submit(self._realtime_connect(on_demand=True))
+            if conv is not None and await self._session_for_text(conv, question):
+                try:
+                    line = await asyncio.wait_for(self._screen_context(), self.TYPED_CONTEXT_S)
+                except Exception:  # noqa: BLE001 - no screen line: she can still look
+                    line = ""
+                await conv.send_context(line)
+                if question != self._question_no:
+                    return                         # a newer question began meanwhile
+                self._on_realtime_heard(text)      # counted, and the journal's question
+                if await conv.ask_text(text):
+                    speed.mark("sent")
+                    self._activity("understanding")
+                    self._turn_seq += 1
+                    self._submit(self._realtime_turn_watchdog(self._turn_seq, typed=text))
+                    return
+        if question != self._question_no:
+            return
+        speed.route("slow")
+        await self._cascade_turn(b"", typed=text)
+
+    TYPED_CONTEXT_S = 1.5       # the screen line, for a typed question: nobody is still talking
+
+    async def _session_for_text(self, conv, question: int) -> bool:
+        """Wait for the live session to open for a typed question; False:
+        it did not (or a newer question began) - the slow route answers."""
+        started = time.monotonic()
+        while not conv.ready and time.monotonic() - started < self.SESSION_WAIT_S:
+            if question != self._question_no:
+                return False
+            if not conv.connecting and time.monotonic() - started > 0.5:
+                break
+            await asyncio.sleep(0.05)
+        return conv.ready and question == self._question_no
+
     async def _restart_realtime(self) -> None:
         conv = self._realtime
         if conv is not None:
@@ -5775,7 +5855,7 @@ class CompanionManager(QObject):
     # reconnect tripping a GeneratorExit — three failures from one slow tool.
     _TURN_WATCHDOG_MAX_S = 75.0
 
-    async def _realtime_turn_watchdog(self, seq: int, pcm: bytes = b"") -> None:
+    async def _realtime_turn_watchdog(self, seq: int, pcm: bytes = b"", typed: str = "") -> None:
         """Guarantee a turn is answered, even if the live model never replies.
 
         The live session can look perfectly healthy and still produce nothing
@@ -5820,7 +5900,7 @@ class CompanionManager(QObject):
             nothing_s = self._NOTHING_HEARD_S * (2 if net_quality.slow() else 1)
             if not busy and elapsed >= (self._HEARD_NO_ANSWER_S if heard else nothing_s):
                 break                   # quiet long enough — really stuck
-        rescue = len(pcm) >= 3200 and not busy
+        rescue = (len(pcm) >= 3200 or bool(typed)) and not busy
         _log.warning("realtime turn produced no response in %.1fs (%s)%s", time.monotonic() - started,
                      "words were heard" if heard else "no words were heard",
                      " - asking the slow way" if rescue else "")
@@ -5828,7 +5908,8 @@ class CompanionManager(QObject):
         if rescue:
             self._drop_realtime()       # nothing more from it: it cannot answer twice
             speed.route("slow")
-            await self._cascade_turn(pcm)
+            # A spoken question goes as it always has; a typed one with its words.
+            await (self._cascade_turn(pcm, typed=typed) if typed else self._cascade_turn(pcm))
             return
         speed.finish("unanswered")
         self._emit_state(AppState.IDLE)
@@ -5889,8 +5970,9 @@ class CompanionManager(QObject):
                 {"type": "qa", "q": question, "a": answer}
             ))
 
-    async def _cascade_turn(self, pcm: bytes):
-        """Transcribe, think, speak — the fallback route."""
+    async def _cascade_turn(self, pcm: bytes, typed: str = ""):
+        """Transcribe, think, speak — the fallback route. `typed`: a question
+        typed instead of said (ask_typed) - there is nothing to transcribe."""
         # 32000 bytes == 1s of 16 kHz mono int16.
         audio_seconds = len(pcm) / 32000.0
         # A new question cancels this one (_interrupt_answer); its last
@@ -5904,7 +5986,7 @@ class CompanionManager(QObject):
         try:
             # 1. Transcribe — bounded so a hung/downloading STT model can
             # never freeze the UI on "Thinking..." forever
-            transcript = await asyncio.wait_for(
+            transcript = typed or await asyncio.wait_for(
                 self._get_stt().transcribe(pcm), timeout=90,
             )
             _log.info("transcript: %r", transcript[:120])
@@ -5925,7 +6007,8 @@ class CompanionManager(QObject):
             # ("Continue.", "Repeat.") on unclear or code-mixed speech, and
             # without this length check a mis-transcribed sentence silently
             # replayed the previous answer instead of being asked.
-            command_plausible = audio_seconds <= self._MAX_COMMAND_SECONDS
+            # Typed, it is exactly what they meant: "next" is the command.
+            command_plausible = bool(typed) or audio_seconds <= self._MAX_COMMAND_SECONDS
             if not command_plausible and (is_next(transcript) or is_repeat(transcript)):
                 _log.info(
                     "ignoring %r as a voice command — %.1fs of audio is too "

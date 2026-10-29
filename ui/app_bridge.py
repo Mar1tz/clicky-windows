@@ -146,6 +146,13 @@ class AppBridge(QObject):
         if self.manager is not None:
             self.manager.start_hands_free()
 
+    def ask(self, text: str) -> None:
+        """A typed question (the shape's Ask box): asked as a spoken one is,
+        answered aloud with her words on the card (CompanionManager.ask_typed)."""
+        text = (text or "").strip()
+        if text and self.manager is not None and hasattr(self.manager, "ask_typed"):
+            self.manager.ask_typed(text)
+
     def hold_hotkey(self, on: bool) -> None:
         """While a new shortcut is being pressed, the old one does nothing."""
         hook = HOTKEY_HOOKS.get("claim" if on else "release")

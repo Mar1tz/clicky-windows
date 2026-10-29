@@ -10,9 +10,10 @@ from __future__ import annotations
 
 import time
 from datetime import datetime
+from typing import Optional
 
 from PyQt6.QtCore import Qt, QTimer, pyqtSignal
-from PyQt6.QtWidgets import QFrame, QGridLayout, QHBoxLayout, QScrollArea, QVBoxLayout, QWidget
+from PyQt6.QtWidgets import QFrame, QGridLayout, QHBoxLayout, QLineEdit, QScrollArea, QVBoxLayout, QWidget
 
 from ui.app_widgets import Meter, button, label
 from ui.insights_data import minutes
@@ -182,6 +183,7 @@ def _scroller(inner: QWidget) -> QScrollArea:
 # ── Chat ──────────────────────────────────────────────────────────────────────
 
 CHAT_LIMIT = 30
+ASK_MAX = 2000           # a question, not a document: attach those
 
 
 def conversation(entries: list[dict]) -> list[tuple[str, str]]:
@@ -200,43 +202,71 @@ def conversation(entries: list[dict]) -> list[tuple[str, str]]:
 
 
 class ChatTab(ShapePage):
-    """Everything asked, newest at the bottom, and Talk. Talk tucks the
-    shape away first (navigate "talk"): she looks at the screen, and the
-    shape would be in the picture."""
+    """Everything asked, newest at the bottom; Talk and Ask under it, as
+    HeyClicky's. Both tuck the shape away first ("talk", "ask:<text>"):
+    she looks at the screen, and the shape would be in the picture. Only
+    the history redraws - a redraw would wipe a question half typed."""
 
     TOPICS = frozenset({"journal"})
     MARGINS = (0, 0, 0, 0)
 
-    def build(self) -> None:
+    def __init__(self, bridge):
+        self._area: Optional[QScrollArea] = None
+        super().__init__(bridge)                 # the history (refresh)
+        self.lay.addLayout(self._foot())         # once: it keeps what is typed
+
+    def refresh(self) -> None:
+        area = self._history()
+        if self._area is None:
+            self.lay.insertWidget(0, area, 1)
+        else:
+            self.lay.replaceWidget(self._area, area)
+            self._area.hide()
+            self._area.setParent(None)
+            self._area.deleteLater()
+        self._area = area
+        bar = area.verticalScrollBar()
+        QTimer.singleShot(0, lambda: bar.setValue(bar.maximum()))
+
+    def _history(self) -> QScrollArea:
         inner = QWidget()
         col = QVBoxLayout(inner)
         col.setContentsMargins(20, 4, 20, 8)
         col.setSpacing(8)
         said = conversation(self._call("recent", [], CHAT_LIMIT))
+        col.addStretch(1)                        # a short chat sits at the bottom, by the box
         if not said:
-            col.addStretch(1)
             for text, name in (("Say hi to Tora", "emptyTitle"),
-                               ("Everything you ask her lives here.", "emptySub")):
+                               ("Everything you ask her, by voice or by typing, lives here.", "emptySub")):
                 line = label(text, name)
                 line.setAlignment(Qt.AlignmentFlag.AlignHCenter)
                 col.addWidget(line)
             col.addStretch(1)
-        else:
-            col.addStretch(1)                     # a short chat sits at the bottom, by the button
-            for who, text in said:
-                col.addWidget(self._bubble(who, text))
-        area = _scroller(inner)
-        self.lay.addWidget(area, 1)
-        bar = area.verticalScrollBar()
-        QTimer.singleShot(0, lambda: bar.setValue(bar.maximum()))
+        for who, text in said:
+            col.addWidget(self._bubble(who, text))
+        return _scroller(inner)
 
+    def _foot(self) -> QHBoxLayout:
         foot = QHBoxLayout()
         foot.setContentsMargins(20, 6, 20, 2)
+        foot.setSpacing(8)
         keys = " + ".join(self._call("hotkey_keys", ["Ctrl", "Win"]))
-        talk = button(f"Talk to Tora  ·  or hold {keys}", "primary")
+        talk = button(f"Talk  ·  {keys}", "primary")
+        talk.setToolTip(f"Tora listens - or hold {keys} anywhere")
         talk.clicked.connect(lambda: self.navigate.emit("talk"))
-        foot.addWidget(talk, 1)
-        self.lay.addLayout(foot)
+        foot.addWidget(talk, 2)
+        self.ask_box = QLineEdit()
+        self.ask_box.setPlaceholderText("Ask Tora…")
+        self.ask_box.setMaxLength(ASK_MAX)
+        self.ask_box.returnPressed.connect(self._ask)
+        foot.addWidget(self.ask_box, 3)
+        return foot
+
+    def _ask(self) -> None:
+        text = self.ask_box.text().strip()
+        if text:
+            self.ask_box.clear()
+            self.navigate.emit("ask:" + text)
 
     @staticmethod
     def _bubble(who: str, text: str) -> QWidget:

@@ -370,3 +370,42 @@ def test_closing_fades_the_page_before_the_shape_shrinks(shape):
     assert not shape.body.isVisible(), "the page is gone ..."
     now = shape.shape_rect()
     assert abs(now.width() - full.width()) < 0.01 and abs(now.top() - full.top()) < 0.01,         "... before the shape moves"
+
+
+# ── Ask: typed questions (29 Oct 2026) ─────────────────────────────────────
+
+def test_ask_tucks_the_shape_away_then_asks(shape, monkeypatch):
+    from PyQt6.QtCore import QTimer
+    asked, later = [], []
+    monkeypatch.setattr(shape.bridge, "ask", asked.append)
+    monkeypatch.setattr(QTimer, "singleShot", lambda ms, fn: later.append(fn))
+    shape.open_from("bottom", _pill_at("bottom"))
+    shape.show_tab("chat")
+    chat = shape.stack.currentWidget()
+    chat.ask_box.setText("  Why won't this total add up?  ")
+    chat.ask_box.returnPressed.emit()
+    assert not shape.is_open() and asked == [], "out of the picture before she looks"
+    assert chat.ask_box.text() == ""
+    for fn in later:
+        fn()
+    assert asked == ["Why won't this total add up?"]
+
+
+def test_an_empty_ask_does_nothing(shape):
+    shape.open_from("bottom", _pill_at("bottom"))
+    shape.show_tab("chat")
+    chat = shape.stack.currentWidget()
+    chat.ask_box.setText("   ")
+    chat.ask_box.returnPressed.emit()
+    assert shape.is_open()
+
+
+def test_a_question_half_typed_survives_the_history_redrawing(shape):
+    shape.open_from("bottom", _pill_at("bottom"))
+    shape.show_tab("chat")
+    chat = shape.stack.currentWidget()
+    chat.ask_box.setText("What does this cla")
+    chat.refresh()                                   # an answer landed in the journal
+    chat.refresh()
+    assert chat.ask_box.text() == "What does this cla"
+    assert chat.lay.count() == 2, "one history, one box - not a pile of them"
