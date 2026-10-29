@@ -39,8 +39,8 @@ import sys
 import time
 from typing import Callable, Optional
 
-from PyQt6.QtCore import QRectF, Qt, QTimer, QVariantAnimation
-from PyQt6.QtGui import QColor, QGuiApplication, QPainter, QPen
+from PyQt6.QtCore import QEasingCurve, QPoint, QPointF, QRectF, QSize, Qt, QTimer, QVariantAnimation
+from PyQt6.QtGui import QColor, QGuiApplication, QPainter, QPainterPath, QPen, QPixmap, QRegion
 from PyQt6.QtWidgets import (QApplication, QButtonGroup, QFrame, QGraphicsOpacityEffect, QHBoxLayout,
                              QStackedWidget, QVBoxLayout, QWidget)
 
@@ -57,6 +57,20 @@ PAD = 24                            # room around the shape in its window, for t
 LIFT = 6                            # the page rises this far as it fades in
 TOP_BAR_H = 52
 FOOT_H = 52
+# The motion (DESIGN.md §2), measured against HeyClicky's frame by frame:
+# the shape grows over the first GROW_PART of the time on a curve that is
+# not all at the start (the site's curve did 60% of the growing in 30 ms -
+# the first frame on screen was a big black box), and the page fades in from
+# FADE_FROM, while the shape is finishing, not after it (an empty black
+# panel for 80 ms read as a glitch).
+GROW = QEasingCurve(QEasingCurve.Type.OutCubic)
+FADE = QEasingCurve(QEasingCurve.Type.OutQuad)
+GROW_PART = 0.55
+FADE_FROM = 0.35
+GHOST_PART = 0.4             # the old page fades out over this much of a change of size
+CLOSE_FADE = 0.22            # closing: the page is gone by here (40 ms) -
+CLOSE_SHRINK_FROM = CLOSE_FADE   # ... before the shape starts back to the pill, or it pokes out
+FIRST_FRAME_MS = 16          # one frame: the window is on the screen before the clock starts
 # A click outside closes the shape - and that click may be on the pill,
 # which would open it again at once. A toggle this soon after is that click.
 REOPEN_GUARD_S = 0.35
@@ -168,6 +182,9 @@ class Shape(QWidget):
         self._a = self._b = QRectF()         # the move: from a to b, global
         self._from_pill = True               # a (or, shrinking, the end) is the pill
         self._t = 0.0                        # 0 = at a, 1 = at b
+        self._page_off = False               # closing before the page had faded in: keep it out
+        self._ghost = None                   # the page going away, as a picture (see _move_to)
+        self._ghost_at = QPointF()
         self._closed_at = 0.0
         self._anim: Optional[QVariantAnimation] = None
         self._pages: dict[str, QWidget] = {}
@@ -411,22 +428,49 @@ class Shape(QWidget):
             self.open_from(edge, pill)
 
     def open_from(self, edge: str, pill: QRectF) -> None:
-        """Grow out of `pill` (global coordinates), docked on `edge`."""
+        """Grow out of `pill` (global coordinates), docked on `edge`.
+
+        The window is made big enough for every size the shape can take
+        from this pill - the pill, open, Settings - and does not move again
+        until it is closed: a Windows window moved or resized mid-animation
+        shows one frame of its old picture in its new place (the page
+        jumped 30 px on close, 28 Oct). Its see-through parts let clicks
+        through to what is under them."""
         self._edge, self._pill = edge, QRectF(pill)
-        self.show()
-        self.raise_()
-        self.activateWindow()
+        span = self._pill.united(self._rect("open")).united(self._rect("settings"))
+        self.setGeometry(span.adjusted(-PAD, -PAD, PAD, PAD).toRect())
+        self.mode = "open"
+        self._page_off = False
+        self._a, self._b, self._from_pill = QRectF(self._pill), self._rect("open"), True
+        self.views.setCurrentIndex(0)
+        self._check_tabs()
+        self.body.setGeometry(self._local(self._b).toRect())
+        self._step(0.0)                      # the pill, the page hidden
         page = self.stack.currentWidget()
         if page is not None and getattr(page, "LIVE", False):
             page.refresh()
-        self._move_to("open")
+        self.show()
+        self.raise_()
+        self.activateWindow()
+        if not animations_on():
+            self._run(1.0, tokens.SHAPE_OPEN)
+            return
+        # The clock starts once the window is on the screen: started at
+        # show(), the first frame Windows drew was already a third grown.
+        QTimer.singleShot(FIRST_FRAME_MS, self._start_open)
+
+    def _start_open(self) -> None:
+        if self.mode == "open" and self._t == 0.0 and self._from_pill:
+            self._run(1.0, tokens.SHAPE_OPEN)
 
     def show_settings(self, key: str = "account") -> None:
         if self.mode == "closed":
             return
+        if key == "invite":
+            self._elsewhere("invite")
+            return
         self._version_text()
-        self.select(key)
-        self._move_to("settings")
+        self._move_to("settings", key)
 
     def back(self) -> None:
         """Escape: Settings -> open -> the pill."""
@@ -442,29 +486,65 @@ class Shape(QWidget):
         self._closed_at = time.monotonic()
         self._move_to("closed")
 
-    def _move_to(self, mode: str) -> None:
+    def _move_to(self, mode: str, setting: str = "") -> None:
         """One move: from where the shape is now to `mode`'s rectangle."""
         was = self.mode
-        if mode == was and self._t >= 1.0:
+        if mode == was and self._t >= 1.0 and not setting:
             return
-        now = self._now_rect() if was != "closed" else QRectF(self._pill)
+        now = self._now_rect()
         self.mode = mode
+        if self._anim is not None:
+            self._anim.stop()
         if mode == "closed":
-            # Shrinking is growing backwards: from the pill to here, t 1 -> 0.
-            self._a, self._b, self._from_pill, self._t = QRectF(self._pill), now, True, 1.0
-            target = 0.0
-            ms = tokens.SHAPE_CLOSE
-        else:
-            self._a, self._b, self._from_pill = now, self._rect(mode), was == "closed"
-            self._t, target, ms = 0.0, 1.0, tokens.SHAPE_OPEN
-            self.views.setCurrentIndex(1 if mode == "settings" else 0)
+            # Shrinking is growing backwards, from the pill to here: t 1 -> 0.
+            # The page fades out first, where it is - unless it had not
+            # finished fading in, when it stays out (no flash back in).
+            self._page_off = self._fade.opacity() < 1.0
+            self._a, self._b, self._from_pill = QRectF(self._pill), now, True
+            self._t = 1.0
+            self._check_tabs()
+            self._step(1.0)
+            self._run(0.0, tokens.SHAPE_CLOSE)
+            return
+        self._page_off = False
+        if mode == was:
+            # Another settings page at the same size: no move.
+            if setting:
+                self.select(setting)
+            return
+        # The page going away fades out as a picture while the shape grows
+        # (GHOST_PART), so the shape is never an empty black box between the
+        # two pages (it was for 80 ms on the way into Settings).
+        self._ghost = self._picture_of_page() if self.body.isVisible() else None
+        self._ghost_at = QPointF(self.body.pos())
+        # Off the screen before anything changes under it: swapped first, the
+        # Settings page showed full size in the small shape for a frame.
+        self._fade.setEnabled(True)
+        self._fade.setOpacity(0.0)
+        self.body.hide()
+        self._a, self._b, self._from_pill = now, self._rect(mode), False
+        self._t = 0.0
+        self.views.setCurrentIndex(1 if mode == "settings" else 0)
+        if setting:
+            self.select(setting)
         self._check_tabs()
-        span = self._a.united(self._b).adjusted(-PAD, -PAD, PAD, PAD).toRect()
-        self.setGeometry(span)
         self.body.setGeometry(self._local(self._b).toRect())
-        self._run(target, ms)
+        self._step(0.0)
+        self._run(1.0, tokens.SHAPE_OPEN)
+
+    def _picture_of_page(self) -> QPixmap:
+        """The page as it is now, on a clear ground - grab() fills what the
+        page leaves unpainted with the light palette, a grey flash in dark."""
+        dpr = self.devicePixelRatioF()
+        pix = QPixmap(QSize(round(self.body.width() * dpr), round(self.body.height() * dpr)))
+        pix.setDevicePixelRatio(dpr)
+        pix.fill(Qt.GlobalColor.transparent)
+        self.body.render(pix, QPoint(), QRegion(), QWidget.RenderFlag.DrawChildren)
+        return pix
 
     def _now_rect(self) -> QRectF:
+        if self._a.isNull() and self._b.isNull():
+            return QRectF(self._pill)
         return _lerp(self._a, self._b, self._grow())
 
     def _run(self, to: float, ms: int) -> None:
@@ -482,11 +562,27 @@ class Shape(QWidget):
         self._anim = a
 
     def _grow(self) -> float:
-        return tokens.ease().valueForProgress(_part(self._t, 0.0, 0.6))
+        if self.mode == "closed":
+            # Closing has its own timing, not opening's played backwards (the
+            # page sat still for 80 ms first): the page fades at once, and the
+            # shape starts back to the pill a moment after.
+            done = 1.0 - self._t
+            return 1.0 - GROW.valueForProgress(_part(done, CLOSE_SHRINK_FROM, 1.0 - CLOSE_SHRINK_FROM))
+        return GROW.valueForProgress(_part(self._t, 0.0, GROW_PART))
+
+    def _page(self, t: float) -> float:
+        """How much of the page shows at `t`, 0-1."""
+        if self._page_off:
+            return 0.0
+        if self.mode == "closed":
+            return 1.0 - _part(1.0 - t, 0.0, CLOSE_FADE)
+        return FADE.valueForProgress(_part(t, FADE_FROM, 1.0 - FADE_FROM))
 
     def _step(self, t: float) -> None:
         self._t = t
-        fade = tokens.ease().valueForProgress(_part(t, 0.4, 0.6))
+        fade = self._page(t)
+        if self.mode == "closed" or t >= GHOST_PART:
+            self._ghost = None
         self._fade.setOpacity(fade)
         # Only while fading: an effect draws the page through a pixmap, which
         # can soften text on a scaled screen.
@@ -497,13 +593,6 @@ class Shape(QWidget):
         self.update()
         if t <= 0.0 and self.mode == "closed":
             self.hide()
-        elif t >= 1.0 and self.mode != "closed":
-            # Landed: the window shrinks to the shape again.
-            span = self._b.adjusted(-PAD, -PAD, PAD, PAD).toRect()
-            if self.geometry() != span:
-                self.setGeometry(span)
-                self.body.setGeometry(self._local(self._b).toRect())
-                self.update()
 
     def _local(self, r: QRectF) -> QRectF:
         return r.translated(-self.x(), -self.y())
@@ -528,6 +617,12 @@ class Shape(QWidget):
         p.setBrush(kit.mix(tokens.PILL, T.BG, g))
         p.setPen(QPen(QColor(T.BORDER), 1.0) if T.is_dark() else Qt.PenStyle.NoPen)
         p.drawRoundedRect(r, radius, radius)
+        if self._ghost is not None:
+            clip = QPainterPath()
+            clip.addRoundedRect(r, radius, radius)
+            p.setClipPath(clip)
+            p.setOpacity(1.0 - _part(self._t, 0.0, GHOST_PART))
+            p.drawPixmap(self._ghost_at, self._ghost)
         p.end()
 
     def keyPressEvent(self, e) -> None:

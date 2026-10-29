@@ -45,13 +45,21 @@ content fades in and settles:
 
 | Time | What happens |
 |---|---|
-| 0–150 ms | The shape grows from the pill to the full size, on `tokens.ease()` |
-| 100–250 ms | The content fades in and lifts 6 px into place |
-| close | The same, reversed, in 180 ms |
+| first frame | The pill, exactly: the clock starts only once the window is on the screen |
+| 0–140 ms | The shape grows from the pill to the full size, on an ease-out (`shape.GROW`; the site's curve did 60% in the first 30 ms and read as a pop) |
+| 90–250 ms | The page fades in and lifts 6 px into place, while the shape is finishing - never an empty box after it |
+| change of size | The old page fades out as a picture while the shape grows (first 40%), then the new one fades in |
+| close (180 ms) | The page fades in the first 40 ms; only then does the shape shrink back into the pill |
 
 Open → Settings grows the same way, from the open size. Nothing slides
 across the screen and nothing bounces. With Windows' animation effects off,
 it appears at once.
+
+**The window never moves while the shape does.** It is made big enough for
+the pill, open and Settings when it opens, and stays put until it closes;
+what moves is painted inside it. A Windows window moved or resized
+mid-animation shows one frame of its old picture in the new place (found
+frame by frame in a screen recording, 28 Oct 2026).
 
 **It opens towards the middle of the screen.** Docked at the top it grows
 down; at the bottom, up; on the left, rightwards; on the right, leftwards.

@@ -245,3 +245,62 @@ def test_it_takes_its_colours_from_the_tokens():
     from tests.agents.test_e2e_design_tokens import ROOT, _code_hexes
     for f in ("ui/shape.py", "ui/shape_pages.py"):
         assert not _code_hexes(ROOT / f), f
+
+
+# ── no glitches (28 Oct 2026, heytoraPopup.mp4, frame by frame) ──────────
+
+def test_the_window_never_moves_while_the_shape_does(shape):
+    """Moved or resized mid-animation, Windows showed one frame of the old
+    picture in the new place: the page jumped 30 px on close."""
+    shape.open_from("top", _pill_at("top"))
+    where = shape.geometry()
+    shape.show_settings("account")
+    shape.back()
+    shape.show_settings("plans")
+    assert shape.geometry() == where
+    shape.shrink()
+    assert shape.geometry() == where
+
+
+def test_the_first_frame_is_the_pill(qapp, monkeypatch):
+    """The clock started at show(); the first frame Windows drew was a third
+    grown - a big black box popping out, not growing."""
+    from ui import shape as S
+    from ui.app_bridge import AppBridge
+    monkeypatch.setattr(S, "animations_on", lambda: True)
+    s = S.Shape(AppBridge())
+    pill = _pill_at("bottom")
+    s.open_from("bottom", pill)
+    assert s._anim is None, "the clock waits for the window to be on the screen"
+    first = s.shape_rect().translated(s.x(), s.y())
+    assert abs(first.width() - pill.width()) < 1 and abs(first.height() - pill.height()) < 1
+    assert not s.body.isVisible()
+    s._start_open()
+    assert s._anim is not None
+    s._anim.stop()
+    s.hide()
+
+
+def test_a_change_of_size_never_shows_the_new_page_early_or_an_empty_box(shape):
+    """Into Settings: the Settings page showed full size in the small shape
+    for a frame, then the shape was an empty black box for 80 ms."""
+    from ui import shape as S
+    shape.open_from("bottom", _pill_at("bottom"))
+    shape._run = lambda to, ms: None             # hold the move at its start
+    shape.show_settings("account")
+    assert not shape.body.isVisible(), "the new page waits"
+    assert shape._ghost is not None, "the old page fades out meanwhile"
+    shape._step(S.GHOST_PART)
+    assert shape._ghost is None
+
+
+def test_closing_fades_the_page_before_the_shape_shrinks(shape):
+    from ui import shape as S
+    shape.open_from("bottom", _pill_at("bottom"))
+    shape._run = lambda to, ms: None
+    shape.shrink()
+    full = shape.shape_rect()
+    shape._step(1.0 - S.CLOSE_FADE - 1e-9)
+    assert not shape.body.isVisible(), "the page is gone ..."
+    now = shape.shape_rect()
+    assert abs(now.width() - full.width()) < 0.01 and abs(now.top() - full.top()) < 0.01,         "... before the shape moves"
