@@ -1421,6 +1421,82 @@ class AppBridge(QObject):
         self._skills().set_enabled(skill_id, bool(on))
         self._skills_changed()
 
+    # ── Integrations and Routines (the shape's WORK pages) ───────────────────
+
+    GOOGLE = {"gmail": ("Gmail", "send email you approve"),
+              "calendar": ("Google Calendar", "read your calendar")}
+
+    def integrations(self) -> dict:
+        """What is connected, and what can be: Google's (integrations/
+        connections.py) and the MCP services (catalog.py, the agents' hub)."""
+        from integrations import catalog
+        connected: list[dict] = []
+        try:
+            from integrations.connections import connections
+            for c in connections().all():
+                name = self.GOOGLE.get(c.provider, (c.provider.title(), ""))[0]
+                connected.append({"id": c.provider, "name": name, "detail": f"{c.account} · {c.state.value}",
+                                  "ok": bool(c.state.usable)})
+        except Exception:  # noqa: BLE001 - the list shows what it can
+            _log.debug("could not read the connections", exc_info=True)
+        hub = self.manager._mcp_hub() if self.manager is not None and hasattr(self.manager, "_mcp_hub") else None
+        if hub is not None:
+            for name, server in list(hub.servers.items()):
+                label = catalog.SERVICES[name].name if name in catalog.SERVICES else name
+                detail = (f"{len(server.tools)} tools" if server.running
+                          else f"not working: {hub.failed.get(name, 'stopped')}")
+                connected.append({"id": name, "name": label, "detail": detail, "ok": bool(server.running)})
+        linked = {c["id"] for c in connected}
+        available = [{"id": k, "name": n, "how": "sign_in", "gives": g}
+                     for k, (n, g) in self.GOOGLE.items() if k not in linked]
+        available += [{"id": s.id, "name": s.name, "how": s.how, "gives": s.gives}
+                      for s in catalog.SERVICES.values() if s.id not in linked]
+        return {"connected": connected, "available": available, "running": hub is not None}
+
+    def _manager_tool(self, name: str, args: dict) -> dict:
+        """One of the companion's own tools, the voice's way in - run on its
+        loop, waited for here (call from a worker thread, not the UI's)."""
+        import asyncio
+        mgr = self.manager
+        loop = getattr(mgr, "_loop", None)
+        if mgr is None or loop is None:
+            return {"error": "HeyTora isn't running."}
+        try:
+            return asyncio.run_coroutine_threadsafe(getattr(mgr, name)(args), loop).result(timeout=30) or {}
+        except Exception as e:  # noqa: BLE001
+            _log.warning("%s failed", name, exc_info=True)
+            return {"error": str(e) or type(e).__name__}
+
+    def connect_integration(self, service: str, pasted: bool = False) -> dict:
+        """Connect as "Tora, connect Notion" does; the outcome is said by her."""
+        return self._manager_tool("_tool_connect_account", {"service": service, "pasted": pasted})
+
+    def disconnect_integration(self, service: str) -> dict:
+        out = self._manager_tool("_tool_disconnect_account", {"service": service})
+        self.changed.emit("integrations")
+        return out
+
+    def routines(self) -> list[dict]:
+        """Skills that run by themselves (their `every:`), with when they run
+        next and when they last ran (agents/manager/scheduler.py)."""
+        from agents.skills.schedule import JOB_PREFIX
+        jobs: dict = {}
+        sched = getattr(self.workforce(), "scheduler", None)
+        if sched is not None:
+            try:
+                jobs = {j["id"]: j for j in sched.jobs()}
+            except Exception:  # noqa: BLE001
+                _log.debug("could not read the schedule", exc_info=True)
+        out = []
+        for s in self.skills():
+            if not s.get("every"):
+                continue
+            job = jobs.get(JOB_PREFIX + s["id"], {})
+            out.append({"id": s["id"], "name": s["name"], "every": s["every"],
+                        "enabled": bool(s.get("enabled", True)), "next": job.get("next", ""),
+                        "last_fired": float(job.get("last_fired") or 0.0), "last": s.get("last")})
+        return out
+
     def _skills_changed(self) -> None:
         wf = self.workforce()
         if wf is not None:

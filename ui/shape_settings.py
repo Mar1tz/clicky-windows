@@ -9,9 +9,11 @@ window already has - its settings tabs' groups and the Tora page's cards
 teaching her) - borrowed, not copied, so the two windows stay the same
 until the app window goes (DESIGN.md §13).
 
-Not here yet, because there is nothing behind them: HeyClicky's Dictation
-(a language and a dictionary), Integrations and Routines pages, a speech
-speed and a captions switch (step 5b).
+Integrations and Routines (step 5b) show what was only reachable by voice
+before: the connections (integrations/) and the skills that run by
+themselves (agents/manager/scheduler.py). Not here yet, because there is
+nothing behind them: HeyClicky's Dictation (a language and a dictionary),
+a speech speed and a captions switch.
 """
 from __future__ import annotations
 
@@ -19,7 +21,7 @@ from PyQt6.QtCore import QTimer
 from PyQt6.QtWidgets import QHBoxLayout, QWidget
 
 from ui.app_pages import ToraPage
-from ui.app_widgets import Select, button, label
+from ui.app_widgets import Select, Switch, button, label
 from ui.settings_tabs import AccountTab, GeneralTab, SystemTab, Tab, UsageTab, _ask
 
 
@@ -214,6 +216,163 @@ class SkillsPage(_Later, Tab):
         self.body.add(teach)
 
 
+def _row_controls(*widgets) -> QWidget:
+    """Several controls at a row's end (a switch and Edit)."""
+    box = QWidget()
+    lay = QHBoxLayout(box)
+    lay.setContentsMargins(0, 0, 0, 0)
+    lay.setSpacing(8)
+    for w in widgets:
+        lay.addWidget(w)
+    return box
+
+
+class IntegrationsPage(Tab):
+    """Apps her jobs can reach: what is connected (Disconnect), and what can
+    be (Connect) - the same tools as "Tora, connect Notion", so the page and
+    her voice never disagree. A sign-in opens in the browser and she says
+    when it is done; a service with a key opens its key page, and the key
+    is read off the clipboard once, kept in Credential Manager and wiped
+    from the clipboard - never typed into HeyTora, never shown."""
+
+    HEADING = "Integrations"
+    TOPICS = frozenset({"integrations"})
+
+    def __init__(self, bridge):
+        self._waiting: dict = {}             # the service whose key page is open
+        self._said = ""
+        self._busy = None
+        super().__init__(bridge)
+
+    def build(self) -> None:
+        from ui.settings_parts import Group
+        data = _ask(self.bridge, "integrations", {"connected": [], "available": [], "running": False}) or {}
+        if self._waiting:
+            w = self._waiting
+            wait = Group("Waiting for your key")
+            done = button("I've copied it", "primary")
+            done.clicked.connect(lambda: self._connect(w, pasted=True))
+            what = "a key" if w.get("how") == "key" else "your personal link"
+            wait.row(w["name"], f"Its page is open in your browser. Make {what} there and copy it, then "
+                                "press I've copied it.", done)
+            self.body.add(wait)
+        have = Group("Connected")
+        for c in data.get("connected") or []:
+            off = button("Disconnect", "ghost")
+            off.clicked.connect(lambda _c=False, c=c: self._disconnect(c))
+            have.row(c["name"], c["detail"], off)
+        if not data.get("connected"):
+            have.row("Nothing yet", "Connect one below - or ask Tora: “connect Notion”.")
+        self.body.add(have)
+        add = Group("Add a connection")
+        for s in data.get("available") or []:
+            go = button("Connect")
+            go.clicked.connect(lambda _c=False, s=s: self._connect(s))
+            add.row(s["name"], (s.get("gives") or "").capitalize(), go)
+        custom = button("Add")
+        custom.clicked.connect(lambda: self._connect({"id": "custom", "name": "Your server"}, pasted=True))
+        add.row("Custom connector", "Any service with an MCP server: copy its https:// address, then "
+                                    "press Add.", custom)
+        if not data.get("running"):
+            add.note("Tora's jobs aren't running, so only Google can be connected right now.")
+        self.body.add(add)
+        self.note = label(self._said, "setNote", wrap=True)
+        self.note.setVisible(bool(self._said))
+        self.body.add(self.note)
+
+    def _say(self, words: str) -> None:
+        self._said = words
+        self.note.setText(words)
+        self.note.setVisible(bool(words))
+
+    def _connect(self, svc: dict, pasted: bool = False) -> None:
+        from ui.settings_tabs import _Background
+        if self._busy is not None:
+            return
+        self._say("Connecting…" if pasted else f"Opening {svc['name']}…")
+
+        def done(answer: dict) -> None:
+            self._busy = None
+            if pasted:
+                self._waiting = {}
+            if answer.get("error"):
+                self._said = answer["error"]
+            elif answer.get("waiting_for_copy"):
+                self._waiting, self._said = svc, ""
+            elif answer.get("through"):
+                self._said = (f"{svc['name']} works through your {answer['through']} link: switch it on "
+                              f"there, and jobs that mention it can use it.")
+            elif pasted:
+                self._said = "Got it - connecting. Tora tells you when it's done."
+            else:
+                self._said = f"{svc['name']}: sign in in your browser. Tora tells you when it's connected."
+            self.refresh()
+        self._busy = _Background(self, lambda: self.bridge.connect_integration(svc["id"], pasted), done)
+
+    def _disconnect(self, c: dict) -> None:
+        from ui.settings_tabs import _Background
+        if self._busy is not None:
+            return
+
+        def done(answer: dict) -> None:
+            self._busy = None
+            self._said = answer.get("error") or ("" if answer.get("ok") else answer.get("note", ""))
+            self.refresh()
+        self._busy = _Background(self, lambda: self.bridge.disconnect_integration(c["id"]), done)
+
+
+def _when(iso: str) -> str:
+    """"Thu 30 Oct, 09:00" from the scheduler's next run; words kept as they are."""
+    from datetime import datetime
+    try:
+        d = datetime.fromisoformat(iso)
+    except (TypeError, ValueError):
+        return iso
+    return f"{d:%a} {d.day} {d:%b}, {d:%H:%M}"
+
+
+class RoutinesPage(_Later, Tab):
+    """Things Tora does on repeat, on this PC: the skills that run by
+    themselves (their "Runs by itself" line), when each runs next and last
+    ran, a switch each, and Edit."""
+
+    HEADING = "Routines"
+    TOPICS = frozenset({"skills", "agents"})
+    edit_skill = ToraPage.edit_skill
+
+    def build(self) -> None:
+        from ui.settings_parts import Group
+        from ui.shape_pages import _ago
+        routines = _ask(self.bridge, "routines", []) or []
+        new = button("New routine", "primary")
+        new.clicked.connect(lambda: self.edit_skill(None))
+        if not routines:
+            empty = Group("Nothing on repeat yet")
+            empty.row("Make one", "A skill with “Runs by itself”: every: weekdays 9am, every: Friday "
+                                  "16:00, every: new file in Downloads\\Receipts.", new)
+            self.body.add(empty)
+            return
+        group = Group("On repeat")
+        for r in routines:
+            words = [f"Every {r['every'].removeprefix('every').strip(': ')}"]
+            if r["enabled"] and r.get("next"):
+                words.append(f"next {_when(r['next'])}")
+            if r.get("last_fired"):
+                words.append(f"last ran {_ago(r['last_fired']).lower()}")
+            switch = Switch(r["enabled"])
+            switch.toggled.connect(lambda on, i=r["id"]: _ask(self.bridge, "set_skill_enabled", None, i, on))
+            edit = button("Edit", "ghost")
+            edit.clicked.connect(lambda _c=False, i=r["id"]: self.edit_skill(_ask(self.bridge, "skill", None, i)))
+            group.row(r["name"], " · ".join(words), _row_controls(switch, edit))
+        self.body.add(group)
+        foot = QHBoxLayout()
+        foot.addWidget(new)
+        foot.addStretch(1)
+        holder = QWidget()
+        holder.setLayout(foot)
+        self.body.add(holder)
+
+
 # key -> the page; the shape's sidebar (shape.SETTINGS) names and orders them.
 PAGES = {
     "account": AccountPage,
@@ -224,4 +383,6 @@ PAGES = {
     "cursor": CursorPage,
     "style": StylePage,
     "skills": SkillsPage,
+    "integrations": IntegrationsPage,
+    "routines": RoutinesPage,
 }

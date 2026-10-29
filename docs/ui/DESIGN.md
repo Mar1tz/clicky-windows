@@ -157,10 +157,22 @@ each made of parts the app already had - borrowed, not copied:
 Old names still asked for land on the new page (`shape.MOVED`: General ->
 Shortcuts, Usage -> Account).
 
-**Step 5b**, when there is something behind them: Dictation (a language, a
-dictionary), Integrations (connect Gmail, Calendar, Notion... - the
-connections exist in `integrations/`, with no page yet), Routines (the
-scheduler exists, with no page yet), a speech speed, a captions switch.
+**Step 5b.** Two pages for what was only reachable by voice:
+
+- **Integrations** (WORK): what is connected (Disconnect) and what can be
+  (Connect) - Google's (Gmail, Calendar) and the MCP services in
+  `integrations/catalog.py`, plus a custom connector. It calls the
+  companion's own `connect_account` / `disconnect_account` tools, so the
+  page and "Tora, connect Notion" behave the same. A sign-in opens in the
+  browser and she says when it is done; a service with a key opens its key
+  page and the page waits for **I've copied it** - the key is read off the
+  clipboard once, kept in Credential Manager, wiped from the clipboard.
+- **Routines** (WORK): the skills that run by themselves (their "Runs by
+  itself" line), when each runs next and last ran, a switch and Edit each,
+  and New routine (the skill editor).
+
+Still waiting for something behind them: Dictation (a language, a
+dictionary), a speech speed, a captions switch.
 
 ## 5. Plans
 
@@ -429,7 +441,8 @@ as she talks.
 | 3c | **Jobs** is the fourth tab (Home · Chat · Insights · Jobs); the foot's **New job +** opens it with the job box ready. Give Tora a job (a question is pointed to Chat) · Needs your OK (Approve / Deny, a sensitive one with its typed word) · Working now (step, what it is doing, progress, Pause / Resume, Stop) · History. Each part redraws only when what it lists changes, so progress never wipes what is being typed. A job's details (plan, log, folder) still open in the app window | Built; needs a live run |
 | 4 | Plans as three cards, yours outlined, Upgrade gone on Max (§5); Invite & Earn as a settings page (§5) - the referral window is no longer opened from the shape | Built; needs a live run |
 | 5a | Settings split into HeyClicky's pages from what exists (§4) | Built; needs a live run |
-| 5b | Dictation, Integrations, Routines, speech speed, captions - each needs its feature first | |
+| 5b | Integrations and Routines pages (§4) | Built; needs a live run |
+| 5c | Dictation, speech speed, captions - each needs its feature first | |
 | 6 | Onboarding restyled (§10); the old app window, settings window and referral window deleted | |
 
 Each step: a screenshot first, then code, then this table updated.

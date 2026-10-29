@@ -91,7 +91,7 @@ TABS = (
 # Step 5a: HeyClicky's pages, one thing each (ui/shape_settings.py), made
 # from what the app already has. A key of shape_settings.PAGES is one of
 # those; any other is an app window settings tab; "invite" is the referral
-# panel. Not yet: Dictation, Integrations, Routines (step 5b).
+# panel. Not yet: Dictation (step 5b).
 SETTINGS = (
     ("", (
         ("account", "Account", "circle-user-round"),
@@ -109,7 +109,9 @@ SETTINGS = (
         ("memory", "Memory", "book-open"),
     )),
     ("WORK", (
+        ("integrations", "Integrations", "link"),
         ("agents", "Agents", "bot"),
+        ("routines", "Routines", "clock"),
         ("skills", "Skills", "blocks"),
         ("devlink", "Code editors", "code"),
         ("advanced", "Advanced", "wrench"),
