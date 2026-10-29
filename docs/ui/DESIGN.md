@@ -418,6 +418,11 @@ speaks. Dragged, it snaps to the nearest side of any monitor and stays there
 microphone stream is open, blue for two seconds after the screen was looked
 at.
 
+**Its glow** (29 Oct 2026, after HeyClicky's notch): while she thinks,
+speaks or listens, a soft light at the pill's far end in our violet, amber
+or teal (`tokens.STATE_GLOW`), drifting a little, brighter as the voice is
+louder - the state at a glance, in colour.
+
 What changes: a **click** on the pill (not a drag) grows it into the shape
 (§2). The answer card stays as it is, a fixed-size card that doesn't grow
 as she talks.

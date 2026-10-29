@@ -285,6 +285,10 @@ SHAPE_CLOSE = 180
 # The pill's black glass (ui/flow_bar.py); the shape grows out of it into
 # the theme's ground.
 PILL = "#000000"
+# The glow at the pill's end while Tora works - HeyClicky's notch does this
+# (heyclickyonboarding.mp4: purple thinking, orange speaking, teal
+# listening), here in our own palette's violet, amber and teal.
+STATE_GLOW = {"thinking": "#8C7CFF", "speaking": "#F29B38", "listening": "#2FB8C8"}
 
 
 def ease():

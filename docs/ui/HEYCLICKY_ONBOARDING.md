@@ -117,7 +117,7 @@ Each phase is usable on its own; the old onboarding stays until the last.
 
 | Phase | What |
 |---|---|
-| A | The frame: the panel grows out of the pill like the shape does. Back, step dots, a sound switch, Skip demo. The pill's state glow while she thinks (violet), speaks (amber) and listens (teal), in our palette |
+| A | **Built.** The frame (`ui/onboarding_shape.py`): the panel grows out of the pill like the shape does, to the middle of the screen; narrow (480) or wide (720) steps; Back, step dots, a sound switch, Skip; Continue lit only when the step is proven; the wizard's `completed` / `ready` / `attach`. `python -m ui.onboarding_shape` shows it with stand-in steps. The pill's glow (`tokens.STATE_GLOW`, `FlowBar.glow`): violet thinking, amber speaking, teal listening, following the voice |
 | B | Show me around · Can I hear you? · This is how you talk to me (hold the keys, say your name) |
 | C | The free onboarding pass (server, local first) · I'm curious about you: the spoken interview, Tora's cursor as its face, answers into her memory and the starter skills |
 | D | Here's how I'd help you (a question from the interview, on their screen) · Circle anything (live) · I can drive your computer (our own list window) · Type: Ctrl, Ctrl |
