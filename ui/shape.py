@@ -47,7 +47,7 @@ from PyQt6.QtWidgets import (QApplication, QButtonGroup, QFrame, QGraphicsOpacit
 from ui import app_theme as T
 from ui import kit, tokens
 from ui.app_shell import IconButton, NavItem
-from ui.app_widgets import button, label
+from ui.app_widgets import Meter, button, label
 from ui.flow_bar import place_card
 
 OPEN_W, OPEN_H = 520, 420           # DESIGN.md §2
@@ -70,7 +70,10 @@ FADE_FROM = 0.35
 GHOST_PART = 0.4             # the old page fades out over this much of a change of size
 CLOSE_FADE = 0.22            # closing: the page is gone by here (40 ms) -
 CLOSE_SHRINK_FROM = CLOSE_FADE   # ... before the shape starts back to the pill, or it pokes out
-FIRST_FRAME_MS = 16          # one frame: the window is on the screen before the clock starts
+FIRST_FRAME_MS = 16
+JOB_W = 132                  # a running job's card beside the shape (DESIGN.md §3)
+JOB_GAP = 10
+MAX_JOBS = 3          # one frame: the window is on the screen before the clock starts
 # A click outside closes the shape - and that click may be on the pill,
 # which would open it again at once. A toggle this soon after is that click.
 REOPEN_GUARD_S = 0.35
@@ -79,8 +82,8 @@ REOPEN_GUARD_S = 0.35
 # shape's own page; any other opens the app window there (app_pages.PAGES keys).
 TABS = (
     ("home", "home", "Home"),
+    ("chat", "chat", "Chat"),
     ("insights", "insights", "Insights"),
-    ("agents", "agents", "Jobs"),
 )
 
 # The settings sidebar (DESIGN.md §4): (group, ((key, name, icon), ...)).
@@ -109,8 +112,8 @@ SETTINGS = (
 
 
 def _pages() -> dict:
-    from ui.shape_pages import HomeTab
-    return {"home": HomeTab}
+    from ui.shape_pages import ChatTab, HomeTab, InsightsTab
+    return {"home": HomeTab, "chat": ChatTab, "insights": InsightsTab}
 
 
 def _settings_kinds() -> dict:
@@ -159,6 +162,30 @@ class _Tab(IconButton):
             p.drawRoundedRect(QRectF(self.rect()), tokens.RADIUS_SM, tokens.RADIUS_SM)
             p.end()
         super().paintEvent(event)
+
+
+class _JobCard(QFrame):
+    """A running job: "Working", its name, how far along. A click opens it."""
+
+    def __init__(self, job: dict, open_key: Callable[[str], None]):
+        super().__init__()
+        self.setObjectName("jobCard")
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._key = f"agents/job/{job['task_id']}" if job.get("task_id") else "agents"
+        self._open = open_key
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(10, 8, 10, 10)
+        lay.setSpacing(4)
+        lay.addWidget(label("WORKING", "sectionTitle"))
+        title = str(job.get("title") or "A job")
+        name = label(title if len(title) <= 48 else title[:47].rstrip() + "…", "rowTitle", wrap=True)
+        lay.addWidget(name)
+        lay.addWidget(Meter(float(job.get("progress") or 0.0), height=3))
+        self.setToolTip(str(job.get("doing") or title))
+
+    def mouseReleaseEvent(self, e) -> None:
+        if e.button() == Qt.MouseButton.LeftButton:
+            self._open(self._key)
 
 
 class Shape(QWidget):
@@ -211,6 +238,13 @@ class Shape(QWidget):
         self._fade.setOpacity(0.0)
         self.body.setGraphicsEffect(self._fade)
         self.body.hide()
+        # Running jobs, beside the open shape - in the room the window has
+        # for Settings anyway, so no window of their own.
+        self.jobs = QWidget(self)
+        self.jobs.setStyleSheet(T.qss())
+        QVBoxLayout(self.jobs).setContentsMargins(0, 0, 0, 0)
+        self.jobs.layout().setSpacing(JOB_GAP)
+        self.jobs.hide()
         self.show_tab(TABS[0][0])
 
     # ── the top bar ──────────────────────────────────────────────────────────
@@ -372,7 +406,13 @@ class Shape(QWidget):
         return next((k for k, w in self._pages.items() if w is page), "")
 
     def _navigate(self, key: str) -> None:
-        if key in _pages():
+        if key == "talk":
+            # Out of the picture first: she looks at the screen.
+            self.shrink()
+            QTimer.singleShot(tokens.SHAPE_CLOSE + 60, self.bridge.talk)
+        elif key.startswith("app/"):
+            self._elsewhere(key[len("app/"):])           # the app window's own page, by name
+        elif key in _pages():
             self.show_tab(key)
         elif key.startswith("settings"):
             self.show_settings(key.partition("/")[2] or "account")
@@ -393,6 +433,8 @@ class Shape(QWidget):
         if not self.isVisible():
             return
         topics, self._pending = self._pending, set()
+        if "agents" in topics or "state" in topics:
+            self._place_jobs()
         page = (self.settings_stack if self.mode == "settings" else self.stack).currentWidget()
         if page is not None and getattr(page, "LIVE", False) and set(getattr(page, "TOPICS", ())) & topics:
             partial = getattr(page, "refresh_topics", None)
@@ -591,8 +633,58 @@ class Shape(QWidget):
         full = self._local(self._b).toRect()
         self.body.move(full.x(), full.y() + round(LIFT * (1.0 - fade)))
         self.update()
+        if t >= 1.0 and self.mode == "open":
+            self._place_jobs()
+        elif self.jobs.isVisible():
+            self.jobs.hide()
         if t <= 0.0 and self.mode == "closed":
             self.hide()
+
+    # ── running jobs, beside the shape ───────────────────────────────────────
+    def _place_jobs(self) -> None:
+        """Up to MAX_JOBS cards beside the open shape, on the side away from
+        the pill's edge where there is room; none while it moves or is
+        another size, or when nothing runs."""
+        running = []
+        if self.mode == "open" and self._t >= 1.0:
+            try:
+                running = list(self.bridge.agents())[:MAX_JOBS]
+            except Exception:  # noqa: BLE001 - no cards, the shape is fine
+                running = []
+        lay = self.jobs.layout()
+        while lay.count():
+            w = lay.takeAt(0).widget()
+            if w is not None:
+                w.hide()
+                w.setParent(None)
+                w.deleteLater()
+        if not running:
+            self.jobs.hide()
+            return
+        for job in running:
+            card = _JobCard(job, lambda key: self._elsewhere(key))
+            lay.addWidget(card)
+            # Added to a holder already on the screen, a card is shown only
+            # later - and until then measures 0 px, so the cards did too.
+            card.show()
+        shape = self._local(self._b)
+        room_left = shape.left() - JOB_GAP - JOB_W >= 0
+        room_right = shape.right() + JOB_GAP + JOB_W <= self.width()
+        prefer_left = self._edge != "left"
+        if (prefer_left and room_left) or not room_right:
+            if not room_left:
+                self.jobs.hide()
+                return
+            x = shape.left() - JOB_GAP - JOB_W
+        else:
+            x = shape.right() + JOB_GAP
+        # Measured for the cards' width: the names wrap, and adjustSize() on
+        # cards just added came out 0 px tall.
+        lay.activate()
+        tall = lay.heightForWidth(JOB_W) if lay.hasHeightForWidth() else lay.sizeHint().height()
+        self.jobs.setGeometry(round(x), round(shape.top() + TOP_BAR_H), JOB_W, max(tall, lay.sizeHint().height()))
+        self.jobs.show()
+        self.jobs.raise_()
 
     def _local(self, r: QRectF) -> QRectF:
         return r.translated(-self.x(), -self.y())

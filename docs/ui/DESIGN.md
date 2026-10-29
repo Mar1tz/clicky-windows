@@ -394,7 +394,9 @@ as she talks.
 | 0 | This document | Done |
 | 1 | The shape: a click on the pill grows it open (§2) - `ui/shape.py`, `ui/shape_pages.py`. Home is its own; the app window's pages need a 1040 px column and can't be squeezed into 520, so Insights, Jobs, Settings, Upgrade and Invite & earn open the app window until each is rebuilt | Built; needs a live run |
 | 2 | Settings inside it: the gear (and Upgrade, on Plans) grows the shape to 820 × 660; the sidebar holds the app's ten settings tabs, regrouped (`shape.SETTINGS`), each titled as its row; Escape steps back a size; Invite & Earn still opens the referral window. The tray's Settings still opens the app window's | Built; needs a live run |
-| 3 | Chat and Insights tabs, Jobs; running-job cards beside the shape | |
+| 3 | Tabs Home · Chat · Insights (`ui/shape_pages.py`): Chat is everything asked, newest at the bottom, and **Talk to Tora** (the shape steps aside, then she listens hands-free); Insights is the four measured numbers and this month on the plan, "All of Insights" opening the app window's page; up to three running-job cards beside the open shape, on the side away from the pill. Not yet: a typed **Ask** box - the app has no typed way into a conversation, so it needs work in companion_manager first | Built; needs a live run |
+| 3b | Typed questions: an Ask box in Chat, and the conversation taking text as well as voice | |
+| 3c | Jobs inside the shape (running, needs your OK, history), from **Jobs +** | |
 | 4 | The Plans card; Invite & Earn as a settings page | |
 | 5 | New pages: Voice (speed, voice tiles), Dictation (language, dictionary), Routines | |
 | 6 | Onboarding restyled (§10); the old app window, settings window and referral window deleted | |

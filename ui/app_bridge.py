@@ -140,6 +140,12 @@ class AppBridge(QObject):
             self.changed.emit("switches")
         return why
 
+    def talk(self) -> None:
+        """Listen, hands-free - the shape's Talk button, as a click on the
+        resting pill did before the shape (ui/shape.py)."""
+        if self.manager is not None:
+            self.manager.start_hands_free()
+
     def hold_hotkey(self, on: bool) -> None:
         """While a new shortcut is being pressed, the old one does nothing."""
         hook = HOTKEY_HOOKS.get("claim" if on else "release")
@@ -187,6 +193,7 @@ class AppBridge(QObject):
         out = []
         for s in states:
             out.append({
+                "task_id": getattr(s, "current_task_id", "") or "",
                 "title": s.current_task_title or getattr(s.spec, "name", "") or "Agent",
                 "doing": s.current_action or "",
                 "step": s.step_index, "total": s.step_total,

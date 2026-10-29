@@ -297,6 +297,10 @@ def qss() -> str:
     QLabel#upPrompt {{ font-size: 17px; font-weight: 600; letter-spacing: -0.2px; }}
     QLabel#emptyTitle {{ font-size: 15px; font-weight: 600; }}
     QLabel#emptySub   {{ color: {TEXT_DIM}; font-size: 13px; }}
+    QFrame#jobCard {{ background: {BG}; border: 1px solid {BORDER}; border-radius: {RADIUS_CARD}px; }}
+    QFrame#jobCard QLabel#rowTitle {{ font-size: 13px; }}
+    QFrame#chatAsked {{ background: {ACCENT_SOFT}; border: none; border-radius: {RADIUS_CARD}px; }}
+    QFrame#chatAnswer {{ background: {SURFACE}; border: none; border-radius: {RADIUS_CARD}px; }}
     QFrame#banner {{ background: {_rgba(WARN, 0.12)}; border: none; border-radius: {RADIUS_CARD}px; }}
     QLabel#bannerText {{ color: {TEXT}; font-size: 13px; font-weight: 600; }}
     QFrame#cardQuiet {{

@@ -1,5 +1,5 @@
 """The shape's own pages (DESIGN.md §3), sized for it: 520 wide, not the app
-window's 1040 column.
+window's 1040 column. Home, Chat and Insights are its tabs.
 
 Home: a greeting and one line of what is happening, then ONE card - the
 newest thing Tora finished (an agent job or the last answer) - and, with
@@ -11,10 +11,11 @@ from __future__ import annotations
 import time
 from datetime import datetime
 
-from PyQt6.QtCore import Qt, pyqtSignal
-from PyQt6.QtWidgets import QFrame, QHBoxLayout, QVBoxLayout, QWidget
+from PyQt6.QtCore import Qt, QTimer, pyqtSignal
+from PyQt6.QtWidgets import QFrame, QGridLayout, QHBoxLayout, QScrollArea, QVBoxLayout, QWidget
 
-from ui.app_widgets import button, label
+from ui.app_widgets import Meter, button, label
+from ui.insights_data import minutes
 from ui.settings_parts import keycaps
 
 # What the newest-result card says for a job, by how it ended.
@@ -61,10 +62,15 @@ def _clip(text: str, n: int) -> str:
     return text if len(text) <= n else text[: n - 1].rstrip() + "…"
 
 
-class HomeTab(QWidget):
+class ShapePage(QWidget):
+    """What every page of the shape shares: live (rebuilt when shown and
+    when one of its TOPICS changes), reads the bridge without ever falling
+    over, and asks for other pages with `navigate`."""
+
     LIVE = True
-    TOPICS = frozenset({"state", "agents", "journal", "guide"})
+    TOPICS: frozenset = frozenset()
     navigate = pyqtSignal(str)
+    MARGINS = (24, 8, 24, 16)
 
     def __init__(self, bridge):
         super().__init__()
@@ -72,7 +78,7 @@ class HomeTab(QWidget):
         self.setObjectName("page")
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self.lay = QVBoxLayout(self)
-        self.lay.setContentsMargins(24, 8, 24, 16)
+        self.lay.setContentsMargins(*self.MARGINS)
         self.lay.setSpacing(0)
         self.refresh()
 
@@ -82,7 +88,7 @@ class HomeTab(QWidget):
         except Exception:  # noqa: BLE001 - a page never falls over on what it reads
             return default
 
-    def refresh(self) -> None:
+    def _clear(self) -> None:
         while self.lay.count():
             item = self.lay.takeAt(0)
             w = item.widget()
@@ -92,6 +98,19 @@ class HomeTab(QWidget):
                 w.hide()
                 w.setParent(None)
                 w.deleteLater()
+
+    def refresh(self) -> None:
+        self._clear()
+        self.build()
+
+    def build(self) -> None:          # pragma: no cover - overridden
+        pass
+
+
+class HomeTab(ShapePage):
+    TOPICS = frozenset({"state", "agents", "journal", "guide"})
+
+    def build(self) -> None:
         hello = label(greeting(self._call("user_name", ""), datetime.now().hour), "upTitle")
         hello.setAlignment(Qt.AlignmentFlag.AlignHCenter)
         self.lay.addWidget(hello)
@@ -110,7 +129,8 @@ class HomeTab(QWidget):
         lay.setContentsMargins(20, 18, 20, 18)
         lay.setSpacing(6)
         kind = "AGENT JOB · " + r["ended"].upper() if r["kind"] == "job" else "LAST ANSWER"
-        lay.addWidget(label(kind + " · " + _ago(r["when"]), "sectionTitle"))
+        # No date, no "20755 D AGO": the label stands on its own.
+        lay.addWidget(label(kind + (" · " + _ago(r["when"]) if r["when"] > 0 else ""), "sectionTitle"))
         lay.addWidget(label(_clip(r["title"], 120), "cardTitle", wrap=True))
         if r["text"]:
             lay.addWidget(label(_clip(r["text"], 260), "cardSub", wrap=True))
@@ -146,3 +166,164 @@ def _ago(when: float, now: float = 0.0) -> str:
     if s < 86400:
         return f"{s // 3600} H AGO"
     return f"{s // 86400} D AGO"
+
+
+def _scroller(inner: QWidget) -> QScrollArea:
+    """A page's scrolling part: no frame, the page's own ground."""
+    area = QScrollArea()
+    area.setWidgetResizable(True)
+    area.setFrameShape(QFrame.Shape.NoFrame)
+    area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+    inner.setObjectName("page")
+    area.setWidget(inner)
+    return area
+
+
+# ── Chat ──────────────────────────────────────────────────────────────────────
+
+CHAT_LIMIT = 30
+
+
+def conversation(entries: list[dict]) -> list[tuple[str, str]]:
+    """recent() rows (newest first) as the chat reads them, oldest at the top:
+    [("asked", text), ("answer", text), ...]."""
+    out: list[tuple[str, str]] = []
+    for e in reversed(entries):
+        q = (e.get("question") or "").strip()
+        if not q:
+            continue
+        out.append(("asked", q))
+        a = (e.get("answer") or "").strip()
+        if a:
+            out.append(("answer", a))
+    return out
+
+
+class ChatTab(ShapePage):
+    """Everything asked, newest at the bottom, and Talk. Talk tucks the
+    shape away first (navigate "talk"): she looks at the screen, and the
+    shape would be in the picture."""
+
+    TOPICS = frozenset({"journal"})
+    MARGINS = (0, 0, 0, 0)
+
+    def build(self) -> None:
+        inner = QWidget()
+        col = QVBoxLayout(inner)
+        col.setContentsMargins(20, 4, 20, 8)
+        col.setSpacing(8)
+        said = conversation(self._call("recent", [], CHAT_LIMIT))
+        if not said:
+            col.addStretch(1)
+            for text, name in (("Say hi to Tora", "emptyTitle"),
+                               ("Everything you ask her lives here.", "emptySub")):
+                line = label(text, name)
+                line.setAlignment(Qt.AlignmentFlag.AlignHCenter)
+                col.addWidget(line)
+            col.addStretch(1)
+        else:
+            col.addStretch(1)                     # a short chat sits at the bottom, by the button
+            for who, text in said:
+                col.addWidget(self._bubble(who, text))
+        area = _scroller(inner)
+        self.lay.addWidget(area, 1)
+        bar = area.verticalScrollBar()
+        QTimer.singleShot(0, lambda: bar.setValue(bar.maximum()))
+
+        foot = QHBoxLayout()
+        foot.setContentsMargins(20, 6, 20, 2)
+        keys = " + ".join(self._call("hotkey_keys", ["Ctrl", "Win"]))
+        talk = button(f"Talk to Tora  ·  or hold {keys}", "primary")
+        talk.clicked.connect(lambda: self.navigate.emit("talk"))
+        foot.addWidget(talk, 1)
+        self.lay.addLayout(foot)
+
+    @staticmethod
+    def _bubble(who: str, text: str) -> QWidget:
+        frame = QFrame()
+        frame.setObjectName("chatAsked" if who == "asked" else "chatAnswer")
+        lay = QVBoxLayout(frame)
+        lay.setContentsMargins(12, 8, 12, 8)
+        lay.addWidget(label(_clip(text, 600), "", wrap=True))
+        row = QWidget()
+        line = QHBoxLayout(row)
+        line.setContentsMargins(0, 0, 0, 0)
+        # Asked on the right, her answer on the left, as a chat reads.
+        if who == "asked":
+            line.addStretch(1)
+            line.addWidget(frame, 4)
+        else:
+            line.addWidget(frame, 5)
+            line.addStretch(1)
+        return row
+
+
+# ── Insights ──────────────────────────────────────────────────────────────────
+
+def _count(n: int, word: str) -> str:
+    return f"{n} {word}" + ("" if n == 1 else "s")
+
+
+def tiles(data: dict) -> list[tuple[str, str, str]]:
+    """The four numbers, as (label, value, line under it) - only what was
+    measured (insights_data), never an estimate."""
+    time_ = data.get("time") or {}
+    done = data.get("handled") or {}
+    knows = data.get("knows") or {}
+    streak, longest = int(data.get("streak") or 0), int(data.get("longest") or 0)
+    return [
+        ("TIME TORA WORKED", minutes(time_.get("total_min", 0)),
+         f"{minutes(time_.get('this_week_min', 0))} this week"),
+        ("THINGS HANDLED", str(done.get("total", 0)),
+         f"{done.get('ask', 0)} asked · {done.get('show', 0)} shown · {done.get('do', 0)} done"),
+        ("WHAT SHE KNOWS", str(knows.get("facts", 0)),
+         "facts · " + _count(int(knows.get("documents", 0)), "document")),
+        ("STREAK", _count(streak, "day"), f"longest {longest}"),
+    ]
+
+
+class InsightsTab(ShapePage):
+    """The Insights page's numbers, two by two, and this month on the plan.
+    The full page (charts, apps, the calendar) is a link away."""
+
+    TOPICS = frozenset({"journal", "agents", "account"})
+    MARGINS = (0, 0, 0, 0)
+
+    def build(self) -> None:
+        data = self._call("insights", {})
+        inner = QWidget()
+        col = QVBoxLayout(inner)
+        col.setContentsMargins(20, 4, 20, 12)
+        col.setSpacing(10)
+        grid = QGridLayout()
+        grid.setSpacing(10)
+        for i, (name, value, under) in enumerate(tiles(data)):
+            tile = QFrame()
+            tile.setObjectName("card")
+            lay = QVBoxLayout(tile)
+            lay.setContentsMargins(14, 12, 14, 12)
+            lay.setSpacing(2)
+            lay.addWidget(label(name, "sectionTitle"))
+            lay.addWidget(label(value, "upTitle"))
+            lay.addWidget(label(under, "cardSub", wrap=True))
+            grid.addWidget(tile, i // 2, i % 2)
+        col.addLayout(grid)
+        plan = data.get("plan") or []
+        if plan:
+            col.addSpacing(4)
+            col.addWidget(label("THIS MONTH", "sectionTitle"))
+            for what, used, limit in plan:
+                row = QHBoxLayout()
+                row.addWidget(label(what, "cardSub"))
+                row.addStretch(1)
+                row.addWidget(label(f"{used} / {limit}" if limit else f"{used} · no limit", "cardSub"))
+                col.addLayout(row)
+                col.addWidget(Meter(used / limit if limit else 0.0, height=4))
+        more = button("All of Insights", "ghost")
+        more.clicked.connect(lambda: self.navigate.emit("app/insights"))
+        row = QHBoxLayout()
+        row.addWidget(more)
+        row.addStretch(1)
+        col.addLayout(row)
+        col.addStretch(1)
+        self.lay.addWidget(_scroller(inner), 1)

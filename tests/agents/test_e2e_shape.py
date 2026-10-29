@@ -130,15 +130,81 @@ def test_the_click_that_closed_it_does_not_open_it_again(shape):
 
 # ── what is in it ──────────────────────────────────────────────────────────
 
-def test_home_is_its_own_and_the_rest_opens_the_app_window(shape):
-    from ui.shape_pages import HomeTab
+def test_the_tabs_are_its_own_and_the_rest_opens_the_app_window(shape):
+    from ui.shape_pages import ChatTab, HomeTab, InsightsTab
     assert isinstance(shape.stack.currentWidget(), HomeTab)
     shape.open_from("bottom", _pill_at("bottom"))
-    shape.show_tab("insights")
+    for key, kind in (("chat", ChatTab), ("insights", InsightsTab), ("home", HomeTab)):
+        shape.show_tab(key)
+        assert isinstance(shape.stack.currentWidget(), kind) and shape._tabs[key].isChecked()
+    assert shape.opened == [] and shape.is_open()
+    shape.stack.currentWidget().navigate.emit("app/insights")      # "All of Insights"
     assert shape.opened == ["insights"]
-    assert isinstance(shape.stack.currentWidget(), HomeTab), "the tab stays on Home"
-    assert shape._tabs["home"].isChecked()
     assert not shape.is_open(), "it steps aside for the app window"
+
+
+def test_talk_tucks_the_shape_away_then_listens(shape, qapp, monkeypatch):
+    """She looks at the screen: the shape would be in the picture."""
+    from PyQt6.QtCore import QTimer
+    asked = []
+    monkeypatch.setattr(shape.bridge, "talk", lambda: asked.append("talk"))
+    later = []
+    monkeypatch.setattr(QTimer, "singleShot", lambda ms, fn: later.append(fn))
+    shape.open_from("bottom", _pill_at("bottom"))
+    shape.show_tab("chat")
+    shape.stack.currentWidget().navigate.emit("talk")
+    assert not shape.is_open() and asked == []
+    for fn in later:
+        fn()
+    assert asked == ["talk"]
+
+
+def test_the_chat_reads_oldest_first():
+    from ui.shape_pages import conversation
+    rows = [{"question": "Second?", "answer": "Two."}, {"question": "First?", "answer": ""},
+            {"question": "  ", "answer": "dropped"}]
+    assert conversation(rows) == [("asked", "First?"), ("asked", "Second?"), ("answer", "Two.")]
+
+
+def test_the_insight_tiles_are_only_what_was_measured():
+    from ui.shape_pages import tiles
+    data = {"time": {"total_min": 75, "this_week_min": 12},
+            "handled": {"total": 9, "ask": 6, "show": 2, "do": 1},
+            "knows": {"facts": 4, "documents": 1}, "streak": 1, "longest": 5}
+    assert tiles(data) == [
+        ("TIME TORA WORKED", "1h 15m", "12 min this week"),
+        ("THINGS HANDLED", "9", "6 asked · 2 shown · 1 done"),
+        ("WHAT SHE KNOWS", "4", "facts · 1 document"),
+        ("STREAK", "1 day", "longest 5"),
+    ]
+    assert tiles({})[0][1] == "0 min", "nothing yet is zero, not an error"
+
+
+def test_running_jobs_sit_beside_the_open_shape(shape, monkeypatch):
+    jobs = [{"task_id": "t1", "title": "Tidy my downloads", "doing": "Moving files", "progress": 0.4}]
+    monkeypatch.setattr(shape.bridge, "agents", lambda: jobs)
+    shape.open_from("bottom", _pill_at("bottom"))
+    assert shape.jobs.isVisible()
+    shape._place_jobs()                          # again, as a refresh does: the holder is showing now
+    assert shape.jobs.height() > 40, "the cards are as tall as they need"
+    body = shape._full()
+    assert shape.jobs.geometry().right() < body.left() or shape.jobs.geometry().left() > body.right()
+    card = shape.jobs.layout().itemAt(0).widget()
+    card._open(card._key)
+    assert shape.opened == ["agents/job/t1"]
+
+
+def test_no_job_cards_while_moving_in_settings_or_with_nothing_running(shape, monkeypatch):
+    jobs = [{"task_id": "t1", "title": "A job", "progress": 0.1}]
+    monkeypatch.setattr(shape.bridge, "agents", lambda: jobs)
+    shape.open_from("bottom", _pill_at("bottom"))
+    shape.show_settings()
+    assert not shape.jobs.isVisible()
+    shape.back()
+    assert shape.jobs.isVisible()
+    jobs.clear()
+    shape._place_jobs()
+    assert not shape.jobs.isVisible()
 
 
 # ── Settings, inside it ────────────────────────────────────────────────────
