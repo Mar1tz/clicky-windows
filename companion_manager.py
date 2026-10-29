@@ -1216,8 +1216,12 @@ class CompanionManager(QObject):
 
     def _on_system_resume(self):
         """Called automatically after the laptop wakes from sleep."""
-        # 1. Restart the mic stream (sounddevice handles become stale on resume)
+        # 1. Restart the mic stream (sounddevice handles become stale on resume).
+        # Abandoned, not stopped: stopping a stream whose device went away in
+        # the sleep crashed HeyTora outright on 28 Oct (crash.log).
         try:
+            self._listener.stop(abandon=True)
+        except TypeError:                     # a listener without the option (tests)
             self._listener.stop()
         except Exception:
             pass

@@ -50,6 +50,10 @@ from audio.capture import resample_pcm, SAMPLE_RATE
 
 _log = logging.getLogger("tora.wake")
 
+# Streams let go after the PC slept (see stop(abandon=True)): held here so
+# nothing ever stops or closes them on a device that is gone.
+_ABANDONED: list = []
+
 
 class Mode(Enum):
     STANDBY       = auto()   # wake-word scanning
@@ -237,17 +241,25 @@ class AmbientListener:
             self._stream.start()
             capture_watch.mic("listener", True)
 
-    def stop(self):
+    def stop(self, *, abandon: bool = False):
+        """`abandon`: after the PC slept. The old stream's device may be gone,
+        and stopping it then crashed HeyTora inside PortAudio (28 Oct, an
+        access violation no `except` can catch) - so it is let go untouched."""
         self._running = False
-        self._close_stream()
+        self._close_stream(abandon=abandon)
 
-    def _close_stream(self):
+    def _close_stream(self, *, abandon: bool = False):
         if self._stream:
-            try:
-                self._stream.stop()
-                self._stream.close()
-            except Exception:
-                pass
+            if abandon:
+                # Kept referenced, never stopped or closed: garbage collection
+                # would close it too. One small handle per sleep, never a crash.
+                _ABANDONED.append(self._stream)
+            else:
+                try:
+                    self._stream.stop()
+                    self._stream.close()
+                except Exception:
+                    pass
             self._stream = None
             capture_watch.mic("listener", False)
 

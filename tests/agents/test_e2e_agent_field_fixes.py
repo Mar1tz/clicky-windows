@@ -82,3 +82,16 @@ def test_a_job_with_githubs_tools_is_told_to_ask_whose_account_it_is():
     [hint] = mcp_tools.hints_for(names, reg)
     assert "get_me" in hint and "Never guess a repository name" in hint
     assert mcp_tools.hints_for(["read_file"], reg) == []
+
+
+def test_after_sleep_the_old_microphone_stream_is_let_go_untouched():
+    """28 Oct: stopping the stream whose device went away in the sleep
+    crashed HeyTora (an access violation inside PortAudio, past any except)."""
+    from audio import ambient_listener as al
+    touched = []
+    stream = SimpleNamespace(stop=lambda: touched.append("stop"), close=lambda: touched.append("close"))
+    listener = al.AmbientListener.__new__(al.AmbientListener)
+    listener._stream, listener._running = stream, True
+    listener.stop(abandon=True)
+    assert touched == [] and listener._stream is None and stream in al._ABANDONED
+    al._ABANDONED.remove(stream)
