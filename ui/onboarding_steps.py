@@ -223,7 +223,60 @@ def tour_voice(panel):
         voice = Interview(events.event.emit)
         panel.voice, panel.voice_events = voice, events
         panel.completed.connect(voice.stop)
+        voice.can_continue = lambda: bool(panel.step().ready)
+        panel.presser = _ContinuePresser(panel)
+        events.event.connect(panel.presser.on_event)
     return voice
+
+
+class _ContinuePresser(QObject):
+    """ "Press Continue for me": the mouse glides to the button and it is
+    pressed - her press_continue. Moving the mouse on the way stops it."""
+
+    GLIDE_MS = 800
+    YOURS_PX = 10
+
+    def __init__(self, panel):
+        super().__init__(panel)
+        self.panel = panel
+        self._timer = QTimer(self)
+        self._timer.setInterval(16)
+        self._timer.timeout.connect(self._tick)
+        self._from = QPointF()
+        self._put: Optional[QPointF] = None
+        self._at = 0.0
+
+    def on_event(self, kind: str, value) -> None:
+        if kind == "press" and value == "continue":
+            self.press()
+
+    def press(self) -> None:
+        if not DriveStep.MOVE_MOUSE:
+            self._click()
+            return
+        from PyQt6.QtGui import QCursor
+        self._from, self._put = QPointF(QCursor.pos()), None
+        self._at = time.monotonic()
+        self._timer.start()
+
+    def _tick(self) -> None:
+        from PyQt6.QtGui import QCursor
+        if self._put is not None and (QPointF(QCursor.pos()) - self._put).manhattanLength() > self.YOURS_PX:
+            self._timer.stop()                    # theirs again
+            return
+        go = self.panel.go
+        to = QPointF(go.mapToGlobal(go.rect().center()))
+        k = min((time.monotonic() - self._at) * 1000 / self.GLIDE_MS, 1.0)
+        pos = self._from + (to - self._from) * (1 - (1 - k) ** 3)
+        QCursor.setPos(pos.toPoint())
+        self._put = QPointF(pos.toPoint())
+        if k >= 1.0:
+            self._timer.stop()
+            QTimer.singleShot(150, self._click)
+
+    def _click(self) -> None:
+        if self.panel.go.isEnabled():
+            self.panel.go.click()
 
 
 # ── holding the keys ──────────────────────────────────────────────────────────
@@ -919,8 +972,9 @@ class DriveStep(_HeldKeys):
     ASK = "Please drive my computer and make a list"
     PLAIN = ["Reply to Sam", "Book the dentist", "Buy milk"]   # with no voice
     MOVE_MOUSE = True        # tests drive it without the real cursor
-    GLIDE_MS = 420
-    KEY_MS = 32
+    GLIDE_MS = 800           # slow enough to watch (the owner, 29 Oct: "a little slower")
+    KEY_MS = 75
+    PAUSE_MS = 250           # a breath between one move and the next
     YOURS_PX = 10            # the mouse this far from where she put it: theirs again
 
     def __init__(self):
@@ -1026,7 +1080,7 @@ class DriveStep(_HeldKeys):
 
     def _begin(self) -> None:
         from PyQt6.QtGui import QCursor
-        self._at = time.monotonic()
+        self._at = time.monotonic() + (self.PAUSE_MS / 1000 if self.MOVE_MOUSE else 0)
         self._from = QPointF(QCursor.pos()) if self.MOVE_MOUSE else QPointF()
         self._typed = 0
 
@@ -1054,6 +1108,8 @@ class DriveStep(_HeldKeys):
             self.take_back("Done. That's what taking the mouse looks like.")
             return
         now = time.monotonic() if now is None else now
+        if now < self._at:
+            return                                # the pause before this move
         action = self._plan[0]
         if action[0] == "glide":
             k = min((now - self._at) * 1000 / self.GLIDE_MS, 1.0) if self.MOVE_MOUSE else 1.0
@@ -1189,9 +1245,63 @@ class TypeStep(Step):
             self.done()
 
 
+# ── pick my voice ─────────────────────────────────────────────────────────────
+
+class VoiceStep(Step):
+    """Her voices as the Settings tiles: tap one to hear her say hello (the
+    bundled clip - nothing spent) and it is hers from her next answer. Ready
+    from the start: she already has one."""
+
+    TITLE = "Pick my voice"
+    LINES = "Tap one to hear it. You can change it any time in Settings."
+    WIDE = True
+    READY = True
+    COLUMNS = 4
+
+    def __init__(self):
+        super().__init__()
+        from PyQt6.QtWidgets import QGridLayout
+        from audio.tts.gemini_tts import VOICES
+        from config import cfg
+        from ui import tokens
+        from ui.shape_widgets import VoiceTile
+        now = cfg.voice or "Zephyr"
+        self.tiles = []
+        box = QWidget()
+        grid = QGridLayout(box)
+        grid.setContentsMargins(0, 0, 0, 0)
+        grid.setSpacing(8)
+        for i, name in enumerate(list(VOICES) + ([now] if now not in VOICES else [])):
+            tile = VoiceTile(name, tokens.VOICE_COLOURS[i % len(tokens.VOICE_COLOURS)])
+            tile.setChecked(name == now)
+            tile.clicked.connect(lambda _c=False, n=name: self.pick(n))
+            grid.addWidget(tile, i // self.COLUMNS, i % self.COLUMNS)
+            self.tiles.append(tile)
+        self.body.addSpacing(8)
+        self.body.addWidget(box)
+        self.chosen = now
+
+    def pick(self, name: str) -> None:
+        from config import cfg
+        from ui.onboarding_parts import _clip_envelope, play_voice
+        self.chosen = name
+        for tile in self.tiles:
+            tile.setChecked(tile.name == name)
+            if tile.name != name:
+                tile.stop()
+        if play_voice(name):
+            next(t for t in self.tiles if t.name == name).play(_clip_envelope(name))
+        live = self.panel.live if self.panel is not None else None
+        if live is not None and hasattr(live, "set_voice"):
+            live.set_voice(name)                  # the running app: saved and used at once
+        else:
+            cfg.set_voice(name)
+
+
 def steps() -> list:
-    """The tour's steps, in order (phases B, C and D)."""
-    return [HelloStep, MicStep, TalkStep, InterviewStep, HelpStep, CircleStep, DriveStep, TypeStep]
+    """The tour's steps, in order (phases B-E so far)."""
+    return [HelloStep, MicStep, TalkStep, InterviewStep, HelpStep, CircleStep, DriveStep, TypeStep,
+            VoiceStep]
 
 
 def stylesheet() -> str:

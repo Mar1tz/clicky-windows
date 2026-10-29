@@ -120,6 +120,12 @@ Settings.
   hold, and no answer in 15 s is their turn again.
 - **Circle:** the panel vanished while they circled, and circling without a word got no answer.
 - **Drive:** after they took the mouse back, asking again did nothing.
+- **Pick her voice** was the preview's empty stand-in: built now (the Settings voice tiles, the
+  bundled hello on a tap). **Driving** is slower (an 800 ms glide, typing at 75 ms a key, a
+  pause between moves). **"Drive my computer and press Continue"** did nothing - the tour's
+  voice had no way to press anything. She now has press_continue: the mouse glides to
+  Continue and presses it, or, when the step isn't done, she says what is left. That button
+  is all she can press in the tour; the real "do it for me" is the agents', after it.
 
 ## Build order
 

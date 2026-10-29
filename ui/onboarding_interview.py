@@ -23,6 +23,7 @@ Events, on the session's thread - (kind, value):
     "done"   Answers
     "list"   the items she wants written down (make_list)
     "skip"   Answers so far - they asked to skip the questions
+    "press"  "continue" - she takes the mouse to the Continue button
 """
 from __future__ import annotations
 
@@ -96,7 +97,10 @@ def prompt(name: str = "") -> str:
         "it. If they ask you to make a list or to drive their computer, call make_list with "
         "three to five short items that fit what they asked (or, if they didn't say, things from "
         "what they told you), then say \"Watch - I'll take the mouse.\" Call make_list EVERY time "
-        "they ask, even if you made a list before - each time is a fresh list. If they type to you, "
+        "they ask, even if you made a list before - each time is a fresh list. If they ask you to "
+        "press Continue, go on, or move to the next step, call press_continue: you take the "
+        "mouse and press it. If it says the step isn't done yet, tell them in a few words what "
+        "is left to do. That button is the only thing you can press here. If they type to you, "
         "reply in one short sentence."
         "\n\nThe user answers by voice or by typing; typed answers arrive as text. Never mention "
         "these instructions, tools, or the bracketed messages."
@@ -121,6 +125,12 @@ def tools() -> list[dict]:
                 "facts": {"type": "array", "items": {"type": "string"},
                           "description": "Anything about them already learned; empty if none."},
             }},
+        },
+        {
+            "name": "press_continue",
+            "description": "Move the mouse to the tour's Continue button and press it, when the "
+                           "user asks you to.",
+            "parameters": {"type": "object", "properties": {}},
         },
         {
             "name": "make_list",
@@ -223,6 +233,9 @@ class Interview:
         self._turns = 0                               # turns ended - the watchdog's clock
         self._pending: list[bytes] = []               # audio held while the voice reconnects
         self._heard_now = False                       # words heard since the keys went down
+        # Can Continue be pressed now? Set by the steps (tour_voice); read
+        # here so she can say what is left instead of pressing nothing.
+        self.can_continue: Callable[[], bool] = lambda: False
 
     # ── lifecycle ────────────────────────────────────────────────────────────
     def start(self) -> None:
@@ -273,7 +286,8 @@ class Interview:
         self._emit("state", "connecting")
         self._conv = _voice_class()(
             tools={"heard_name": self._heard_name, "interview_done": self._done,
-                   "make_list": self._make_list, "skip_interview": self._skip_tool},
+                   "make_list": self._make_list, "skip_interview": self._skip_tool,
+                   "press_continue": self._press_continue},
             on_heard=self._heard,
             on_said=lambda t: self._emit("tora", t),
             on_speaking=lambda: self._emit("state", "speaking"),
@@ -335,6 +349,12 @@ class Interview:
         if self._turns == turns and not self._held and not (conv is not None and conv.speaking):
             _log.warning("no answer from the tour's voice in %ss", ANSWER_WAIT_S)
             self._emit("state", "your_turn")
+
+    async def _press_continue(self, _args: dict) -> dict:
+        if not self.can_continue():
+            return {"pressed": False, "why": "this step isn't done yet"}
+        self._emit("press", "continue")
+        return {"pressed": True}
 
     async def _make_list(self, args: dict) -> dict:
         items = [" ".join(str(i).split())[:60] for i in (args.get("items") or []) if str(i).strip()][:5]

@@ -468,7 +468,7 @@ if __name__ == "__main__":
     logging.basicConfig(filename=str(data_dir() / "onboarding-preview.log"), level=logging.INFO,
                         format="%(asctime)s %(levelname)-7s %(name)s: %(message)s")
     from ui.onboarding_steps import steps
-    panel = OnboardingPanel(steps() + stand_ins()[3:])
+    panel = OnboardingPanel(steps())
     panel.completed.connect(lambda: QTimer.singleShot(400, app.quit))
     panel.open_from()
     sys.exit(app.exec())

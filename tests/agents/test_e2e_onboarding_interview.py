@@ -21,7 +21,7 @@ def test_her_instructions_hold_the_name_and_the_four_questions():
 def test_she_has_only_the_tours_own_tools():
     from ui.onboarding_interview import _voice_class, tools
     names = [f["name"] for f in tools()[0]["functionDeclarations"]]
-    assert names == ["heard_name", "skip_interview", "make_list", "interview_done"], "no pointing, clicking or looking"
+    assert names == ["heard_name", "skip_interview", "press_continue", "make_list", "interview_done"], "no pointing, clicking or looking"
     voice = _voice_class()(tools={})
     assert voice._setup("hi")["tools"] == tools()
 
@@ -29,7 +29,7 @@ def test_she_has_only_the_tours_own_tools():
 def test_the_work_she_picks_is_from_the_skills_list():
     from ui.onboarding_interview import tools
     from ui.setup_wizard import USES
-    done = tools()[0]["functionDeclarations"][3]
+    done = tools()[0]["functionDeclarations"][4]
     assert done["parameters"]["properties"]["work"]["items"]["enum"] == list(USES)
 
 
@@ -246,3 +246,12 @@ def test_a_circle_with_no_words_is_still_answered(monkeypatch):
     iv._held = False
     asyncio.run(iv._release(("JPEG", "[circled]")))
     assert sent == ["end", I.QUIET_ASK], "29 Oct: a silent circle got nothing back"
+
+
+def test_she_presses_continue_only_when_it_can_be_pressed():
+    iv, events = _engine()
+    out = asyncio.run(iv._press_continue({}))
+    assert out["pressed"] is False and events == [], "she says what is left instead"
+    iv.can_continue = lambda: True
+    assert asyncio.run(iv._press_continue({})) == {"pressed": True}
+    assert events == [("press", "continue")]

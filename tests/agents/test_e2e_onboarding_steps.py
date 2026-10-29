@@ -475,3 +475,43 @@ def test_her_list_wins_over_driving_anyway(panel, qapp):
     _run_timers(qapp, 50)
     _drive_all(drive)
     assert drive.list.items() == [("Pay rent", True)]
+
+
+
+# ── "press Continue for me", and pick my voice (29 Oct) ────────────────────────
+
+def test_she_can_press_continue_for_them(panel):
+    import ui.onboarding_steps as St
+    drive = _to_step(panel, St.DriveStep)
+    assert panel.voice.can_continue() is False, "not done: she says what is left"
+    panel.voice.say("press", "continue")
+    assert panel.step() is drive
+    drive.done()
+    assert panel.voice.can_continue() is True
+    panel.voice.say("press", "continue")
+    assert isinstance(panel.step(), St.TypeStep)
+
+
+def test_pick_my_voice_plays_it_and_keeps_it(panel, monkeypatch):
+    import ui.onboarding_steps as St
+    from config import cfg
+    kept = []
+    monkeypatch.setattr(cfg, "set_voice", kept.append)
+    step = _to_step(panel, St.VoiceStep)
+    assert panel.go.isEnabled(), "she already has a voice"
+    assert len(step.tiles) >= 12 and step.WIDE
+    step.pick("Puck")
+    assert kept == ["Puck"] and panel.played[-1] == "Puck"
+    assert [t.name for t in step.tiles if t.isChecked()] == ["Puck"]
+
+
+def test_with_the_app_running_the_voice_goes_through_it(panel, monkeypatch):
+    from types import SimpleNamespace
+    import ui.onboarding_steps as St
+    from config import cfg
+    monkeypatch.setattr(cfg, "set_voice", lambda n: (_ for _ in ()).throw(AssertionError("app's job")))
+    picked = []
+    panel.attach(SimpleNamespace(set_voice=picked.append))
+    step = _to_step(panel, St.VoiceStep)
+    step.pick("Kore")
+    assert picked == ["Kore"]
