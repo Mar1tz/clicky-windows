@@ -96,6 +96,16 @@ the app is built and published as before.
 The server goes live before the app, so for a few minutes the old app talks
 to the new server. A server change must keep the last app working.
 
+### Live's history (30 Oct 2026)
+
+Migrations 0001-0013 were run on live by hand (the SQL editor), so live's
+migration history was empty and `--check` listed every one as missing. A
+read-only check in the SQL editor showed 0001-0013 really are on live and
+0014 is not. `python tools/release.py --mark-applied 0001-0013` records them
+as applied - live's history only, after you type "yes" - so the next release
+applies 0014 alone. From now on, change live only through `tools/release.py`:
+anything run by hand has to be recorded the same way, or a release runs it again.
+
 ## The website
 
 `heytora-web` uses the database only for its Google / Microsoft sign-in

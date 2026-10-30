@@ -7,6 +7,7 @@ installed copy updates itself to.
     python tools/release.py 1.6.5 --notes "..." --dry-run       # build and check, publish nothing
     python tools/release.py 1.6.5 --notes "..." --skip-build    # publish what the dry run built
     python tools/release.py --server-only                       # migrations and functions, no app
+    python tools/release.py --mark-applied 0001-0013            # on live already (run by hand): record it
 
 Before anything changes:
 
@@ -204,12 +205,53 @@ def check_live() -> int:
     return 0
 
 
+def versions(spec: str) -> list[str]:
+    """'0001-0013' or '0001,0004' -> ['0001', ...], four digits each."""
+    out: list[str] = []
+    for part in spec.replace(" ", "").split(","):
+        if "-" in part:
+            a, b = (int(x) for x in part.split("-", 1))
+            out += [f"{n:04d}" for n in range(a, b + 1)]
+        elif part:
+            out.append(f"{int(part):04d}")
+    return out
+
+
+def mark_applied(spec: str) -> int:
+    """--mark-applied: write to live's migration HISTORY that these are
+    applied - nothing else. For changes that are on live but were run by hand
+    (the SQL editor), so the next release does not run them again (30 Oct
+    2026: all of 0001-0013 were, and --check listed every one as missing).
+    Check first that they really are on live; only versions here, and only
+    ones live's history lacks, after you type "yes"."""
+    wanted = versions(spec)
+    here = {p.name[:4] for p in (ROOT / "supabase" / "migrations").glob("[0-9][0-9][0-9][0-9]_*.sql")}
+    strange = [v for v in wanted if v not in here]
+    if strange:
+        sys.exit(f"no migration file for {', '.join(strange)} - nothing changed")
+    env = live_env()
+    missing, _unknown = live_migrations(env)
+    already = [v for v in wanted if v not in missing]
+    if already:
+        sys.exit(f"live's history already has {', '.join(already)} - nothing changed")
+    print("This writes to LIVE's migration history only (no tables, no data):")
+    print("   recorded as applied: " + ", ".join(wanted))
+    print("   still to apply on the next release: " + (", ".join(v for v in missing if v not in wanted) or "nothing"))
+    if input('   type "yes" to record them: ').strip().lower() != "yes":
+        sys.exit("stopped: nothing changed")
+    supabase_live("migration repair --status applied " + " ".join(wanted), env)
+    return check_live()
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("version", nargs="?")
     ap.add_argument("--notes", help="what changed - shown in the app and on GitHub")
     ap.add_argument("--check", action="store_true", help="what live's database lacks; changes nothing")
     ap.add_argument("--server-only", action="store_true", help="migrations and functions; no app")
+    ap.add_argument("--mark-applied", metavar="VERSIONS",
+                    help="e.g. 0001-0013: record in live's history that these are already applied "
+                         "(run by hand); changes nothing else, asks first")
     ap.add_argument("--required", action="store_true", help="copies older than this must update")
     ap.add_argument("--min-version", default=None, help="copies older than this must update")
     ap.add_argument("--dry-run", action="store_true", help="build and check; publish nothing")
@@ -218,6 +260,8 @@ def main() -> int:
     args = ap.parse_args()
     if args.check:
         return check_live()
+    if args.mark_applied:
+        return mark_applied(args.mark_applied)
     if not args.server_only and not (args.version and args.notes):
         ap.error("a version and --notes, or --server-only, or --check")
 
