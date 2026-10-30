@@ -362,6 +362,9 @@ class AgentsTab(Tab):
     put on the running agents at once (bridge.set_agent_rail)."""
 
     HEADING = "Agents"
+    # The approval switches and the workspace. Off on the shape's "Limits &
+    # models" page, where the Agents page above it already has them.
+    BASICS = True
 
     def build(self) -> None:
         from ui.settings_parts import Group
@@ -375,24 +378,26 @@ class AgentsTab(Tab):
         # about is in the line under it - a switch like this is only safe
         # when its edges are plain.
         asks = Group("When they ask you")
-        asks.toggle("Approve automatically",
-                    "Still asks, every time: anything that pays, files a return, sends, "
-                    "posts or deletes for others to see.", br.auto_approve(), br.set_auto_approve)
-        asks.toggle("Show me the plan first", "Approve a job's steps before it starts.",
-                    r["plan"], rail("plan"))
+        if self.BASICS:
+            asks.toggle("Approve automatically",
+                        "Still asks, every time: anything that pays, files a return, sends, "
+                        "posts or deletes for others to see.", br.auto_approve(), br.set_auto_approve)
+            asks.toggle("Show me the plan first", "Approve a job's steps before it starts.",
+                        r["plan"], rail("plan"))
         asks.row("Run without asking, up to", "Anything above this stops and asks.",
                  _choice(RISKS, r["risk"], rail("risk"), 240))
         self.body.add(asks)
 
-        work = Group("Where they work")
-        change = button("Change")
-        change.clicked.connect(self._pick_workspace)
-        where = work.row("Workspace", r["workspace"] or "Not set", change)
-        if r["workspace"]:
-            opener = button("Open")
-            opener.clicked.connect(lambda: br.open_folder(r["workspace"]))
-            where.layout().insertWidget(where.layout().count() - 1, opener)
-        self.body.add(work)
+        if self.BASICS:
+            work = Group("Where they work")
+            change = button("Change")
+            change.clicked.connect(self._pick_workspace)
+            where = work.row("Workspace", r["workspace"] or "Not set", change)
+            if r["workspace"]:
+                opener = button("Open")
+                opener.clicked.connect(lambda: br.open_folder(r["workspace"]))
+                where.layout().insertWidget(where.layout().count() - 1, opener)
+            self.body.add(work)
 
         limits = Group("Limits for each job")
         limits.row("Jobs at once", "More wait their turn.",
@@ -541,9 +546,10 @@ class AdvancedTab(Tab):
         # long buttons side by side needed 605 px of the shape's 624, and
         # more than it has in a wider font.
         help_ = Group("Help")
-        wizard = button("Run again")
+        wizard = button("Replay")
         wizard.clicked.connect(br.run_setup)
-        help_.row("Setup", "The first launch's steps: sign-in, microphone, shortcut, her voice.", wizard)
+        help_.row("The tour", "The first launch's tour again: her voice, the microphone, the "
+                  "interview, circling, driving and the rest.", wizard)
         report = button("Save")
         report.clicked.connect(br.save_report)
         help_.row("Diagnostics report", "What is working and what isn't, in a file to send us.", report)

@@ -149,7 +149,7 @@ def test_the_tabs_are_its_own_and_all_of_insights_is_a_whole_page_in_it(shape):
     shape.show_tab("insights")
     shape.stack.currentWidget().navigate.emit("insights/all")      # "All of Insights"
     assert shape.mode == "page" and isinstance(shape.page_stack.currentWidget(), InsightsPage)
-    assert shape._full().width() == shape._rect("settings").width(), "the large size"
+    assert shape._full().width() == shape._rect("page").width(), "a whole page's own size"
     shape.back()
     assert shape.mode == "open", "Back, or Escape: the tabs again"
 
@@ -650,19 +650,41 @@ def test_account_shows_the_month_on_the_plan_when_signed_in(shape, qapp, monkeyp
     assert "you@example.com" in words and "Questions" in words
 
 
-def test_all_of_insights_fits_the_shape(shape, qapp):
-    """Built for the old window's 1040 px column, the third tile and the
-    streak ran off the shape's right edge (30 Oct): in the shape it is laid
-    out narrow - and must stay narrower than it."""
+def _screen(monkeypatch, w: int, h: int) -> None:
+    from PyQt6.QtCore import QRect
+    from PyQt6.QtGui import QScreen
+    monkeypatch.setattr(QScreen, "availableGeometry", lambda self: QRect(0, 0, w, h))
+
+
+def test_all_of_insights_is_wide_again_on_a_normal_screen(shape, qapp, monkeypatch):
+    """31 Oct: "it looked cool as a proper page; now it is ugly and squashed."
+    A whole page has its own size - the old window's width - and Insights
+    is laid out wide in it, and fits it."""
     from ui import shape as S
     from ui import tokens
     tokens.load_fonts()
+    _screen(monkeypatch, 1920, 1040)
+    shape.open_from("bottom", _pill_at("bottom"))
+    shape.go("insights/all")
+    qapp.processEvents()
+    page = shape.page_stack.currentWidget()
+    assert shape._rect("page").width() == S.PAGE_W and not page.NARROW
+    assert page.body.widget().minimumSizeHint().width() <= S.PAGE_W
+
+
+def test_on_a_small_screen_all_of_insights_is_narrow_and_still_fits(shape, qapp, monkeypatch):
+    """Built for the old window's 1040 px column, the third tile and the
+    streak ran off the shape's edge at 820 px (30 Oct): under WIDE_MIN it
+    is laid out narrow - and must stay narrower than the page."""
+    from ui import tokens
+    tokens.load_fonts()
+    _screen(monkeypatch, 900, 700)
     shape.open_from("bottom", _pill_at("bottom"))
     shape.go("insights/all")
     qapp.processEvents()
     page = shape.page_stack.currentWidget()
     assert page.NARROW
-    assert page.body.widget().minimumSizeHint().width() <= S.SETTINGS_W
+    assert page.body.widget().minimumSizeHint().width() <= shape._rect("page").width()
 
 
 def test_a_late_scroll_never_touches_a_page_that_is_gone(qapp):
@@ -777,3 +799,26 @@ def test_trouble_reads_the_plan_before_the_next_question_is_refused():
     assert _trouble("service") == (_trouble("service")[0], "") and "our side" in _trouble("service")[0]
     assert _trouble() == ("", "")
     assert _trouble(summary=out, mode="own_key") == ("", ""), "their own key: the plan's credits don't stop her"
+
+
+def test_ready_jobs_never_push_their_buttons_off_the_shape(shape, qapp, monkeypatch):
+    """31 Oct, about to record: three ready jobs with long lines made the
+    card wider than the shape and Start was cut off at its edge."""
+    from PyQt6.QtWidgets import QPushButton, QScrollArea
+    from ui import tokens
+    tokens.load_fonts()
+    jobs = [{"title": "Summarize competitor feature set and pricing pages",
+             "why": "Quick market research to refine your product strategy before the next launch."}] * 3
+    monkeypatch.setattr(shape.bridge, "ready_jobs", lambda: jobs)
+    shape.open_from("bottom", _pill_at("bottom"))
+    shape.show_tab("home")
+    page = shape.stack.currentWidget()
+    page.refresh()
+    qapp.processEvents()
+    area = page.findChild(QScrollArea)
+    assert area.widget().minimumSizeHint().width() <= area.viewport().width()
+    starts = [b for b in page.findChildren(QPushButton) if b.text() == "Start"]
+    assert len(starts) == 3
+    for b in starts:
+        right = b.mapTo(area.viewport(), b.rect().topRight()).x()
+        assert right <= area.viewport().width(), "Start sits inside the shape"

@@ -282,7 +282,12 @@ class AppBridge(QObject):
         return cfg.switch(name)
 
     def set_switch(self, name: str, on: bool) -> None:
-        if name in self.READ_WHERE_USED:
+        if name == "taskbar":
+            from config import cfg
+            from ui import taskbar
+            cfg.set_switch(name, bool(on))
+            taskbar.apply(bool(on))
+        elif name in self.READ_WHERE_USED:
             # Nothing to tell live (the trail's look, PT-03): saved, and read
             # each time it is used.
             from config import cfg
@@ -291,7 +296,7 @@ class AppBridge(QObject):
             self.tray.apply_switch(name, bool(on))
         self.changed.emit("switches")
 
-    READ_WHERE_USED = ("trail_line", "memory", "type_tap")
+    READ_WHERE_USED = ("trail_line", "memory", "ui_sounds")
 
     # ── memory (EN-15) ───────────────────────────────────────────────────────
 
@@ -828,7 +833,8 @@ class AppBridge(QObject):
         self._access_changed()
 
     def run_setup(self) -> None:
-        """Open the first-launch wizard again (sign in, or add a key)."""
+        """Signed out or no key: the sign-in window. Otherwise the tour
+        again (main.py _run_setup)."""
         if self.tray is not None and hasattr(self.tray, "on_run_setup"):
             self.tray.on_run_setup.emit()
 

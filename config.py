@@ -593,9 +593,13 @@ class Config:
         # Settings > Updates: a downloaded update installs by itself - the
         # next time HeyTora starts, or as it is quit (updates/service.py).
         "auto_update":   ("TORA_AUTO_UPDATE", True),
-        # Settings > Shortcuts: Ctrl tapped twice opens the shape to type to
-        # Tora (hotkey.DoubleTap; HeyClicky's "Text mode").
-        "type_tap":      ("TORA_TYPE_TAP", True),
+        # Settings > General: HeyTora's button in the Windows taskbar, which
+        # opens the shape (ui/taskbar.py). (Ctrl, Ctrl to type is no longer a
+        # switch - it is how you type to Tora, 31 Oct 2026.)
+        "taskbar":       ("TORA_TASKBAR", True),
+        # Settings > Voice: the shape's sounds as it opens and grows into
+        # Settings (ui/sounds.py UI).
+        "ui_sounds":     ("TORA_UI_SOUNDS", True),
         # Settings > Code editors (devlink/): connectors may reach HeyTora.
         # On - each workspace still reads nothing until it is allowed there.
         "devlink":       ("TORA_DEVLINK", True),

@@ -45,6 +45,7 @@ from PyQt6.QtWidgets import (QAbstractButton, QApplication, QButtonGroup, QFrame
                              QStackedWidget, QVBoxLayout, QWidget)
 
 from ui import app_theme as T
+from ui import sounds
 from ui import kit, tokens
 from ui.app_shell import IconButton
 from ui.app_widgets import Meter, button, label, later
@@ -52,6 +53,11 @@ from ui.flow_bar import place_card
 
 OPEN_W, OPEN_H = 520, 420           # DESIGN.md §2
 SETTINGS_W, SETTINGS_H = 820, 660
+# A whole page - all of Insights, everything asked - at the old window's
+# width, so Insights is laid out wide again (31 Oct: in the 820 px shape it
+# was "ugly and squashed"). Smaller on a small screen; narrow below WIDE_MIN.
+PAGE_W, PAGE_H = 1060, 700
+WIDE_MIN = 1000
 NAV_W = 196
 PAD = 24                            # room around the shape in its window, for the shadow
 LIFT = 6                            # the page rises this far as it fades in
@@ -115,12 +121,14 @@ SETTINGS = (
 
 # Pages one step in, with no row of their own: (name, the row lit while on
 # them). Plans opens from Upgrade and Account's Change plan; Privacy and
-# Advanced from rows at the foot of General; Code editors from Integrations.
+# Advanced from rows at the foot of General; Code editors from Integrations;
+# Limits & models from Agents.
 INNER = {
     "plans": ("Plans", "account"),
     "privacy": ("Privacy", "system"),
     "advanced": ("Advanced", "system"),
     "devlink": ("Code editors", "integrations"),
+    "agent-limits": ("Limits & models", "agents"),
 }
 
 # The grey line under each page's title, HeyClicky's way ("Your plan,
@@ -143,6 +151,7 @@ LEDES = {
     "privacy": "What Tora looks at, and what she keeps.",
     "advanced": "Your own keys, the models in use, diagnostics.",
     "devlink": "Your code editors, read as data instead of screenshots.",
+    "agent-limits": "What agents may do on their own, and how much one job may use.",
 }
 
 
@@ -409,8 +418,8 @@ class Shape(QWidget):
         return view
 
     def show_page(self, key: str) -> None:
-        """A whole page (PAGES_WIDE) at the Settings size, built the first
-        time it is asked for."""
+        """A whole page (PAGES_WIDE) at its own size (PAGE_W), built the
+        first time it is asked for."""
         if self.mode == "closed" or key not in self.PAGES_WIDE:
             return
         page = self._wide_built.get(key)
@@ -418,7 +427,8 @@ class Shape(QWidget):
             from ui import app_pages
             cls_name, heading = self.PAGES_WIDE[key]
             cls = getattr(app_pages, cls_name)
-            page = type(cls_name, (cls,), {"HEADING": heading, "NARROW": True})(self.bridge)
+            narrow = self._rect("page").width() < WIDE_MIN
+            page = type(cls_name, (cls,), {"HEADING": heading, "NARROW": narrow})(self.bridge)
             page.navigate.connect(self._navigate)
             self._wide_built[key] = page
             self.page_stack.addWidget(page)
@@ -636,8 +646,12 @@ class Shape(QWidget):
         """Where `mode` sits on the screen: beside the pill, towards the middle."""
         if mode == "closed":
             return QRectF(self._pill)
-        w, h = (SETTINGS_W, SETTINGS_H) if mode in ("settings", "page") else (OPEN_W, OPEN_H)
         screen = QGuiApplication.screenAt(self._pill.center().toPoint()) or QGuiApplication.primaryScreen()
+        if mode == "page":
+            room = screen.availableGeometry()
+            w, h = min(PAGE_W, room.width() - 48), min(PAGE_H, room.height() - 48)
+        else:
+            w, h = (SETTINGS_W, SETTINGS_H) if mode == "settings" else (OPEN_W, OPEN_H)
         x, y = place_card(self._edge, self._pill, screen.availableGeometry(), w, h)
         return QRectF(round(x), round(y), w, h)
 
@@ -658,7 +672,7 @@ class Shape(QWidget):
         through to what is under them."""
         self._edge, self._pill = edge, QRectF(pill)
         self._upgrade_shown()
-        span = self._pill.united(self._rect("open")).united(self._rect("settings"))
+        span = self._pill.united(self._rect("open")).united(self._rect("settings")).united(self._rect("page"))
         self.setGeometry(span.adjusted(-PAD, -PAD, PAD, PAD).toRect())
         self.mode = "open"
         self._page_off = False
@@ -673,6 +687,7 @@ class Shape(QWidget):
         self.show()
         self.raise_()
         self.activateWindow()
+        sounds.ui("open")
         if not animations_on():
             self._run(1.0, tokens.SHAPE_OPEN)
             return
@@ -699,6 +714,8 @@ class Shape(QWidget):
         if self.mode == "closed":
             return
         self._version_text()
+        if self.mode != "settings":
+            sounds.ui("settings")
         self._move_to("settings", key)
 
     def back(self) -> None:

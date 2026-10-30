@@ -90,9 +90,14 @@ def test_either_ctrl_counts():
     assert fired == [1]
 
 
-def test_it_is_a_switch_on_by_default():
+def test_it_is_always_on_not_a_switch():
+    """31 Oct: "why is type to Tora optional? It should be built in." """
+    from pathlib import Path
     from config import cfg
-    assert cfg.SWITCHES["type_tap"] == ("TORA_TYPE_TAP", True)
+    assert "type_tap" not in cfg.SWITCHES
+    main = (Path(__file__).resolve().parents[2] / "main.py").read_text(encoding="utf-8")
+    body = main[main.index("def _type_to_tora():"):main.index("shortcuts.type_to_tora.connect")]
+    assert "cfg.switch" not in body
 
 
 def test_the_shape_opens_on_chat_ready_to_type(monkeypatch):

@@ -19,11 +19,12 @@ a speech speed and a captions switch.
 from __future__ import annotations
 
 from PyQt6.QtCore import QTimer
-from PyQt6.QtWidgets import QHBoxLayout, QWidget
+from PyQt6.QtWidgets import QHBoxLayout, QVBoxLayout, QWidget
 
+from ui import app_theme as T
 from ui.app_pages import ToraPage
 from ui.app_widgets import Select, Switch, button, label
-from ui.settings_tabs import AccountTab, GeneralTab, SystemTab, Tab, UsageTab, _ask
+from ui.settings_tabs import AccountTab, AgentsTab, GeneralTab, SystemTab, Tab, UsageTab, _ask
 
 
 
@@ -41,8 +42,11 @@ class _Later:
 # ── the top group ─────────────────────────────────────────────────────────────
 
 class AccountPage(AccountTab):
-    """HeyClicky's Account: this month on the plan first (the Usage tab's
-    group), then who you are, how Tora thinks, signing out and closing."""
+    """HeyClicky's Account, and nothing more (31 Oct: "ours has a lot of
+    fluff"): the plan in one card - which plan, a line on the month, a bar
+    for each allowance, Upgrade - then Log out, Delete account and Quit.
+    The name comes from the tour's interview and the own key lives in
+    Advanced, so neither is here; there is no picture."""
 
     HEADING = "Account"
     _USAGE = UsageTab._USAGE
@@ -55,23 +59,119 @@ class AccountPage(AccountTab):
         if refresh is not None:
             refresh(force=True)
 
+    def refresh_topics(self, topics: set) -> None:
+        """The plan moves with every question: only its card is swapped."""
+        if "account" in topics and not self._swap(getattr(self, "_slot_w", None), self._plan):
+            self.refresh()
+
     def build(self) -> None:
-        self._slot_w = self._slot(self._usage)
+        from ui.settings_parts import Group
+        br = self.bridge
+        st = _ask(br, "account_state", {}) or {}
+        self._slot_w = self._slot(self._plan)
         self.body.add(self._slot_w)
-        super().build()
+
+        acct = Group("Account")
+        if st.get("signed_in"):
+            from ui import app_pages
+            acct.link("Log out", st.get("email") or "",
+                      lambda: app_pages.confirm_sign_out(self) and br.account_sign_out())
+            gone = acct.link("Delete account", "Permanently erase your account and all its data.",
+                             lambda: self._close_account(st.get("email") or ""))
+            _danger(gone)
+        bye = acct.link("Quit HeyTora", "", lambda: _ask(br, "quit", None))
+        _danger(bye)
+        self.body.add(acct)
+
+    def _plan(self) -> QWidget:
+        """The plan card - or, signed out, reading, or on their own key,
+        what the Usage card says then."""
+        from account.service import resets_on
+        from ui.app_widgets import Meter
+        from ui.settings_parts import Group
+        st = _ask(self.bridge, "account_state", {}) or {}
+        summary = st.get("summary")
+        if not (st.get("signed_in") and summary and st.get("mode", "account") == "account"):
+            return self._usage()
+        plan = summary.get("plan_name") or (summary.get("plan") or "").capitalize() or "HeyTora"
+        g = Group("Plan")
+        card = QWidget()
+        col = QVBoxLayout(card)
+        col.setContentsMargins(0, 0, 0, 0)
+        col.setSpacing(4)
+        col.addWidget(label(f"You're on the {plan} plan.", "setTitle", wrap=True))
+        from account.service import credits_words
+        when = resets_on(summary)
+        words = credits_words(summary)
+        blocked = (summary.get("blocked") or {}).get("all") == "budget"
+        line = ("This month's credits are used up." if blocked else
+                (words + "." if words else "Your plan's use this month.")) + f" It starts again on {when}."
+        col.addWidget(label(line, "setDesc", wrap=True))
+        col.addSpacing(10)
+        bars = QHBoxLayout()
+        bars.setSpacing(24)
+        limits, usage = summary.get("limits") or {}, summary.get("usage") or {}
+        today = summary.get("today") or {}
+        for kind, name, unit in self._USAGE:
+            if kind not in limits:
+                continue
+            used, cap = int(usage.get(kind) or 0), limits.get(kind)
+            said = f"{used} {unit[:-1] if used == 1 else unit} this month"
+            if today.get(kind):
+                said += f" · {int(today[kind])} today"
+            one = QVBoxLayout()
+            one.setSpacing(4)
+            head = QHBoxLayout()
+            head.addWidget(label(name, "setDesc"))
+            head.addStretch(1)
+            if cap is not None:
+                head.addWidget(label(f"{used} / {cap}", "setDesc"))
+            one.addLayout(head)
+            one.addWidget(label(said, "setTitle", wrap=True))
+            frac = 0.0 if not cap else min(1.0, used / cap)
+            one.addWidget(Meter(frac, colour=T.WARN if frac >= 0.8 else T.ACCENT, height=4))
+            bars.addLayout(one, 1)
+        col.addLayout(bars)
+        col.addSpacing(12)
+        top = (summary.get("plan") or "") == "max"
+        go = button("Change plan" if top else "Upgrade", "ghost" if top else "primary")
+        go.clicked.connect(lambda: self.navigate.emit("settings/plans"))
+        foot = QHBoxLayout()
+        foot.addWidget(go)
+        foot.addStretch(1)
+        col.addLayout(foot)
+        g.add(card, (16, 14, 16, 16))
+        return g
+
+
+def _danger(row) -> None:
+    """A row that ends something: its title in the warning red."""
+    row.title.setStyleSheet(f"color: {T.DANGER};")
 
 
 class GeneralPage(SystemTab):
-    """How HeyTora behaves on the PC: starting with Windows, the floating
-    panel, how it looks, keeping itself up to date - and, one step in,
-    Privacy and Advanced (they have no sidebar rows of their own)."""
+    """How HeyTora behaves on the PC, HeyClicky's way: in the taskbar or
+    not, starting with Windows, keeping itself up to date, how it looks,
+    the tour again - and, one step in, Privacy and Advanced.
+
+    The floating panel's switch went (31 Oct: "I don't understand it -
+    whenever I click it, it disables itself"): the panel hides itself when
+    a conversation ends, so the switch flipped back. The shape is where the
+    conversation is now."""
 
     HEADING = "General"
 
     def build(self) -> None:
         from ui.settings_parts import Group
-        super().build()
         br = self.bridge
+        app = Group("Behaviour")
+        app.toggle("Show in taskbar", "A HeyTora button in the taskbar, for when the pill is hard to find.",
+                   br.switch("taskbar"), lambda on: br.set_switch("taskbar", on))
+        app.toggle("Launch at login", "Open HeyTora when you sign in to Windows.",
+                   br.autostart(), br.set_autostart)
+        self.body.add(app)
+        self._updates_slot = self._slot(self._updates_card)
+        self.body.add(self._updates_slot)
         look = Group("Appearance")
         modes = (("system", "Match Windows"), ("light", "Light"), ("dark", "Dark"))
         theme = Select(*(words for _m, words in modes), width=180)
@@ -81,12 +181,64 @@ class GeneralPage(SystemTab):
             lambda k: br.set_theme(keys[k]) if 0 <= k < len(keys) else None)
         look.row("Theme", "", theme)
         self.body.add(look)
+        tour = Group("Welcome tour")
+        again = button("Replay")
+        again.clicked.connect(br.run_setup)
+        tour.row("Replay the welcome tour", "Her voice, the microphone, the interview, circling and "
+                 "driving - from the start.", again)
+        self.body.add(tour)
         more = Group("More")
         more.link("Privacy", "What Tora looks at, and what she keeps.",
                   lambda: self.navigate.emit("settings/privacy"))
         more.link("Advanced", "Your own keys, the models in use, diagnostics.",
                   lambda: self.navigate.emit("settings/advanced"))
         self.body.add(more)
+
+
+# ── WORK ──────────────────────────────────────────────────────────────────────
+
+class AgentsPage(AgentsTab):
+    """HeyClicky's Agents, as short as theirs (31 Oct: "theirs is much
+    cleaner"): where the agents work, and how much they do without asking.
+    The limits, the models and the history are one step in (AgentLimitsPage)."""
+
+    HEADING = "Agents"
+
+    def build(self) -> None:
+        from ui.settings_parts import Group
+        br = self.bridge
+        r = _ask(br, "agent_rails", None) or {"workspace": "", "plan": False}
+        work = Group("Workspace")
+        change = button("Change")
+        change.clicked.connect(self._pick_workspace)
+        where = work.row("Agent folder", r["workspace"] or "Where agents work and put the things they "
+                         "make. Not set yet.", change)
+        if r["workspace"]:
+            opener = button("Open")
+            opener.clicked.connect(lambda: br.open_folder(r["workspace"]))
+            where.layout().insertWidget(where.layout().count() - 1, opener)
+        self.body.add(work)
+        auto = Group("Autonomy")
+        auto.toggle("Approve automatically", "Jobs keep going without asking. Paying, sending, "
+                    "posting or deleting for others still asks.", br.auto_approve(), br.set_auto_approve)
+        auto.toggle("Show me the plan first", "See a job's steps, and say yes, before it starts.",
+                    r["plan"], lambda v: br.set_agent_rail("plan", v))
+        self.body.add(auto)
+        more = Group("More")
+        more.link("Limits & models", "What they may run without asking, jobs at once, time and work "
+                  "limits, where their requests go, and their history.",
+                  lambda: self.navigate.emit("settings/agent-limits"))
+        self.body.add(more)
+        if br.workforce() is None:
+            self.body.add(label("The agents did not start - see tora.log for why. Changes here "
+                                "are kept and used when they do.", "setNote", wrap=True))
+
+
+class AgentLimitsPage(AgentsTab):
+    """Everything else about the agents, one step in from Agents."""
+
+    HEADING = "Limits & models"
+    BASICS = False
 
 
 # ── TORA ──────────────────────────────────────────────────────────────────────
@@ -139,6 +291,10 @@ class VoicePage(_Later, Tab):
         self.body.add(_grid(self.tiles, 4))
         self.body.add(label("Tap a voice to hear it. It is hers from the next answer.", "setNote"))
         self.body.add(self._sound())
+        ui = Group("Interface sounds")
+        ui.toggle("Sounds as HeyTora opens", "A soft sound as it grows out of the pill, and into "
+                  "Settings.", br.switch("ui_sounds"), lambda on: br.set_switch("ui_sounds", on))
+        self.body.add(ui)
         answers = Group("How she answers")
         routes = ("realtime", "cascade")
         route = Select("Live - answers in about a second",
@@ -273,10 +429,9 @@ class ShortcutsPage(GeneralTab):
         held = _ask(br, "hotkey_keys", []) or [br.hotkey() or "Ctrl + Win"]
         talk.row("Push to talk", "Hold to talk; let go to send. A quick tap: she listens until you stop.",
                  _row_controls(_keys(held), change))
-        tap = Switch(br.switch("type_tap"))
-        tap.toggled.connect(lambda on: br.set_switch("type_tap", on))
+        # Not a switch: it is how you type to her (31 Oct 2026).
         talk.row("Type to Tora", "Tap Ctrl twice: HeyTora opens on Chat, ready to type.",
-                 _row_controls(_keys(["Ctrl", "Ctrl"]), tap))
+                 _keys(["Ctrl", "Ctrl"]))
         cursor = Group("Her cursor")
         cursor.row("Show or hide her cursor", "From anywhere, any time.",
                    _keys([k.strip().capitalize() for k in
@@ -559,5 +714,7 @@ PAGES = {
     "style": StylePage,
     "skills": SkillsPage,
     "integrations": IntegrationsPage,
+    "agents": AgentsPage,
+    "agent-limits": AgentLimitsPage,
     "routines": RoutinesPage,
 }

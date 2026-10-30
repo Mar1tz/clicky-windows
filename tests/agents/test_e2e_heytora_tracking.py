@@ -71,7 +71,7 @@ def test_settings_does_not_stick_on_reading_your_plan(qapp, heytora, monkeypatch
         acc._summary, acc._summary_at = None, 0.0
     s = _shape(monkeypatch)                           # built for the first time
     try:
-        _until(qapp, lambda: "Free plan" in _texts(s))
+        _until(qapp, lambda: "You're on the Free plan." in _texts(s))
         assert "3 questions this month" in _texts(s)
 
         # Closed; the plan moves while nobody looks; opened again.

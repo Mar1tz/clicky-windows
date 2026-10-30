@@ -604,6 +604,15 @@ def main():
             _lg.getLogger("tora").exception("could not open the shape")
             manager.start_hands_free()
 
+    # HeyTora's button in the taskbar opens and closes the shape, as a click
+    # on the pill does (ui/taskbar.py; Settings > General can hide it).
+    try:
+        from ui import taskbar
+        taskbar.install(_toggle_shape)
+    except Exception:                     # noqa: BLE001 - the pill still opens it
+        import logging as _lg
+        _lg.getLogger("tora").warning("could not put HeyTora in the taskbar", exc_info=True)
+
     def _open_app(page: str = ""):
         """Open the shape - at `page` ("settings/voice", "agents/job/<id>",
         "insights/all") when one is asked for."""
@@ -790,7 +799,21 @@ def main():
         if show is not None:
             show("home")
 
-    tray.on_run_setup.connect(_open_tour)
+    def _run_setup():
+        """The tray's "Sign in to HeyTora" and Settings' Sign in and Replay
+        share one signal: no way to reach Gemini - the sign-in window;
+        otherwise the tour again."""
+        from ui import sign_in_gate
+        if sign_in_gate.required() or not cfg.has_key():
+            from ui.setup_wizard import SetupWizard
+            wiz = SetupWizard()
+            wiz.completed.connect(_access_changed)
+            wiz.show()
+            _setup_keepalive[0] = wiz
+        else:
+            _open_tour()
+
+    tray.on_run_setup.connect(_run_setup)
 
     def _open_api_keys():
         from ui.api_keys_dialog import ApiKeysDialog
@@ -972,10 +995,9 @@ def main():
     shortcuts.toggle_cursor.connect(lambda: _show_cursor(not cfg.cursor_shown()))
     cursor_key = KeyShortcut(cfg.cursor_hotkey(), shortcuts.toggle_cursor.emit)
 
-    # Ctrl, Ctrl: the shape opens on Chat, the box ready to type in
-    # (Settings > Shortcuts can switch it off - read at each tap).
+    # Ctrl, Ctrl: the shape opens on Chat, the box ready to type in.
     def _type_to_tora():
-        if not cfg.switch("type_tap") or _type_claim:
+        if _type_claim:
             return
         try:
             if "s" not in shape:

@@ -177,9 +177,12 @@ class HomeTab(ShapePage):
             row.setSpacing(10)
             words = QVBoxLayout()
             words.setSpacing(1)
-            words.addWidget(label(_clip(job.get("title", ""), 44), "cardTitle"))
+            # The words wrap; the buttons keep their size. Unwrapped, a long
+            # line made the row wider than the shape and pushed Start off its
+            # edge (31 Oct, seen while recording).
+            words.addWidget(label(_clip(job.get("title", ""), 60), "cardTitle", wrap=True))
             if job.get("why"):
-                words.addWidget(label(_clip(job["why"], 64), "cardSub"))
+                words.addWidget(label(_clip(job["why"], 90), "cardSub", wrap=True))
             row.addLayout(words, 1)
             start = button("Start", "primary")
             start.clicked.connect(lambda _c=False, i=index: self._call("start_ready_job", None, i))

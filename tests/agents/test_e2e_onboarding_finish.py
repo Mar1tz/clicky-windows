@@ -185,7 +185,10 @@ def test_main_opens_the_tour_after_the_app_is_up():
     src = (ROOT / "main.py").read_text(encoding="utf-8")
     assert src.index("first_launch = not setup_already_ran()") < src.index("door = sign_in_gate.gate()")
     assert "OnboardingPanel(steps())" in src and "tour.attach(live)" in src
-    assert "tray.on_run_setup.connect(_open_tour)" in src, "Run again is the tour too"
+    assert "tray.on_run_setup.connect(_run_setup)" in src, "Replay is the tour too"
+    run_setup = src[src.index("def _run_setup():"):src.index("tray.on_run_setup.connect(_run_setup)")]
+    assert "sign_in_gate.required() or not cfg.has_key()" in run_setup and "SetupWizard()" in run_setup,         "signed out, Sign in opens the sign-in window - not the tour"
+    assert "_open_tour()" in run_setup
     assert "bridge=AppBridge(manager, tray, panel)" in src
     gate = (ROOT / "ui/sign_in_gate.py").read_text(encoding="utf-8")
     assert "(wizard_factory or SetupWizard)()" in gate, "the gate's window signs in, nothing more"

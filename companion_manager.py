@@ -1690,7 +1690,11 @@ class CompanionManager(QObject):
     def _on_realtime_turn_end(self, turn) -> None:
         """One complete answer. Called from the pump, on the loop thread."""
         self._gate().new_answer()                   # anything still waiting goes up now
-        heard = (turn.heard or "").strip()
+        # A typed question (ask_typed) has no audio, so the session heard
+        # nothing: its words are the ones _typed_turn handed in. Without
+        # them the turn was answered but never kept - Chat and Home never
+        # showed it (31 Oct).
+        heard = (turn.heard or "").strip() or " ".join(self._heard_buf or []).strip()
         said = (turn.said or "").strip()
         if heard:
             self._log_route(heard)
