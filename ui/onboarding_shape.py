@@ -37,7 +37,7 @@ from PyQt6.QtWidgets import (QAbstractButton, QGraphicsOpacityEffect, QHBoxLayou
 
 from ui import app_theme as T
 from ui import kit, tokens
-from ui.app_widgets import button, icon, label
+from ui.app_widgets import button, icon, label, later
 from ui.shape import FADE, FADE_FROM, GROW, GROW_PART, LIFT, PAD, _lerp, _part, animations_on
 
 # Widths; the height is each step's own (fit), between these - HeyClicky's
@@ -124,7 +124,7 @@ class Step(QWidget):
         """Something new is on the step (a box, cards): the panel fits it -
         once the layout has taken it in."""
         if self.panel is not None:
-            QTimer.singleShot(0, self.panel.refit)
+            later(self, self.panel.refit)
 
     def enter(self) -> None:
         """Shown: start what is live (a microphone, a timer)."""

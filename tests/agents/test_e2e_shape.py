@@ -187,7 +187,8 @@ def test_talk_tucks_the_shape_away_then_listens(shape, qapp, monkeypatch):
     asked = []
     monkeypatch.setattr(shape.bridge, "talk", lambda: asked.append("talk"))
     later = []
-    monkeypatch.setattr(QTimer, "singleShot", lambda ms, fn: later.append(fn))
+    import ui.shape as _S
+    monkeypatch.setattr(_S, "later", lambda owner, fn, ms=0: later.append(fn))
     shape.open_from("bottom", _pill_at("bottom"))
     shape.show_tab("chat")
     shape.stack.currentWidget().navigate.emit("talk")
@@ -483,7 +484,8 @@ def test_ask_tucks_the_shape_away_then_asks(shape, monkeypatch):
     from PyQt6.QtCore import QTimer
     asked, later = [], []
     monkeypatch.setattr(shape.bridge, "ask", asked.append)
-    monkeypatch.setattr(QTimer, "singleShot", lambda ms, fn: later.append(fn))
+    import ui.shape as _S
+    monkeypatch.setattr(_S, "later", lambda owner, fn, ms=0: later.append(fn))
     shape.open_from("bottom", _pill_at("bottom"))
     shape.show_tab("chat")
     chat = shape.stack.currentWidget()

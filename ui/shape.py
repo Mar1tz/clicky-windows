@@ -47,7 +47,7 @@ from PyQt6.QtWidgets import (QAbstractButton, QApplication, QButtonGroup, QFrame
 from ui import app_theme as T
 from ui import kit, tokens
 from ui.app_shell import IconButton
-from ui.app_widgets import Meter, button, label
+from ui.app_widgets import Meter, button, label, later
 from ui.flow_bar import place_card
 
 OPEN_W, OPEN_H = 520, 420           # DESIGN.md §2
@@ -586,8 +586,8 @@ class Shape(QWidget):
             # this one - and its window must be gone from the front for that.
             text = key[len("ask:"):]
             self.shrink()
-            QTimer.singleShot(tokens.SHAPE_CLOSE + 60,
-                              (lambda: self.bridge.ask(text)) if text else self.bridge.talk)
+            later(self, (lambda: self.bridge.ask(text)) if text else self.bridge.talk,
+                  tokens.SHAPE_CLOSE + 60)
         elif key.startswith("agents/job/"):
             self.open_job(key.split("/", 2)[2])
         elif key in ("insights/all", "journal"):
@@ -679,7 +679,7 @@ class Shape(QWidget):
             return
         # The clock starts once the window is on the screen: started at
         # show(), the first frame Windows drew was already a third grown.
-        QTimer.singleShot(FIRST_FRAME_MS, self._start_open)
+        later(self, self._start_open, FIRST_FRAME_MS)
 
     def _start_open(self) -> None:
         if self.mode == "open" and self._t == 0.0 and self._from_pill:
@@ -694,7 +694,7 @@ class Shape(QWidget):
         self.activateWindow()
         page = self._pages.get("chat")
         if page is not None:
-            QTimer.singleShot(0, page.ask_box.setFocus)
+            later(page.ask_box, page.ask_box.setFocus)
 
     def show_settings(self, key: str = "account") -> None:
         if self.mode == "closed":
@@ -914,7 +914,7 @@ class Shape(QWidget):
     def changeEvent(self, e) -> None:
         # A click somewhere else: the shape goes, as a menu does.
         if e.type() == e.Type.ActivationChange and not self.isActiveWindow() and self.is_open():
-            QTimer.singleShot(0, self._left)
+            later(self, self._left)
         super().changeEvent(e)
 
     def _left(self) -> None:

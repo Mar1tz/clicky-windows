@@ -18,7 +18,7 @@ from PyQt6.QtWidgets import (QAbstractButton, QCheckBox, QFrame, QHBoxLayout, QL
                              QScrollArea, QVBoxLayout, QWidget)
 
 from ui import app_theme as T
-from ui.app_widgets import button, label
+from ui.app_widgets import button, label, later
 from ui.onboarding_interview import Interview, save
 from ui.onboarding_shape import Step
 
@@ -73,7 +73,7 @@ class HelloStep(Step):
         self._played = True
         from config import cfg
         from ui.onboarding_parts import play_voice
-        QTimer.singleShot(350, lambda: play_voice(cfg.voice or "Zephyr"))
+        later(self, lambda: play_voice(cfg.voice or "Zephyr"), 350)
 
 
 # ── can I hear you ────────────────────────────────────────────────────────────
@@ -272,7 +272,7 @@ class _ContinuePresser(QObject):
         self._put = QPointF(pos.toPoint())
         if k >= 1.0:
             self._timer.stop()
-            QTimer.singleShot(150, self._click)
+            later(self, self._click, 150)
 
     def _click(self) -> None:
         if self.panel.go.isEnabled():
@@ -828,7 +828,7 @@ class InterviewStep(_HeldKeys):
             save(answers)                          # what she learned before they skipped
         self.pill.set_state("done", "No problem - let's move on.")
         self.done()
-        QTimer.singleShot(self.MOVE_ON_MS, self._move_on)
+        later(self, self._move_on, self.MOVE_ON_MS)
 
     def _move_on(self) -> None:
         if self.panel is not None and self.panel.step() is self:
@@ -1015,7 +1015,7 @@ class _AsksAboutScreen(_HeldKeys):
             return
         self._asked = True
         self.status.setText("Thinking…")
-        QTimer.singleShot(self.LINE_STAYS_S * 1000, self._clear_line)
+        later(self, self._clear_line, self.LINE_STAYS_S * 1000)
 
     TOO_SHORT = "Hold them a little longer while you ask."
 
@@ -1027,7 +1027,7 @@ class _AsksAboutScreen(_HeldKeys):
         elif kind == "tora_end" and self._asked:
             self.reply.setText(" ".join(str(value).split()))
             self.status.setText("That's me, on your screen.")
-            QTimer.singleShot(1500, self._clear_line)
+            later(self, self._clear_line, 1500)
             self.done()
         elif kind == "state" and value == "offline":
             self._clear_line()
@@ -1250,7 +1250,7 @@ class DriveStep(_HeldKeys):
         elif kind == "tora_end" and self._waiting and not self.driving:
             # Her answer came and no list with it: drive anyway, after her words.
             self._waiting = False
-            QTimer.singleShot(self.AFTER_WORDS_MS, self._drive_anyway)
+            later(self, self._drive_anyway, self.AFTER_WORDS_MS)
         elif kind == "state" and value == "offline" and self._waiting and not self.driving:
             self._waiting = False
             self.drive(self._last or self.PLAIN)
@@ -1420,7 +1420,7 @@ class TypeStep(Step):
 
     def open_box(self) -> None:
         self.key.set_lit(True)
-        QTimer.singleShot(260, self._unlight)
+        later(self, self._unlight, 260)
         self.hint.setText("That's it - now type")
         self.box.show()
         self.box.focus()
@@ -1558,7 +1558,7 @@ class _JobCard(QFrame):
 
     def appear(self, after_ms: int) -> None:
         """In its place from the start (the panel fits it), faded in in turn."""
-        QTimer.singleShot(after_ms, self._fade_in)
+        later(self, self._fade_in, after_ms)
 
     def _fade_in(self) -> None:
         from PyQt6.QtCore import QPropertyAnimation
@@ -1628,7 +1628,7 @@ class OneMoreStep(Step):
         if kind == "jobs":
             self.ready_with(list(value))
         elif kind == "tora_end":
-            QTimer.singleShot(1500, self._plain)          # she only talked: theirs fill in
+            later(self, self._plain, 1500)          # she only talked: theirs fill in
         elif kind == "state" and value == "offline":
             self._plain()
 
