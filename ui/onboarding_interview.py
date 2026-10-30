@@ -24,6 +24,7 @@ Events, on the session's thread - (kind, value):
     "list"   the items she wants written down (make_list)
     "skip"   Answers so far - they asked to skip the questions
     "press"  "continue" - she takes the mouse to the Continue button
+    "jobs"   [ReadyJob] she made for Home (ready_jobs)
 """
 from __future__ import annotations
 
@@ -100,7 +101,11 @@ def prompt(name: str = "") -> str:
         "they ask, even if you made a list before - each time is a fresh list. If they ask you to "
         "press Continue, go on, or move to the next step, call press_continue: you take the "
         "mouse and press it. If it says the step isn't done yet, tell them in a few words what "
-        "is left to do. That button is the only thing you can press here. If they type to you, "
+        "is left to do. That button is the only thing you can press here. When you get the "
+        "message [one more thing], make two or three jobs you could start for them right away on "
+        "their PC, from what they told you (above all what they want off their plate) - call "
+        "ready_jobs with them, then say in one or two sentences that they're waiting on Home. If "
+        "you know nothing about them, make useful everyday ones. If they type to you, "
         "reply in one short sentence."
         "\n\nThe user answers by voice or by typing; typed answers arrive as text. Never mention "
         "these instructions, tools, or the bracketed messages."
@@ -125,6 +130,18 @@ def tools() -> list[dict]:
                 "facts": {"type": "array", "items": {"type": "string"},
                           "description": "Anything about them already learned; empty if none."},
             }},
+        },
+        {
+            "name": "ready_jobs",
+            "description": "Jobs ready for them to start from Home, made from what they told you.",
+            "parameters": {"type": "object", "properties": {
+                "jobs": {"type": "array", "items": {"type": "object", "properties": {
+                    "title": {"type": "string", "description": "Three to six words."},
+                    "why": {"type": "string", "description": "One short sentence: why this, for them."},
+                    "ask": {"type": "string",
+                            "description": "What starting it says to you, as they would ask it."},
+                }, "required": ["title", "ask"]}},
+            }, "required": ["jobs"]},
         },
         {
             "name": "press_continue",
@@ -287,7 +304,7 @@ class Interview:
         self._conv = _voice_class()(
             tools={"heard_name": self._heard_name, "interview_done": self._done,
                    "make_list": self._make_list, "skip_interview": self._skip_tool,
-                   "press_continue": self._press_continue},
+                   "press_continue": self._press_continue, "ready_jobs": self._ready_jobs},
             on_heard=self._heard,
             on_said=lambda t: self._emit("tora", t),
             on_speaking=lambda: self._emit("state", "speaking"),
@@ -349,6 +366,24 @@ class Interview:
         if self._turns == turns and not self._held and not (conv is not None and conv.speaking):
             _log.warning("no answer from the tour's voice in %ss", ANSWER_WAIT_S)
             self._emit("state", "your_turn")
+
+    async def _ready_jobs(self, args: dict) -> dict:
+        from ui.ready_jobs import clean
+        jobs = clean(args.get("jobs"))
+        if jobs:
+            self._emit("jobs", jobs)
+        return {"ok": True, "ready": len(jobs)}
+
+    def one_more_thing(self) -> None:
+        """The last step: she makes jobs from what she learned."""
+        async def go() -> None:
+            if await self._ensure():
+                self._emit("state", "thinking")
+                await self._conv.ask_text("[one more thing]")
+                await self._watch_answer()
+            else:
+                self._emit("state", "offline")
+        self._run(go())
 
     async def _press_continue(self, _args: dict) -> dict:
         if not self.can_continue():

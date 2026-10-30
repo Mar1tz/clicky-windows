@@ -27,7 +27,7 @@ would share the hotkey and the microphone).
 
 | What | Where |
 |---|---|
-| Sign in | `free@heytora.test`, `pro@heytora.test`, or any new email |
+| Sign in | `python tools/dev.py signin` (free@heytora.test), or `signin pro@heytora.test`, or any new email. The app's window only signs in through the website, which doesn't run against the local database yet - this signs the dev app in for you |
 | The sign-in code | Mailpit, http://127.0.0.1:57324 (every email the local stack sends) |
 | Tables, users, SQL | Studio, http://127.0.0.1:57323 |
 | The app's data | `%LOCALAPPDATA%\HeyTora-dev` (live's stays in `HeyTora`) |

@@ -401,6 +401,9 @@ def main():
     # ── No HeyTora account, no HeyTora ────────────────────────────────────────
     # Before the overlay, the hotkey, the microphone or the agents exist: no
     # sign-in, only the sign-in window - and closing it closes the app.
+    # Read before the gate: its sign-in window marks setup done when it closes.
+    from ui.setup_wizard import setup_already_ran
+    first_launch = not setup_already_ran()
     door = sign_in_gate.gate()
     if door == "closed":
         return
@@ -764,20 +767,40 @@ def main():
     tray.on_set_stt_language.connect(manager.set_stt_language)
     tray.on_set_custom_instructions.connect(manager.set_custom_instructions)
 
+    from ui.app_bridge import AppBridge
+
     # Setup wizard (re-run) + diagnostics. Finishing it may have signed in to
     # a HeyTora account or set a key: the running app takes that up at once.
     def _access_changed():
         manager.on_access_changed()
         tray.rebuild_menu()
 
-    def _run_setup_again():
-        from ui.setup_wizard import SetupWizard
-        wiz = SetupWizard()
-        wiz.completed.connect(_access_changed)
-        wiz.attach(live)                      # the app is running: no "getting ready"
-        wiz.show()
-        _setup_keepalive[0] = wiz
-    tray.on_run_setup.connect(_run_setup_again)
+    def _open_tour():
+        """The first launch's tour (ui/onboarding_shape.py): out of the pill,
+        on the running app, and Home - with the jobs it made ready - after."""
+        try:
+            from ui.onboarding_shape import OnboardingPanel
+            from ui.onboarding_steps import steps
+            from ui.setup_wizard import mark_setup_complete
+            tour = OnboardingPanel(steps())
+            tour.completed.connect(mark_setup_complete)
+            tour.completed.connect(_access_changed)
+            tour.completed.connect(lambda: QTimer.singleShot(450, _home_after_tour))
+            tour.attach(live)
+            tour.open_from(flow.pill_geometry()[1])
+            _setup_keepalive[0] = tour
+        except Exception:                  # noqa: BLE001 - the app runs without its tour
+            import logging as _lg
+            _lg.getLogger("tora").exception("could not open the first launch's tour")
+
+    def _home_after_tour():
+        if "s" not in shape or not shape["s"].isVisible():
+            _toggle_shape()
+        show = getattr(shape.get("s"), "show_tab", None)
+        if show is not None:
+            show("home")
+
+    tray.on_run_setup.connect(_open_tour)
 
     def _open_api_keys():
         from ui.api_keys_dialog import ApiKeysDialog
@@ -942,6 +965,7 @@ def main():
         set_voice=tray.pick_voice,
         set_route=tray.pick_route,
         show_panel=_show_panel,
+        bridge=AppBridge(manager, tray, panel),     # the tour's Plans step
     )
 
     # Esc = cancel the answer in progress (stops speech instantly), and the
@@ -1012,29 +1036,27 @@ def main():
          f"talking  |  LLM: {providers['llm']}"),
     )
 
-    # ── First-run setup wizard ────────────────────────────────────────────────
-    # Show the welcome + API key walkthrough on the first launch.
-    # If everything is already wired up, the helper is a no-op.
+    # ── First launch ──────────────────────────────────────────────────────────
+    # The tour grows out of the pill (docs/ui/HEYCLICKY_ONBOARDING.md); signing
+    # in came first, at the gate. A build without accounts and no key yet
+    # gets the key window first, then the tour.
     try:
-        from ui.setup_wizard import maybe_show_setup_wizard, SetupWizard
-
-        # Force-show via env var (handy for testing).
-        if os.environ.get("TORA_FORCE_SETUP", "").strip() in ("1", "true", "yes"):
-            wiz = SetupWizard()
-            wiz.show()
-        elif door == "signed_in":
-            # The gate's window, waiting on "Getting Tora ready": it carries
-            # on with the real shortcut and cursor now the app is up.
-            wiz = sign_in_gate.open_wizard()
+        from ui.setup_wizard import maybe_show_setup_wizard
+        if os.environ.get("TORA_FORCE_SETUP", "").strip() in ("1", "true", "yes") or first_launch:
+            wiz = maybe_show_setup_wizard() if not cfg.has_key() else None
+            if wiz is not None:
+                wiz.completed.connect(_access_changed)
+                wiz.completed.connect(_open_tour)
+                _setup_keepalive[0] = wiz
+            else:
+                _open_tour()
         else:
-            wiz = maybe_show_setup_wizard()
-        if wiz is not None:
-            wiz.completed.connect(_access_changed)
-            wiz.completed.connect(lambda: _open_app("home"))
-            wiz.attach(live)
-            _setup_keepalive[0] = wiz       # keep a reference so it isn't GC'd
+            wiz = maybe_show_setup_wizard()          # no way to reach Gemini: sign in or a key
+            if wiz is not None:
+                wiz.completed.connect(_access_changed)
+                _setup_keepalive[0] = wiz
     except Exception as e:
-        print(f"[setup-wizard] skipped: {e}")
+        print(f"[first-launch] skipped: {e}")
 
     sys.exit(app.exec())
 

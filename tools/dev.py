@@ -2,6 +2,7 @@
 
     python tools/dev.py            # start the local stack, its functions, and the app
     python tools/dev.py setup      # the same, without the app: write .env.development, say what is missing
+    python tools/dev.py signin [email]   # sign the dev app in (default free@heytora.test) - the code from Mailpit
     python tools/dev.py reset      # empty the local database: every migration again, then the seed
     python tools/dev.py status     # where everything is
     python tools/dev.py stop       # stop the local stack (its data is kept)
@@ -184,6 +185,72 @@ def cmd_run() -> int:
                        creationflags=NO_WINDOW)
 
 
+def cmd_signin(email: str) -> int:
+    """Sign the dev app in, here: the code is read from Mailpit. The window's
+    only door is the website, and heytora-web doesn't run against the local
+    database yet - so without this a dev run couldn't get past signing in
+    (29 Oct 2026)."""
+    import re
+    import time
+    import urllib.request
+    status = ensure_stack()
+    if write_env(status):
+        return cmd_setup()
+    mailpit = (status.get("MAILPIT_URL") or status.get("INBUCKET_URL") or "").rstrip("/")
+    for k, v in dotenv_values(ENV_FILE).items():
+        if k.startswith("TORA_"):
+            os.environ[k] = v or ""
+    os.environ["TORA_DATA_DIR"] = str(DATA_DIR)
+    os.environ["TORA_ACCESS"] = "account"
+    sys.path.insert(0, str(ROOT))
+    os.chdir(ROOT)
+    from account.service import account
+    from config import cfg
+
+    def newest_code(after: float) -> str:
+        with urllib.request.urlopen(f"{mailpit}/api/v1/messages?limit=20", timeout=5) as r:
+            listing = json.load(r)
+        for m in listing.get("messages") or []:
+            to = [a.get("Address", "").lower() for a in m.get("To") or []]
+            if email.lower() not in to:
+                continue
+            with urllib.request.urlopen(f"{mailpit}/api/v1/message/{m['ID']}", timeout=5) as r:
+                body = json.load(r)
+            found = re.search(r"\b(\d{6})\b", body.get("Text") or body.get("HTML") or "")
+            created = m.get("Created", "")
+            if found and created and _when(created) >= after - 2:
+                return found.group(1)
+        return ""
+
+    sent_at = time.time()
+    print(f"Sending a sign-in code to {email} (local Mailpit)...")
+    account().send_code(email)
+    code = ""
+    for _ in range(40):
+        code = newest_code(sent_at)
+        if code:
+            break
+        time.sleep(0.25)
+    if not code:
+        print(f"No code arrived in Mailpit ({mailpit}). Is the local stack up? `python tools/dev.py status`")
+        return 1
+    summary = account().verify(email, code)
+    cfg.set_access_mode("account")
+    print(f"Signed in as {email} ({summary.get('plan_name') or summary.get('plan') or 'signed in'}), "
+          f"in {DATA_DIR}.")
+    print("Now: python tools/dev.py   (add $env:TORA_FORCE_SETUP=1 for the first-launch tour)")
+    return 0
+
+
+def _when(created: str) -> float:
+    """Mailpit's time ("2026-10-29T18:13:01.123Z") as seconds."""
+    from datetime import datetime
+    try:
+        return datetime.fromisoformat(created.replace("Z", "+00:00")).timestamp()
+    except ValueError:
+        return 0.0
+
+
 def cmd_reset() -> int:
     ensure_stack()
     print("Emptying the local database: every migration again, then the seed.")
@@ -207,9 +274,15 @@ def cmd_stop() -> int:
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("command", nargs="?", default="run", choices=["run", "setup", "reset", "status", "stop"])
+    ap.add_argument("command", nargs="?", default="run",
+                    choices=["run", "setup", "signin", "reset", "status", "stop"])
+    ap.add_argument("email", nargs="?", default="free@heytora.test",
+                    help="signin: the account (free@heytora.test, pro@heytora.test or any new email)")
+    args = ap.parse_args()
+    if args.command == "signin":
+        return cmd_signin(args.email)
     return {"run": cmd_run, "setup": cmd_setup, "reset": cmd_reset,
-            "status": cmd_status, "stop": cmd_stop}[ap.parse_args().command]()
+            "status": cmd_status, "stop": cmd_stop}[args.command]()
 
 
 if __name__ == "__main__":

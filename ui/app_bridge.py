@@ -153,6 +153,24 @@ class AppBridge(QObject):
         if text and self.manager is not None and hasattr(self.manager, "ask_typed"):
             self.manager.ask_typed(text)
 
+    def ready_jobs(self) -> list[dict]:
+        """Jobs the first launch made ready (ui/ready_jobs.py), for Home."""
+        from ui import ready_jobs
+        return [{"title": j.title, "why": j.why} for j in ready_jobs.load()]
+
+    def start_ready_job(self, index: int) -> None:
+        """Start: off Home, and asked of her in its own words."""
+        from ui import ready_jobs
+        job = ready_jobs.take(index)
+        self.changed.emit("ready")
+        if job is not None:
+            self.ask(job.ask)
+
+    def put_away_ready_job(self, index: int) -> None:
+        from ui import ready_jobs
+        ready_jobs.take(index)
+        self.changed.emit("ready")
+
     def hold_hotkey(self, on: bool) -> None:
         """While a new shortcut is being pressed, the old one does nothing."""
         hook = HOTKEY_HOOKS.get("claim" if on else "release")

@@ -21,7 +21,8 @@ def test_her_instructions_hold_the_name_and_the_four_questions():
 def test_she_has_only_the_tours_own_tools():
     from ui.onboarding_interview import _voice_class, tools
     names = [f["name"] for f in tools()[0]["functionDeclarations"]]
-    assert names == ["heard_name", "skip_interview", "press_continue", "make_list", "interview_done"], "no pointing, clicking or looking"
+    assert sorted(names) == ["heard_name", "interview_done", "make_list", "press_continue", "ready_jobs",
+                            "skip_interview"], "no pointing, clicking or looking at will"
     voice = _voice_class()(tools={})
     assert voice._setup("hi")["tools"] == tools()
 
@@ -29,7 +30,7 @@ def test_she_has_only_the_tours_own_tools():
 def test_the_work_she_picks_is_from_the_skills_list():
     from ui.onboarding_interview import tools
     from ui.setup_wizard import USES
-    done = tools()[0]["functionDeclarations"][4]
+    done = next(f for f in tools()[0]["functionDeclarations"] if f["name"] == "interview_done")
     assert done["parameters"]["properties"]["work"]["items"]["enum"] == list(USES)
 
 

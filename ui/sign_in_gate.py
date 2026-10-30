@@ -44,9 +44,10 @@ def gate(wizard_factory=None) -> str:
     if not required():
         return "ok"
     from ui.setup_wizard import SetupWizard, setup_already_ran
-    make = wizard_factory or SetupWizard
-    # After a sign-out the questions were already answered: straight to
-    # signing in. A fresh install (or a reinstall) gets the whole first launch.
+    # Signing in only: the first launch's tour (ui/onboarding_shape.py) opens
+    # out of the pill once the app is up - it needs the running app and the
+    # account (its voice is free on the server, migration 0014).
+    make = wizard_factory or (lambda start: SetupWizard(start="connect", signin_only=True))
     wiz = make(start="connect" if setup_already_ran() else "welcome")
     loop = QEventLoop()
     wiz.completed.connect(loop.quit)

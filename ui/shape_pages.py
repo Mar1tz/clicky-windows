@@ -109,7 +109,7 @@ class ShapePage(QWidget):
 
 
 class HomeTab(ShapePage):
-    TOPICS = frozenset({"state", "agents", "journal", "guide"})
+    TOPICS = frozenset({"state", "agents", "journal", "guide", "ready"})
 
     def build(self) -> None:
         hello = label(greeting(self._call("user_name", ""), datetime.now().hour), "upTitle")
@@ -118,10 +118,51 @@ class HomeTab(ShapePage):
         status = label(status_line(self._call("state", "idle"), len(self._call("agents", []))), "upSub")
         status.setAlignment(Qt.AlignmentFlag.AlignHCenter)
         self.lay.addWidget(status)
-        self.lay.addSpacing(18)
+        self.lay.addSpacing(14)
+        # The cards scroll; they never shrink. Stacked into the shape's fixed
+        # height they were squeezed until the words ran into each other (the
+        # owner, 29 Oct 2026).
+        inner = QWidget()
+        col = QVBoxLayout(inner)
+        col.setContentsMargins(0, 0, 0, 0)
+        col.setSpacing(10)
+        ready = self._call("ready_jobs", [])
+        if ready:                                        # what the first launch got ready
+            col.addWidget(self._ready_card(ready))
         result = newest_result(self._call("tasks", [], 8), self._call("recent", [], 1))
-        self.lay.addWidget(self._result_card(result) if result else self._empty_card())
-        self.lay.addStretch(1)
+        if result:
+            col.addWidget(self._result_card(result))
+        elif not ready:
+            col.addWidget(self._empty_card())
+        col.addStretch(1)
+        self.lay.addWidget(_scroller(inner), 1)
+
+    def _ready_card(self, jobs: list[dict]) -> QFrame:
+        """The jobs the first launch made ready, a row each: Start asks her
+        in the job's own words, Not now puts it away."""
+        card = QFrame()
+        card.setObjectName("card")
+        lay = QVBoxLayout(card)
+        lay.setContentsMargins(18, 14, 14, 14)
+        lay.setSpacing(10)
+        lay.addWidget(label("READY TO START", "sectionTitle"))
+        for index, job in enumerate(jobs):
+            row = QHBoxLayout()
+            row.setSpacing(10)
+            words = QVBoxLayout()
+            words.setSpacing(1)
+            words.addWidget(label(_clip(job.get("title", ""), 44), "cardTitle"))
+            if job.get("why"):
+                words.addWidget(label(_clip(job["why"], 64), "cardSub"))
+            row.addLayout(words, 1)
+            start = button("Start", "primary")
+            start.clicked.connect(lambda _c=False, i=index: self._call("start_ready_job", None, i))
+            later = button("Not now", "link")
+            later.clicked.connect(lambda _c=False, i=index: self._call("put_away_ready_job", None, i))
+            row.addWidget(later)
+            row.addWidget(start)
+            lay.addLayout(row)
+        return card
 
     def _result_card(self, r: dict) -> QFrame:
         card = QFrame()

@@ -202,7 +202,8 @@ class SetupWizard(QDialog):
     _hotkey = pyqtSignal(bool)                     # the shortcut, from the hook's thread
 
     def __init__(self, parent=None, *, account=None, start: str = "welcome",
-                 check_key: Callable[[str], tuple[bool, str]] = _check_own_key):
+                 check_key: Callable[[str], tuple[bool, str]] = _check_own_key,
+                 signin_only: Optional[bool] = None):
         super().__init__(parent)
         self.setWindowTitle("HeyTora")
         self.setModal(False)
@@ -215,7 +216,12 @@ class SetupWizard(QDialog):
         self._account = account
         from account import settings
         self._gated = settings.configured()        # HeyTora accounts: signing in is a must
-        self._signin_only = start == "connect" and setup_already_ran()
+        # Signing in (or a key) and nothing else: after a sign-out, and - since
+        # the new tour (ui/onboarding_shape.py) runs once the app is up - the
+        # gate's window on a fresh install too.
+        if signin_only is None:
+            signin_only = setup_already_ran()
+        self._signin_only = bool(signin_only and start == "connect")
         self._check_key = check_key
         self._connected = cfg.has_key()
         self._level = 0.0
@@ -265,6 +271,9 @@ class SetupWizard(QDialog):
         outer.setSpacing(0)
         self.phases = O.PhaseBar()
         outer.addWidget(self.phases)
+        # Signing in only: no "Permissions › Set up › Learn" ahead - the tour
+        # is what follows, out of the pill.
+        self.phases.setVisible(not self._signin_only)
         self.stack = QStackedWidget()
         outer.addWidget(self.stack, 1)
         self.pages: dict[str, QWidget] = {}
@@ -1420,6 +1429,7 @@ def maybe_show_setup_wizard(parent=None) -> Optional[SetupWizard]:
     is a worse answer than a window explaining why."""
     if setup_already_ran() and cfg.has_key():
         return None
-    w = SetupWizard(parent)
+    # Signing in or a key only: the rest of the first launch is the tour.
+    w = SetupWizard(parent, start="connect", signin_only=True)
     w.show()
     return w

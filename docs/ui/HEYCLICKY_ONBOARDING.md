@@ -127,6 +127,23 @@ Settings.
   Continue and presses it, or, when the step isn't done, she says what is left. That button
   is all she can press in the tour; the real "do it for me" is the agents', after it.
 
+## The owner's walk-through (30 Oct 2026)
+
+- **Too much empty space** on most steps: the panel is now only as tall as each step
+  (`OnboardingPanel.fit`, between MIN_H and MAX_H) and grows when a step does (`Step.grew`).
+- **I'm curious about you**, reworked after HeyClicky's: the conversation on a dotted board
+  that always shows the newest line (`ChatBoard`), and one row under it - where she is
+  (`StatusPill`: speaking, thinking, listening, your turn; held with the mouse it is the
+  keys; round while they type) and the type box. No keycaps row.
+- **Typing** anywhere in the tour is a messaging app's box (`MessageBox`): a send arrow
+  appears in it once something is typed; Enter still works.
+- **Here's how I'd help you** is gone - it was the talk step again.
+- **Circle anything** shows a real recording (`assets/onboarding/circle.webp`, made from an
+  OBS clip with `tools/clip_to_webp.py`), not a drawn mock-up; until there is one it shows
+  just the keys.
+- **Voice and colour** come second, together (`MakeMeYoursStep`), as HeyClicky asks them:
+  the rest of the tour is in the voice they chose.
+
 ## Build order
 
 Each phase is usable on its own; the old onboarding stays until the last.
@@ -137,4 +154,4 @@ Each phase is usable on its own; the old onboarding stays until the last.
 | B | **Built** (`ui/onboarding_steps.py`). **Hi, I'm Tora**: her hello played from the bundled clip (no talk message), Show me - no character on screen. **First, can I hear you?**: bars that rise with the voice, the "Testing, testing" bubble, the microphone as a chip that lists the others; proven by half a second of speech. **This is how you talk to me**: the user's own keys as keycaps that light while held, "Hi Tora!"; proven by a real hold and release; the shortcut borrowed from the running app while the step is up. Hearing the name waits for phase C (it needs the free pass) |
 | C | **Built.** **The free onboarding pass**: migration 0014 adds an "onboarding" window - never a talk message, never on the credits, three per account ever, 20 minutes and six passes each, no ticket; the function's voice-pass takes `{onboarding: true}` and says `onboarding_used` after three. The app asks for it only from the tour's own voice (`account.service.TOUR_VOICE`), so the app's standby voice beside it is counted as usual; a server without 0014 simply gives a normal pass. Tried on the local Supabase: three tours then refused, six passes a window, nothing in usage_costs, talk unchanged. **The tour's voice** (`ui/onboarding_interview.py`): one live session for the talk step and the interview, with only two tools - `heard_name` and `interview_done` - so what she learns comes back structured. **This is how you talk to me** now hears the name ("Hi Tora, I'm …") and she says hello by it; the hold alone still proves the step offline. **I'm curious about you** (wide): four questions out loud, her lines and yours as chat bubbles, a status line, answer by holding the keys or typing; the answers become the profile (name, work), the starter skills for that work, and facts in her memory. No voice: it says so and lets them carry on |
 | D | **Built**, all on the tour's free voice (no talk messages). **Here's how I'd help you**: a question from the interview's work (the old first launch's TRY list); hold the keys and ask - the panel stays where it is but is left out of the picture she is handed (`keep_out_of_pictures`, Windows' WDA_EXCLUDEFROMCAPTURE; the owner, 29 Oct: hiding it was in the way). Circling or asking without a word still gets an answer (`QUIET_ASK`). **Circle anything**: a looping demo of her circling a figure, then they try it - the line they draw is on the screen as they draw (`TrailOverlay`, click-through) and stays until she has answered, and is on the picture she gets. **I can drive your computer too**: "Your list" in the panel; she picks the items (`make_list`), the step moves the real mouse there, types them and ticks two; Esc or moving the mouse gives it back at once, and asking again starts a fresh list - if she answers without calling make_list, it drives anyway (29 Oct: the second ask did nothing); "Or just let her do it" asks without talking; offline she still drives a plain list. **Not in the mood to talk? Type**: Ctrl, Ctrl opens a box, her answer comes back under it; the app's own Ctrl Ctrl is borrowed while the step is up (`claim_type_tap`) |
-| E | One more thing: jobs from the interview as "Ready to start" cards on Home · Pick her voice · Plans · the old onboarding removed |
+| E | **Built.** **There's one more thing…**: Show me, and she makes two or three jobs from the interview (her ready_jobs tool) - or, if she only talks or has no voice, the starter skills for their work fill in; they are kept (`ui/ready_jobs.py`, ready_jobs.json) and wait on Home as **Ready to start** cards - Start asks her in the job's own words, Not now puts it away. **Pick my voice** (the Settings tiles). **Pick a plan**: the Settings plan cards, and "Start using HeyTora". **The tour replaces the old wizard**: the gate's window signs in only (`signin_only`); the tour opens out of the pill once the app is up on a first launch (read before the gate), Run again opens it too, and it ends on the shape's Home. The old wizard's tour pages are no longer shown - deleting them goes with revamp step 6 (the old windows) |
