@@ -29,7 +29,7 @@ from PyQt6.QtWidgets import (
 from ui import app_theme as T
 from ui.app_widgets import (
     Card, Dot, Meter, PageBody, Pill, Row, Select, Switch, ToggleRow,
-    button, columns, hrule, label, refill, section, spacer, title,
+    button, columns, hrule, label, later, refill, section, spacer, title,
 )
 
 _log = logging.getLogger("tora.app")
@@ -111,7 +111,7 @@ class Page(QWidget):
         self.build()
         self.body.finish()
         if was:
-            QTimer.singleShot(0, lambda: bar.setValue(min(was, bar.maximum())))
+            later(self, lambda: bar.setValue(min(was, bar.maximum())))
 
     def action(self, text: str, kind: str = "ghost"):
         b = button(text, kind)
@@ -200,7 +200,7 @@ class HomePage(Page):
         was = bar.value()
         self._fill()
         if was:
-            QTimer.singleShot(0, lambda: bar.setValue(min(was, bar.maximum())))
+            later(self, lambda: bar.setValue(min(was, bar.maximum())))
 
     def _fill(self) -> None:
         from ui.app_parts import SideCard
@@ -569,6 +569,14 @@ class InsightsPage(Page):
     HEADING = "Insights"
     LIVE = True
     TOPICS = frozenset({"journal", "account", "agents"})
+    # In the shape (820 px, not the old window's 1040): the time tile on its
+    # own, the other two beside each other, and the pairs below stacked.
+    NARROW = False
+
+    def _row(self):
+        lay = QVBoxLayout() if self.NARROW else QHBoxLayout()
+        lay.setSpacing(T.GAP)
+        return lay
 
     def showEvent(self, event) -> None:
         """Opened: the charts grow in, one a beat after another (Wispr's
@@ -590,16 +598,20 @@ class InsightsPage(Page):
         d.setdefault("knows", {"facts": 0, "documents": 0, "recent": []})
 
         # ── three tiles: time worked (the lead), things handled, what she knows
-        tiles = QHBoxLayout()
-        tiles.setSpacing(T.GAP)
-        tiles.addWidget(self._time_tile(d["time"]), 3)
+        if self.NARROW:
+            self.body.add(self._time_tile(d["time"]))
+            tiles = QHBoxLayout()
+            tiles.setSpacing(T.GAP)
+        else:
+            tiles = QHBoxLayout()
+            tiles.setSpacing(T.GAP)
+            tiles.addWidget(self._time_tile(d["time"]), 3)
         tiles.addWidget(self._handled_tile(d["handled"]), 2)
         tiles.addWidget(self._knows_tile(d["knows"]), 2)
         self.body.add_layout(tiles)
 
         # ── where you use Tora · the streak
-        mid = QHBoxLayout()
-        mid.setSpacing(T.GAP)
+        mid = self._row()
         apps = InfoCard("Where you use Tora", f"apps · {d['apps_used']}", big=True)
         if d["apps"]:
             for rank, (name, n, share) in enumerate(d["apps"]):
@@ -628,8 +640,7 @@ class InsightsPage(Page):
         self.body.add_layout(mid)
 
         # ── the plan · agents
-        low = QHBoxLayout()
-        low.setSpacing(T.GAP)
+        low = self._row()
         low.addWidget(self._plan_card(d), 1)
         low.addWidget(self._agents_card(d["agents"]), 1)
         self.body.add_layout(low)

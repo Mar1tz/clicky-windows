@@ -32,7 +32,7 @@ def shape(qapp, monkeypatch):
     from ui import shape as S
     from ui.app_bridge import AppBridge
     monkeypatch.setattr(S, "animations_on", lambda: False)
-    s = S.Shape(AppBridge(), open_app=lambda key: None)
+    s = S.Shape(AppBridge())
     g = QGuiApplication.primaryScreen().availableGeometry()
     s.open_from("bottom", QRectF(g.center().x() - 23, g.bottom() - 22, 46, 10))
     yield s

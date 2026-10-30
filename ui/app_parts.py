@@ -876,17 +876,20 @@ def growing_text(text: str, placeholder: str, least: int = 84, most: int = 320):
 class Drawer(QWidget):
     """A panel that slides in from the right over a page - a job's details -
     with the page dimmed but visible behind it. Escape or a click
-    on the page closes it. A subclass fills `body` in refresh()."""
+    on the page closes it. A subclass fills `body` in refresh(). It covers
+    `host` - the page's window, or what is painted of the shape (its window
+    is bigger than the shape, for the shape to grow in)."""
 
     W = 500
 
-    def __init__(self, page: QWidget):
+    def __init__(self, page: QWidget, host: QWidget | None = None):
         from PyQt6.QtCore import QEasingCurve, QPropertyAnimation
         from PyQt6.QtWidgets import QScrollArea
         from ui import kit, tokens
-        super().__init__(page.window())
+        host = host if host is not None else page.window()
+        super().__init__(host)
         self.hide()
-        page.window().installEventFilter(self)
+        host.installEventFilter(self)
         self.panel = QFrame(self)
         self.panel.setObjectName("drawer")
         kit.drop_shadow(self.panel, "hero")

@@ -15,7 +15,7 @@ from typing import Optional
 from PyQt6.QtCore import Qt, QTimer, pyqtSignal
 from PyQt6.QtWidgets import QFrame, QGridLayout, QHBoxLayout, QLineEdit, QScrollArea, QVBoxLayout, QWidget
 
-from ui.app_widgets import Meter, button, label
+from ui.app_widgets import Meter, button, label, later
 from ui.insights_data import minutes
 from ui.settings_parts import keycaps
 
@@ -267,7 +267,7 @@ class ChatTab(ShapePage):
             self._area.deleteLater()
         self._area = area
         bar = area.verticalScrollBar()
-        QTimer.singleShot(0, lambda: bar.setValue(bar.maximum()))
+        later(area, lambda: bar.setValue(bar.maximum()))
 
     def _history(self) -> QScrollArea:
         inner = QWidget()
@@ -391,7 +391,7 @@ class InsightsTab(ShapePage):
                 col.addLayout(row)
                 col.addWidget(Meter(used / limit if limit else 0.0, height=4))
         more = button("All of Insights", "ghost")
-        more.clicked.connect(lambda: self.navigate.emit("app/insights"))
+        more.clicked.connect(lambda: self.navigate.emit("insights/all"))
         row = QHBoxLayout()
         row.addWidget(more)
         row.addStretch(1)

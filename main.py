@@ -580,60 +580,51 @@ def main():
         )
     panel.on_document_dropped.connect(_on_doc_dropped)
 
-    # The one-window app (ui/app_window). Built the first time it is asked
-    # for — nine pages of widgets is a visible pause, and most sessions never
-    # open it — and kept, so what it embeds (the agents panel) is built
-    # once. Every control in it goes down the same path
-    # as the tray item it stands for, so the windows below still work too.
-    app_window = {}
-
-    def _open_app(page: str = ""):
-        try:
-            if "w" not in app_window:
-                from ui.app_bridge import AppBridge
-                from ui.app_window import ToraApp
-                # Everything the window reads comes from these, and every
-                # change it makes goes down the tray's own path (APP-10).
-                w = ToraApp(AppBridge(manager, tray, panel))
-                app_window["w"] = w
-            app_window["w"].open_at(page)
-        except Exception as exc:          # noqa: BLE001 - never kill the tray
-            import logging as _lg
-            _lg.getLogger("tora").exception("could not open the app window")
-            tray.show_notification("HeyTora", f"Couldn't open the app: {exc}")
-
-    tray.on_open_app.connect(lambda: _open_app())
-    _activate[0] = lambda: _open_app()        # HeyTora started again: its window
-    tray.on_open_app_page.connect(_open_app)
-    tray.panel_visible = panel.isVisible
-
     # The shape (ui/shape.py, DESIGN.md §1): a click on the resting pill
-    # grows it into the app, beside the pill. Built on the first click. Until
-    # it has every page (DESIGN.md §13) the app window above stays, from the
-    # tray, and the shape's Settings and Upgrade open it.
+    # grows it into the app, beside the pill. Built on the first click. It is
+    # the whole app now (step 6, 30 Oct 2026: the old app window is gone):
+    # the tray's Open HeyTora, starting HeyTora again, an agent's orb and
+    # every "open this page" open it, at that page.
     shape = {}
 
-    def _from_shape(key: str):
-        """What the shape has no page of its own for yet: the app window."""
-        if key == "invite":
-            _open_app()
-            if "w" in app_window:
-                app_window["w"].open_free_month()
-        else:
-            _open_app(key)
+    def _shape():
+        if "s" not in shape:
+            from ui.app_bridge import AppBridge
+            from ui.shape import Shape
+            shape["s"] = Shape(AppBridge(manager, tray, panel))
+        return shape["s"]
 
     def _toggle_shape():
         try:
-            if "s" not in shape:
-                from ui.app_bridge import AppBridge
-                from ui.shape import Shape
-                shape["s"] = Shape(AppBridge(manager, tray, panel), open_app=_from_shape)
+            s = _shape()
             flow.close_card()
-            shape["s"].toggle(*flow.pill_geometry())
+            s.toggle(*flow.pill_geometry())
         except Exception:                 # noqa: BLE001 - a click still does what it did
             import logging as _lg
             _lg.getLogger("tora").exception("could not open the shape")
             manager.start_hands_free()
+
+    def _open_app(page: str = ""):
+        """Open the shape - at `page` ("settings/voice", "agents/job/<id>",
+        "insights/all") when one is asked for."""
+        try:
+            s = _shape()
+            if not s.is_open():
+                flow.close_card()
+                s.open_from(*flow.pill_geometry())
+            if page:
+                QTimer.singleShot(0, lambda: s.go(page))     # once it has begun to open
+            s.raise_()
+            s.activateWindow()
+        except Exception as exc:          # noqa: BLE001 - never kill the tray
+            import logging as _lg
+            _lg.getLogger("tora").exception("could not open HeyTora")
+            tray.show_notification("HeyTora", f"Couldn't open HeyTora: {exc}")
+
+    tray.on_open_app.connect(lambda: _open_app())
+    _activate[0] = lambda: _open_app()        # HeyTora started again: it opens
+    tray.on_open_app_page.connect(_open_app)
+    tray.panel_visible = panel.isVisible
 
     flow.click_opens = True
     flow.open_requested.connect(_toggle_shape)
@@ -641,7 +632,6 @@ def main():
     # Light/dark: the Settings choice, or Windows' own when it is "system".
     # Every surface that styles itself from app_theme restyles in place.
     app_theme.on_change(tray.retheme)
-    app_theme.on_change(lambda: app_window["w"].retheme() if "w" in app_window else None)
     app_theme.on_change(lambda: shape["s"].retheme() if "s" in shape else None)
 
     def _windows_theme_changed(*_):
@@ -942,11 +932,11 @@ def main():
 
     def _show_cursor(on: bool):
         """Her cursor beside the mouse, or only her bar - saved, shown on
-        the next frame, and the app window's switch follows."""
+        the next frame, and Settings > Cursor's switch follows."""
         cfg.set_cursor_shown(on)
         set_cursor_shown(on)
-        if "w" in app_window:
-            app_window["w"].bridge.changed.emit("cursor")
+        if "s" in shape:
+            shape["s"].bridge.changed.emit("cursor")
 
     # The tour's "type to me" step watches Ctrl, Ctrl itself while it is up.
     _type_claim: list = []

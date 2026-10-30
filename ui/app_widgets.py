@@ -28,6 +28,20 @@ from ui import tokens
 
 # ── text ──────────────────────────────────────────────────────────────────────
 
+def later(owner, fn, ms: int = 0) -> None:
+    """`fn` in `ms`, as long as `owner` is still there. A bare
+    QTimer.singleShot(ms, lambda: ...) runs even after its page is deleted;
+    touching what it held then raises inside Qt's event loop, and PyQt
+    aborts the whole app for that (a crash with no trace, 30 Oct 2026). The
+    timer here is owner's: it goes with it, and never fires."""
+    from PyQt6.QtCore import QTimer
+    timer = QTimer(owner)
+    timer.setSingleShot(True)
+    timer.timeout.connect(fn)
+    timer.timeout.connect(timer.deleteLater)
+    timer.start(ms)
+
+
 def label(text: str, name: str = "", *, wrap: bool = False) -> QLabel:
     lab = QLabel(text)
     if name:

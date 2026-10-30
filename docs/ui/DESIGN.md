@@ -454,6 +454,9 @@ as she talks.
 | 5a | Settings split into HeyClicky's pages from what exists (§4) | Built; needs a live run |
 | 5b | Integrations and Routines pages (§4) | Built; needs a live run |
 | 5c | Dictation, speech speed, captions - each needs its feature first | |
-| 6 | Onboarding restyled (§10); the old app window, settings window and referral window deleted | |
+| 6 | Onboarding restyled (§10, docs/ui/HEYCLICKY_ONBOARDING.md) | Built |
+| 6a | Everything in the shape: a third size, **page** (Settings' size, Back instead of the sidebar) for all of Insights (laid out narrow) and everything asked; a job's details slide in over the Jobs tab (the drawer covers the shape's body); the tray's Open HeyTora, starting HeyTora again, an agent's orb and every old page name (`app/...`, `invite`, `skills`) open the shape there (`Shape.go`). The shape owns its bridge. `app_widgets.later()` replaces bare `singleShot(lambda)` on pages - one ran after its page was gone and PyQt aborted | Built |
+| 6b | The old app window, settings window, referral window and the old wizard's tour pages deleted, and their tests moved onto the pages that stay | |
+| 6c | The sign-in window in the new design | |
 
 Each step: a screenshot first, then code, then this table updated.

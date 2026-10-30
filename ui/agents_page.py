@@ -386,8 +386,8 @@ class JobDrawer(Drawer):
     """A job's details (Drawer): what it was asked, its plan as a checklist,
     its live activity, how it ended, its folder."""
 
-    def __init__(self, page: QWidget, bridge):
-        super().__init__(page)
+    def __init__(self, page: QWidget, bridge, host: QWidget | None = None):
+        super().__init__(page, host)
         self.bridge = bridge
         self._task_id = ""
         self._events = None

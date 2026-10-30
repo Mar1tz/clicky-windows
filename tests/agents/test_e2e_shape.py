@@ -30,12 +30,20 @@ def shape(qapp, monkeypatch):
     from ui import shape as S
     from ui.app_bridge import AppBridge
     monkeypatch.setattr(S, "animations_on", lambda: False)     # every step lands at once
-    opened = []
-    s = S.Shape(AppBridge(), open_app=opened.append)
+    opened = []                                  # the jobs it was asked to open
+    real = S.Shape.open_job
+
+    def open_job(self, task_id):                 # on the class: no loop back to the shape
+        opened.append(f"agents/job/{task_id}")
+        real(self, task_id)
+    monkeypatch.setattr(S.Shape, "open_job", open_job)
+    s = S.Shape(AppBridge())
     s.opened = opened
     yield s
+    from PyQt6.QtCore import QCoreApplication, QEvent
     s.hide()
     s.deleteLater()
+    QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)   # gone before the next test
 
 
 def _pill_at(edge: str):
@@ -130,17 +138,47 @@ def test_the_click_that_closed_it_does_not_open_it_again(shape):
 
 # ── what is in it ──────────────────────────────────────────────────────────
 
-def test_the_tabs_are_its_own_and_the_rest_opens_the_app_window(shape):
+def test_the_tabs_are_its_own_and_all_of_insights_is_a_whole_page_in_it(shape):
+    from ui.app_pages import InsightsPage
     from ui.shape_pages import ChatTab, HomeTab, InsightsTab
     assert isinstance(shape.stack.currentWidget(), HomeTab)
     shape.open_from("bottom", _pill_at("bottom"))
     for key, kind in (("chat", ChatTab), ("insights", InsightsTab), ("home", HomeTab)):
         shape.show_tab(key)
         assert isinstance(shape.stack.currentWidget(), kind) and shape._tabs[key].isChecked()
-    assert shape.opened == [] and shape.is_open()
-    shape.stack.currentWidget().navigate.emit("app/insights")      # "All of Insights"
-    assert shape.opened == ["insights"]
-    assert not shape.is_open(), "it steps aside for the app window"
+    shape.show_tab("insights")
+    shape.stack.currentWidget().navigate.emit("insights/all")      # "All of Insights"
+    assert shape.mode == "page" and isinstance(shape.page_stack.currentWidget(), InsightsPage)
+    assert shape._full().width() == shape._rect("settings").width(), "the large size"
+    shape.back()
+    assert shape.mode == "open", "Back, or Escape: the tabs again"
+
+
+def test_everything_asked_is_a_whole_page_too(shape):
+    from ui.app_pages import JournalPage
+    shape.open_from("bottom", _pill_at("bottom"))
+    shape.go("journal")
+    assert shape.mode == "page" and isinstance(shape.page_stack.currentWidget(), JournalPage)
+
+
+def test_a_jobs_details_slide_in_over_the_shape(shape):
+    shape.open_from("bottom", _pill_at("bottom"))
+    shape.go("agents/job/t9")
+    drawer = shape._job_drawer
+    assert shape._current() == "agents" and drawer.isVisible()
+    assert drawer.parentWidget() is shape.body, "over what is painted, not the bigger window"
+
+
+def test_the_old_windows_addresses_land_in_the_shape(shape):
+    shape.open_from("bottom", _pill_at("bottom"))
+    shape.go("app/agents/job/t3")
+    assert shape.opened[-1] == "agents/job/t3"
+    shape.go("settings/voice")
+    assert shape.mode == "settings" and shape.current_setting() == "voice"
+    shape.go("invite")
+    assert shape.current_setting() == "invite"
+    shape.go("something-gone")
+    assert shape.mode == "open" and shape._current() == "home", "nothing by that name: Home"
 
 
 def test_talk_tucks_the_shape_away_then_listens(shape, qapp, monkeypatch):
@@ -568,7 +606,7 @@ def test_pause_stop_and_history(shape, monkeypatch):
     assert ("pause_job", "t1") in work.calls and ("stop_job", "t1") in work.calls
     row = page._parts["history"].itemAt(1).widget()
     row._on_click()
-    assert shape.opened == ["agents/job/t0"], "its details: the app window's, for now"
+    assert shape.opened == ["agents/job/t0"], "its details, over the Jobs tab"
 
 
 def test_with_nothing_at_all_jobs_says_what_it_is_for(shape, monkeypatch):
@@ -608,3 +646,40 @@ def test_account_shows_the_month_on_the_plan_when_signed_in(shape, qapp, monkeyp
     page = shape.settings_stack.currentWidget()
     words = " ".join(l.text() for l in page.findChildren(QLabel))
     assert "you@example.com" in words and "Questions" in words
+
+
+def test_all_of_insights_fits_the_shape(shape, qapp):
+    """Built for the old window's 1040 px column, the third tile and the
+    streak ran off the shape's right edge (30 Oct): in the shape it is laid
+    out narrow - and must stay narrower than it."""
+    from ui import shape as S
+    from ui import tokens
+    tokens.load_fonts()
+    shape.open_from("bottom", _pill_at("bottom"))
+    shape.go("insights/all")
+    qapp.processEvents()
+    page = shape.page_stack.currentWidget()
+    assert page.NARROW
+    assert page.body.widget().minimumSizeHint().width() <= S.SETTINGS_W
+
+
+def test_a_late_scroll_never_touches_a_page_that_is_gone(qapp):
+    """30 Oct: QTimer.singleShot(0, lambda: bar.setValue(...)) ran after its
+    page was deleted; the error inside Qt's loop made PyQt abort the run.
+    later() ties the delay to the page."""
+    from PyQt6.QtCore import QCoreApplication, QEvent
+    from PyQt6.QtWidgets import QWidget
+    from ui.app_widgets import later
+    ran = []
+    page = QWidget()
+    later(page, lambda: ran.append(1))
+    page.deleteLater()
+    QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+    for _ in range(5):
+        qapp.processEvents()
+    assert ran == []
+    alive = QWidget()
+    later(alive, lambda: ran.append(2))
+    for _ in range(5):
+        qapp.processEvents()
+    assert ran == [2]

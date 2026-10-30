@@ -16,7 +16,7 @@ from PyQt6.QtWidgets import QApplication, QFrame, QHBoxLayout, QLabel, QLineEdit
 
 from ui import app_theme as T
 from ui import tokens
-from ui.app_widgets import button, icon, label
+from ui.app_widgets import button, icon, label, later
 from ui.settings_parts import SubDialog
 
 GOAL = 15                 # questions the friend asks (migration 0010)
@@ -288,7 +288,7 @@ class ReferralPanel(QWidget):
     def _copy(self) -> None:
         QApplication.clipboard().setText(self.link_edit.text())
         self.copy_btn.setText("Copied")
-        QTimer.singleShot(1500, lambda: self.copy_btn.setText("Copy") if not self.isHidden() else None)
+        later(self.copy_btn, lambda: self.copy_btn.setText("Copy"), 1500)
 
     def _refresh_code(self) -> None:
         if self._busy is not None:

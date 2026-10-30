@@ -26,11 +26,11 @@ what grows is the shape painted inside it. Resizing a Windows window every
 frame flickers; painting does not. The page fades in over the last part,
 lifted 6 px into place.
 
-What the shape has no page of its own for yet (DESIGN.md §13) opens the app
-window there (`open_app`) and the shape steps aside: the app window's
-pages are built for a 1040 px column and cannot be squeezed into 520.
-Settings holds the app's settings tabs (ui/settings_tabs.py), regrouped;
-step 5 gives them HeyClicky's page pattern.
+Everything is here now (DESIGN.md §13, step 6: the old app window is
+gone): the tabs at the open size; Settings, its sidebar and pages, at the
+large one; and what the open shape is too small for - all of Insights,
+everything asked - as a whole page at that size ("page"), with Back. A
+job's details slide in over the Jobs tab.
 """
 from __future__ import annotations
 
@@ -279,20 +279,21 @@ class _JobCard(QFrame):
 
 class Shape(QWidget):
     """open_from(edge, pill) / show_settings(key) / back() / shrink() /
-    toggle(edge, pill). `bridge` is the app's AppBridge; `open_app(key)`
-    opens the app window at a page key ("insights", "agents/job/<id>",
-    "invite") for what the shape has no page of its own for yet."""
+    toggle(edge, pill) / go(key). `bridge` is the app's AppBridge."""
 
-    def __init__(self, bridge, open_app: Optional[Callable[[str], None]] = None):
+    def __init__(self, bridge):
         super().__init__()
         self.bridge = bridge
-        self.open_app = open_app or (lambda _key: None)
+        # Its bridge goes with it: what the bridge hears later (a plan read
+        # in the background) can never reach a shape that is gone.
+        if bridge.parent() is None:
+            bridge.setParent(self)
         self.setWindowTitle("HeyTora")
         self.setWindowFlags(Qt.WindowType.FramelessWindowHint | Qt.WindowType.Tool
                             | Qt.WindowType.WindowStaysOnTopHint)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
 
-        self.mode = "closed"                 # closed | open | settings
+        self.mode = "closed"                 # closed | open | settings | page
         self._edge = "bottom"
         self._pill = QRectF()                # global
         self._a = self._b = QRectF()         # the move: from a to b, global
@@ -322,6 +323,7 @@ class Shape(QWidget):
         self.views = QStackedWidget()
         self.views.addWidget(self._build_open_view())
         self.views.addWidget(self._build_settings_view())
+        self.views.addWidget(self._build_page_view())
         lay.addWidget(self.views, 1)
         self._fade = QGraphicsOpacityEffect(self.body)
         self._fade.setOpacity(0.0)
@@ -383,6 +385,60 @@ class Shape(QWidget):
         row.addWidget(jobs)
         lay.addWidget(foot)
         return view
+
+    # ── the page size: a whole page, and Back ────────────────────────────────
+    # What the open shape is too small for - all of Insights, everything asked -
+    # at the Settings size, without its sidebar (DESIGN.md §13, step 6: the
+    # old app window is gone, so its pages live here).
+    PAGES_WIDE = {"insights": ("InsightsPage", "Insights"), "journal": ("JournalPage", "Everything asked")}
+
+    def _build_page_view(self) -> QWidget:
+        view = QWidget()
+        lay = QVBoxLayout(view)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(0)
+        top = QHBoxLayout()
+        top.setContentsMargins(16, 10, 16, 0)
+        back = button("‹ Back", "link")
+        back.clicked.connect(lambda: self._move_to("open"))
+        top.addWidget(back)
+        top.addStretch(1)
+        lay.addLayout(top)
+        self.page_stack = QStackedWidget()
+        lay.addWidget(self.page_stack, 1)
+        self._wide_built: dict[str, QWidget] = {}
+        return view
+
+    def show_page(self, key: str) -> None:
+        """A whole page (PAGES_WIDE) at the Settings size, built the first
+        time it is asked for."""
+        if self.mode == "closed" or key not in self.PAGES_WIDE:
+            return
+        page = self._wide_built.get(key)
+        if page is None:
+            from ui import app_pages
+            cls_name, heading = self.PAGES_WIDE[key]
+            cls = getattr(app_pages, cls_name)
+            page = type(cls_name, (cls,), {"HEADING": heading, "NARROW": True})(self.bridge)
+            page.navigate.connect(self._navigate)
+            self._wide_built[key] = page
+            self.page_stack.addWidget(page)
+            self.body.setStyleSheet(T.qss())
+        else:
+            page.refresh()
+        self.page_stack.setCurrentWidget(page)
+        self._move_to("page")
+
+    def open_job(self, task_id: str) -> None:
+        """A job's details: the Jobs tab, its drawer sliding in over the
+        shape - what "Open job" and a running job's card open."""
+        if self.mode == "closed" or not task_id:
+            return
+        self.show_tab("agents")
+        from ui.agents_page import JobDrawer
+        if getattr(self, "_job_drawer", None) is None:
+            self._job_drawer = JobDrawer(self._pages["agents"], self.bridge, host=self.body)
+        self._job_drawer.show_job(task_id)
 
     # ── the settings size: the sidebar and a tab ─────────────────────────────
     def _build_settings_view(self) -> QWidget:
@@ -474,9 +530,7 @@ class Shape(QWidget):
     def show_tab(self, key: str) -> None:
         kinds = _pages()
         if key not in kinds:
-            # Not built for the shape yet: the tab stays where it was.
-            self._check_tabs()
-            self._elsewhere(key)
+            self._navigate(key)               # not a tab: wherever it lives
             return
         page = self._pages.get(key)
         if page is None:
@@ -489,7 +543,7 @@ class Shape(QWidget):
             page.refresh()
         self.stack.setCurrentWidget(page)
         self._tabs[key].setChecked(True)
-        if self.mode == "settings":
+        if self.mode in ("settings", "page"):
             self._move_to("open")
 
     def _upgrade_shown(self) -> None:
@@ -520,7 +574,13 @@ class Shape(QWidget):
         page = self.stack.currentWidget()
         return next((k for k, w in self._pages.items() if w is page), "")
 
+    def go(self, key: str) -> None:
+        """Open at `key`: a tab ("agents"), a setting ("settings/voice"), a
+        whole page ("insights/all", "journal"), a job ("agents/job/<id>")."""
+        self._navigate(key)
+
     def _navigate(self, key: str) -> None:
+        key = key[len("app/"):] if key.startswith("app/") else key    # the old window's names
         if key == "talk" or key.startswith("ask:"):
             # Out of the picture first: she looks at the screen - theirs, not
             # this one - and its window must be gone from the front for that.
@@ -528,19 +588,18 @@ class Shape(QWidget):
             self.shrink()
             QTimer.singleShot(tokens.SHAPE_CLOSE + 60,
                               (lambda: self.bridge.ask(text)) if text else self.bridge.talk)
-        elif key.startswith("app/"):
-            self._elsewhere(key[len("app/"):])           # the app window's own page, by name
+        elif key.startswith("agents/job/"):
+            self.open_job(key.split("/", 2)[2])
+        elif key in ("insights/all", "journal"):
+            self.show_page("insights" if key == "insights/all" else "journal")
         elif key in _pages():
             self.show_tab(key)
         elif key.startswith("settings"):
             self.show_settings(key.partition("/")[2] or "account")
+        elif key in _settings_kinds() or key in MOVED or key in ("skills", "setup"):
+            self.show_settings({"skills": "skills", "setup": "advanced"}.get(key, key))
         else:
-            self._elsewhere(key)
-
-    def _elsewhere(self, key: str) -> None:
-        """What the shape has no page for yet: the app window, there."""
-        self.shrink()
-        self.open_app(key)
+            self.show_tab("home")                        # nothing by that name: Home
 
     def _on_changed(self, topic: str) -> None:
         self._pending.add(topic)
@@ -555,7 +614,7 @@ class Shape(QWidget):
             self._upgrade_shown()
         if "agents" in topics or "state" in topics:
             self._place_jobs()
-        page = (self.settings_stack if self.mode == "settings" else self.stack).currentWidget()
+        page = {"settings": self.settings_stack, "page": self.page_stack}.get(self.mode, self.stack).currentWidget()
         if page is not None and getattr(page, "LIVE", False) and set(getattr(page, "TOPICS", ())) & topics:
             partial = getattr(page, "refresh_topics", None)
             partial(topics) if partial is not None else page.refresh()
@@ -578,7 +637,7 @@ class Shape(QWidget):
         """Where `mode` sits on the screen: beside the pill, towards the middle."""
         if mode == "closed":
             return QRectF(self._pill)
-        w, h = (SETTINGS_W, SETTINGS_H) if mode == "settings" else (OPEN_W, OPEN_H)
+        w, h = (SETTINGS_W, SETTINGS_H) if mode in ("settings", "page") else (OPEN_W, OPEN_H)
         screen = QGuiApplication.screenAt(self._pill.center().toPoint()) or QGuiApplication.primaryScreen()
         x, y = place_card(self._edge, self._pill, screen.availableGeometry(), w, h)
         return QRectF(round(x), round(y), w, h)
@@ -644,8 +703,8 @@ class Shape(QWidget):
         self._move_to("settings", key)
 
     def back(self) -> None:
-        """Escape: Settings -> open -> the pill."""
-        if self.mode == "settings":
+        """Escape: Settings (or a whole page) -> open -> the pill."""
+        if self.mode in ("settings", "page"):
             self._move_to("open")
         else:
             self.shrink()
@@ -695,7 +754,7 @@ class Shape(QWidget):
         self.body.hide()
         self._a, self._b, self._from_pill = now, self._rect(mode), False
         self._t = 0.0
-        self.views.setCurrentIndex(1 if mode == "settings" else 0)
+        self.views.setCurrentIndex({"settings": 1, "page": 2}.get(mode, 0))
         if setting:
             self.select(setting)
         self._check_tabs()
@@ -791,7 +850,7 @@ class Shape(QWidget):
             self.jobs.hide()
             return
         for job in running:
-            card = _JobCard(job, lambda key: self._elsewhere(key))
+            card = _JobCard(job, self._navigate)
             lay.addWidget(card)
             # Added to a holder already on the screen, a card is shown only
             # later - and until then measures 0 px, so the cards did too.
