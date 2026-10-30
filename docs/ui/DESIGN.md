@@ -227,9 +227,9 @@ in both themes (`PAPER.card`, `.ink`, `.dim`, `.faint`, `.line`,
 `.edge`...). `STAGE` is the one dark moment in the light flow ("Nice job.").
 
 **Depicted apps keep their own colours.** A picture of someone else's
-app - the tour's music player, spreadsheet, PDF, album covers, the
-florist's site - wears that app's colours, and they live in one map,
-`tour_scenes.DEPICTED`, and nowhere else (heytora-web BRAND.md §2).
+app wears that app's colours, kept in one map beside the picture and
+nowhere else (heytora-web BRAND.md §2). (The old tour scenes that had
+`DEPICTED` went in revamp step 6b.)
 
 **Scales.**
 
@@ -364,43 +364,27 @@ site. No exclamation marks. No emoji in UI text.
 
 ## 10. Onboarding
 
-Built: `ui/setup_wizard.py`, `ui/onboarding_parts.py`. It keeps its flow
-and is restyled to the settings page pattern (§4): step dots and **Skip**
-at the top, one question as the title, one grey line, the live test, a
-picker under it, **Continue**.
+Two parts since revamp step 6b:
 
-The steps prove what Tora is: she hears you, the key works, she sees and
-points, she explains and draws. Q = a question beside a picture, T = a
-centred test.
+- **The sign-in window** (`ui/setup_wizard.py`): a centred card on the
+  ribbon - Sign in via browser, or (signed in, or a build without
+  accounts) your own Gemini key - and **Finish**, locked until signed in.
+  The sign-in gate shows it before the overlay, hotkey and voice exist;
+  finishing it does not mark the first launch done. Since step 6c it is
+  drawn as the tour's card, so the two read as one thing.
+- **The tour** (`ui/onboarding_shape.py`, `ui/onboarding_steps.py`,
+  docs/ui/HEYCLICKY_ONBOARDING.md): grows out of the pill once the app is
+  up - hello, her voice and colour, the mic, talking, the interview, circle,
+  drive, typing, the jobs it makes ready, a plan. Its end marks the first
+  launch done; the tray's Run again opens it.
 
-| Phase | Page id | Screen | Layout | What proves it |
-|---|---|---|---|---|
-| Sign up | `connect` | Sign in to HeyTora: a centred card with the logo, on the ribbon | T | Signed in. Continue is locked until then |
-| | `welcome` | Hi, I'm Tora. Picture: the website's five "What it does" scenes, moving (`ui/tour_scenes.py`) | Q | Get started |
-| | `work` | Tell us about yourself: name, and what you do (chips). Matching skill cards slide in, in colour | Q | A chip |
-| Permissions | `privacy` | We look when you ask. Not before. The one real control: **Skip private windows** (`privacy_guard`) | Q | A choice |
-| | `mic` | First, can I hear you? Live bars, what it heard, the mic picker | T | [Change microphone] [Yes] |
-| Set up | `ready` | Getting Tora ready (only when opened by the sign-in gate) | T | The app has started |
-| | `shortcut` | Test your shortcut: "Does the key light up while you hold it?" | T | The key lit at least once |
-| Learn | `try` | Ask Tora about this: a worked sum with one wrong line | T | Tora pointed (timed). Skip |
-| | `payoff` | Nice job (dark): only what was measured. Left out if nothing was | T | None, a moment |
-| Personalize | `voice` | Pick her voice: one at a time, big, its waveform moving with the real clip | T | A choice |
-| | `personal` | Make her yours: her colour, start with Windows, always listening | T | Choices |
-| | `done` | You're set: the hotkey keycap, and **Open HeyTora**, which grows the pill open for the first time | T | Opens the shape on Home |
+The old wizard's pages (welcome, work, privacy, mic, ready, shortcut, try,
+payoff, voice, personal, done - after Wispr Flow's five phases) and the
+tour scenes on its welcome page were deleted in step 6b; the tour does
+each of their jobs. What the tour keeps from them:
 
-Rules that stay:
-
-- Continue is disabled until the step is answered or proven.
-- Back on every screen after the first. Skip only on Learn screens.
-- Every Learn demo uses the **real** overlay and voice, not a recording,
-  and counts against the plan like any other question.
-- **The words hide while the shortcut is held** on a Learn screen, so Tora
-  looks at the sum instead of reading the instruction out.
-- **The shortcut test borrows the hotkey** (`claim_hotkey`), so holding it
-  lights the key without starting a conversation.
-- **Two halves.** The sign-in gate shows the window before the overlay,
-  hotkey and voice exist. Leaving `mic` emits `ready`; `main.py` calls
-  `attach(live)` on the same window.
+- **The hold-to-talk step borrows the hotkey** (`claim_hotkey`), so holding
+  it lights the key without starting a conversation.
 - **Voices** are recorded once by whoever releases
   (`assets/voices/make_voices.py`) and ship with the app: choosing a voice
   never spends a talk message.
@@ -456,7 +440,7 @@ as she talks.
 | 5c | Dictation, speech speed, captions - each needs its feature first | |
 | 6 | Onboarding restyled (§10, docs/ui/HEYCLICKY_ONBOARDING.md) | Built |
 | 6a | Everything in the shape: a third size, **page** (Settings' size, Back instead of the sidebar) for all of Insights (laid out narrow) and everything asked; a job's details slide in over the Jobs tab (the drawer covers the shape's body); the tray's Open HeyTora, starting HeyTora again, an agent's orb and every old page name (`app/...`, `invite`, `skills`) open the shape there (`Shape.go`). The shape owns its bridge. `app_widgets.later()` replaces bare `singleShot(lambda)` on pages - one ran after its page was gone and PyQt aborted | Built |
-| 6b | The old app window, settings window, referral window and the old wizard's tour pages deleted, and their tests moved onto the pages that stay | |
-| 6c | The sign-in window in the new design | |
+| 6b | The old app window (`ui/app_window.py`, its Home and Agents pages), the Settings dialog (`ui/settings_dialog.py`), the referral window, the old wizard's pages and its tour scenes deleted; `ui/setup_wizard.py` is the sign-in window and the starter-skill lists. Their tests moved onto what stays - the plan-tracking tests now run on the shape's Settings, the referral tests on the panel, a job's details on its drawer - or went with what they tested. Signing in no longer marks the first launch done: the tour's end does. The old Home's warning came back on the shape's Home: a strip under the greeting only while Tora can't answer (this month's credits used up - shown from the plan before a question is refused -, a refused or empty own key, our server, no internet, signed out), with **See plans** / **Fix it** / **Sign in** one click away (`AppBridge.trouble`) | Built |
+| 6c | The sign-in window in the new design: the tour's card (no Windows frame, the app's ground, the tour's title and grey line, Finish at the foot), centred, as tall as what it shows, dragged by its background, a close X; signed in, a blue card says who and the plan; the own key waits behind one link. The old 1080 px window on the ribbon is gone, and with it the tick and cross the font couldn't draw | Built |
 
 Each step: a screenshot first, then code, then this table updated.

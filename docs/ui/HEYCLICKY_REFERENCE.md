@@ -64,8 +64,8 @@ five different kinds of window to learn. HeyClicky has one.
 - Two controls at the bottom: a big **Hold Ctrl + Alt to talk** button and
   an **Ask…** text box.
 
-**Ours today:** Home (`ui/app_pages.py` `HomePage`) and the Tora page are
-full-window pages. Home is busier and doesn't lead with the newest result.
+**Ours then:** Home (the old app window's `HomePage`, deleted in revamp step 6b) and the Tora page were
+full-window pages. Home was busier and didn't lead with the newest result.
 
 **We take:** the greeting and status line, "newest result first" as one big
 card, running jobs as cards beside the shape, the talk button and text box

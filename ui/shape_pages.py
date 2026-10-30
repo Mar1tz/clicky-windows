@@ -109,7 +109,7 @@ class ShapePage(QWidget):
 
 
 class HomeTab(ShapePage):
-    TOPICS = frozenset({"state", "agents", "journal", "guide", "ready"})
+    TOPICS = frozenset({"state", "agents", "journal", "guide", "ready", "account"})
 
     def build(self) -> None:
         hello = label(greeting(self._call("user_name", ""), datetime.now().hour), "upTitle")
@@ -119,6 +119,10 @@ class HomeTab(ShapePage):
         status.setAlignment(Qt.AlignmentFlag.AlignHCenter)
         self.lay.addWidget(status)
         self.lay.addSpacing(14)
+        strip = self._trouble()
+        if strip is not None:
+            self.lay.addWidget(strip)
+            self.lay.addSpacing(10)
         # The cards scroll; they never shrink. Stacked into the shape's fixed
         # height they were squeezed until the words ran into each other (the
         # owner, 29 Oct 2026).
@@ -136,6 +140,28 @@ class HomeTab(ShapePage):
             col.addWidget(self._empty_card())
         col.addStretch(1)
         self.lay.addWidget(_scroller(inner), 1)
+
+    def _trouble(self) -> Optional[QFrame]:
+        """Only when she can't answer - out of credits, a refused key, our
+        server, no connection - and why, with the fix one click away.
+        Everything fine says nothing (the old Home's banner, 6b)."""
+        words, fix = self._call("trouble", ("", ""))
+        if not words:
+            return None
+        from ui import app_theme as T
+        from ui.app_widgets import Dot
+        box = QFrame()
+        box.setObjectName("banner")
+        lay = QHBoxLayout(box)
+        lay.setContentsMargins(14, 10, 12, 10)
+        lay.setSpacing(10)
+        lay.addWidget(Dot(T.WARN, 8), 0, Qt.AlignmentFlag.AlignVCenter)
+        lay.addWidget(label(words, "bannerText", wrap=True), 1)
+        if fix:
+            go = button({"plans": "See plans", "account": "Sign in"}.get(fix, "Fix it"), "link")
+            go.clicked.connect(lambda: self.navigate.emit(f"settings/{fix}"))
+            lay.addWidget(go, 0, Qt.AlignmentFlag.AlignVCenter)
+        return box
 
     def _ready_card(self, jobs: list[dict]) -> QFrame:
         """The jobs the first launch made ready, a row each: Start asks her
@@ -407,11 +433,7 @@ ENDED_STATUSES = ("completed", "failed", "cancelled", "rejected")
 
 
 def _status_words():
-    """agents_page.status_words. app_pages first: it imports agents_page
-    at its foot, and agents_page imports it at its head - loaded the other
-    way round (the Jobs tab before the app window ever opened) the import
-    went in a circle and failed."""
-    from ui import app_pages  # noqa: F401
+    """agents_page.status_words, imported when first needed."""
     from ui.agents_page import status_words
     return status_words
 

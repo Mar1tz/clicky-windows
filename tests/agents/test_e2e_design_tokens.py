@@ -1,6 +1,6 @@
 """One set of values for the whole UI (docs/ui/DESIGN.md, ui/tokens.py).
 
-The first launch, the tour scenes and the app window each grew their own
+The first launch, its tour scenes and the first app window each grew their own
 colours, radii and shadows - 71 raw colours in one file, 46 in another,
 eleven different radii - so the same grey existed under three spellings and
 a change had to be made three times. They were consolidated into
@@ -20,7 +20,6 @@ CONSOLIDATED = (
     "ui/kit.py",
     "ui/app_theme.py",
     "ui/app_widgets.py",
-    "ui/app_window.py",
     "ui/app_pages.py",
     "ui/onboarding_parts.py",
     "ui/setup_wizard.py",
@@ -29,7 +28,6 @@ CONSOLIDATED = (
     "ui/app_popover.py",
     "ui/window_frame.py",
     "ui/app_parts.py",
-    "ui/settings_dialog.py",
     "ui/settings_tabs.py",
     "ui/agents_page.py",
     "ui/skills_page.py",
@@ -50,17 +48,6 @@ def test_ui_files_take_their_colours_from_tokens():
     offenders = {f: _code_hexes(ROOT / f) for f in CONSOLIDATED}
     offenders = {f: h for f, h in offenders.items() if h}
     assert not offenders, f"use a ui/tokens.py name instead: {offenders}"
-
-
-def test_the_tour_keeps_other_apps_colours_in_one_place():
-    """A depicted application's colours live in DEPICTED (BRAND.md §2: they
-    stop at its window's edge); everything else in the tour is a token."""
-    src = (ROOT / "ui/tour_scenes.py").read_text(encoding="utf-8")
-    head, _, rest = src.partition("DEPICTED = {")
-    assert rest, "tour_scenes.DEPICTED is where depicted apps' colours go"
-    rest = rest.split("\n}\n", 1)[1]
-    stray = HEX.findall(head) + HEX.findall(rest)
-    assert not stray, f"a tour colour outside DEPICTED: {stray}"
 
 
 def test_the_scales_are_the_scales():

@@ -1,4 +1,5 @@
-"""The tabs of the Settings dialog (ui/settings_dialog.py, DESIGN.md §3D).
+"""The Settings tabs (DESIGN.md §4): the shape's Settings pages are built on them
+(ui/shape_settings.py). They began in a Settings dialog, deleted in revamp step 6b.
 
 Settings was a long page - approvals, the account, updates, agent rails,
 allowed actions, the microphone, appearance - and Setup, Voice & models and

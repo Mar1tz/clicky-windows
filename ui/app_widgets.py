@@ -680,7 +680,7 @@ def logo(service: str, size: int = 20, dpr: float = 0.0) -> Optional[QPixmap]:
 
 
 def nav_icon(kind: str, colour: str, size: int = 20, dpr: float = 0.0) -> QPixmap:
-    """A page's icon. `kind` keys are the page ids in app_pages."""
+    """A page's icon: `kind` is a key of ICONS."""
     return icon(kind, colour, size, dpr)
 
 

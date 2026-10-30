@@ -41,46 +41,61 @@ def _fresh_run(heytora):
 
 # -- the reported bug -------------------------------------------------------------------------------------------
 
-def test_settings_does_not_stick_on_reading_your_plan(qapp, heytora):
+def _shape(monkeypatch):
+    """The shape, open on its Account settings (the plan, this month)."""
+    from ui import shape as S
     from ui.app_bridge import AppBridge
-    from ui.app_window import ToraApp
+    monkeypatch.setattr(S, "animations_on", lambda: False)
+    return _reopen(S.Shape(AppBridge()))
+
+
+def _reopen(s):
+    """Out of the pill again, and on to Settings > Account, as a user would."""
+    from tests.agents.test_e2e_shape import _pill_at
+    s.open_from("bottom", _pill_at("bottom"))
+    s.show_settings("account")
+    return s
+
+
+def _close(s):
+    from PyQt6.QtCore import QCoreApplication, QEvent
+    s.hide()
+    s.deleteLater()
+    QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+
+
+def test_settings_does_not_stick_on_reading_your_plan(qapp, heytora, monkeypatch):
     _signed_in(heytora)
     acc = heytora.account
     with acc._lock:                                   # nothing known: the first run after sign-in
         acc._summary, acc._summary_at = None, 0.0
-    w = ToraApp(AppBridge())
+    s = _shape(monkeypatch)                           # built for the first time
     try:
-        w.show()
-        w.show_page("settings/usage")                       # built for the first time
-        _until(qapp, lambda: "Free plan" in _texts(w))
-        assert "3 questions this month" in _texts(w)
+        _until(qapp, lambda: "Free plan" in _texts(s))
+        assert "3 questions this month" in _texts(s)
 
         # Closed; the plan moves while nobody looks; opened again.
-        w.hide()
+        s.hide()
         heytora.fake.usage = {"talk": 9}
         acc.summary(force=True)
         qapp.processEvents()
-        w.show()
-        _until(qapp, lambda: "9 questions this month" in _texts(w))
-        assert "Reading your plan…" not in _texts(w)
+        _reopen(s)
+        _until(qapp, lambda: "9 questions this month" in _texts(s))
+        assert "Reading your plan…" not in _texts(s)
     finally:
-        w.close()
+        _close(s)
 
 
-def test_the_card_moves_with_every_question(qapp, heytora):
-    from ui.app_bridge import AppBridge
-    from ui.app_window import ToraApp
+def test_the_card_moves_with_every_question(qapp, heytora, monkeypatch):
     _signed_in(heytora)
-    w = ToraApp(AppBridge())
+    s = _shape(monkeypatch)
     try:
-        w.show()
-        w.show_page("settings/usage")
-        _until(qapp, lambda: "3 questions this month" in _texts(w))
+        _until(qapp, lambda: "3 questions this month" in _texts(s))
         heytora.account.new_talk()
         heytora.account.voice_pass("talk", "gemini-3.8-live")   # the server says: talk 1 this month
-        _until(qapp, lambda: "1 question this month · 1 today" in _texts(w))
+        _until(qapp, lambda: "1 question this month · 1 today" in _texts(s))
     finally:
-        w.close()
+        _close(s)
 
 
 # -- the account owns the plan -----------------------------------------------------------------------------------
@@ -213,40 +228,6 @@ def test_a_refused_ticket_is_asked_for_again_once(heytora, monkeypatch):
     assert heytora.fake.opened["talk"] == 2
 
 
-# -- Home: the plan at a glance, live ---------------------------------------------------------------------------
-
-def _home(qapp, state):
-    from tests.agents.test_e2e_first_launch import _Bridge, _state
-    from ui.app_pages import HomePage
-
-    class HomeBridge(_Bridge):
-        """_Bridge keeps the account state in .state - which Home calls."""
-        def __init__(self, account):
-            super().__init__(account)
-            self.account = self.__dict__.pop("state")
-
-        def account_state(self):
-            return dict(self.account)
-    bridge = HomeBridge(_state(**state))
-    page = HomePage(bridge)
-    page.refresh()
-    return page, _texts(page)
-
-
-def test_home_shows_the_plan_moving_with_use(qapp):
-    max_plan = {"plan": "max", "plan_name": "Max", "limits": {"talk": None, "agent": 1000, "dictation": None},
-                "usage": {"talk": 19, "agent": 3, "dictation": 2}, "today": {"talk": 4},
-                "period_end": "2026-11-01T00:00:00+00:00", "fair_use": 0.05}
-    _page, texts = _home(qapp, {"summary": max_plan})
-    assert "Your Max plan" in texts and "Starts again on 1 Nov" in texts
-    assert "5% of this month used" in texts
-
-
-def test_home_has_no_plan_card_on_an_own_key(qapp):
-    _page, texts = _home(qapp, {"mode": "own_key"})
-    assert not any(t.startswith("Your ") and t.endswith(" plan") for t in texts)
-
-
 def test_settings_says_todays_use(qapp):
     from tests.agents.test_e2e_first_launch import _Bridge, _state
     from ui.settings_tabs import UsageTab as SettingsPage
@@ -256,28 +237,24 @@ def test_settings_says_todays_use(qapp):
     assert "7 questions this month · 2 today" in _texts(page)
 
 
-def test_talking_moves_settings_in_place(qapp, heytora):
+def test_talking_moves_settings_in_place(qapp, heytora, monkeypatch):
     """Reported 2 Oct: "I'm on the Settings page, I talk, the values don't
     change." Every time the user talks is a talk message, counted when Tora
     hears it; the plan card is swapped in place - the rest of Settings (a
     switch, something half-typed, the scroll) is left alone."""
     from PyQt6.QtWidgets import QWidget
-    from ui.app_bridge import AppBridge
-    from ui.app_window import ToraApp
     _signed_in(heytora)
-    w = ToraApp(AppBridge())
+    s = _shape(monkeypatch)
     try:
-        w.show()
-        w.show_page("settings/usage")
-        _until(qapp, lambda: "3 questions this month" in _texts(w))
-        page = w._settings.tab("usage")
+        _until(qapp, lambda: "3 questions this month" in _texts(s))
+        page = s.settings_stack.currentWidget()
         untouched = page.body.widget().findChildren(QWidget)[0]
         for n in (1, 2, 3):                           # three questions, one after another
             heytora.account.new_talk()
             heytora.account.ticket("talk")            # what _count_question does when Tora hears them
             _until(qapp, lambda n=n: f"{n} question{'' if n == 1 else 's'} this month · {n} today"
-                   in _texts(w))
+                   in _texts(s))
         assert untouched in page.body.widget().findChildren(QWidget), "the page was not rebuilt"
         assert heytora.fake.opened["talk"] == 3
     finally:
-        w.close()
+        _close(s)

@@ -1,4 +1,4 @@
-"""The Tora app window's one door into the running companion (APP-10).
+"""The shape's one door into the running companion (APP-10).
 
 The window was a drawing: nine pages of placeholder numbers and switches
 that did nothing, on purpose (M29 - "place everything where it needs to go,
@@ -57,7 +57,7 @@ def check_shortcut(combo: str) -> str:
 
 
 class AppBridge(QObject):
-    """What the app window can read and do. Nothing else."""
+    """What the shape (and the tour) can read and do. Nothing else."""
 
     # Something the pages show has changed: "state", "account", "agents",
     # "guide", "switches", "journal", "recording", "skills". A page shown at
@@ -109,6 +109,36 @@ class AppBridge(QObject):
     def problem(self) -> str:
         """"billing" / "key" while Google is refusing the account (APP-02)."""
         return str(getattr(self.manager, "_problem_kind", "") or "")
+
+    def trouble(self) -> tuple[str, str]:
+        """Why Tora can't answer right now, for Home's strip: (words, where
+        to fix it - a settings key, or ""). ("", "") when she can.
+
+        Out of this month's credits shows before the next question is
+        refused: the plan already says so (account summary, "blocked")."""
+        kind = self.problem()
+        st = {}
+        try:
+            st = self.account_state()
+        except Exception:  # noqa: BLE001 - a bridge without accounts
+            pass
+        summary = st.get("summary") or {}
+        blocked = (summary.get("blocked") or {}).get("all") == "budget"
+        if (kind == "plan" or blocked) and st.get("mode", "account") == "account":
+            from account.service import resets_on
+            when = resets_on(summary) if summary else ""
+            return (f"This month's credits are used up. Tora can't answer until they come back"
+                    f"{' on ' + when if when else ''}, or you add more.", "plans")
+        words = {
+            "billing": ("Your Gemini key is out of credit. Tora can't answer until it's topped up.",
+                        "advanced"),
+            "key": ("Google refused your Gemini key. Check it in Advanced.", "advanced"),
+            "service": ("HeyTora is having trouble on our side. It's not you - ask again in a "
+                        "few minutes.", ""),
+            "signin": ("You're signed out. Sign in to keep talking to Tora.", "account"),
+            "network": ("Tora can't reach the internet. Check your connection.", ""),
+        }.get(kind)
+        return words or ("", "")
 
     def listening(self) -> str:
         """"ambient" - wakes on "Tora" - or "hotkey"."""
@@ -433,14 +463,6 @@ class AppBridge(QObject):
         from ui import sounds
         cfg.set_listen_sound(key)
         sounds.play(key)
-
-    def sidebar_collapsed(self) -> bool:
-        from config import cfg
-        return cfg.sidebar_collapsed()
-
-    def set_sidebar_collapsed(self, shut: bool) -> None:
-        from config import cfg
-        cfg.set_sidebar_collapsed(shut)
 
     def uses(self) -> list[str]:
         """What they said they do at first launch ("Accounting", "Student"...)."""

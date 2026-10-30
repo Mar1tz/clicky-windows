@@ -1,23 +1,23 @@
-"""Get a free month: the referral window (docs/REFERRALS.md).
+"""Get a free month: the referral panel, the shape's Invite & Earn page
+(docs/REFERRALS.md).
 
 Wispr Flow's layout - Refer, Past referrals, Apply referral - for HeyTora's
 offer: a friend gets 14 days of Pro, and when they've asked Tora 15
 questions the referrer gets a free month, used on their next payment. Every
-rule is the server's (migration 0010); this window shows what it says, and
+rule is the server's (migration 0010); this panel shows what it says, and
 in words why a code can't be used.
 """
 from __future__ import annotations
 
 from typing import Optional
 
-from PyQt6.QtCore import QRectF, Qt, QTimer, pyqtSignal
+from PyQt6.QtCore import QRectF, Qt, pyqtSignal
 from PyQt6.QtGui import QColor, QFont, QLinearGradient, QPainter, QPainterPath, QPen
 from PyQt6.QtWidgets import QApplication, QFrame, QHBoxLayout, QLabel, QLineEdit, QVBoxLayout, QWidget
 
 from ui import app_theme as T
 from ui import tokens
 from ui.app_widgets import button, icon, label, later
-from ui.settings_parts import SubDialog
 
 GOAL = 15                 # questions the friend asks (migration 0010)
 PANEL_H = 440             # each tab's panel: as tall as Refer's
@@ -327,29 +327,6 @@ class ReferralPanel(QWidget):
         self._busy = _Background(self, lambda: self.bridge.apply_referral(code), done)
 
 
-class ReferralWindow(SubDialog):
-    """The panel over the app window (or its Settings)."""
-
-    W = 580
-
-    def __init__(self, over: QWidget, bridge, tab: str = "refer"):
-        super().__init__(over, "Refer and earn rewards",
-                         "Give a friend 14 days of Pro, and get a free month when they've asked "
-                         f"Tora {GOAL} questions.")
-        self.panel = ReferralPanel(bridge, tab)
-        self.body.addWidget(self.panel)
-        self.foot.addWidget(self.panel.foot_note, 1)
-        self.panel.changed.connect(self._place)
-
-    def __getattr__(self, name):
-        # The panel's parts (link_edit, copy_btn, _show...), as when they
-        # were the window's own.
-        panel = self.__dict__.get("panel")
-        if panel is None:
-            raise AttributeError(name)
-        return getattr(panel, name)
-
-
 # ── Invite & Earn: the shape's settings page (DESIGN.md §5) ───────────────────
 
 def invite_page():
@@ -374,11 +351,3 @@ def invite_page():
 
     return InvitePage
 
-
-def open_referrals(window: QWidget, bridge, tab: str = "refer") -> ReferralWindow:
-    """Over the app window (or Settings, when it is open)."""
-    over = getattr(window, "_settings", None)
-    over = over if over is not None and over.isVisible() else window
-    dlg = ReferralWindow(over, bridge, tab)
-    dlg.open()
-    return dlg

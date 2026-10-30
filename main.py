@@ -759,7 +759,7 @@ def main():
 
     from ui.app_bridge import AppBridge
 
-    # Setup wizard (re-run) + diagnostics. Finishing it may have signed in to
+    # The sign-in window and the tour. Finishing either may have signed in to
     # a HeyTora account or set a key: the running app takes that up at once.
     def _access_changed():
         manager.on_access_changed()
@@ -884,7 +884,7 @@ def main():
     _update_timer.start()
 
     # ── Global hotkey ─────────────────────────────────────────────────────────
-    # The first launch's shortcut test borrows it (ui/setup_wizard.py): while
+    # The tour's "hold to talk" step borrows it (ui/onboarding_steps.py): while
     # claimed, holding the hotkey lights the key there instead of starting a
     # conversation. Called on the keyboard hook's thread.
     _hotkey_claim: list = []
@@ -923,7 +923,7 @@ def main():
         claim=lambda: _hotkey_claim.__setitem__(slice(None), [(lambda: None, lambda: None)]),
         release=_hotkey_claim.clear)
 
-    # What the first launch's second half needs from the running app.
+    # What the tour needs from the running app.
     def _claim_hotkey(down, up):
         _hotkey_claim[:] = [(down, up)]
 
@@ -1051,7 +1051,7 @@ def main():
     sys.exit(app.exec())
 
 
-# Module-level slots keeping references to the setup wizard [0] and the API
+# Module-level slots keeping references to the sign-in window or the tour [0] and the API
 # keys dialog [1] alive while Qt is running (PyQt will GC them otherwise and
 # the dialog will vanish).
 _setup_keepalive: list = [None, None]

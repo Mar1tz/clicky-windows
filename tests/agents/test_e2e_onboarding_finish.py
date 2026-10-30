@@ -16,7 +16,7 @@ import pytest  # noqa: E402
 
 pytest.importorskip("PyQt6")
 
-from tests.agents.test_e2e_first_launch import _sign_in, _wizard, qapp, service  # noqa: E402,F401
+from tests.agents.test_e2e_first_launch import qapp  # noqa: E402,F401 - fixture
 from tests.agents.test_e2e_onboarding_steps import FakeVoice, _run_timers, _to_step  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -181,21 +181,6 @@ def test_starting_one_asks_her_in_its_words(monkeypatch):
 
 # ── the tour in the old wizard's place ─────────────────────────────────────
 
-def test_the_gate_signs_in_and_nothing_more(qapp, service):
-    from ui import setup_wizard
-    assert not setup_wizard.setup_already_ran()
-    w = _wizard(service.account, start="connect", signin_only=True)
-    assert w._signin_only, "a fresh install too: the rest is the tour"
-    assert w.phases.isHidden(), "no Permissions > Set up > Learn ahead of a sign-in"
-    done = []
-    w.completed.connect(lambda: done.append(1))
-    _sign_in(service)
-    w._refresh_connect()
-    w._next()
-    assert done == [1]
-    w.close()
-
-
 def test_main_opens_the_tour_after_the_app_is_up():
     src = (ROOT / "main.py").read_text(encoding="utf-8")
     assert src.index("first_launch = not setup_already_ran()") < src.index("door = sign_in_gate.gate()")
@@ -203,7 +188,9 @@ def test_main_opens_the_tour_after_the_app_is_up():
     assert "tray.on_run_setup.connect(_open_tour)" in src, "Run again is the tour too"
     assert "bridge=AppBridge(manager, tray, panel)" in src
     gate = (ROOT / "ui/sign_in_gate.py").read_text(encoding="utf-8")
-    assert 'SetupWizard(start="connect", signin_only=True)' in gate
+    assert "(wizard_factory or SetupWizard)()" in gate, "the gate's window signs in, nothing more"
+    from ui import setup_wizard
+    assert not hasattr(setup_wizard, "PAGES"), "the old tour's pages are gone"
 
 
 def test_dev_can_sign_in_without_the_website():

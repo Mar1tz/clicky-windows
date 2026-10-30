@@ -2,7 +2,7 @@
 
 The tray used to open a 30-item QMenu - every voice, model, tutor switch and
 journal option, three submenus deep - drawn by Windows in its own dark
-chrome. Everything in it now lives in the app window (ui/app_pages.py), so
+chrome. Everything in it now lives in the shape (ui/shape.py), so
 the tray only has to answer the questions you right-click it for: is Tora
 on, what is she doing, how much plan is left, open the app, stop, quit.
 

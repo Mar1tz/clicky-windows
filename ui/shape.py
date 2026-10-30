@@ -78,8 +78,7 @@ MAX_JOBS = 3          # one frame: the window is on the screen before the clock 
 # which would open it again at once. A toggle this soon after is that click.
 REOPEN_GUARD_S = 0.35
 
-# (key, icon, name) - the tabs, left to right. A key in _pages() is the
-# shape's own page; any other opens the app window there (app_pages.PAGES keys).
+# (key, icon, name) - the tabs, left to right (_pages() builds them).
 TABS = (
     ("home", "home", "Home"),
     ("chat", "chat", "Chat"),

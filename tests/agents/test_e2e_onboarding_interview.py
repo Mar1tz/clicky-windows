@@ -47,10 +47,10 @@ def test_answers_become_the_profile_the_skills_and_her_memory(monkeypatch):
     import ai.gemini_memory as M
     import ui.onboarding_interview as I
     from config import cfg
-    from ui.setup_wizard import SetupWizard
+    from ui import setup_wizard
     got = {}
     monkeypatch.setattr(cfg, "set_profile", lambda name, uses: got.update(profile=(name, uses)))
-    monkeypatch.setattr(SetupWizard, "_save_skills", staticmethod(lambda uses: got.update(skills=uses)))
+    monkeypatch.setattr(setup_wizard, "save_skills", lambda uses: got.update(skills=uses))
     remembered = []
 
     async def remember(text, source=""):

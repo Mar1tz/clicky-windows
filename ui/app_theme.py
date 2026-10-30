@@ -218,7 +218,7 @@ def qss() -> str:
     QLabel#statValue {{ font-size: 30px; font-weight: 700; letter-spacing: -0.6px; }}
     QLabel#statLabel {{ color: {TEXT_DIM}; font-size: 14px; }}
     QLabel#footTitle {{ font-size: 14px; font-weight: 700; }}
-    /* ── the Settings dialog (ui/settings_dialog.py) ───────────────────── */
+    /* ── Settings cards (ui/settings_tabs.py) ─────────────────────────── */
     QFrame#settingsCard {{ background: {SURFACE}; border: none; border-radius: {tokens.RADIUS_XL}px; }}
     QFrame#settingsNav {{
         background: {BG}; border: none; border-right: 1px solid {BORDER};

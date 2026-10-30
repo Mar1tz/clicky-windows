@@ -228,12 +228,13 @@ def test_a_click_opens_that_job_and_a_finished_card_goes(qapp):
 
 
 def test_a_click_opens_the_apps_agents_page_on_that_job():
-    """main.py wires the cards to tray.on_open_app_page("agents/job/<id>")."""
+    """main.py wires the cards to tray.on_open_app_page("agents/job/<id>"),
+    which the shape opens as that job's details."""
     import inspect
     from pathlib import Path
 
-    from ui import app_window
-    assert "agents/job/" in inspect.getsource(app_window.ToraApp.show_page)
+    from ui import shape
+    assert "agents/job/" in inspect.getsource(shape.Shape._navigate)
     main = (Path(__file__).resolve().parents[2] / "main.py").read_text(encoding="utf-8")
     assert 'on_open=lambda _agent, task: tray.on_open_app_page.emit(' in main
 

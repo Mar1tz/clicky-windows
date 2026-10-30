@@ -685,3 +685,95 @@ def test_a_late_scroll_never_touches_a_page_that_is_gone(qapp):
     for _ in range(5):
         qapp.processEvents()
     assert ran == [2]
+
+
+# ── kept from the old app window's tests (it went in revamp step 6b) ─────────
+
+def test_every_icon_actually_draws(qapp):
+    """The Unicode glyphs this replaced fell back to three different fonts,
+    one of them a colour emoji. Every icon has a Lucide file, and it renders."""
+    from ui.app_widgets import ICONS, nav_icon
+    for key in ICONS:
+        px = nav_icon(key, "#FFFFFF")
+        img = px.toImage()
+        assert not px.isNull() and any(img.pixelColor(x, y).alpha()
+                                       for x in range(img.width()) for y in range(img.height())), key
+
+
+def test_a_switch_reports_what_it_was_clicked_to(qapp):
+    from ui.app_widgets import Switch
+    seen: list[bool] = []
+    s = Switch(False)
+    s.toggled.connect(seen.append)
+    s.setChecked(True)
+    s.setChecked(True)               # no event for no change
+    s.setChecked(False)
+    assert seen == [True, False]
+
+
+def test_the_tray_offers_a_way_in():
+    """The app is useless if nothing opens it."""
+    from ui.tray import TrayManager
+    assert hasattr(TrayManager, "on_open_app")
+
+
+def test_the_old_windows_are_gone():
+    """Revamp step 6b: everything opens in the shape, and the old app
+    window, its Settings dialog, the referral window and the old wizard's
+    tour pages are deleted - not left to drift."""
+    import importlib.util
+    from ui import referral_window, setup_wizard
+    for gone in ("ui.app_window", "ui.settings_dialog", "ui.tour_scenes"):
+        assert importlib.util.find_spec(gone) is None, gone
+    assert not hasattr(referral_window, "ReferralWindow")
+    assert not hasattr(setup_wizard, "PAGES")
+
+
+# ── Home says when she can't answer (the old Home's banner, 6b) ───────────────
+
+def _home_words(shape, trouble):
+    from PyQt6.QtWidgets import QLabel
+    shape.bridge.trouble = lambda: trouble
+    shape.show_tab("home")
+    page = shape.stack.currentWidget()
+    page.refresh()
+    return page, [l.text() for l in page.findChildren(QLabel)]
+
+
+def test_home_says_nothing_when_all_is_well(shape):
+    _page, words = _home_words(shape, ("", ""))
+    assert not any("can't answer" in w or "refused" in w for w in words)
+
+
+def test_home_says_when_the_credits_are_used_up_and_where_to_go(shape):
+    from PyQt6.QtWidgets import QPushButton
+    page, words = _home_words(shape, ("This month's credits are used up.", "plans"))
+    assert "This month's credits are used up." in words
+    went = []
+    page.navigate.connect(went.append)
+    next(b for b in page.findChildren(QPushButton) if b.text() == "See plans").click()
+    assert went == ["settings/plans"]
+
+
+class _Mgr:
+    def __init__(self, kind=""):
+        self._problem_kind = kind
+
+
+def _trouble(kind="", summary=None, mode="account"):
+    from ui.app_bridge import AppBridge
+    b = AppBridge.__new__(AppBridge)
+    b.manager = _Mgr(kind)
+    b.account_state = lambda: {"mode": mode, "summary": summary}
+    return AppBridge.trouble(b)
+
+
+def test_trouble_reads_the_plan_before_the_next_question_is_refused():
+    out = {"blocked": {"all": "budget"}, "period_end": "2026-11-01T00:00:00+00:00"}
+    words, fix = _trouble(summary=out)
+    assert "credits are used up" in words and "1 Nov" in words and fix == "plans"
+    assert _trouble("plan")[1] == "plans"
+    assert _trouble("key")[1] == "advanced" and "refused" in _trouble("key")[0]
+    assert _trouble("service") == (_trouble("service")[0], "") and "our side" in _trouble("service")[0]
+    assert _trouble() == ("", "")
+    assert _trouble(summary=out, mode="own_key") == ("", ""), "their own key: the plan's credits don't stop her"

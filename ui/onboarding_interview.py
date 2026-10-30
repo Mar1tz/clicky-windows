@@ -191,13 +191,13 @@ def save(answers: Answers) -> None:
     the facts in her memory. Each part on its own: one failing never stops
     the others."""
     from config import cfg
-    from ui.setup_wizard import SetupWizard
+    from ui.setup_wizard import save_skills
     name = answers.name or cfg.profile()[0]
     try:
         cfg.set_profile(name, answers.uses)
     except Exception:  # noqa: BLE001
         _log.warning("could not save the profile", exc_info=True)
-    SetupWizard._save_skills(answers.uses)
+    save_skills(answers.uses)
     facts = list(answers.facts) + ([answers.summary] if answers.summary else [])
     if not facts:
         return
