@@ -64,8 +64,8 @@ def panel(qapp, monkeypatch):
     p.seen = seen
     p.open_from()
     yield p
-    p.hide()
-    p.deleteLater()
+    from tests.agents.test_e2e_onboarding_steps import throw_away
+    throw_away(p)
 
 
 def test_continue_waits_for_the_step_to_be_proven(panel):

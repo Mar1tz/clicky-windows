@@ -138,8 +138,8 @@ def test_the_panel_turns_it_on_and_off(heytora, qapp, monkeypatch):
     assert heytora.account.onboarding_on()
     p.skip()
     assert not heytora.account.onboarding_on()
-    p.hide()
-    p.deleteLater()
+    from tests.agents.test_e2e_onboarding_steps import throw_away
+    throw_away(p)
 
 
 def test_signed_out_the_panel_leaves_the_account_alone(heytora):

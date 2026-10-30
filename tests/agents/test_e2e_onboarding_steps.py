@@ -46,6 +46,24 @@ class FakeVoice:
         self.calls.append("skip")
         self.say("skip", None)
 
+    def one_more_thing(self):
+        self.calls.append("one more thing")
+
+
+def throw_away(panel) -> None:
+    """A panel gone for good before the next test: its step left, then
+    deleted now - not on some later test's processEvents, where what it
+    still had queued once crashed the run (30 Oct)."""
+    from PyQt6.QtCore import QCoreApplication, QEvent
+    try:
+        panel.step().leave()
+    except Exception:  # noqa: BLE001 - a test may have left it half-way
+        pass
+    panel.hide()
+    panel.deleteLater()
+    QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+    QCoreApplication.processEvents()
+
 
 @pytest.fixture
 def panel(qapp, monkeypatch):
@@ -66,9 +84,7 @@ def panel(qapp, monkeypatch):
     p = O.OnboardingPanel(St.steps())
     p.played = played
     yield p
-    p.step().leave()
-    p.hide()
-    p.deleteLater()
+    throw_away(p)
 
 
 def _run_timers(qapp, ms=500):
@@ -102,9 +118,8 @@ def test_hello_is_quiet_with_the_sound_off(panel, qapp):
 # ── can I hear you ─────────────────────────────────────────────────────────
 
 def test_it_takes_real_speech_not_a_click(panel):
-    panel.open_from()
-    panel.next()
-    mic = panel.step()
+    import ui.onboarding_steps as St
+    mic = _to_step(panel, St.MicStep)
     mic.hear(0.2, 0.05)                          # a knock on the desk
     for _ in range(5):
         mic.hear(0.001, 0.05)                    # a quiet room
@@ -120,9 +135,8 @@ def test_the_microphone_chip_names_it_and_a_choice_is_saved(panel, monkeypatch):
     saved = []
     monkeypatch.setattr(cfg, "set_mic_device", saved.append)
     monkeypatch.setattr(cfg, "mic_device", lambda: None)
-    panel.open_from()
-    panel.next()
-    mic = panel.step()
+    import ui.onboarding_steps as St
+    mic = _to_step(panel, St.MicStep)
     assert "Built-in" in mic.chip.text(), "Windows' default when none was chosen"
     mic._pick(3, "Headset")
     assert saved == [3] and "Headset" in mic.chip.text()
@@ -131,20 +145,15 @@ def test_the_microphone_chip_names_it_and_a_choice_is_saved(panel, monkeypatch):
 def test_no_microphone_does_not_trap_them(panel, monkeypatch):
     import ui.onboarding_steps as St
     monkeypatch.setattr(St.MicStep, "microphones", staticmethod(lambda: []))
-    panel.open_from()
-    panel.next()
+    _to_step(panel, St.MicStep)
     assert panel.go.isEnabled() and "No microphone found" in panel.step().note.text()
 
 
 # ── this is how you talk to me ─────────────────────────────────────────────
 
 def _to_talk(panel):
-    panel.open_from()
-    panel.next()
-    for _ in range(12):
-        panel.step().hear(0.04, 0.05)
-    panel.next()
-    return panel.step()
+    import ui.onboarding_steps as St
+    return _to_step(panel, St.TalkStep)
 
 
 def test_a_real_hold_proves_it_and_a_brush_does_not(panel):
@@ -237,13 +246,14 @@ def test_her_lines_and_yours_become_bubbles(panel):
     say("you_end", "I run a bakery.")
     say("state", "your_turn")
     assert iv.lines() == [(True, "What do you mostly work on?"), (False, "I run a bakery.")]
-    assert "hold the keys" in iv.status.text()
+    assert iv.status.text().startswith("Your turn - hold Ctrl")
 
 
 def test_typing_an_answer_sends_it(panel):
     iv = _to_interview(panel)
     iv.box.setText("  I write code  ")
-    iv._typed()
+    assert not iv.box.send.isHidden(), "a send arrow, once something is typed"
+    iv.box.send_now()
     assert ("type", "I write code") in panel.voice.calls
     assert iv.lines() == [(False, "I write code")] and iv.box.text() == ""
 
@@ -251,7 +261,7 @@ def test_typing_an_answer_sends_it(panel):
 def test_the_keys_answer_too(panel):
     iv = _to_interview(panel)
     iv.hold(True)
-    assert all(cap._lit for cap in iv.keys)
+    assert iv.pill.state == "listening"
     iv.hold(False)
     assert panel.voice.calls[-2:] == [("hold", True), ("hold", False)]
 
@@ -276,11 +286,7 @@ def test_no_voice_does_not_trap_them(panel):
 
 
 def test_the_tour_ends_her_voice(panel):
-    panel.open_from()
-    panel.next()
-    for _ in range(12):
-        panel.step().hear(0.04, 0.05)
-    panel.next()
+    _to_talk(panel)
     panel.skip()
     assert panel.voice.calls[-1] == "stop"
 
@@ -296,28 +302,26 @@ def _to_step(panel, cls):
     return panel.step()
 
 
-def test_the_help_question_comes_from_the_interview(panel):
-    import ui.onboarding_steps as St
-    from ui.onboarding_interview import Answers
-    from ui.setup_wizard import TRY
-    panel.open_from()
-    St.tour_voice(panel).answers = Answers(uses=["Developer"])
-    help_ = _to_step(panel, St.HelpStep)
-    assert TRY["Developer"] in help_.suggestion.text.text()
-    assert St.HelpStep.suggest([]) == "What am I looking at here?"
-
-
 def test_asking_about_the_screen_keeps_the_panel_and_hands_her_the_screen(panel):
+    from PyQt6.QtCore import QPointF
     import ui.onboarding_steps as St
-    help_ = _to_step(panel, St.HelpStep)
+    circle = _to_step(panel, St.CircleStep)
     panel.show()
-    help_.hold(True, 10.0)
+    circle.hold(True, 10.0)
     assert panel.isVisible(), "it stays put (29 Oct) - left out of her picture instead"
-    help_.hold(False, 12.0)
-    assert panel.voice.calls[-1] == ("hold", False, ("jpeg:0", St.HelpStep.NOTE))
+    circle._follow.stop()
+    for x, y in ((100, 100), (180, 100), (180, 160)):
+        circle.trail.add(QPointF(x, y))
+    circle.hold(False, 12.0)
+    assert panel.voice.calls[-1] == ("hold", False, ("jpeg:3", St.CircleStep.NOTE))
     assert not panel.go.isEnabled(), "proven by her answer"
-    panel.voice.say("tora_end", "That's VS Code - the red line means a typo.")
-    assert panel.go.isEnabled() and "VS Code" in help_.reply.text()
+    panel.voice.say("tora_end", "That's your revenue for the quarter.")
+    assert panel.go.isEnabled() and "revenue" in circle.reply.text()
+
+
+def test_the_help_step_is_gone():
+    import ui.onboarding_steps as St
+    assert not hasattr(St, "HelpStep"), "30 Oct: it was the talk step again"
 
 
 def test_the_circle_stays_until_she_answers(panel):
@@ -335,19 +339,10 @@ def test_the_circle_stays_until_she_answers(panel):
     assert not circle.trail.isVisible()
 
 
-def test_a_brush_of_the_keys_sends_no_picture(panel):
-    import ui.onboarding_steps as St
-    help_ = _to_step(panel, St.HelpStep)
-    help_.hold(True, 10.0)
-    help_.hold(False, 10.1)
-    assert panel.voice.calls[-1] == ("hold", False) and "longer" in help_.status.text()
-
-
 def test_circling_draws_a_line_and_she_gets_it_on_the_picture(panel):
     from PyQt6.QtCore import QPointF
     import ui.onboarding_steps as St
     circle = _to_step(panel, St.CircleStep)
-    assert circle.demo._timer.isActive(), "her demo loops while the step is up"
     circle.hold(True, 10.0)
     circle._follow.stop()                          # the test draws, not the real mouse
     for x, y in ((100, 100), (180, 100), (180, 160), (100, 160), (100, 100)):
@@ -414,7 +409,7 @@ def test_ctrl_ctrl_opens_the_box_and_she_answers(panel):
     typed.tapped.emit()
     assert not typed.box.isHidden()
     typed.box.setText("hi there")
-    typed._send()
+    typed.box.send_now()
     assert panel.voice.calls[-1] == ("type", "hi there") and not panel.go.isEnabled()
     panel.voice.say("tora_end", "Hi! Got your message.")
     assert panel.go.isEnabled() and typed.reply.text() == "Hi! Got your message."
@@ -432,7 +427,7 @@ def test_the_skip_link_stops_her_and_moves_on(panel, qapp):
     assert "skip" in panel.voice.calls, "she is told too, so she stops asking"
     assert "move on" in iv.status.text()
     _run_timers(qapp, 100)
-    assert isinstance(panel.step(), St.HelpStep), "on to the next step by itself"
+    assert isinstance(panel.step(), St.CircleStep), "on to the next step by itself"
 
 
 def test_asking_her_to_skip_keeps_what_she_learned(panel, qapp, monkeypatch):
@@ -497,7 +492,7 @@ def test_pick_my_voice_plays_it_and_keeps_it(panel, monkeypatch):
     from config import cfg
     kept = []
     monkeypatch.setattr(cfg, "set_voice", kept.append)
-    step = _to_step(panel, St.VoiceStep)
+    step = _to_step(panel, St.MakeMeYoursStep)
     assert panel.go.isEnabled(), "she already has a voice"
     assert len(step.tiles) >= 12 and step.WIDE
     step.pick("Puck")
@@ -512,6 +507,99 @@ def test_with_the_app_running_the_voice_goes_through_it(panel, monkeypatch):
     monkeypatch.setattr(cfg, "set_voice", lambda n: (_ for _ in ()).throw(AssertionError("app's job")))
     picked = []
     panel.attach(SimpleNamespace(set_voice=picked.append))
-    step = _to_step(panel, St.VoiceStep)
+    step = _to_step(panel, St.MakeMeYoursStep)
     step.pick("Kore")
     assert picked == ["Kore"]
+
+
+def test_her_colour_is_picked_with_her_voice(panel, monkeypatch):
+    from types import SimpleNamespace
+    import ui.onboarding_steps as St
+    painted = []
+    panel.attach(SimpleNamespace(bridge=SimpleNamespace(set_cursor_colour=painted.append)))
+    step = _to_step(panel, St.MakeMeYoursStep)
+    assert St.steps()[1] is St.MakeMeYoursStep, "second, as HeyClicky asks it (30 Oct)"
+    step.paint("teal")
+    assert painted == ["teal"] and [t.key for t in step.colours if t.isChecked()] == ["teal"]
+
+
+def test_each_step_is_only_as_tall_as_what_is_on_it(panel):
+    import ui.onboarding_steps as St
+    from ui.onboarding_shape import MAX_H, MIN_H
+    hello = _to_step(panel, St.HelloStep)
+    short = panel.panel_rect().height()
+    talk = _to_step(panel, St.TalkStep)
+    assert MIN_H <= short < panel.panel_rect().height() <= MAX_H, "30 Oct: so much white space"
+    assert hello is not talk
+
+
+def test_the_type_box_grows_the_panel_when_it_opens(panel, qapp):
+    import ui.onboarding_steps as St
+    typed = _to_step(panel, St.TypeStep)
+    before = panel.panel_rect().height()
+    typed.tapped.emit()
+    _run_timers(qapp, 60)
+    assert panel.panel_rect().height() > before
+
+
+# ── the owner's second walk-through (30 Oct) ───────────────────────────────
+
+def _click(widget, hold_s=0.0):
+    from PyQt6.QtCore import QEvent, QPointF, Qt
+    from PyQt6.QtGui import QMouseEvent
+    import time as _t
+    at = QPointF(10, 10)
+    for kind in (QEvent.Type.MouseButtonPress, QEvent.Type.MouseButtonRelease):
+        if kind == QEvent.Type.MouseButtonRelease and hold_s:
+            _t.sleep(hold_s)
+        ev = QMouseEvent(kind, at, at, Qt.MouseButton.LeftButton, Qt.MouseButton.LeftButton,
+                         Qt.KeyboardModifier.NoModifier)
+        (widget.mousePressEvent if kind == QEvent.Type.MouseButtonPress else widget.mouseReleaseEvent)(ev)
+
+
+def test_a_tap_on_the_pill_listens_and_the_next_tap_sends(panel):
+    iv = _to_interview(panel)
+    before = len(panel.voice.calls)
+    _click(iv.pill)
+    assert panel.voice.calls[before:] == [("hold", True)], "a click used to send a split second of silence"
+    assert "tap when you're done" in iv.status.text()
+    _click(iv.pill)
+    assert panel.voice.calls[-1] == ("hold", False)
+
+
+def test_holding_the_pill_works_like_the_keys(panel, monkeypatch):
+    import ui.onboarding_steps as St
+    monkeypatch.setattr(St.StatusPill, "HOLD_S", 0.01)
+    iv = _to_interview(panel)
+    _click(iv.pill, hold_s=0.03)
+    assert panel.voice.calls[-2:] == [("hold", True), ("hold", False)]
+
+
+def test_the_round_mic_sits_in_the_middle(panel):
+    iv = _to_interview(panel)
+    iv.pill.set_compact(True)
+    m = iv.pill.layout().contentsMargins()
+    assert iv.pill.width() == 44 and (m.left(), m.right()) == (0, 0), "it was off-centre and cut off"
+    iv.pill.set_compact(False)
+    assert iv.pill.layout().contentsMargins().left() == 16
+
+
+def test_the_list_has_room_before_it_is_filled(panel):
+    import ui.onboarding_steps as St
+    drive = _to_step(panel, St.DriveStep)
+    empty = drive.list.sizeHint().height()
+    for item in ("One", "Two", "Three", "Four", "Five"):
+        drive.list.box.setText(item)
+        drive.list.add()
+    assert drive.list.sizeHint().height() == empty, "30 Oct: filling it squashed it"
+    drive.list.clear()
+    assert drive.list.items() == []
+
+
+def test_a_step_is_measured_once_it_has_built_itself(panel, monkeypatch):
+    import ui.onboarding_steps as St
+    tall = St.label("x", "obNote")
+    tall.setMinimumHeight(420)
+    monkeypatch.setattr(St, "_plans_page", lambda bridge: tall)
+    _to_step(panel, St.PlansStep)
+    assert panel.panel_rect().height() > 420, "30 Oct: the plans were squashed"

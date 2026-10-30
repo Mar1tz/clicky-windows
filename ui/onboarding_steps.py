@@ -14,7 +14,7 @@ import time
 from typing import Optional, Sequence
 
 from PyQt6.QtCore import QObject, QPointF, Qt, QTimer, pyqtSignal
-from PyQt6.QtWidgets import (QCheckBox, QFrame, QHBoxLayout, QLineEdit, QMenu, QPushButton,
+from PyQt6.QtWidgets import (QAbstractButton, QCheckBox, QFrame, QHBoxLayout, QLineEdit, QMenu, QPushButton,
                              QScrollArea, QVBoxLayout, QWidget)
 
 from ui import app_theme as T
@@ -92,7 +92,7 @@ class MicStep(Step):
         super().__init__()
         from ui.shape_widgets import LevelBars
         self.bars = LevelBars(bars=22, big=True)
-        self.body.addSpacing(36)
+        self.body.addSpacing(18)
         self.body.addLayout(_centred(self.bars))
         self.body.addSpacing(24)
         self.body.addLayout(_centred(Bubble("Testing, testing, 1, 2, 3")))
@@ -358,7 +358,7 @@ class TalkStep(_HeldKeys):
     def __init__(self):
         super().__init__()
         row, self.keys = self.keycaps("Hold", "and say")
-        self.body.addSpacing(40)
+        self.body.addSpacing(18)
         self.body.addLayout(row)
         self.body.addSpacing(18)
         self.body.addLayout(_centred(Bubble("Hi Tora, I'm …your name")))
@@ -413,7 +413,194 @@ class TalkStep(_HeldKeys):
             self.status.setText("Hold them a little longer, then let go.")
 
 
+# ── typing to her: a messaging app's box ──────────────────────────────────────
+
+def _soft(hex_colour: str, alpha: float) -> str:
+    from PyQt6.QtGui import QColor
+    c = QColor(hex_colour)
+    return f"rgba({c.red()}, {c.green()}, {c.blue()}, {alpha:.2f})"
+
+
+class SendButton(QAbstractButton):
+    """The round send arrow, there once something is typed."""
+
+    def __init__(self):
+        super().__init__()
+        self.setFixedSize(32, 32)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setToolTip("Send")
+
+    def paintEvent(self, _e) -> None:  # noqa: N802
+        from PyQt6.QtCore import QRectF
+        from PyQt6.QtGui import QColor, QPainter, QPen
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(QColor(T.ACCENT))
+        p.drawEllipse(QRectF(self.rect()).adjusted(1, 1, -1, -1))
+        pen = QPen(QColor(T.ON_ACCENT), 2.2)
+        pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+        pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+        p.setPen(pen)
+        x, y = self.width() / 2, self.height() / 2
+        p.drawLine(QPointF(x, y + 6), QPointF(x, y - 6))
+        p.drawLine(QPointF(x - 5, y - 1), QPointF(x, y - 6))
+        p.drawLine(QPointF(x + 5, y - 1), QPointF(x, y - 6))
+
+
+class MessageBox(QFrame):
+    """Type, and a send arrow appears in the box - press it, or Enter - as
+    in every messaging app (the owner, 30 Oct 2026: not everyone knows to
+    press Enter). `active`: being typed in, or holding something typed."""
+
+    sent = pyqtSignal(str)
+    active = pyqtSignal(bool)
+
+    def __init__(self, placeholder: str):
+        super().__init__()
+        self.setObjectName("obMsg")
+        self.setFixedHeight(44)
+        row = QHBoxLayout(self)
+        row.setContentsMargins(16, 4, 6, 4)
+        row.setSpacing(6)
+        self.edit = QLineEdit()
+        self.edit.setObjectName("obMsgEdit")
+        self.edit.setPlaceholderText(placeholder)
+        self.edit.setFrame(False)
+        self.send = SendButton()
+        self.send.hide()
+        row.addWidget(self.edit, 1)
+        row.addWidget(self.send)
+        self.edit.textChanged.connect(self._changed)
+        self.edit.returnPressed.connect(self.send_now)
+        self.send.clicked.connect(self.send_now)
+        self.edit.installEventFilter(self)
+        self._on = False
+
+    def text(self) -> str:
+        return self.edit.text()
+
+    def setText(self, text: str) -> None:  # noqa: N802 - as QLineEdit's
+        self.edit.setText(text)
+
+    def focus(self) -> None:
+        self.edit.setFocus()
+
+    def _changed(self, text: str) -> None:
+        self.send.setVisible(bool(text.strip()))
+        self._mark()
+
+    def _mark(self) -> None:
+        on = self.edit.hasFocus() or bool(self.edit.text().strip())
+        if on != self._on:
+            self._on = on
+            self.setProperty("on", on)
+            self.style().unpolish(self)
+            self.style().polish(self)
+            self.active.emit(on)
+
+    def eventFilter(self, obj, event) -> bool:  # noqa: N802
+        from PyQt6.QtCore import QEvent
+        if obj is self.edit and event.type() in (QEvent.Type.FocusIn, QEvent.Type.FocusOut):
+            self._mark()
+        return False
+
+    def send_now(self) -> None:
+        text = self.edit.text().strip()
+        if text:
+            self.edit.clear()
+            self.sent.emit(text)
+
+
 # ── I'm curious about you ─────────────────────────────────────────────────────
+
+class StatusPill(QFrame):
+    """Where she is - speaking, thinking, listening, your turn - as one wide
+    pill in the voice's own colour, HeyClicky's way. It is also a button: a
+    tap starts listening and the next tap sends; a press held longer than
+    HOLD_S works as the keys do (30 Oct: a click did nothing - it only
+    listened while held). Small and round while they type."""
+
+    held = pyqtSignal(bool)
+    HOLD_S = 0.5
+
+    def __init__(self):
+        super().__init__()
+        self.setObjectName("obPill")
+        self.setFixedHeight(44)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setToolTip("Tap to talk, tap again to send - or hold the keys")
+        self._down_at: Optional[float] = None
+        self._open = False                       # listening after a tap, until the next
+        row = QHBoxLayout(self)
+        self._row = row
+        row.setContentsMargins(16, 0, 16, 0)
+        row.setSpacing(8)
+        row.addStretch(1)
+        from PyQt6.QtWidgets import QLabel
+        self.icon = QLabel()
+        self.words = label("", "obPillText")
+        row.addWidget(self.icon)
+        row.addWidget(self.words)
+        row.addStretch(1)
+        self.state = ""
+        self.set_state("connecting")
+
+    def words_for(self, state: str) -> str:
+        return {
+            "connecting": "Getting ready…",
+            "speaking": "Tora is speaking…",
+            "thinking": "Thinking…",
+            "listening": ("Listening… tap when you're done" if self._open
+                          else "Listening… let go when you're done"),
+            "your_turn": f"Your turn - hold {' + '.join(hotkey_keys())}",
+        }.get(state, "")
+
+    def set_state(self, state: str, words: str = "") -> None:
+        from PyQt6.QtGui import QPixmap
+        from ui import tokens
+        from ui.app_widgets import icon
+        self.state = state
+        self.words.setText(words or self.words_for(state))
+        colour = tokens.STATE_GLOW.get(state) or T.ACCENT
+        name = {"speaking": "megaphone", "thinking": "sparkles", "connecting": "sparkles",
+                "done": "check"}.get(state, "mic")
+        self.icon.setPixmap(QPixmap(icon(name, T.TEXT, 16, self.devicePixelRatioF())))
+        self.setStyleSheet(f"QFrame#obPill {{ background: {_soft(colour, 0.16)}; "
+                           f"border: 1px solid {_soft(colour, 0.6)}; border-radius: 22px; }}")
+
+    def set_compact(self, on: bool) -> None:
+        """Round while they type: the icon alone, in the middle."""
+        self.words.setVisible(not on)
+        self._row.setContentsMargins(*((0, 0, 0, 0) if on else (16, 0, 16, 0)))
+        self._row.setSpacing(0 if on else 8)
+        if on:
+            self.setFixedWidth(44)
+        else:
+            self.setMinimumWidth(0)
+            self.setMaximumWidth(16777215)
+
+    def mousePressEvent(self, e) -> None:  # noqa: N802
+        if e.button() != Qt.MouseButton.LeftButton:
+            return
+        self._down_at = time.monotonic()
+        if not self._open:
+            self.held.emit(True)                 # listening from the press
+
+    def mouseReleaseEvent(self, e) -> None:  # noqa: N802
+        if e.button() != Qt.MouseButton.LeftButton or self._down_at is None:
+            return
+        held = time.monotonic() - self._down_at
+        self._down_at = None
+        if self._open:                           # the second tap: send
+            self._open = False
+            self.held.emit(False)
+        elif held >= self.HOLD_S:                # held like the keys: let go to send
+            self.held.emit(False)
+        else:                                    # a tap: keep listening until the next
+            self._open = True
+            self.set_state("listening")
+
 
 class _Said(QWidget):
     """One line of the conversation: hers on the left, theirs on the right."""
@@ -424,7 +611,7 @@ class _Said(QWidget):
         row = QHBoxLayout(self)
         row.setContentsMargins(0, 0, 0, 0)
         self.text = label(text, "obHers" if hers else "obYours", wrap=True)
-        self.text.setMaximumWidth(460)
+        self.text.setMaximumWidth(440)
         if not hers:
             row.addStretch(1)
         row.addWidget(self.text)
@@ -438,60 +625,127 @@ class _Said(QWidget):
         self.text.setText(" ".join(text.split()))
 
 
+class ChatBoard(QFrame):
+    """The conversation on a chat wallpaper - faint doodles, as a messaging
+    app's (30 Oct: a dotted grid in a frame read as a canvas) - newest at
+    the bottom and always in view: whenever it grows, it follows."""
+
+    TILE = 132
+
+    def __init__(self, height: int = 250):
+        super().__init__()
+        self.setObjectName("obBoard")
+        self.setFixedHeight(height)
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(1, 1, 1, 1)
+        inner = QWidget()
+        inner.setObjectName("obBoardInner")
+        self.lines = QVBoxLayout(inner)
+        self.lines.setContentsMargins(14, 12, 14, 12)
+        self.lines.setSpacing(8)
+        self.lines.addStretch(1)                      # the newest sits at the bottom
+        self.scroll = QScrollArea()
+        self.scroll.setObjectName("obChat")
+        self.scroll.setWidgetResizable(True)
+        self.scroll.setFrameShape(QFrame.Shape.NoFrame)
+        self.scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.scroll.setWidget(inner)
+        lay.addWidget(self.scroll)
+        self.scroll.verticalScrollBar().rangeChanged.connect(self._follow)
+
+    def _follow(self, _low: int, high: int) -> None:
+        self.scroll.verticalScrollBar().setValue(high)
+
+    def _tile(self):
+        """One square of the wallpaper: little line doodles, faint."""
+        from PyQt6.QtCore import QRectF
+        from PyQt6.QtGui import QColor, QPainter, QPainterPath, QPen, QPixmap
+        dpr = self.devicePixelRatioF()
+        n = self.TILE
+        pm = QPixmap(round(n * dpr), round(n * dpr))
+        pm.setDevicePixelRatio(dpr)
+        pm.fill(Qt.GlobalColor.transparent)
+        p = QPainter(pm)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        ink = QColor(T.TEXT)
+        ink.setAlphaF(0.07)
+        pen = QPen(ink, 1.4)
+        pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+        pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+        p.setPen(pen)
+        p.setBrush(Qt.BrushStyle.NoBrush)
+        bubble = QPainterPath()                               # a speech bubble
+        bubble.addRoundedRect(QRectF(14, 14, 26, 18), 6, 6)
+        bubble.moveTo(20, 32)
+        bubble.lineTo(17, 38)
+        bubble.lineTo(26, 32)
+        p.drawPath(bubble)
+        p.drawEllipse(QPointF(92, 24), 6, 6)                  # a circle
+        p.drawLine(QPointF(64, 64), QPointF(76, 64))          # a plus
+        p.drawLine(QPointF(70, 58), QPointF(70, 70))
+        wave = QPainterPath(QPointF(14, 96))                  # a squiggle
+        wave.cubicTo(QPointF(22, 86), QPointF(30, 106), QPointF(38, 96))
+        wave.cubicTo(QPointF(46, 86), QPointF(54, 106), QPointF(60, 96))
+        p.drawPath(wave)
+        star = QPainterPath(QPointF(104, 92))                 # a sparkle
+        for x, y in ((107, 101), (116, 104), (107, 107), (104, 116), (101, 107), (92, 104),
+                     (101, 101), (104, 92)):
+            star.lineTo(QPointF(x, y))
+        p.drawPath(star)
+        p.drawRoundedRect(QRectF(48, 22, 10, 10), 3, 3)       # a square
+        p.end()
+        return pm
+
+    def paintEvent(self, e) -> None:  # noqa: N802
+        super().paintEvent(e)
+        from PyQt6.QtCore import QRectF
+        from PyQt6.QtGui import QPainter, QPainterPath
+        if getattr(self, "_tile_theme", None) != T.TEXT:      # made again when the theme changes
+            self._tile_pm, self._tile_theme = self._tile(), T.TEXT
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        clip = QPainterPath()
+        clip.addRoundedRect(QRectF(self.rect()), 16, 16)
+        p.setClipPath(clip)
+        p.drawTiledPixmap(self.rect(), self._tile_pm)
+
+
 class InterviewStep(_HeldKeys):
-    """Four questions, out loud: her lines and theirs as chat bubbles, a
-    status line, and an answer by holding the keys or typing. Proven when
-    she has all four (interview_done) - saved as the profile, the starter
-    skills and her memory (onboarding_interview.save). Without a voice it
-    says so and lets them carry on: Settings has the same answers."""
+    """Four questions, out loud: her lines and theirs as chat bubbles on a
+    dotted board, and under it one row - where she is (StatusPill, held it
+    is the keys) and a box to type in (MessageBox) - as HeyClicky's. Proven
+    when she has all four (interview_done) - saved as the profile, the
+    starter skills and her memory (onboarding_interview.save). Without a
+    voice it says so and lets them carry on."""
 
     TITLE = "I'm curious about you."
     LINES = "Four quick questions, so I can set myself up for you."
     WIDE = True
 
-    STATES = {
-        "connecting": "Getting ready…",
-        "speaking": "Tora is speaking…",
-        "thinking": "Thinking…",
-        "listening": "Listening…",
-        "your_turn": "Your turn - hold the keys, or type",
-    }
-
     def __init__(self):
         super().__init__()
-        self.chat = QWidget()
-        self.chat_lay = QVBoxLayout(self.chat)
-        self.chat_lay.setContentsMargins(4, 4, 4, 4)
-        self.chat_lay.setSpacing(8)
-        self.chat_lay.addStretch(1)
-        self.scroll = QScrollArea()
-        self.scroll.setObjectName("obChat")
-        self.scroll.setWidgetResizable(True)
-        self.scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        self.scroll.setWidget(self.chat)
-        self.scroll.setMinimumHeight(200)
-        self.body.addSpacing(10)
-        self.body.addWidget(self.scroll, 1)
-        self.status = label(self.STATES["connecting"], "obStatus")
-        self.status.setAlignment(Qt.AlignmentFlag.AlignHCenter)
-        self.body.addSpacing(10)
-        self.body.addLayout(_centred(self.status))
-        self.body.addSpacing(10)
-        row, self.keys = self.keycaps("Hold", "to answer")
+        self.board = ChatBoard()
+        self.chat_lay = self.board.lines
+        self.scroll = self.board.scroll
+        self.body.addWidget(self.board)
+        self.body.addSpacing(4)
+        row = QHBoxLayout()
+        row.setSpacing(10)
+        self.pill = StatusPill()
+        self.pill.held.connect(self.hold)
+        self.status = self.pill.words
+        self.box = MessageBox("Or type here")
+        self.box.sent.connect(self._typed)
+        self.box.active.connect(self.pill.set_compact)
+        row.addWidget(self.pill, 1)
+        row.addWidget(self.box, 1)
         self.body.addLayout(row)
-        self.body.addSpacing(8)
-        self.box = QLineEdit()
-        self.box.setObjectName("obType")
-        self.box.setPlaceholderText("Or type here, then press Enter")
-        self.box.returnPressed.connect(self._typed)
         self.skip_link = button("Skip these questions", "link")
         self.skip_link.clicked.connect(self.skip)
-        answer = QHBoxLayout()
-        answer.addWidget(self.box, 1)
-        answer.addSpacing(10)
-        answer.addWidget(self.skip_link)
-        self.body.addLayout(answer)
-        self.body.addSpacing(12)
+        skip_row = QHBoxLayout()
+        skip_row.addStretch(1)
+        skip_row.addWidget(self.skip_link)
+        self.body.addLayout(skip_row)
         self._hers: Optional[_Said] = None
         self._yours: Optional[_Said] = None
         self._voice = None
@@ -511,8 +765,6 @@ class InterviewStep(_HeldKeys):
         line = _Said(hers)
         self.chat_lay.addWidget(line)
         line.show()
-        QTimer.singleShot(0, lambda: self.scroll.verticalScrollBar().setValue(
-            self.scroll.verticalScrollBar().maximum()))
         return line
 
     def lines(self) -> list[tuple[bool, str]]:
@@ -529,12 +781,12 @@ class InterviewStep(_HeldKeys):
             return
         if kind == "state":
             if value == "offline":
-                self.status.setText("I can't reach my voice right now")
+                self.pill.set_state("offline", "I can't reach my voice right now")
                 self._note("I couldn't connect just now - carry on, and tell me about "
                            "yourself any time.")
                 self.done()
             elif not self.ready:
-                self.status.setText(self.STATES.get(str(value), ""))
+                self.pill.set_state(str(value))
         elif kind == "tora":
             if self._hers is None:
                 self._hers = self._said(True)
@@ -553,7 +805,7 @@ class InterviewStep(_HeldKeys):
             self.answers = value
             save(value)
             name = getattr(value, "name", "")
-            self.status.setText(f"Got it{', ' + name if name else ''} - thank you!")
+            self.pill.set_state("done", f"Got it{', ' + name if name else ''} - thank you!")
             self.done()
         elif kind == "skip":
             self._skipped(value)
@@ -574,7 +826,7 @@ class InterviewStep(_HeldKeys):
         if answers is not None and (getattr(answers, "uses", None) or getattr(answers, "facts", None)):
             self.answers = answers
             save(answers)                          # what she learned before they skipped
-        self.status.setText("No problem - let's move on.")
+        self.pill.set_state("done", "No problem - let's move on.")
         self.done()
         QTimer.singleShot(self.MOVE_ON_MS, self._move_on)
 
@@ -585,18 +837,14 @@ class InterviewStep(_HeldKeys):
     def _note(self, words: str) -> None:
         self._said(True).set(words)
 
-    def _typed(self) -> None:
-        text = self.box.text().strip()
-        if not text:
-            return
-        self.box.clear()
+    def _typed(self, text: str) -> None:
         self._said(False).set(text)
         if self._voice is not None:
             self._voice.type(text)
 
     def hold(self, down: bool, now: Optional[float] = None) -> None:
-        for cap in self.keys:
-            cap.set_lit(down)
+        if down and not self.ready:
+            self.pill.set_state("listening")
         if self._voice is not None:
             self._voice.hold(down)
 
@@ -722,8 +970,10 @@ class _AsksAboutScreen(_HeldKeys):
     def leave(self) -> None:
         super().leave()
         self._follow.stop()
-        if self.trail is not None:
-            self.trail.hide()
+        trail, self.trail = self.trail, None
+        if trail is not None:            # a window of its own: gone with the step, not kept
+            trail.hide()
+            trail.deleteLater()
 
     def _clear_line(self) -> None:
         if self.trail is not None:
@@ -785,105 +1035,47 @@ class _AsksAboutScreen(_HeldKeys):
             self.done()
 
 
-class HelpStep(_AsksAboutScreen):
-    """A question made from the interview, asked about their real screen."""
+def circle_clip_path():
+    """A recording of HeyTora circling something and answering - an
+    animated WebP made with tools/clip_to_webp.py. None until there is one."""
+    from ui.tokens import assets_dir
+    path = assets_dir() / "onboarding" / "circle.webp"
+    return path if path.exists() else None
 
-    TITLE = "Here's how I'd help you"
-    LINES = "I see what you see. Hold the keys, ask, and watch your screen."
 
-    def __init__(self):
+class Clip(QFrame):
+    """A short looping recording, as HeyClicky shows its own (the owner, 30
+    Oct 2026: a real one, not a drawing). QMovie: no video player to ship."""
+
+    def __init__(self, path, width: int = 420):
         super().__init__()
-        row, self.keys = self.keycaps("Hold", "and ask")
-        self.body.addSpacing(36)
-        self.body.addLayout(row)
-        self.body.addSpacing(14)
-        self.suggestion = Bubble(self.suggest())
-        self.body.addLayout(_centred(self.suggestion))
-        self.body.addSpacing(8)
-        self.build_tail()
-
-    @staticmethod
-    def suggest(uses: Sequence[str] = ()) -> str:
-        """A question that fits what they do, from the old first launch's list."""
-        from ui.setup_wizard import TRY
-        for use in uses:
-            if use in TRY:
-                return TRY[use]
-        return "What am I looking at here?"
-
-    def enter(self) -> None:
-        super().enter()
-        answers = getattr(self._voice, "answers", None)
-        self.suggestion.text.setText(f"“{self.suggest(getattr(answers, 'uses', ()) or ())}”")
-
-
-class _CircleDemo(QWidget):
-    """Her cursor drawing round a figure on a little page, over and over:
-    what circling looks like, before they try it."""
-
-    LOOP_MS = 2600
-
-    def __init__(self):
-        super().__init__()
-        self.setFixedSize(360, 120)
-        self.t = 0.0
-        self._timer = QTimer(self)
-        self._timer.setInterval(16)
-        self._timer.timeout.connect(self._tick)
-        self._started = 0.0
+        from PyQt6.QtCore import QSize
+        from PyQt6.QtGui import QMovie
+        from PyQt6.QtWidgets import QLabel
+        self.setObjectName("obClip")
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(0, 0, 0, 0)
+        self.view = QLabel()
+        self.movie = QMovie(str(path))
+        self.movie.jumpToFrame(0)
+        first = self.movie.currentImage().size()
+        if first.width() > 0:
+            self.movie.setScaledSize(QSize(width, round(first.height() * width / first.width())))
+            self.view.setFixedSize(self.movie.scaledSize())
+        self.view.setMovie(self.movie)
+        lay.addWidget(self.view)
 
     def start(self) -> None:
-        self._started = time.monotonic()
-        self._timer.start()
+        self.movie.start()
 
     def stop(self) -> None:
-        self._timer.stop()
-
-    def _tick(self) -> None:
-        self.t = ((time.monotonic() - self._started) * 1000 % self.LOOP_MS) / self.LOOP_MS
-        self.update()
-
-    def paintEvent(self, _e) -> None:  # noqa: N802
-        import math
-        from PyQt6.QtCore import QRectF
-        from PyQt6.QtGui import QColor, QFont, QPainter, QPen
-        p = QPainter(self)
-        p.setRenderHint(QPainter.RenderHint.Antialiasing)
-        card = QRectF(self.rect()).adjusted(1, 1, -1, -1)
-        p.setPen(QPen(QColor(T.BORDER), 1))
-        p.setBrush(QColor(T.SURFACE))
-        p.drawRoundedRect(card, 12, 12)
-        p.setPen(QColor(T.TEXT_DIM))
-        f = QFont(self.font())
-        f.setPixelSize(12)
-        p.setFont(f)
-        p.drawText(QRectF(20, 18, 320, 18), "Quarterly report")
-        for i, w in enumerate((300, 250, 280)):
-            p.fillRect(QRectF(20, 46 + i * 16, w, 6), QColor(T.BORDER))
-        f.setPixelSize(15)
-        f.setBold(True)
-        p.setFont(f)
-        p.setPen(QColor(T.TEXT))
-        figure = QRectF(220, 14, 110, 26)
-        p.drawText(figure, Qt.AlignmentFlag.AlignCenter, "$48,200")
-        draw = min(self.t / 0.7, 1.0)                     # the circle, then a pause
-        ring = figure.adjusted(-10, -6, 10, 6)
-        pen = QPen(QColor(T.ACCENT), 3)
-        pen.setCapStyle(Qt.PenCapStyle.RoundCap)
-        p.setPen(pen)
-        p.setBrush(Qt.BrushStyle.NoBrush)
-        p.drawArc(ring, 90 * 16, int(-draw * 360 * 16))
-        a = math.radians(90 - draw * 360)
-        head = QPointF(ring.center().x() + ring.width() / 2 * math.cos(a),
-                       ring.center().y() - ring.height() / 2 * math.sin(a))
-        p.setPen(Qt.PenStyle.NoPen)
-        p.setBrush(QColor(T.ACCENT))
-        p.drawEllipse(head, 5, 5)
+        self.movie.stop()
 
 
 class CircleStep(_AsksAboutScreen):
     """Draw round anything while you ask: the line is on the screen as you
-    draw and on the picture she is handed."""
+    draw and on the picture she is handed. Above it, a real recording of it
+    done (circle_clip_path) - when there is one."""
 
     TITLE = "Circle anything, ask about it"
     LINES = "Hold the keys, draw round something with your mouse, and ask about it."
@@ -894,28 +1086,35 @@ class CircleStep(_AsksAboutScreen):
 
     def __init__(self):
         super().__init__()
-        self.demo = _CircleDemo()
-        self.body.addSpacing(16)
-        self.body.addLayout(_centred(self.demo))
-        self.body.addSpacing(16)
+        path = circle_clip_path()
+        self.clip = Clip(path) if path is not None else None
+        if self.clip is not None:
+            self.body.addSpacing(4)
+            self.body.addLayout(_centred(self.clip))
+        self.body.addSpacing(12)
         row, self.keys = self.keycaps("Hold", "draw round it, and ask")
         self.body.addLayout(row)
-        self.body.addSpacing(8)
         self.build_tail()
 
     def enter(self) -> None:
         super().enter()
-        self.demo.start()
+        if self.clip is not None:
+            self.clip.start()
 
     def leave(self) -> None:
         super().leave()
-        self.demo.stop()
+        if self.clip is not None:
+            self.clip.stop()
 
 
 # ── I can drive your computer too ─────────────────────────────────────────────
 
 class ListWindow(QFrame):
-    """A small "Your list" window inside the panel, for her to fill in."""
+    """A small "Your list" window inside the panel, for her to fill in -
+    with room for five rows from the start, so filling it never squashes
+    it (30 Oct)."""
+
+    ROOM = 5 * 26
 
     def __init__(self):
         super().__init__()
@@ -925,9 +1124,13 @@ class ListWindow(QFrame):
         lay.setContentsMargins(14, 12, 14, 12)
         lay.setSpacing(6)
         lay.addWidget(label("Your list", "obListTitle"))
-        self.rows = QVBoxLayout()
+        rows = QWidget()
+        rows.setMinimumHeight(self.ROOM)
+        self.rows = QVBoxLayout(rows)
+        self.rows.setContentsMargins(0, 0, 0, 0)
         self.rows.setSpacing(4)
-        lay.addLayout(self.rows)
+        self.rows.addStretch(1)
+        lay.addWidget(rows)
         self.box = QLineEdit()
         self.box.setObjectName("obType")
         self.box.setPlaceholderText("Add an item")
@@ -941,7 +1144,7 @@ class ListWindow(QFrame):
             return None
         tick = QCheckBox(text)
         tick.setObjectName("obListItem")
-        self.rows.addWidget(tick)
+        self.rows.insertWidget(self.rows.count() - 1, tick)
         tick.show()
         self.ticks.append(tick)
         self.box.clear()
@@ -1047,12 +1250,15 @@ class DriveStep(_HeldKeys):
         elif kind == "tora_end" and self._waiting and not self.driving:
             # Her answer came and no list with it: drive anyway, after her words.
             self._waiting = False
-            QTimer.singleShot(self.AFTER_WORDS_MS, lambda: self.drive(self._last or self.PLAIN))
+            QTimer.singleShot(self.AFTER_WORDS_MS, self._drive_anyway)
         elif kind == "state" and value == "offline" and self._waiting and not self.driving:
             self._waiting = False
             self.drive(self._last or self.PLAIN)
 
     AFTER_WORDS_MS = 600
+
+    def _drive_anyway(self) -> None:
+        self.drive(self._last or self.PLAIN)
 
     # ── driving ──────────────────────────────────────────────────────────────
     def drive(self, items: Sequence[str]) -> None:
@@ -1167,19 +1373,18 @@ class TypeStep(Step):
         super().__init__()
         from ui.onboarding_parts import Keycap
         self.key = Keycap("Ctrl", px=26)
-        self.body.addSpacing(40)
+        self.body.addSpacing(18)
         self.body.addLayout(_centred(self.key))
         self.body.addSpacing(10)
         self.hint = label("tap it twice", "obNote")
         self.hint.setAlignment(Qt.AlignmentFlag.AlignHCenter)
         self.body.addWidget(self.hint)
-        self.box = QLineEdit()
-        self.box.setObjectName("obType")
-        self.box.setPlaceholderText("Type to Tora, then press Enter")
-        self.box.returnPressed.connect(self._send)
+        self.box = MessageBox("Type to Tora")
+        self.box.setFixedWidth(380)
+        self.box.sent.connect(self._send)
         self.box.hide()
-        self.body.addSpacing(12)
-        self.body.addWidget(self.box)
+        self.body.addSpacing(10)
+        self.body.addLayout(_centred(self.box))
         self.reply = label("", "obReply", wrap=True)
         self.reply.setAlignment(Qt.AlignmentFlag.AlignHCenter)
         self.body.addWidget(self.reply)
@@ -1215,16 +1420,16 @@ class TypeStep(Step):
 
     def open_box(self) -> None:
         self.key.set_lit(True)
-        QTimer.singleShot(260, lambda: self.key.set_lit(False))
+        QTimer.singleShot(260, self._unlight)
         self.hint.setText("That's it - now type")
         self.box.show()
-        self.box.setFocus()
+        self.box.focus()
+        self.grew()
 
-    def _send(self) -> None:
-        text = self.box.text().strip()
-        if not text:
-            return
-        self.box.clear()
+    def _unlight(self) -> None:
+        self.key.set_lit(False)
+
+    def _send(self, text: str) -> None:
         self._sent = True
         self.reply.setText("…")
         if self._voice is not None:
@@ -1239,21 +1444,24 @@ class TypeStep(Step):
             self.reply.setText(("" if self.reply.text() == "…" else self.reply.text()) + str(value))
         elif kind == "tora_end":
             self.reply.setText(" ".join(str(value).split()))
+            self.grew()
             self.done()
         elif kind == "state" and value == "offline":
             self.reply.setText("I can't reach my voice right now - but that's where my answer goes.")
+            self.grew()
             self.done()
 
 
-# ── pick my voice ─────────────────────────────────────────────────────────────
+# ── make me yours: voice and colour ───────────────────────────────────────────
 
-class VoiceStep(Step):
-    """Her voices as the Settings tiles: tap one to hear her say hello (the
-    bundled clip - nothing spent) and it is hers from her next answer. Ready
-    from the start: she already has one."""
+class MakeMeYoursStep(Step):
+    """Her voice and her cursor's colour, the Settings tiles - second, as
+    HeyClicky asks them first (the owner, 30 Oct 2026), so the rest of the
+    tour is in the voice they chose. A tap on a voice plays her hello (the
+    bundled clip - nothing spent). Ready from the start: she has both."""
 
-    TITLE = "Pick my voice"
-    LINES = "Tap one to hear it. You can change it any time in Settings."
+    TITLE = "Make me yours"
+    LINES = "Pick my voice and my colour. You can change both any time in Settings."
     WIDE = True
     READY = True
     COLUMNS = 4
@@ -1264,11 +1472,11 @@ class VoiceStep(Step):
         from audio.tts.gemini_tts import VOICES
         from config import cfg
         from ui import tokens
-        from ui.shape_widgets import VoiceTile
+        from ui.shape_widgets import CursorTile, VoiceTile
         now = cfg.voice or "Zephyr"
         self.tiles = []
-        box = QWidget()
-        grid = QGridLayout(box)
+        voices = QWidget()
+        grid = QGridLayout(voices)
         grid.setContentsMargins(0, 0, 0, 0)
         grid.setSpacing(8)
         for i, name in enumerate(list(VOICES) + ([now] if now not in VOICES else [])):
@@ -1277,9 +1485,26 @@ class VoiceStep(Step):
             tile.clicked.connect(lambda _c=False, n=name: self.pick(n))
             grid.addWidget(tile, i // self.COLUMNS, i % self.COLUMNS)
             self.tiles.append(tile)
-        self.body.addSpacing(8)
-        self.body.addWidget(box)
+        self.body.addWidget(label("MY VOICE", "obGroup"))
+        self.body.addWidget(voices)
+        self.body.addSpacing(6)
+        self.body.addWidget(label("MY COLOUR", "obGroup"))
+        colour = cfg.cursor_colour()
+        self.colours = []
+        row = QHBoxLayout()
+        row.setSpacing(8)
+        for key, name, hex_colour in tokens.CURSOR_COLOURS:
+            tile = CursorTile(key, name, hex_colour)
+            tile.setChecked(key == colour)
+            tile.clicked.connect(lambda _c=False, k=key: self.paint(k))
+            row.addWidget(tile, 1)
+            self.colours.append(tile)
+        self.body.addLayout(row)
         self.chosen = now
+        self.colour = colour
+
+    def _live(self):
+        return self.panel.live if self.panel is not None else None
 
     def pick(self, name: str) -> None:
         from config import cfg
@@ -1291,17 +1516,222 @@ class VoiceStep(Step):
                 tile.stop()
         if play_voice(name):
             next(t for t in self.tiles if t.name == name).play(_clip_envelope(name))
-        live = self.panel.live if self.panel is not None else None
+        live = self._live()
         if live is not None and hasattr(live, "set_voice"):
             live.set_voice(name)                  # the running app: saved and used at once
         else:
             cfg.set_voice(name)
 
+    def paint(self, key: str) -> None:
+        """Her cursor in this colour - at once, beside the mouse."""
+        self.colour = key
+        for tile in self.colours:
+            tile.setChecked(tile.key == key)
+        bridge = getattr(self._live(), "bridge", None)
+        if bridge is not None and hasattr(bridge, "set_cursor_colour"):
+            bridge.set_cursor_colour(key)
+        else:
+            from config import cfg
+            cfg.set_cursor_colour(key)
+
+
+# ── there's one more thing… ───────────────────────────────────────────────────
+
+class _JobCard(QFrame):
+    """A job she made ready: its title and why."""
+
+    def __init__(self, job):
+        super().__init__()
+        self.setObjectName("obJob")
+        self.setFixedWidth(400)
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(16, 12, 16, 12)
+        lay.setSpacing(2)
+        lay.addWidget(label("READY TO START", "obJobTag"))
+        lay.addWidget(label(job.title, "obJobTitle", wrap=True))
+        if job.why:
+            lay.addWidget(label(job.why, "obNote", wrap=True))
+        from PyQt6.QtWidgets import QGraphicsOpacityEffect
+        self._fade = QGraphicsOpacityEffect(self)
+        self._fade.setOpacity(0.0)
+        self.setGraphicsEffect(self._fade)
+
+    def appear(self, after_ms: int) -> None:
+        """In its place from the start (the panel fits it), faded in in turn."""
+        QTimer.singleShot(after_ms, self._fade_in)
+
+    def _fade_in(self) -> None:
+        from PyQt6.QtCore import QPropertyAnimation
+        a = QPropertyAnimation(self._fade, b"opacity", self)
+        a.setDuration(260)
+        a.setStartValue(0.0)
+        a.setEndValue(1.0)
+        a.start()
+
+
+class OneMoreStep(Step):
+    """Show me: she makes two or three jobs from the interview (ready_jobs)
+    and they wait on Home as "Ready to start" cards (ui/ready_jobs.py). With
+    no voice - or if she only talks - they come from the starter skills for
+    their work: the step always ends with something to do."""
+
+    TITLE = "There's one more thing…"
+    LINES = "From what you told me, I can get a few jobs ready for you."
+    FALLBACK_S = 20          # no jobs from her by then: the starter skills' own
+    STAGGER_MS = 260
+
+    def __init__(self):
+        super().__init__()
+        self.show_me = button("Show me", "primary")
+        self.show_me.setMinimumWidth(140)
+        self.show_me.clicked.connect(self.make)
+        self.body.addSpacing(24)
+        self.body.addLayout(_centred(self.show_me))
+        self.status = label("", "obNote")
+        self.status.setAlignment(Qt.AlignmentFlag.AlignHCenter)
+        self.body.addWidget(self.status)
+        self.cards = QVBoxLayout()
+        self.cards.setSpacing(8)
+        self.body.addSpacing(6)
+        self.body.addLayout(self.cards)
+        self.jobs: list = []
+        self._voice = None
+        self._asked = False
+        self._late = QTimer(self)
+        self._late.setSingleShot(True)
+        self._late.timeout.connect(self._plain)
+
+    def enter(self) -> None:
+        if self.panel is not None and self._voice is None:
+            self._voice = tour_voice(self.panel)
+            self.panel.voice_events.event.connect(self._event)
+
+    def leave(self) -> None:
+        self._late.stop()
+
+    def make(self) -> None:
+        if self._asked:
+            return
+        self._asked = True
+        self.show_me.hide()
+        self.status.setText("Getting them ready…")
+        if self._voice is None:
+            self._plain()
+            return
+        self._voice.start()
+        self._voice.one_more_thing()
+        self._late.start(self.FALLBACK_S * 1000)
+
+    def _event(self, kind: str, value) -> None:
+        if self.panel is None or self.panel.step() is not self or not self._asked or self.jobs:
+            return
+        if kind == "jobs":
+            self.ready_with(list(value))
+        elif kind == "tora_end":
+            QTimer.singleShot(1500, self._plain)          # she only talked: theirs fill in
+        elif kind == "state" and value == "offline":
+            self._plain()
+
+    def _uses(self) -> list[str]:
+        answers = getattr(self._voice, "answers", None)
+        if getattr(answers, "uses", None):
+            return list(answers.uses)
+        from config import cfg
+        return cfg.profile()[1]
+
+    def _plain(self) -> None:
+        if not self.jobs:
+            from ui.ready_jobs import from_skills
+            self.ready_with(from_skills(self._uses()))
+
+    def ready_with(self, jobs: list) -> None:
+        from ui import ready_jobs
+        if self.jobs or not jobs:
+            return
+        self._late.stop()
+        self.jobs = jobs[:ready_jobs.MOST]
+        ready_jobs.save(self.jobs)
+        for i, job in enumerate(self.jobs):
+            card = _JobCard(job)
+            self.cards.addLayout(_centred(card))
+            card.appear(i * self.STAGGER_MS)
+        self.grew()
+        self.status.setText("They're waiting on Home - start one whenever you like.")
+        self.done()
+
+
+# ── plans ─────────────────────────────────────────────────────────────────────
+
+def _plans_page(bridge):
+    """The Settings plan cards and their payment note - no page title (the
+    step has one) and none of what follows them there (billing, credits)."""
+    from PyQt6.QtWidgets import QLabel
+    from ui.settings_tabs import PLANS_NOTE, PlansTab
+
+    class TourPlans(PlansTab):
+        def build_title(self) -> QWidget:
+            return QWidget()
+
+        def build(self) -> None:
+            add, done = self.body.add, []
+
+            def only_the_plans(widget, *a, **kw):
+                if done:
+                    return
+                add(widget, *a, **kw)
+                if isinstance(widget, QLabel) and widget.text() == PLANS_NOTE:
+                    done.append(True)
+            self.body.add = only_the_plans
+            try:
+                super().build()
+            finally:
+                self.body.add = add
+
+    page = TourPlans(bridge)
+    page.body.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+    head = page.body.top.itemAt(0).widget() if page.body.top.count() else None
+    if head is not None and head.layout() is not None:
+        head.layout().setContentsMargins(0, 0, 0, 0)    # the title's room, with no title
+    return page
+
+
+class PlansStep(Step):
+    """The plans side by side, theirs marked - the last step, as HeyClicky's.
+    Nothing to prove: Free is a fine place to start."""
+
+    TITLE = "Pick a plan"
+    LINES = "Start free - or go further with Pro or Max. You can change it any time."
+    WIDE = True
+    READY = True
+    GO = "Start using HeyTora"
+
+    def __init__(self):
+        super().__init__()
+        self.page: Optional[QWidget] = None
+
+    def enter(self) -> None:
+        if self.page is not None:
+            return
+        live = self.panel.live if self.panel is not None else None
+        try:
+            self.page = _plans_page(getattr(live, "bridge", None))
+        except Exception:  # noqa: BLE001 - plans are in Settings too
+            import logging
+            logging.getLogger("tora.onboarding").warning("could not show the plans", exc_info=True)
+            self.page = label("Plans are in Settings → Plans & billing.", "obNote")
+        self.page.setMinimumHeight(self.PAGE_H)      # the step's own stretch would squash it
+        self.body.addWidget(self.page, 1)
+        self.page.show()             # added to a step on show: hidden until shown, and unmeasured
+        self.grew()
+
+    PAGE_H = 430
+
 
 def steps() -> list:
-    """The tour's steps, in order (phases B-E so far)."""
-    return [HelloStep, MicStep, TalkStep, InterviewStep, HelpStep, CircleStep, DriveStep, TypeStep,
-            VoiceStep]
+    """The tour's steps, in order. "Here's how I'd help you" went (30 Oct
+    2026: it was the talk step again); voice and colour moved up to second."""
+    return [HelloStep, MakeMeYoursStep, MicStep, TalkStep, InterviewStep, CircleStep, DriveStep,
+            TypeStep, OneMoreStep, PlansStep]
 
 
 def stylesheet() -> str:
@@ -1317,16 +1747,25 @@ def stylesheet() -> str:
     QScrollArea#obChat {{ background: transparent; border: none; }}
     QScrollArea#obChat > QWidget > QWidget {{ background: transparent; }}
     QLabel#obHers {{ background: {T.SURFACE}; color: {T.TEXT}; border: 1px solid {T.BORDER};
-                    border-radius: 14px; padding: 8px 12px; font-size: 13px; }}
-    QLabel#obYours {{ background: {T.ACCENT_SOFT}; color: {T.TEXT}; border-radius: 14px;
-                     padding: 8px 12px; font-size: 13px; }}
-    QLabel#obStatus {{ background: {T.SURFACE}; color: {T.TEXT}; border: 1px solid {T.BORDER};
-                      border-radius: {tokens.pill(32)}px; padding: 7px 18px; font-size: 13px;
-                      font-weight: 600; }}
+                    border-radius: 14px; border-top-left-radius: 4px; padding: 8px 12px;
+                    font-size: 13px; }}
+    QLabel#obYours {{ background: {T.ACCENT}; color: {T.ON_ACCENT}; border-radius: 14px;
+                     border-top-right-radius: 4px; padding: 8px 12px; font-size: 13px; }}
     QLineEdit#obType {{ background: {T.SURFACE}; color: {T.TEXT}; border: 1px solid {T.BORDER};
                        border-radius: 10px; padding: 8px 12px; font-size: 13px; }}
     QLineEdit#obType:focus {{ border-color: {T.ACCENT}; }}
     QFrame#obList {{ background: {T.SURFACE}; border: 1px solid {T.BORDER}; border-radius: 12px; }}
     QLabel#obListTitle {{ color: {T.TEXT}; font-size: 13px; font-weight: 700; }}
     QCheckBox#obListItem {{ color: {T.TEXT}; font-size: 13px; }}
+    QFrame#obMsg {{ background: {T.SURFACE}; border: 1px solid {T.BORDER}; border-radius: 22px; }}
+    QFrame#obMsg[on="true"] {{ border: 1px solid {T.ACCENT}; }}
+    QLineEdit#obMsgEdit {{ background: transparent; border: none; color: {T.TEXT}; font-size: 13px; }}
+    QLabel#obPillText {{ color: {T.TEXT}; font-size: 13px; font-weight: 600; }}
+    QFrame#obBoard {{ background: {T.SURFACE_SUNK}; border: none; border-radius: 16px; }}
+    QWidget#obBoardInner {{ background: transparent; }}
+    QLabel#obGroup {{ color: {T.TEXT_DIM}; font-size: 11px; font-weight: 700; letter-spacing: 1px; }}
+    QFrame#obClip {{ border: 1px solid {T.BORDER}; border-radius: 12px; }}
+    QFrame#obJob {{ background: {T.SURFACE}; border: 1px solid {T.BORDER}; border-radius: 12px; }}
+    QLabel#obJobTag {{ color: {T.ACCENT}; font-size: 10px; font-weight: 700; letter-spacing: 1px; }}
+    QLabel#obJobTitle {{ color: {T.TEXT}; font-size: 14px; font-weight: 700; }}
     """

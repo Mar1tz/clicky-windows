@@ -40,9 +40,15 @@ from ui import kit, tokens
 from ui.app_widgets import button, icon, label
 from ui.shape import FADE, FADE_FROM, GROW, GROW_PART, LIFT, PAD, _lerp, _part, animations_on
 
+# Widths; the height is each step's own (fit), between these - HeyClicky's
+# panel is only as tall as what is on it (the owner, 30 Oct 2026: "so much
+# white space").
 NARROW = (480, 600)
 WIDE = (720, 600)
+MIN_H = 200
+MAX_H = 640
 HEAD_H = 44
+FOOT_GAP = 14            # between a step and Continue
 SIDE_W = 96
 
 
@@ -113,6 +119,12 @@ class Step(QWidget):
         if not self.ready:
             self.ready = True
             self.finished.emit()
+
+    def grew(self) -> None:
+        """Something new is on the step (a box, cards): the panel fits it -
+        once the layout has taken it in."""
+        if self.panel is not None:
+            QTimer.singleShot(0, self.panel.refit)
 
     def enter(self) -> None:
         """Shown: start what is live (a microphone, a timer)."""
@@ -204,7 +216,11 @@ class OnboardingPanel(QWidget):
         for step in self.steps:
             step.finished.connect(self._light)
             self.stack.addWidget(step)
+        # The stack is as tall as the panel makes it (fit), not its tallest
+        # step - or a short step could never be short.
+        self.stack.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Ignored)
         lay.addWidget(self.stack, 1)
+        lay.addSpacing(FOOT_GAP)
         foot = QHBoxLayout()
         foot.addStretch(1)
         self.go = button("Continue", "primary")
@@ -316,8 +332,38 @@ class OnboardingPanel(QWidget):
             hook()
 
     # ── sizes and motion ─────────────────────────────────────────────────────
+    def fit(self, step: Step) -> int:
+        """The panel's height for this step: its head, what is on it, and
+        Continue - no room to spare."""
+        w = (WIDE if step.WIDE else NARROW)[0]
+        lay = self.body.layout()
+        m = lay.contentsMargins()
+        inner = w - m.left() - m.right()
+        for child in step.findChildren(QWidget):
+            child.ensurePolished()
+        step.ensurePolished()
+        slay = step.layout()
+        slay.invalidate()                    # what it holds may have just changed (enter, grew)
+        slay.activate()
+        need = slay.heightForWidth(inner) if slay.hasHeightForWidth() else slay.sizeHint().height()
+        need = max(need, slay.minimumSize().height())    # a part with a height of its own (the plans)
+        h = m.top() + HEAD_H + need + FOOT_GAP + self.go.sizeHint().height() + m.bottom()
+        return int(min(max(h, MIN_H), MAX_H))
+
+    def refit(self) -> None:
+        """The step on show grew or shrank: the panel follows, as between steps."""
+        target = self._rect_for(self.step())
+        if target == self._b or self._a.isNull():
+            return
+        now = _lerp(self._a, self._b, self._grow())
+        self._a, self._b, self._from_pill = now, target, False
+        self.body.setGeometry(self._local(self._b).toRect())
+        self._t = 0.0
+        self._step_to(0.0)
+        self._run(1.0, tokens.SHAPE_OPEN)
+
     def _rect_for(self, step: Step) -> QRectF:
-        w, h = WIDE if step.WIDE else NARROW
+        w, h = (WIDE if step.WIDE else NARROW)[0], self.fit(step)
         screen = QGuiApplication.screenAt(self._pill.center().toPoint()) or QGuiApplication.primaryScreen()
         g = screen.availableGeometry()
         return QRectF(round(g.center().x() - w / 2), round(g.center().y() - h / 2), w, h)
@@ -325,7 +371,7 @@ class OnboardingPanel(QWidget):
     def _span(self) -> QRectF:
         screen = QGuiApplication.screenAt(self._pill.center().toPoint()) or QGuiApplication.primaryScreen()
         g = screen.availableGeometry()
-        wide = QRectF(round(g.center().x() - WIDE[0] / 2), round(g.center().y() - WIDE[1] / 2), *WIDE)
+        wide = QRectF(round(g.center().x() - WIDE[0] / 2), round(g.center().y() - MAX_H / 2), WIDE[0], MAX_H)
         return wide.united(self._pill).adjusted(-PAD, -PAD, PAD, PAD)
 
     def open_from(self, pill: Optional[QRectF] = None) -> None:
@@ -348,8 +394,10 @@ class OnboardingPanel(QWidget):
 
     def _move(self, i: int) -> None:
         now = _lerp(self._a, self._b, self._grow())
-        target = self._rect_for(self.steps[i])
         self._show_step(i)
+        # Measured once it is in: a step may build part of itself as it
+        # enters (the plans), and that part must fit too (30 Oct).
+        target = self._rect_for(self.steps[i])
         if target == self._b:
             return                                    # same size: the page simply changes
         self._a, self._b, self._from_pill = now, target, False
