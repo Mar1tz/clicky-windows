@@ -29,12 +29,19 @@ SOUNDS = (
 OFF = "off"
 VOLUME = 0.55
 
-# The shape's own sounds, HeyClicky's way (31 Oct 2026): a soft one as it
-# grows out of the pill, another as it grows into Settings. Quieter than
-# the listening pop - they mark a move, they don't ask for attention.
+# The shape's own sounds, HeyClicky's way (31 Oct 2026): its own files, not
+# the listening pops above (those are "her sound", Settings > Voice). Kenney's
+# Interface Sounds, CC0 (assets/sounds/kenney): a swell as it grows out of
+# the pill and its exact reverse as it shrinks back, a warm tap into
+# Settings and a soft glass one back, and a tick between tabs and pages. Quieter than the
+# listening pop - they mark a move, they don't ask for attention.
 # Settings > Voice > Interface sounds (cfg switch "ui_sounds").
-UI = {"open": "bubble", "settings": "select"}
+UI = {"open": "ui_open", "close": "ui_close", "settings": "ui_settings", "back": "ui_back",
+      "tab": "ui_tab"}
 UI_VOLUME = 0.28
+# Opening and closing a touch under the rest (31 Oct: "the load in is too
+# much"); a tab's tick only just there.
+UI_VOLUMES = {"open": 0.2, "close": 0.2, "tab": 0.14}
 
 _effects: dict = {}
 
@@ -89,7 +96,7 @@ def ui(event: str) -> bool:
     except Exception:  # noqa: BLE001
         return False
     key = UI.get(event)
-    fx = _effect(key, UI_VOLUME) if key else None
+    fx = _effect(key, UI_VOLUMES.get(event, UI_VOLUME)) if key else None
     if fx is None:
         return False
     try:
@@ -98,3 +105,10 @@ def ui(event: str) -> bool:
         return True
     except Exception:  # noqa: BLE001
         return False
+
+
+def preload_ui() -> None:
+    """Load the shape's sounds when it is made: the first one played after
+    a cold start otherwise woke the sound system in the middle of a move."""
+    for event, key in UI.items():
+        _effect(key, UI_VOLUMES.get(event, UI_VOLUME))

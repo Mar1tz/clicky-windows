@@ -33,6 +33,16 @@ SOURCES = {
     "ES_Notifications, User Interface 12 - Epidemic Sound.mp3": "chime",
     "ES_User Interface, Click, Digital, Video Game, Select, Positive, Notification 03 - Epidemic Sound - 0000-0329.wav": "select",
     "ES_User Interface, Click, Digital, Video Game, Select, Positive, Notification 04 - Epidemic Sound.mp3": "spark",
+    # The shape's own sounds (ui/sounds.py UI) - Kenney's Interface Sounds,
+    # CC0 (kenney/License.txt): free for commercial use, no credit needed.
+    # maximize and minimize are one sound and its exact reverse: a pair.
+    # (31 Oct: the first open swell was "too much", and the glass tap into
+    # Settings didn't land - a smaller pair, and a warm low tap.)
+    "kenney/maximize_009.ogg": "ui_open",
+    "kenney/minimize_009.ogg": "ui_close",
+    "kenney/select_006.ogg": "ui_settings",
+    "kenney/glass_003.ogg": "ui_back",
+    "kenney/tick_004.ogg": "ui_tab",
 }
 
 
@@ -71,4 +81,4 @@ if __name__ == "__main__":
     for source, name in SOURCES.items():
         x = tidy(decode(HERE / source))
         write(name, x)
-        print(f"{name:7} {len(x) / RATE:.3f}s  <- {source[:60]}")
+        print(f"{name:11} {len(x) / RATE:.3f}s  <- {source[:60]}")

@@ -60,6 +60,7 @@ PAGE_W, PAGE_H = 1060, 700
 WIDE_MIN = 1000
 NAV_W = 196
 PAD = 24                            # room around the shape in its window, for the shadow
+TAB_SLIDE_MS, TAB_SLIDE_PX = 180, 18  # a tab's page coming in, inside the open shape
 LIFT = 6                            # the page rises this far as it fades in
 TOP_BAR_H = 52
 FOOT_H = 52
@@ -88,7 +89,6 @@ REOPEN_GUARD_S = 0.35
 TABS = (
     ("home", "home", "Home"),
     ("chat", "chat", "Chat"),
-    ("insights", "insights", "Insights"),
     ("agents", "agents", "Jobs"),
 )
 
@@ -161,8 +161,8 @@ MOVED = {"general": "shortcuts", "usage": "account"}
 
 
 def _pages() -> dict:
-    from ui.shape_pages import ChatTab, HomeTab, InsightsTab, JobsTab
-    return {"home": HomeTab, "chat": ChatTab, "insights": InsightsTab, "agents": JobsTab}
+    from ui.shape_pages import ChatTab, HomeTab, JobsTab
+    return {"home": HomeTab, "chat": ChatTab, "agents": JobsTab}
 
 
 def _settings_kinds() -> dict:
@@ -315,6 +315,7 @@ class Shape(QWidget):
         self._pages: dict[str, QWidget] = {}
         self._tabs_built: dict[str, QWidget] = {}
         self._pending: set[str] = set()
+        sounds.preload_ui()
         self._refresh = QTimer(self)
         self._refresh.setSingleShot(True)
         self._refresh.setInterval(150)       # one redraw per burst, as the app window
@@ -436,7 +437,16 @@ class Shape(QWidget):
         else:
             page.refresh()
         self.page_stack.setCurrentWidget(page)
+        self._make_room(self._rect("page"))
         self._move_to("page")
+
+    def _make_room(self, rect: QRectF) -> None:
+        """The window grown to hold `rect` too - once, before a move to it."""
+        have = QRectF(self.geometry()).adjusted(PAD, PAD, -PAD, -PAD)
+        if have.contains(rect):
+            return
+        self.setGeometry(have.united(rect).adjusted(-PAD, -PAD, PAD, PAD).toRect())
+        self._step(self._t)                  # the shape, where it was, in the new window
 
     def open_job(self, task_id: str) -> None:
         """A job's details: the Jobs tab, its drawer sliding in over the
@@ -521,8 +531,20 @@ class Shape(QWidget):
             self.body.setStyleSheet(T.qss())    # polish the new page's labels at the right size
         else:
             page.refresh()
+        was = self.settings_stack.currentWidget()
         self.settings_stack.setCurrentWidget(page)
         self._rows[INNER[key][1] if key in INNER else key].setChecked(True)
+        if self.mode == "settings" and was is not None and was is not page and self._t >= 1.0:
+            # Another page inside Settings: the tabs' tick and glide, up or
+            # down as the sidebar runs (31 Oct: "do that for Settings too").
+            # A page one step in (Privacy, Plans) comes from below.
+            order = [k for _h, rows in SETTINGS for k, _n, _i in rows]
+            def place(k: str) -> float:
+                return order.index(INNER[k][1]) + 0.5 if k in INNER else order.index(k)
+            before = next((k for k, w in self._tabs_built.items() if w is was), key)
+            sounds.ui("tab")
+            self._slide_in(page, 1 if place(key) > place(before) else -1,
+                           stack=self.settings_stack, vertical=True)
 
     def current_setting(self) -> str:
         page = self.settings_stack.currentWidget()
@@ -550,10 +572,53 @@ class Shape(QWidget):
             self.body.setStyleSheet(T.qss())    # polish the new page's labels at the right size
         elif getattr(page, "LIVE", False):
             page.refresh()
+        was = self.stack.currentWidget()
         self.stack.setCurrentWidget(page)
         self._tabs[key].setChecked(True)
         if self.mode in ("settings", "page"):
             self._move_to("open")
+        elif self.mode == "open" and was is not None and was is not page and self._t >= 1.0:
+            sounds.ui("tab")
+            order = [k for k, _i, _n in TABS]
+            before = next((k for k, w in self._pages.items() if w is was), key)
+            self._slide_in(page, 1 if order.index(key) > order.index(before) else -1)
+
+    def _slide_in(self, page: QWidget, side: int, stack: QStackedWidget | None = None,
+                  vertical: bool = False) -> None:
+        """A tab changed inside the open shape: the new page fades in, coming
+        a few pixels from the side of the tab it was asked from (31 Oct: it
+        used to jump). Not while the shape itself is moving, nor with
+        Windows' animations off."""
+        if not animations_on():
+            return
+        running = getattr(page, "_slide", None)
+        if running is not None:
+            running.stop()                     # tapped again mid-slide: start from its place
+        home = (stack or self.stack).contentsRect().topLeft()   # where the stack keeps its page
+        fade = QGraphicsOpacityEffect(page)
+        fade.setOpacity(0.0)
+        page.setGraphicsEffect(fade)
+        anim = QVariantAnimation(page)
+        page._slide = anim
+        anim.setStartValue(0.0)
+        anim.setEndValue(1.0)
+        anim.setDuration(TAB_SLIDE_MS)
+        anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+
+        def step(t) -> None:
+            fade.setOpacity(t)
+            off = round(side * TAB_SLIDE_PX * (1.0 - t))
+            page.move(home.x() + (0 if vertical else off), home.y() + (off if vertical else 0))
+
+        def done() -> None:
+            page.move(home)
+            page.setGraphicsEffect(None)       # drawn plainly again: no softened text
+            if getattr(page, "_slide", None) is anim:
+                page._slide = None
+        anim.valueChanged.connect(step)
+        anim.finished.connect(done)
+        step(0.0)
+        anim.start(QVariantAnimation.DeletionPolicy.DeleteWhenStopped)
 
     def _upgrade_shown(self) -> None:
         """Upgrade, unless there is nothing to upgrade to (Max), or no plan
@@ -599,8 +664,10 @@ class Shape(QWidget):
                   tokens.SHAPE_CLOSE + 60)
         elif key.startswith("agents/job/"):
             self.open_job(key.split("/", 2)[2])
-        elif key in ("insights/all", "journal"):
-            self.show_page("insights" if key == "insights/all" else "journal")
+        elif key in ("insights", "insights/all", "journal"):
+            # Insights is not a tab (31 Oct: in the small shape it was "dumb"):
+            # its calendar is on Account, and all of it is a whole page.
+            self.show_page("journal" if key == "journal" else "insights")
         elif key in _pages():
             self.show_tab(key)
         elif key.startswith("settings"):
@@ -672,7 +739,10 @@ class Shape(QWidget):
         through to what is under them."""
         self._edge, self._pill = edge, QRectF(pill)
         self._upgrade_shown()
-        span = self._pill.united(self._rect("open")).united(self._rect("settings")).united(self._rect("page"))
+        # Not the whole-page size: a see-through window is redrawn whole on
+        # every frame, and one big enough for it made the grow into Settings
+        # stutter (31 Oct). show_page() makes room when a page is opened.
+        span = self._pill.united(self._rect("open")).united(self._rect("settings"))
         self.setGeometry(span.adjusted(-PAD, -PAD, PAD, PAD).toRect())
         self.mode = "open"
         self._page_off = False
@@ -709,13 +779,12 @@ class Shape(QWidget):
         page = self._pages.get("chat")
         if page is not None:
             later(page.ask_box, page.ask_box.setFocus)
+            later(page, page.to_bottom, tokens.SHAPE_OPEN + 40)     # once it has its size
 
     def show_settings(self, key: str = "account") -> None:
         if self.mode == "closed":
             return
         self._version_text()
-        if self.mode != "settings":
-            sounds.ui("settings")
         self._move_to("settings", key)
 
     def back(self) -> None:
@@ -739,6 +808,15 @@ class Shape(QWidget):
             return
         now = self._now_rect()
         self.mode = mode
+        # Each change of size has its sound (ui/sounds.py UI): growing into
+        # Settings or a whole page, back down to the tabs, into the pill.
+        big = ("settings", "page")
+        if mode == "closed":
+            sounds.ui("close")
+        elif was == "open" and mode in big:
+            sounds.ui("settings")
+        elif was in big and mode == "open":
+            sounds.ui("back")
         if self._anim is not None:
             self._anim.stop()
         if mode == "closed":
@@ -942,6 +1020,9 @@ class Shape(QWidget):
         if app is not None and (app.activeModalWidget() is not None or app.activePopupWidget() is not None):
             return
         w = app.activeWindow() if app is not None else None
+        from ui.taskbar import TaskbarButton
+        if isinstance(w, TaskbarButton):
+            return                            # its own taskbar button: that click opens or closes it
         while w is not None:
             if w is self:
                 return
