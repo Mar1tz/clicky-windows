@@ -160,7 +160,8 @@ def test_finish_waits_for_a_sign_in_and_leaves_the_tour_to_come(qapp, service):
     finished = []
     w = _wizard(service.account)
     w.completed.connect(lambda: finished.append(1))
-    assert w.page() == "connect" and w.next_btn.text() == "Finish"
+    assert w.page() == "connect" and w.next_btn.text() == "Continue"
+    assert not w.next_btn.isVisibleTo(w), "not until signed in: the sign-in button is the one"
     w.next_btn.setEnabled(True)
     w.next_btn.click()
     assert finished == [] and "Sign in first" in w.connect_status.text()

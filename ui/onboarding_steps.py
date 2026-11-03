@@ -400,7 +400,10 @@ class TalkStep(_HeldKeys):
             self._voice.hold(down)
         if down:
             self._down_at = now
-            self.reply.setText("")
+            if self.reply.isVisible():
+                self.reply.setText("")
+                self.reply.hide()
+                self.grew()
             self.status.setText("listening…")
             return
         held = now - self._down_at if self._down_at is not None else 0.0
@@ -955,9 +958,14 @@ class _AsksAboutScreen(_HeldKeys):
         self.status = label("waiting for you…", "obNote")
         self.status.setAlignment(Qt.AlignmentFlag.AlignHCenter)
         self.body.addWidget(self.status)
-        self.reply = label("", "obReply", wrap=True)
-        self.reply.setAlignment(Qt.AlignmentFlag.AlignHCenter)
-        self.body.addWidget(self.reply)
+        # Her answer as one bubble, her chat's, a few lines at most: she has
+        # said it all aloud. The whole of it here, streaming in under the keys,
+        # grew the panel into a wall of text over them (31 Oct).
+        self.reply = label("", "obHers", wrap=True)
+        self.reply.setFixedWidth(REPLY_W)
+        self.reply.hide()
+        self.body.addSpacing(6)
+        self.body.addLayout(_centred(self.reply))
 
     def enter(self) -> None:
         super().enter()
@@ -993,7 +1001,10 @@ class _AsksAboutScreen(_HeldKeys):
             cap.set_lit(down)
         if down:
             self._down_at = now
-            self.reply.setText("")
+            if self.reply.isVisible():
+                self.reply.setText("")
+                self.reply.hide()
+                self.grew()
             if self.TRAIL:
                 self.trail = self.trail or TrailOverlay()
                 self.trail.begin()
@@ -1023,16 +1034,29 @@ class _AsksAboutScreen(_HeldKeys):
         if self.panel is None or self.panel.step() is not self:
             return
         if kind == "tora" and self._asked:
-            self.reply.setText(self.reply.text() + str(value))
+            self.status.setText("Answering…")
         elif kind == "tora_end" and self._asked:
-            self.reply.setText(" ".join(str(value).split()))
+            self.reply.setText(_short(" ".join(str(value).split()), REPLY_CHARS))
+            self.reply.show()
             self.status.setText("That's me, on your screen.")
+            self.grew()
             later(self, self._clear_line, 1500)
             self.done()
         elif kind == "state" and value == "offline":
             self._clear_line()
             self.status.setText("I can't reach my voice right now - try it any time after the tour.")
             self.done()
+
+
+REPLY_W = 380          # her answer's bubble: wide enough for three lines
+REPLY_CHARS = 180      # about three lines of it
+
+
+def _short(text: str, n: int) -> str:
+    """At most `n` characters, cut at a word, with an ellipsis."""
+    if len(text) <= n:
+        return text
+    return text[:n].rsplit(" ", 1)[0].rstrip(",;:-") + "…"
 
 
 def circle_clip_path():
@@ -1385,9 +1409,14 @@ class TypeStep(Step):
         self.box.hide()
         self.body.addSpacing(10)
         self.body.addLayout(_centred(self.box))
-        self.reply = label("", "obReply", wrap=True)
-        self.reply.setAlignment(Qt.AlignmentFlag.AlignHCenter)
-        self.body.addWidget(self.reply)
+        # Her answer as one bubble, her chat's, a few lines at most: she has
+        # said it all aloud. The whole of it here, streaming in under the keys,
+        # grew the panel into a wall of text over them (31 Oct).
+        self.reply = label("", "obHers", wrap=True)
+        self.reply.setFixedWidth(REPLY_W)
+        self.reply.hide()
+        self.body.addSpacing(6)
+        self.body.addLayout(_centred(self.reply))
         self.tapped.connect(self.open_box)
         self._tap = None
         self._voice = None
@@ -1432,6 +1461,8 @@ class TypeStep(Step):
     def _send(self, text: str) -> None:
         self._sent = True
         self.reply.setText("…")
+        self.reply.show()
+        self.grew()
         if self._voice is not None:
             self._voice.type(text)
         else:
@@ -1440,14 +1471,14 @@ class TypeStep(Step):
     def _event(self, kind: str, value) -> None:
         if self.panel is None or self.panel.step() is not self or not self._sent:
             return
-        if kind == "tora":
-            self.reply.setText(("" if self.reply.text() == "…" else self.reply.text()) + str(value))
-        elif kind == "tora_end":
-            self.reply.setText(" ".join(str(value).split()))
+        if kind == "tora_end":
+            self.reply.setText(_short(" ".join(str(value).split()), REPLY_CHARS))
+            self.reply.show()
             self.grew()
             self.done()
         elif kind == "state" and value == "offline":
             self.reply.setText("I can't reach my voice right now - but that's where my answer goes.")
+            self.reply.show()
             self.grew()
             self.done()
 
@@ -1688,6 +1719,17 @@ def _plans_page(bridge):
                 self.body.add = add
 
     page = TourPlans(bridge)
+    # The card for the plan they are on keeps its outline but not its "Your
+    # plan" button: "Start using HeyTora" under the cards is the one way on
+    # (31 Oct: "why does it have an extra button?"). Its room stays, so the
+    # three cards' buttons still line up.
+    from PyQt6.QtWidgets import QPushButton, QSizePolicy
+    for b in page.findChildren(QPushButton):
+        if b.text() == "Your plan":
+            keep = b.sizePolicy()
+            keep.setRetainSizeWhenHidden(True)
+            b.setSizePolicy(keep)
+            b.hide()
     page.body.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
     head = page.body.top.itemAt(0).widget() if page.body.top.count() else None
     if head is not None and head.layout() is not None:

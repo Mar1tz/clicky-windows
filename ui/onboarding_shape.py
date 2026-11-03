@@ -286,6 +286,8 @@ class OnboardingPanel(QWidget):
         self.dots.at = i
         self.dots.update()
         self.back_button.setVisible(i > 0)
+        # The last step's own button ends the tour: nothing left to skip.
+        self.skip_button.setVisible(i < len(self.steps) - 1)
         self._light()
         self.go.setText(self.step().GO)
         self.step_changed.emit(i)

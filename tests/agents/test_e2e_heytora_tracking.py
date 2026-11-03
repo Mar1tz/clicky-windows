@@ -247,6 +247,12 @@ def test_talking_moves_settings_in_place(qapp, heytora, monkeypatch):
     s = _shape(monkeypatch)
     try:
         _until(qapp, lambda: "3 questions this month" in _texts(s))
+        # Account reads the plan again once the shape has grown (a beat after
+        # it is shown): let that read land before the questions start.
+        settle = time.monotonic() + 0.6
+        while time.monotonic() < settle:
+            qapp.processEvents()
+        _until(qapp, lambda: not heytora.account.plan_state()["busy"])
         page = s.settings_stack.currentWidget()
         untouched = page.body.widget().findChildren(QWidget)[0]
         for n in (1, 2, 3):                           # three questions, one after another

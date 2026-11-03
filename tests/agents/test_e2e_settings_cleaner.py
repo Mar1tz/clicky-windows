@@ -24,6 +24,24 @@ SUMMARY = {"plan": "free", "plan_name": "Free", "plan_status": "active",
            "period_end": "2026-11-28T00:00:00+00:00"}
 
 
+def _settled_then_animating(shape, monkeypatch) -> None:
+    """Open at once (the fixture has animations off), then animations on for
+    what is under test. Real time is not used: after a long run Qt's shared
+    animation clock has been seen stuck at 0 in the test process, with plain
+    timers still firing, so these step each slide by hand (_finish)."""
+    from ui import shape as S
+    shape.open_from("bottom", _pill_at("bottom"))
+    assert shape.mode == "open" and shape._t >= 1.0
+    monkeypatch.setattr(S, "animations_on", lambda: True)
+    monkeypatch.setattr(type(shape), "_left", lambda self: None)   # a stray window's focus: not under test
+
+
+def _finish(page) -> None:
+    anim = getattr(page, "_slide", None)
+    if anim is not None:
+        anim.setCurrentTime(anim.duration())
+
+
 def _page(shape, monkeypatch, key):
     from PyQt6.QtWidgets import QLabel
     monkeypatch.setattr(shape.bridge, "account_state", lambda: {
@@ -221,38 +239,22 @@ def test_her_answer_on_the_circle_step_is_one_short_bubble(qapp, monkeypatch):
 def test_a_tab_glides_in_inside_the_open_shape(shape, qapp, monkeypatch):
     """31 Oct: "when we press the shortcut from the bottom, can the screen
     animate inside" - New job + (and the tabs, and Ctrl, Ctrl) used to jump."""
-    import time
-    from ui import shape as S
-    monkeypatch.setattr(S, "animations_on", lambda: True)
-    shape.open_from("bottom", _pill_at("bottom"))
-    end = time.monotonic() + 0.5
-    while time.monotonic() < end:
-        qapp.processEvents()
-    home = shape.stack.currentWidget().pos()
+    _settled_then_animating(shape, monkeypatch)
+    home = shape.stack.contentsRect().topLeft()
     shape._new_job()                                      # the foot's New job +
     page = shape.stack.currentWidget()
     effect = page.graphicsEffect()
     assert effect is not None and effect.opacity() < 0.5 and page.pos().x() > home.x(), "from the right"
-    end = time.monotonic() + 0.5
-    while time.monotonic() < end:
-        qapp.processEvents()
+    _finish(page)
     assert page.graphicsEffect() is None and page.pos() == home, "settled, drawn plainly"
 
 
 def test_tabs_tapped_quickly_never_leave_a_page_off_its_place(shape, qapp, monkeypatch):
-    import time
-    from ui import shape as S
-    monkeypatch.setattr(S, "animations_on", lambda: True)
-    shape.open_from("bottom", _pill_at("bottom"))
-    end = time.monotonic() + 0.5
-    while time.monotonic() < end:
-        qapp.processEvents()
+    _settled_then_animating(shape, monkeypatch)
     for key in ("chat", "agents", "chat", "home", "agents", "home"):
-        shape.show_tab(key)
-        qapp.processEvents()
-    end = time.monotonic() + 0.6
-    while time.monotonic() < end:
-        qapp.processEvents()
+        shape.show_tab(key)                               # each tapped before the last has settled
+    for page in shape._pages.values():
+        _finish(page)
     home = shape.stack.contentsRect().topLeft()
     for page in shape._pages.values():
         assert page.pos() == home and page.graphicsEffect() is None
@@ -261,25 +263,23 @@ def test_tabs_tapped_quickly_never_leave_a_page_off_its_place(shape, qapp, monke
 def test_settings_pages_glide_in_with_the_tabs_tick(shape, qapp, monkeypatch):
     """31 Oct: "the switching tabs is good - do that for the tabs inside
     Settings too"."""
-    import time
-    from ui import shape as S
     from ui import sounds
-    monkeypatch.setattr(S, "animations_on", lambda: True)
     played = []
     monkeypatch.setattr(sounds, "ui", lambda event: played.append(event) or True)
     shape.open_from("bottom", _pill_at("bottom"))
-    shape.show_settings("account")
-    end = time.monotonic() + 0.6
-    while time.monotonic() < end:
-        qapp.processEvents()
+    shape.show_settings("account")                         # at once: animations are still off
+    assert shape.mode == "settings" and shape._t >= 1.0
+    from ui import shape as S
+    monkeypatch.setattr(S, "animations_on", lambda: True)
+    monkeypatch.setattr(type(shape), "_left", lambda self: None)
     home = shape.settings_stack.contentsRect().topLeft()
     played.clear()
     shape.select("voice")                                  # further down the sidebar
     page = shape.settings_stack.currentWidget()
     assert played == ["tab"] and page.graphicsEffect() is not None and page.pos().y() > home.y()
-    end = time.monotonic() + 0.5
-    while time.monotonic() < end:
-        qapp.processEvents()
+    _finish(page)
     assert page.graphicsEffect() is None and page.pos() == home
     shape.select("account")                                # back up: from above
-    assert shape.settings_stack.currentWidget().pos().y() < home.y()
+    page = shape.settings_stack.currentWidget()
+    assert page.pos().y() < home.y()
+    _finish(page)

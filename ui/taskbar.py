@@ -18,6 +18,9 @@ from PyQt6.QtWidgets import QWidget
 from ui.app_widgets import later
 
 
+CLICK_AFTER_MS = 60        # after Windows has moved the focus on from this window
+
+
 class TaskbarButton(QWidget):
     clicked = pyqtSignal()
 
@@ -45,9 +48,12 @@ class TaskbarButton(QWidget):
         # and an error inside a Qt event aborts the whole app.
         if (getattr(self, "_on", False) and e.type() == QEvent.Type.WindowStateChange
                 and not self.isMinimized() and self.isVisible()):
-            # Its button was clicked: say so, and back to the taskbar.
-            self.clicked.emit()
+            # Its button was clicked: back to the taskbar first, then say so.
+            # The other way round, the shape opened and took the focus, then
+            # this window's minimising handed the focus to the app behind it
+            # - and the shape, losing focus, closed as it began (31 Oct).
             later(self, self.showMinimized)
+            later(self, self.clicked.emit, CLICK_AFTER_MS)
 
 
 _button: list[TaskbarButton] = []          # the one main.py made

@@ -201,7 +201,7 @@ class SetupWizard(QDialog):
 
     @property
     def next_btn(self) -> QPushButton:
-        """Finish: enabled once signed in."""
+        """Continue: there, and enabled, once signed in."""
         return self.finish_btn
 
     def page(self) -> str:
@@ -320,7 +320,9 @@ class SetupWizard(QDialog):
 
         foot = QHBoxLayout()
         foot.addStretch(1)
-        self.finish_btn = button("Finish", "primary")
+        # One main button at a time (31 Oct: "why does it have an extra
+        # button?"): Sign in until signed in, then this one alone.
+        self.finish_btn = button("Continue", "primary")
         self.finish_btn.setMinimumWidth(140)
         self.finish_btn.clicked.connect(self._next)
         foot.addWidget(self.finish_btn)
@@ -428,8 +430,11 @@ class SetupWizard(QDialog):
         if self._gated:
             signed_in = self._account.signed_in()
             self.finish_btn.setEnabled(signed_in)
+            self.finish_btn.setVisible(signed_in)
             self.key_card.setEnabled(signed_in)
             self.key_link.setVisible(signed_in and self.key_card.isHidden())
+        else:
+            self.finish_btn.setVisible(cfg.has_key())
         self._fit()
 
     def _run(self, job: str, work: Callable[[], str]) -> None:
@@ -558,6 +563,7 @@ class SetupWizard(QDialog):
                 self._connected = True
                 self.key_edit.clear()
                 self.connect_status.setText("Your key works. You're connected.")
+                self.finish_btn.show()
             else:
                 self.connect_status.setText(message)
         self._fit()

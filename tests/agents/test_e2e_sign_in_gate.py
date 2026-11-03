@@ -50,7 +50,7 @@ def test_the_sign_in_page_cannot_be_skipped(qapp, service):
     finished = []
     w.completed.connect(lambda: finished.append(1))
     assert w.page() == "connect" and w.windowTitle()
-    assert not w.next_btn.isEnabled()
+    assert not w.next_btn.isEnabled() and not w.next_btn.isVisibleTo(w),         "one main button at a time: signing in, until signed in"
     assert not w.key_card.isEnabled(), "an own key comes after the account, not instead"
     w._next()
     assert not finished and "Sign in first" in w.connect_status.text()
@@ -58,7 +58,7 @@ def test_the_sign_in_page_cannot_be_skipped(qapp, service):
     _sign_in(service)
     w._refresh_connect()
     assert w.next_btn.isEnabled() and w.key_card.isEnabled()
-    assert w.next_btn.text() == "Finish"
+    assert w.next_btn.text() == "Continue" and w.next_btn.isVisibleTo(w)
     w._next()
     assert finished == [1], "signed in: that is all it asks - the tour comes next"
 
@@ -108,7 +108,7 @@ def test_signing_in_through_the_window_lets_heytora_start(qapp, service):
     def act(w):
         _sign_in(service)
         w._refresh_connect()
-        w._next()                                        # Finish
+        w._next()                                        # Continue
     result, _made = _gate_with(service, act)
     assert result == "signed_in" and service.account.signed_in()
 

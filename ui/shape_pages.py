@@ -1,5 +1,7 @@
 """The shape's own pages (DESIGN.md §3), sized for it: 520 wide, not the app
-window's 1040 column. Home, Chat and Insights are its tabs.
+window's 1040 column. Home, Chat and Jobs are its tabs. (Insights was one
+until 31 Oct: in the small shape it was four numbers - its calendar is on
+Settings > Account now, and all of it opens as a whole page.)
 
 Home: a greeting and one line of what is happening, then ONE card - the
 newest thing Tora finished (an agent job or the last answer) - and, with
@@ -12,11 +14,10 @@ import time
 from datetime import datetime
 from typing import Optional
 
-from PyQt6.QtCore import Qt, QTimer, pyqtSignal
-from PyQt6.QtWidgets import QFrame, QGridLayout, QHBoxLayout, QLineEdit, QScrollArea, QVBoxLayout, QWidget
+from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtWidgets import QFrame, QHBoxLayout, QLineEdit, QScrollArea, QVBoxLayout, QWidget
 
 from ui.app_widgets import Meter, button, label, later
-from ui.insights_data import minutes
 from ui.settings_parts import keycaps
 
 # What the newest-result card says for a job, by how it ended.
@@ -296,7 +297,20 @@ class ChatTab(ShapePage):
             self._area.deleteLater()
         self._area = area
         bar = area.verticalScrollBar()
+        # Kept at the bottom while the chat settles - built while the shape is
+        # still growing (Ctrl, Ctrl), it has no height yet, and one jump to
+        # "the bottom" then left it at the top (31 Oct). Scrolled up by hand,
+        # it is left where it was put.
+        stick = [True]
+        bar.valueChanged.connect(lambda v: stick.__setitem__(0, v >= bar.maximum() - 4))
+        bar.rangeChanged.connect(lambda _lo, hi: stick[0] and bar.setValue(hi))
         later(area, lambda: bar.setValue(bar.maximum()))
+
+    def to_bottom(self) -> None:
+        """The newest message in view."""
+        if self._area is not None:
+            bar = self._area.verticalScrollBar()
+            bar.setValue(bar.maximum())
 
     def _history(self) -> QScrollArea:
         inner = QWidget()
@@ -356,77 +370,6 @@ class ChatTab(ShapePage):
             line.addWidget(frame, 5)
             line.addStretch(1)
         return row
-
-
-# ── Insights ──────────────────────────────────────────────────────────────────
-
-def _count(n: int, word: str) -> str:
-    return f"{n} {word}" + ("" if n == 1 else "s")
-
-
-def tiles(data: dict) -> list[tuple[str, str, str]]:
-    """The four numbers, as (label, value, line under it) - only what was
-    measured (insights_data), never an estimate."""
-    time_ = data.get("time") or {}
-    done = data.get("handled") or {}
-    knows = data.get("knows") or {}
-    streak, longest = int(data.get("streak") or 0), int(data.get("longest") or 0)
-    return [
-        ("TIME TORA WORKED", minutes(time_.get("total_min", 0)),
-         f"{minutes(time_.get('this_week_min', 0))} this week"),
-        ("THINGS HANDLED", str(done.get("total", 0)),
-         f"{done.get('ask', 0)} asked · {done.get('show', 0)} shown · {done.get('do', 0)} done"),
-        ("WHAT SHE KNOWS", str(knows.get("facts", 0)),
-         "facts · " + _count(int(knows.get("documents", 0)), "document")),
-        ("STREAK", _count(streak, "day"), f"longest {longest}"),
-    ]
-
-
-class InsightsTab(ShapePage):
-    """The Insights page's numbers, two by two, and this month on the plan.
-    The full page (charts, apps, the calendar) is a link away."""
-
-    TOPICS = frozenset({"journal", "agents", "account"})
-    MARGINS = (0, 0, 0, 0)
-
-    def build(self) -> None:
-        data = self._call("insights", {})
-        inner = QWidget()
-        col = QVBoxLayout(inner)
-        col.setContentsMargins(20, 4, 20, 12)
-        col.setSpacing(10)
-        grid = QGridLayout()
-        grid.setSpacing(10)
-        for i, (name, value, under) in enumerate(tiles(data)):
-            tile = QFrame()
-            tile.setObjectName("card")
-            lay = QVBoxLayout(tile)
-            lay.setContentsMargins(14, 12, 14, 12)
-            lay.setSpacing(2)
-            lay.addWidget(label(name, "sectionTitle"))
-            lay.addWidget(label(value, "upTitle"))
-            lay.addWidget(label(under, "cardSub", wrap=True))
-            grid.addWidget(tile, i // 2, i % 2)
-        col.addLayout(grid)
-        plan = data.get("plan") or []
-        if plan:
-            col.addSpacing(4)
-            col.addWidget(label("THIS MONTH", "sectionTitle"))
-            for what, used, limit in plan:
-                row = QHBoxLayout()
-                row.addWidget(label(what, "cardSub"))
-                row.addStretch(1)
-                row.addWidget(label(f"{used} / {limit}" if limit else f"{used} · no limit", "cardSub"))
-                col.addLayout(row)
-                col.addWidget(Meter(used / limit if limit else 0.0, height=4))
-        more = button("All of Insights", "ghost")
-        more.clicked.connect(lambda: self.navigate.emit("insights/all"))
-        row = QHBoxLayout()
-        row.addWidget(more)
-        row.addStretch(1)
-        col.addLayout(row)
-        col.addStretch(1)
-        self.lay.addWidget(_scroller(inner), 1)
 
 
 # ── Jobs ──────────────────────────────────────────────────────────────────────

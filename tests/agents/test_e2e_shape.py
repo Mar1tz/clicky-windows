@@ -139,15 +139,16 @@ def test_the_click_that_closed_it_does_not_open_it_again(shape):
 # ── what is in it ──────────────────────────────────────────────────────────
 
 def test_the_tabs_are_its_own_and_all_of_insights_is_a_whole_page_in_it(shape):
+    from ui import shape as S
     from ui.app_pages import InsightsPage
-    from ui.shape_pages import ChatTab, HomeTab, InsightsTab
+    from ui.shape_pages import ChatTab, HomeTab, JobsTab
     assert isinstance(shape.stack.currentWidget(), HomeTab)
     shape.open_from("bottom", _pill_at("bottom"))
-    for key, kind in (("chat", ChatTab), ("insights", InsightsTab), ("home", HomeTab)):
+    assert [k for k, _i, _n in S.TABS] == ["home", "chat", "agents"], "Insights is not a tab"
+    for key, kind in (("chat", ChatTab), ("agents", JobsTab), ("home", HomeTab)):
         shape.show_tab(key)
         assert isinstance(shape.stack.currentWidget(), kind) and shape._tabs[key].isChecked()
-    shape.show_tab("insights")
-    shape.stack.currentWidget().navigate.emit("insights/all")      # "All of Insights"
+    shape.go("insights")                                           # old links: the whole page
     assert shape.mode == "page" and isinstance(shape.page_stack.currentWidget(), InsightsPage)
     assert shape._full().width() == shape._rect("page").width(), "a whole page's own size"
     shape.back()
@@ -203,20 +204,6 @@ def test_the_chat_reads_oldest_first():
     rows = [{"question": "Second?", "answer": "Two."}, {"question": "First?", "answer": ""},
             {"question": "  ", "answer": "dropped"}]
     assert conversation(rows) == [("asked", "First?"), ("asked", "Second?"), ("answer", "Two.")]
-
-
-def test_the_insight_tiles_are_only_what_was_measured():
-    from ui.shape_pages import tiles
-    data = {"time": {"total_min": 75, "this_week_min": 12},
-            "handled": {"total": 9, "ask": 6, "show": 2, "do": 1},
-            "knows": {"facts": 4, "documents": 1}, "streak": 1, "longest": 5}
-    assert tiles(data) == [
-        ("TIME TORA WORKED", "1h 15m", "12 min this week"),
-        ("THINGS HANDLED", "9", "6 asked · 2 shown · 1 done"),
-        ("WHAT SHE KNOWS", "4", "facts · 1 document"),
-        ("STREAK", "1 day", "longest 5"),
-    ]
-    assert tiles({})[0][1] == "0 min", "nothing yet is zero, not an error"
 
 
 def test_running_jobs_sit_beside_the_open_shape(shape, monkeypatch):

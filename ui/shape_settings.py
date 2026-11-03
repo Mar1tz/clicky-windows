@@ -18,7 +18,7 @@ a speech speed and a captions switch.
 """
 from __future__ import annotations
 
-from PyQt6.QtCore import QTimer
+from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtWidgets import QHBoxLayout, QVBoxLayout, QWidget
 
 from ui import app_theme as T
@@ -53,11 +53,16 @@ class AccountPage(AccountTab):
     _usage = UsageTab._usage
 
     def showEvent(self, event) -> None:
-        # On screen: the plan is read again - it may have changed on Paddle's page.
-        super().showEvent(event)
+        # On screen: the plan is read again - it may have changed on Paddle's
+        # page. Once (not AccountTab's read as well), and after the shape has
+        # finished growing: the answer redraws the card, and a redraw in the
+        # middle of the grow made it stutter (31 Oct).
+        Tab.showEvent(self, event)
         refresh = getattr(self.bridge, "refresh_account", None)
         if refresh is not None:
-            refresh(force=True)
+            from ui import tokens
+            from ui.app_widgets import later
+            later(self, lambda: refresh(force=True), tokens.SHAPE_OPEN + 80)
 
     def refresh_topics(self, topics: set) -> None:
         """The plan moves with every question: only its card is swapped."""
@@ -70,6 +75,7 @@ class AccountPage(AccountTab):
         st = _ask(br, "account_state", {}) or {}
         self._slot_w = self._slot(self._plan)
         self.body.add(self._slot_w)
+        self.body.add(self._activity())
 
         acct = Group("Account")
         if st.get("signed_in"):
@@ -100,39 +106,59 @@ class AccountPage(AccountTab):
         col.setContentsMargins(0, 0, 0, 0)
         col.setSpacing(4)
         col.addWidget(label(f"You're on the {plan} plan.", "setTitle", wrap=True))
-        from account.service import credits_words
         when = resets_on(summary)
-        words = credits_words(summary)
         blocked = (summary.get("blocked") or {}).get("all") == "budget"
-        line = ("This month's credits are used up." if blocked else
-                (words + "." if words else "Your plan's use this month.")) + f" It starts again on {when}."
-        col.addWidget(label(line, "setDesc", wrap=True))
-        col.addSpacing(10)
-        bars = QHBoxLayout()
-        bars.setSpacing(24)
-        limits, usage = summary.get("limits") or {}, summary.get("usage") or {}
-        today = summary.get("today") or {}
-        for kind, name, unit in self._USAGE:
-            if kind not in limits:
-                continue
-            used, cap = int(usage.get(kind) or 0), limits.get(kind)
-            said = f"{used} {unit[:-1] if used == 1 else unit} this month"
-            if today.get(kind):
-                said += f" · {int(today[kind])} today"
-            one = QVBoxLayout()
-            one.setSpacing(4)
+        credits = summary.get("credits") or {}
+        if isinstance(credits.get("month"), int):
+            # What is really measured (0012): credits - the AI work Tora does,
+            # a cent each - not questions, jobs and dictations counted apart
+            # (31 Oct: "we measure via token spend, replace those three").
+            month = int(credits["month"])
+            left = int(credits.get("month_left") or 0)
+            used = int(credits.get("month_used") or max(0, month - left))
+            bought = int(credits.get("bought_left") or 0)
+            col.addWidget(label("This month's credits are used up." if blocked else
+                                f"Credits come back on {when}.", "setDesc", wrap=True))
+            col.addSpacing(12)
             head = QHBoxLayout()
-            head.addWidget(label(name, "setDesc"))
+            head.addWidget(label("Credits", "setTitle"))
             head.addStretch(1)
-            if cap is not None:
-                head.addWidget(label(f"{used} / {cap}", "setDesc"))
-            one.addLayout(head)
-            one.addWidget(label(said, "setTitle", wrap=True))
-            frac = 0.0 if not cap else min(1.0, used / cap)
-            one.addWidget(Meter(frac, colour=T.WARN if frac >= 0.8 else T.ACCENT, height=4))
-            bars.addLayout(one, 1)
-        col.addLayout(bars)
-        col.addSpacing(12)
+            head.addWidget(label(f"{used:,} / {month:,} used", "setDesc"))
+            col.addLayout(head)
+            frac = 0.0 if not month else min(1.0, used / month)
+            col.addWidget(Meter(frac, colour=T.WARN if frac >= 0.8 else T.ACCENT, height=6))
+            said = f"{left:,} left this month"
+            if bought:
+                said += f" · {bought:,} added"
+            col.addWidget(label(said, "setDesc"))
+            col.addSpacing(6)
+            col.addWidget(label("A question uses about 2 credits, looking at your screen less than 1, "
+                                "an agent job 25 to 150.", "setNote", wrap=True))
+            col.addSpacing(8)
+        else:
+            # A plan without credits (an older server): its allowances, a row each.
+            col.addWidget(label("This month's credits are used up." if blocked else
+                                f"Your plan's use this month. It starts again on {when}.", "setDesc", wrap=True))
+            col.addSpacing(12)
+            limits, usage = summary.get("limits") or {}, summary.get("usage") or {}
+            today = summary.get("today") or {}
+            for kind, name, unit in self._USAGE:
+                if kind not in limits:
+                    continue
+                used, cap = int(usage.get(kind) or 0), limits.get(kind)
+                said = f"{used} {unit[:-1] if used == 1 else unit} this month"
+                if today.get(kind):
+                    said += f" · {int(today[kind])} today"
+                head = QHBoxLayout()
+                head.addWidget(label(name, "setTitle"))
+                head.addStretch(1)
+                head.addWidget(label(f"{used} / {cap}" if cap is not None else "unlimited", "setDesc"))
+                col.addLayout(head)
+                frac = 0.0 if not cap else min(1.0, used / cap)
+                col.addWidget(Meter(frac, colour=T.WARN if frac >= 0.8 else T.ACCENT, height=4))
+                col.addWidget(label(said, "setDesc"))
+                col.addSpacing(8)
+        col.addSpacing(4)
         top = (summary.get("plan") or "") == "max"
         go = button("Change plan" if top else "Upgrade", "ghost" if top else "primary")
         go.clicked.connect(lambda: self.navigate.emit("settings/plans"))
@@ -142,6 +168,61 @@ class AccountPage(AccountTab):
         col.addLayout(foot)
         g.add(card, (16, 14, 16, 16))
         return g
+
+
+def _activity_of(self) -> QWidget:
+    """When they have used HeyTora: the old Insights' calendar, a square a
+    day (GitHub's way), the streak over it, and three measured numbers under
+    it (31 Oct: "the old Insights had cool graphs - put some in Account").
+    All of Insights is one link away."""
+    from ui import insights_data as data
+    from ui.app_parts import StreakGrid, legend
+    from ui.settings_parts import Group
+    d = _ask(self.bridge, "insights", {}) or {}
+    if not d:
+        d = data.summarise([])
+    more = button("All insights", "link")
+    more.clicked.connect(lambda: self.navigate.emit("insights/all"))
+    g = Group("Your activity", more)
+    card = QWidget()
+    col = QVBoxLayout(card)
+    col.setContentsMargins(0, 0, 0, 0)
+    col.setSpacing(6)
+    head = QHBoxLayout()
+    streak = int(d.get("streak") or 0)
+    head.addWidget(label(f"{streak} day streak" if streak != 1 else "1 day streak", "setTitle"))
+    head.addStretch(1)
+    head.addWidget(label(f"longest {int(d.get('longest') or 0)} · "
+                         f"{int(d.get('active_days') or 0)} active days", "setDesc"))
+    col.addLayout(head)
+    col.addSpacing(4)
+    col.addWidget(StreakGrid(data.calendar(d.get("days") or {}, weeks=ACTIVITY_WEEKS)),
+                  0, Qt.AlignmentFlag.AlignLeft)
+    col.addWidget(legend(), 0, Qt.AlignmentFlag.AlignLeft)
+    col.addSpacing(8)
+    t = d.get("time") or {}
+    h = d.get("handled") or {}
+    k = d.get("knows") or {}
+    stats = QHBoxLayout()
+    stats.setSpacing(24)
+    for value, words in ((data.minutes(int(t.get("total_min") or 0)), "Tora worked for you"),
+                         (str(int(h.get("total") or d.get("questions") or 0)), "things she handled"),
+                         (str(int(k.get("facts") or 0)), "things she knows about you")):
+        one = QVBoxLayout()
+        one.setSpacing(0)
+        big = label(value, "setTitle")
+        big.setStyleSheet("font-size: 20px; font-weight: 700;")
+        one.addWidget(big)
+        one.addWidget(label(words, "setDesc"))
+        stats.addLayout(one)
+    stats.addStretch(1)
+    col.addLayout(stats)
+    g.add(card, (16, 14, 16, 14))
+    return g
+
+
+AccountPage._activity = _activity_of
+ACTIVITY_WEEKS = 26                     # half a year: as many as the page's width holds
 
 
 def _danger(row) -> None:
@@ -292,8 +373,8 @@ class VoicePage(_Later, Tab):
         self.body.add(label("Tap a voice to hear it. It is hers from the next answer.", "setNote"))
         self.body.add(self._sound())
         ui = Group("Interface sounds")
-        ui.toggle("Sounds as HeyTora opens", "A soft sound as it grows out of the pill, and into "
-                  "Settings.", br.switch("ui_sounds"), lambda on: br.set_switch("ui_sounds", on))
+        ui.toggle("Sounds as HeyTora opens and closes", "A soft sound as it grows out of the pill "
+                  "and into Settings, shrinks back, and changes tab.", br.switch("ui_sounds"), lambda on: br.set_switch("ui_sounds", on))
         self.body.add(ui)
         answers = Group("How she answers")
         routes = ("realtime", "cascade")
