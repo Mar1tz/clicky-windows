@@ -28,6 +28,20 @@ from ui import tokens
 
 # ── text ──────────────────────────────────────────────────────────────────────
 
+def later(owner, fn, ms: int = 0) -> None:
+    """`fn` in `ms`, as long as `owner` is still there. A bare
+    QTimer.singleShot(ms, lambda: ...) runs even after its page is deleted;
+    touching what it held then raises inside Qt's event loop, and PyQt
+    aborts the whole app for that (a crash with no trace, 30 Oct 2026). The
+    timer here is owner's: it goes with it, and never fires."""
+    from PyQt6.QtCore import QTimer
+    timer = QTimer(owner)
+    timer.setSingleShot(True)
+    timer.timeout.connect(fn)
+    timer.timeout.connect(timer.deleteLater)
+    timer.start(ms)
+
+
 def label(text: str, name: str = "", *, wrap: bool = False) -> QLabel:
     lab = QLabel(text)
     if name:
@@ -576,6 +590,7 @@ from PyQt6.QtGui import QPixmap   # noqa: E402  (grouped with its users)
 # Page and action -> icon file. A new page adds a line here.
 ICONS = {
     "home": "house",
+    "chat": "message-circle",
     "insights": "chart-column",
     "agents": "bot",
     "journal": "book-open",
@@ -631,8 +646,41 @@ def icon(name: str, colour: str, size: int = 18, dpr: float = 0.0) -> QPixmap:
     return px
 
 
+# Brand logos whose own colour is black: drawn in the theme's ink, or they
+# vanish on dark (assets/logos/LICENSE.md).
+INK_LOGOS = frozenset({"notion", "github"})
+
+
+def logo(service: str, size: int = 20, dpr: float = 0.0) -> Optional[QPixmap]:
+    """A service's logo (assets/logos/<service>.svg) in its brand's colour,
+    or None when there is none. Only to name a connection - see the folder's
+    LICENSE.md."""
+    import re
+    from PyQt6.QtCore import QByteArray
+    from PyQt6.QtGui import QGuiApplication
+    from PyQt6.QtSvg import QSvgRenderer
+    path = tokens.assets_dir() / "logos" / f"{service}.svg"
+    if not path.exists():
+        return None
+    if not dpr:
+        screen = QGuiApplication.primaryScreen()
+        dpr = screen.devicePixelRatio() if screen is not None else 1.0
+    svg = path.read_text(encoding="utf-8")
+    if service in INK_LOGOS:
+        svg = re.sub(r'fill="#[0-9A-Fa-f]{6}"', f'fill="{QColor(T.TEXT).name()}"', svg, count=1)
+    side = max(1, round(size * dpr))
+    px = QPixmap(side, side)
+    px.setDevicePixelRatio(side / size)
+    px.fill(QColor(0, 0, 0, 0))
+    p = QPainter(px)
+    p.setRenderHint(QPainter.RenderHint.Antialiasing)
+    QSvgRenderer(QByteArray(svg.encode("utf-8"))).render(p, QRectF(0, 0, size, size))
+    p.end()
+    return px
+
+
 def nav_icon(kind: str, colour: str, size: int = 20, dpr: float = 0.0) -> QPixmap:
-    """A page's icon. `kind` keys are the page ids in app_pages."""
+    """A page's icon: `kind` is a key of ICONS."""
     return icon(kind, colour, size, dpr)
 
 

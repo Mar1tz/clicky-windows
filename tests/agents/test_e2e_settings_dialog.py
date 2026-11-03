@@ -1,5 +1,6 @@
-"""Settings as a dialog with a menu (ui/settings_dialog.py, DESIGN.md §3D),
-and the Data & privacy tab's controls over what Tora keeps."""
+"""The Settings tabs (ui/settings_tabs.py, shown in the shape by
+ui/shape_settings.py), and the Data & privacy tab's controls over what Tora
+keeps. The dialog they first lived in went in revamp step 6b."""
 from __future__ import annotations
 
 import json
@@ -23,51 +24,11 @@ def qapp():
     yield QApplication.instance() or QApplication([])
 
 
-@pytest.fixture
-def window(qapp):
-    from ui.app_window import ToraApp
-    w = ToraApp()
-    w.resize(1280, 820)
-    yield w
-    w.deleteLater()
-
-
-def test_the_menu_is_the_agreed_tabs(window):
+def test_the_menu_is_the_agreed_tabs():
     from ui.settings_tabs import TABS
     assert [(sec, [k for k, *_r in rows]) for sec, rows in TABS] == [
         ("Settings", ["general", "system", "agents", "devlink", "advanced"]),
         ("Account", ["account", "usage", "plans", "privacy", "memory"])]
-    window.open_settings()
-    words = [r.text() for r in window._settings._rows.values()]
-    assert words == ["General", "System", "Agents", "Code editors", "Advanced",
-                     "Account", "Usage", "Plans & billing", "Data & privacy", "Memory"]
-
-
-def test_every_tab_builds(window):
-    from ui.settings_tabs import TABS
-    window.open_settings()
-    for _sec, rows in TABS:
-        for key, *_r in rows:
-            window._settings.select(key)
-            assert window._settings.current() == key
-            assert window._settings._rows[key].isChecked()
-
-
-def test_escape_and_a_click_outside_close_it(window, qapp):
-    window.show()
-    window.open_settings("system")
-    dlg = window._settings
-    QApplication.sendEvent(dlg, QKeyEvent(QEvent.Type.KeyPress, Qt.Key.Key_Escape,
-                                          Qt.KeyboardModifier.NoModifier))
-    assert dlg.isHidden()
-    window.open_settings()
-    qapp.processEvents()
-    outside = QPointF(5, 5)
-    QApplication.sendEvent(dlg, QMouseEvent(QEvent.Type.MouseButtonPress, outside, outside,
-                                            Qt.MouseButton.LeftButton, Qt.MouseButton.LeftButton,
-                                            Qt.KeyboardModifier.NoModifier))
-    assert dlg.isHidden(), "the dimmed app behind it closes it"
-    window.hide()
 
 
 # ── Data & privacy: what Tora keeps, and the controls over it ────────────────

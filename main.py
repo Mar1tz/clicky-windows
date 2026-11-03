@@ -68,6 +68,7 @@ class _Shortcuts(QObject):
     """Global shortcuts fire on the keyboard hook's thread; these signals
     bring them to Qt's, where the screen may be changed."""
     toggle_cursor = pyqtSignal()
+    type_to_tora = pyqtSignal()
 
 
 class _PowerEvents(QAbstractNativeEventFilter):
@@ -400,6 +401,9 @@ def main():
     # ── No HeyTora account, no HeyTora ────────────────────────────────────────
     # Before the overlay, the hotkey, the microphone or the agents exist: no
     # sign-in, only the sign-in window - and closing it closes the app.
+    # Read before the gate: its sign-in window marks setup done when it closes.
+    from ui.setup_wizard import setup_already_ran
+    first_launch = not setup_already_ran()
     door = sign_in_gate.gate()
     if door == "closed":
         return
@@ -576,37 +580,68 @@ def main():
         )
     panel.on_document_dropped.connect(_on_doc_dropped)
 
-    # The one-window app (ui/app_window). Built the first time it is asked
-    # for — nine pages of widgets is a visible pause, and most sessions never
-    # open it — and kept, so what it embeds (the agents panel) is built
-    # once. Every control in it goes down the same path
-    # as the tray item it stands for, so the windows below still work too.
-    app_window = {}
+    # The shape (ui/shape.py, DESIGN.md §1): a click on the resting pill
+    # grows it into the app, beside the pill. Built on the first click. It is
+    # the whole app now (step 6, 30 Oct 2026: the old app window is gone):
+    # the tray's Open HeyTora, starting HeyTora again, an agent's orb and
+    # every "open this page" open it, at that page.
+    shape = {}
+
+    def _shape():
+        if "s" not in shape:
+            from ui.app_bridge import AppBridge
+            from ui.shape import Shape
+            shape["s"] = Shape(AppBridge(manager, tray, panel))
+        return shape["s"]
+
+    def _toggle_shape():
+        try:
+            s = _shape()
+            flow.close_card()
+            s.toggle(*flow.pill_geometry())
+        except Exception:                 # noqa: BLE001 - a click still does what it did
+            import logging as _lg
+            _lg.getLogger("tora").exception("could not open the shape")
+            manager.start_hands_free()
+
+    # HeyTora's button in the taskbar opens and closes the shape, as a click
+    # on the pill does (ui/taskbar.py; Settings > General can hide it).
+    try:
+        from ui import taskbar
+        taskbar.install(_toggle_shape)
+    except Exception:                     # noqa: BLE001 - the pill still opens it
+        import logging as _lg
+        _lg.getLogger("tora").warning("could not put HeyTora in the taskbar", exc_info=True)
 
     def _open_app(page: str = ""):
+        """Open the shape - at `page` ("settings/voice", "agents/job/<id>",
+        "insights/all") when one is asked for."""
         try:
-            if "w" not in app_window:
-                from ui.app_bridge import AppBridge
-                from ui.app_window import ToraApp
-                # Everything the window reads comes from these, and every
-                # change it makes goes down the tray's own path (APP-10).
-                w = ToraApp(AppBridge(manager, tray, panel))
-                app_window["w"] = w
-            app_window["w"].open_at(page)
+            s = _shape()
+            if not s.is_open():
+                flow.close_card()
+                s.open_from(*flow.pill_geometry())
+            if page:
+                QTimer.singleShot(0, lambda: s.go(page))     # once it has begun to open
+            s.raise_()
+            s.activateWindow()
         except Exception as exc:          # noqa: BLE001 - never kill the tray
             import logging as _lg
-            _lg.getLogger("tora").exception("could not open the app window")
-            tray.show_notification("HeyTora", f"Couldn't open the app: {exc}")
+            _lg.getLogger("tora").exception("could not open HeyTora")
+            tray.show_notification("HeyTora", f"Couldn't open HeyTora: {exc}")
 
     tray.on_open_app.connect(lambda: _open_app())
-    _activate[0] = lambda: _open_app()        # HeyTora started again: its window
+    _activate[0] = lambda: _open_app()        # HeyTora started again: it opens
     tray.on_open_app_page.connect(_open_app)
     tray.panel_visible = panel.isVisible
+
+    flow.click_opens = True
+    flow.open_requested.connect(_toggle_shape)
 
     # Light/dark: the Settings choice, or Windows' own when it is "system".
     # Every surface that styles itself from app_theme restyles in place.
     app_theme.on_change(tray.retheme)
-    app_theme.on_change(lambda: app_window["w"].retheme() if "w" in app_window else None)
+    app_theme.on_change(lambda: shape["s"].retheme() if "s" in shape else None)
 
     def _windows_theme_changed(*_):
         if cfg.theme() == "system":
@@ -731,20 +766,54 @@ def main():
     tray.on_set_stt_language.connect(manager.set_stt_language)
     tray.on_set_custom_instructions.connect(manager.set_custom_instructions)
 
-    # Setup wizard (re-run) + diagnostics. Finishing it may have signed in to
+    from ui.app_bridge import AppBridge
+
+    # The sign-in window and the tour. Finishing either may have signed in to
     # a HeyTora account or set a key: the running app takes that up at once.
     def _access_changed():
         manager.on_access_changed()
         tray.rebuild_menu()
 
-    def _run_setup_again():
-        from ui.setup_wizard import SetupWizard
-        wiz = SetupWizard()
-        wiz.completed.connect(_access_changed)
-        wiz.attach(live)                      # the app is running: no "getting ready"
-        wiz.show()
-        _setup_keepalive[0] = wiz
-    tray.on_run_setup.connect(_run_setup_again)
+    def _open_tour():
+        """The first launch's tour (ui/onboarding_shape.py): out of the pill,
+        on the running app, and Home - with the jobs it made ready - after."""
+        try:
+            from ui.onboarding_shape import OnboardingPanel
+            from ui.onboarding_steps import steps
+            from ui.setup_wizard import mark_setup_complete
+            tour = OnboardingPanel(steps())
+            tour.completed.connect(mark_setup_complete)
+            tour.completed.connect(_access_changed)
+            tour.completed.connect(lambda: QTimer.singleShot(450, _home_after_tour))
+            tour.attach(live)
+            tour.open_from(flow.pill_geometry()[1])
+            _setup_keepalive[0] = tour
+        except Exception:                  # noqa: BLE001 - the app runs without its tour
+            import logging as _lg
+            _lg.getLogger("tora").exception("could not open the first launch's tour")
+
+    def _home_after_tour():
+        if "s" not in shape or not shape["s"].isVisible():
+            _toggle_shape()
+        show = getattr(shape.get("s"), "show_tab", None)
+        if show is not None:
+            show("home")
+
+    def _run_setup():
+        """The tray's "Sign in to HeyTora" and Settings' Sign in and Replay
+        share one signal: no way to reach Gemini - the sign-in window;
+        otherwise the tour again."""
+        from ui import sign_in_gate
+        if sign_in_gate.required() or not cfg.has_key():
+            from ui.setup_wizard import SetupWizard
+            wiz = SetupWizard()
+            wiz.completed.connect(_access_changed)
+            wiz.show()
+            _setup_keepalive[0] = wiz
+        else:
+            _open_tour()
+
+    tray.on_run_setup.connect(_run_setup)
 
     def _open_api_keys():
         from ui.api_keys_dialog import ApiKeysDialog
@@ -838,7 +907,7 @@ def main():
     _update_timer.start()
 
     # ── Global hotkey ─────────────────────────────────────────────────────────
-    # The first launch's shortcut test borrows it (ui/setup_wizard.py): while
+    # The tour's "hold to talk" step borrows it (ui/onboarding_steps.py): while
     # claimed, holding the hotkey lights the key there instead of starting a
     # conversation. Called on the keyboard hook's thread.
     _hotkey_claim: list = []
@@ -877,7 +946,7 @@ def main():
         claim=lambda: _hotkey_claim.__setitem__(slice(None), [(lambda: None, lambda: None)]),
         release=_hotkey_claim.clear)
 
-    # What the first launch's second half needs from the running app.
+    # What the tour needs from the running app.
     def _claim_hotkey(down, up):
         _hotkey_claim[:] = [(down, up)]
 
@@ -886,16 +955,21 @@ def main():
 
     def _show_cursor(on: bool):
         """Her cursor beside the mouse, or only her bar - saved, shown on
-        the next frame, and the app window's switch follows."""
+        the next frame, and Settings > Cursor's switch follows."""
         cfg.set_cursor_shown(on)
         set_cursor_shown(on)
-        if "w" in app_window:
-            app_window["w"].bridge.changed.emit("cursor")
+        if "s" in shape:
+            shape["s"].bridge.changed.emit("cursor")
+
+    # The tour's "type to me" step watches Ctrl, Ctrl itself while it is up.
+    _type_claim: list = []
 
     from types import SimpleNamespace
     live = SimpleNamespace(
         claim_hotkey=_claim_hotkey,
         release_hotkey=_hotkey_claim.clear,
+        claim_type_tap=lambda: _type_claim.__setitem__(slice(None), [True]),
+        release_type_tap=_type_claim.clear,
         state=manager.sig_state_changed,
         point=manager.sig_point_at,
         draw=manager.sig_draw,
@@ -904,6 +978,7 @@ def main():
         set_voice=tray.pick_voice,
         set_route=tray.pick_route,
         show_panel=_show_panel,
+        bridge=AppBridge(manager, tray, panel),     # the tour's Plans step
     )
 
     # Esc = cancel the answer in progress (stops speech instantly), and the
@@ -919,6 +994,26 @@ def main():
     shortcuts = _Shortcuts(app)
     shortcuts.toggle_cursor.connect(lambda: _show_cursor(not cfg.cursor_shown()))
     cursor_key = KeyShortcut(cfg.cursor_hotkey(), shortcuts.toggle_cursor.emit)
+
+    # Ctrl, Ctrl: the shape opens on Chat, the box ready to type in.
+    def _type_to_tora():
+        if _type_claim:
+            return
+        try:
+            if "s" not in shape:
+                _toggle_shape()                    # builds and opens it
+            shape["s"].open_to_type(*flow.pill_geometry())
+        except Exception:  # noqa: BLE001 - a tap never breaks anything
+            import logging as _lg
+            _lg.getLogger("tora").exception("could not open the shape to type")
+    shortcuts.type_to_tora.connect(_type_to_tora)
+    from hotkey import DoubleTap
+    type_tap = DoubleTap(shortcuts.type_to_tora.emit)
+    try:
+        type_tap.start()
+    except Exception:  # noqa: BLE001
+        import logging as _lg
+        _lg.getLogger("tora").warning("could not watch for Ctrl, Ctrl", exc_info=True)
     try:
         cursor_key.start()
     except Exception:  # noqa: BLE001 - a bad saved shortcut must not stop HeyTora
@@ -953,34 +1048,32 @@ def main():
          f"talking  |  LLM: {providers['llm']}"),
     )
 
-    # ── First-run setup wizard ────────────────────────────────────────────────
-    # Show the welcome + API key walkthrough on the first launch.
-    # If everything is already wired up, the helper is a no-op.
+    # ── First launch ──────────────────────────────────────────────────────────
+    # The tour grows out of the pill (docs/ui/HEYCLICKY_ONBOARDING.md); signing
+    # in came first, at the gate. A build without accounts and no key yet
+    # gets the key window first, then the tour.
     try:
-        from ui.setup_wizard import maybe_show_setup_wizard, SetupWizard
-
-        # Force-show via env var (handy for testing).
-        if os.environ.get("TORA_FORCE_SETUP", "").strip() in ("1", "true", "yes"):
-            wiz = SetupWizard()
-            wiz.show()
-        elif door == "signed_in":
-            # The gate's window, waiting on "Getting Tora ready": it carries
-            # on with the real shortcut and cursor now the app is up.
-            wiz = sign_in_gate.open_wizard()
+        from ui.setup_wizard import maybe_show_setup_wizard
+        if os.environ.get("TORA_FORCE_SETUP", "").strip() in ("1", "true", "yes") or first_launch:
+            wiz = maybe_show_setup_wizard() if not cfg.has_key() else None
+            if wiz is not None:
+                wiz.completed.connect(_access_changed)
+                wiz.completed.connect(_open_tour)
+                _setup_keepalive[0] = wiz
+            else:
+                _open_tour()
         else:
-            wiz = maybe_show_setup_wizard()
-        if wiz is not None:
-            wiz.completed.connect(_access_changed)
-            wiz.completed.connect(lambda: _open_app("home"))
-            wiz.attach(live)
-            _setup_keepalive[0] = wiz       # keep a reference so it isn't GC'd
+            wiz = maybe_show_setup_wizard()          # no way to reach Gemini: sign in or a key
+            if wiz is not None:
+                wiz.completed.connect(_access_changed)
+                _setup_keepalive[0] = wiz
     except Exception as e:
-        print(f"[setup-wizard] skipped: {e}")
+        print(f"[first-launch] skipped: {e}")
 
     sys.exit(app.exec())
 
 
-# Module-level slots keeping references to the setup wizard [0] and the API
+# Module-level slots keeping references to the sign-in window or the tour [0] and the API
 # keys dialog [1] alive while Qt is running (PyQt will GC them otherwise and
 # the dialog will vanish).
 _setup_keepalive: list = [None, None]

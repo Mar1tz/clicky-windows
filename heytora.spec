@@ -160,6 +160,11 @@ datas.append(("skills", "skills"))
 datas.append((os.path.join("assets", "fonts"), os.path.join("assets", "fonts")))
 datas.append((os.path.join("assets", "brand"), os.path.join("assets", "brand")))
 datas.append((os.path.join("assets", "icons"), os.path.join("assets", "icons")))
+# The services' logos on Settings > Integrations (ui/app_widgets.logo).
+datas.append((os.path.join("assets", "logos"), os.path.join("assets", "logos")))
+# The first launch's recordings (tools/clip_to_webp.py) - when there are any.
+if os.path.isdir(os.path.join("assets", "onboarding")):
+    datas.append((os.path.join("assets", "onboarding"), os.path.join("assets", "onboarding")))
 # The listening pops (ui/sounds.py) - the WAVs only, not the downloaded originals.
 for _wav in _glob.glob(os.path.join("assets", "sounds", "*.wav")):
     if not os.path.basename(_wav).startswith("ES_"):

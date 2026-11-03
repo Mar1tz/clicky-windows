@@ -1,12 +1,27 @@
-"""Publish a new HeyTora - every installed copy updates itself to it.
+"""Publish a new HeyTora - the live server first, then the app every
+installed copy updates itself to.
 
+    python tools/release.py --check                             # what live is missing; changes nothing
     python tools/release.py 1.6.5 --notes "What changed, in a sentence or two"
     python tools/release.py 1.6.6 --notes "..." --required      # old copies must update
     python tools/release.py 1.6.5 --notes "..." --dry-run       # build and check, publish nothing
     python tools/release.py 1.6.5 --notes "..." --skip-build    # publish what the dry run built
+    python tools/release.py --server-only                       # migrations and functions, no app
+    python tools/release.py --mark-applied 0001-0013            # on live already (run by hand): record it
 
-In order - each step only after the one before it worked:
+Before anything changes:
 
+  a. this is `main`, nothing uncommitted, the same as GitHub's main - what
+     users get is exactly what is in git;
+  b. tests/agents is green.
+
+Then, in order - each step only after the one before it worked:
+
+  s1. live's migrations against supabase/migrations: one live has that is
+      not here stops the release (someone changed live by hand); the ones
+      live lacks are listed and pushed after you type "yes";
+  s2. the functions (heytora, paddle) are deployed. Live's function secrets
+      are left as they are - set them in the dashboard;
   1. version.py and installer.iss get the new version (only those lines);
   2. build.bat installer; the installer is checked: its version, that no
      .env went into it;
@@ -21,9 +36,15 @@ In order - each step only after the one before it worked:
 --required sets min_version to this version: copies older than it ask to
 update at once ("HeyTora needs an update"). Use it when the server changes
 in a way old apps cannot follow. Otherwise the previous min_version stays.
+The server goes first, so between s2 and step 4 the OLD app talks to the
+NEW server: a change to the server must keep the last app working.
+
+.env.production (git-ignored, read only here):
+    SUPABASE_DB_PASSWORD=     live database password (Project Settings > Database)
+    SUPABASE_ACCESS_TOKEN=    optional: a personal access token, else `supabase login`
 
 Needs: gh (signed in to an account that can publish to Qwickly/heytora),
-git, Inno Setup (build.bat finds it). Windows.
+git, Inno Setup (build.bat finds it), Node (npx: the Supabase CLI). Windows.
 """
 from __future__ import annotations
 
@@ -31,6 +52,7 @@ import argparse
 import datetime as dt
 import hashlib
 import json
+import os
 import re
 import subprocess
 import sys
@@ -39,11 +61,18 @@ import time
 import urllib.request
 from pathlib import Path
 
+from dotenv import dotenv_values
+
 ROOT = Path(__file__).resolve().parents[1]
 REPO = "Qwickly/heytora"
 SITE_AUTHOR = ["-c", "user.name=Qwickly", "-c", "user.email=307737469+Qwickly@users.noreply.github.com"]
 INSTALLER = ROOT / "dist" / "Setup-HeyTora.exe"
 MANIFEST_URL = "https://qwickly.github.io/heytora/latest.json"
+# HeyTora's live Supabase project (account/settings.py), and the CLI pinned in tools/dev.py
+PROJECT_REF = "uizwfpxzzkokyrkvjzkr"
+SUPABASE = "npx --yes supabase@2.120.0"
+# (function, extra deploy flags) - the same switches as supabase/config.toml
+FUNCTIONS = [("heytora", []), ("paddle", ["--no-verify-jwt"])]
 
 
 def run(argv, cwd=ROOT, check=True, **kw) -> subprocess.CompletedProcess:
@@ -89,16 +118,162 @@ def sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+def git_out(*args: str) -> str:
+    return subprocess.run(["git", *args], cwd=ROOT, capture_output=True, text=True,
+                          encoding="utf-8", errors="replace").stdout.strip()
+
+
+def same_as_github_main() -> None:
+    """(a) What users get is exactly what is on GitHub's main."""
+    branch = git_out("rev-parse", "--abbrev-ref", "HEAD")
+    if branch != "main":
+        sys.exit(f"on {branch!r}: releases are made from main. Merge dev into main first:\n"
+                 "    git switch main && git pull && git merge dev && git push")
+    if git_out("status", "--porcelain", "--untracked-files=no"):
+        sys.exit("uncommitted changes: commit or drop them first - a release is what is in git")
+    run(["git", "fetch", "-q", "origin", "main"])
+    behind = git_out("rev-list", "--count", "HEAD..origin/main")
+    ahead = git_out("rev-list", "--count", "origin/main..HEAD")
+    if behind != "0" or ahead != "0":
+        sys.exit(f"main is {ahead} ahead / {behind} behind GitHub: `git pull` then `git push` first")
+
+
+def live_env() -> dict:
+    """os.environ plus .env.production's two keys - nothing else from it."""
+    path = ROOT / ".env.production"
+    values = dotenv_values(path) if path.exists() else {}
+    env = dict(os.environ)
+    for key in ("SUPABASE_DB_PASSWORD", "SUPABASE_ACCESS_TOKEN"):
+        if values.get(key):
+            env[key] = values[key]
+    if not env.get("SUPABASE_DB_PASSWORD"):
+        sys.exit("no SUPABASE_DB_PASSWORD: put the live database password in .env.production\n"
+                 "(Supabase > Project Settings > Database). It never leaves this PC.")
+    return env
+
+
+def supabase_live(args: str, env: dict, capture: bool = False) -> subprocess.CompletedProcess:
+    print(f"  $ supabase {args}")
+    # npx is a .cmd on Windows: shell=True (CLAUDE.md)
+    r = subprocess.run(f"{SUPABASE} {args} --project-ref {PROJECT_REF}", cwd=ROOT, shell=True, env=env,
+                       text=True, encoding="utf-8", errors="replace", capture_output=capture)
+    if r.returncode != 0:
+        sys.exit(f"supabase {args.split()[0]} failed{': ' + (r.stderr or r.stdout)[-800:] if capture else ''}")
+    return r
+
+
+def live_migrations(env: dict) -> tuple[list[str], list[str]]:
+    """(here but not live, live but not here) - by version, e.g. '0013'."""
+    out = supabase_live("migration list --output-format json", env, capture=True).stdout
+    rows = json.loads(out[out.find("{"):])["migrations"]
+    missing = [r["local"] for r in rows if r.get("local") and not r.get("remote")]
+    unknown = [r["remote"] for r in rows if r.get("remote") and not r.get("local")]
+    return missing, unknown
+
+
+def release_server(env: dict, dry_run: bool) -> None:
+    print("s1. live's migrations")
+    missing, unknown = live_migrations(env)
+    if unknown:
+        sys.exit(f"live has migration(s) {', '.join(unknown)} that supabase/migrations does not.\n"
+                 "Someone changed live by hand. Add the same file here (or repair live's history) first.")
+    if not missing:
+        print("   live has every migration")
+    else:
+        files = sorted(p.name for v in missing for p in (ROOT / "supabase" / "migrations").glob(f"{v}_*.sql"))
+        print("   live does not have:\n" + "".join(f"     {f}\n" for f in files), end="")
+        if dry_run:
+            print("   dry run: not applied")
+        else:
+            if input('   apply these to the LIVE database? type "yes": ').strip().lower() != "yes":
+                sys.exit("stopped: nothing changed")
+            supabase_live("db push --yes", env)
+    print("s2. the functions")
+    if dry_run:
+        print("   dry run: not deployed - " + ", ".join(name for name, _ in FUNCTIONS))
+        return
+    for name, flags in FUNCTIONS:
+        supabase_live(" ".join(["functions deploy", name, "--use-api", *flags]), env)
+
+
+def check_live() -> int:
+    """--check: what a release would change on the server. Changes nothing."""
+    missing, unknown = live_migrations(live_env())
+    print("live has every migration" if not missing else f"live does not have: {', '.join(missing)}")
+    if unknown:
+        print(f"live has, and supabase/migrations does not: {', '.join(unknown)}")
+    return 0
+
+
+def versions(spec: str) -> list[str]:
+    """'0001-0013' or '0001,0004' -> ['0001', ...], four digits each."""
+    out: list[str] = []
+    for part in spec.replace(" ", "").split(","):
+        if "-" in part:
+            a, b = (int(x) for x in part.split("-", 1))
+            out += [f"{n:04d}" for n in range(a, b + 1)]
+        elif part:
+            out.append(f"{int(part):04d}")
+    return out
+
+
+def mark_applied(spec: str) -> int:
+    """--mark-applied: write to live's migration HISTORY that these are
+    applied - nothing else. For changes that are on live but were run by hand
+    (the SQL editor), so the next release does not run them again (30 Oct
+    2026: all of 0001-0013 were, and --check listed every one as missing).
+    Check first that they really are on live; only versions here, and only
+    ones live's history lacks, after you type "yes"."""
+    wanted = versions(spec)
+    here = {p.name[:4] for p in (ROOT / "supabase" / "migrations").glob("[0-9][0-9][0-9][0-9]_*.sql")}
+    strange = [v for v in wanted if v not in here]
+    if strange:
+        sys.exit(f"no migration file for {', '.join(strange)} - nothing changed")
+    env = live_env()
+    missing, _unknown = live_migrations(env)
+    already = [v for v in wanted if v not in missing]
+    if already:
+        sys.exit(f"live's history already has {', '.join(already)} - nothing changed")
+    print("This writes to LIVE's migration history only (no tables, no data):")
+    print("   recorded as applied: " + ", ".join(wanted))
+    print("   still to apply on the next release: " + (", ".join(v for v in missing if v not in wanted) or "nothing"))
+    if input('   type "yes" to record them: ').strip().lower() != "yes":
+        sys.exit("stopped: nothing changed")
+    supabase_live("migration repair --status applied " + " ".join(wanted), env)
+    return check_live()
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("version")
-    ap.add_argument("--notes", required=True, help="what changed - shown in the app and on GitHub")
+    ap.add_argument("version", nargs="?")
+    ap.add_argument("--notes", help="what changed - shown in the app and on GitHub")
+    ap.add_argument("--check", action="store_true", help="what live's database lacks; changes nothing")
+    ap.add_argument("--server-only", action="store_true", help="migrations and functions; no app")
+    ap.add_argument("--mark-applied", metavar="VERSIONS",
+                    help="e.g. 0001-0013: record in live's history that these are already applied "
+                         "(run by hand); changes nothing else, asks first")
     ap.add_argument("--required", action="store_true", help="copies older than this must update")
     ap.add_argument("--min-version", default=None, help="copies older than this must update")
     ap.add_argument("--dry-run", action="store_true", help="build and check; publish nothing")
     ap.add_argument("--skip-build", action="store_true",
                     help="publish the installer already in dist (after a --dry-run), checked again")
     args = ap.parse_args()
+    if args.check:
+        return check_live()
+    if args.mark_applied:
+        return mark_applied(args.mark_applied)
+    if not args.server_only and not (args.version and args.notes):
+        ap.error("a version and --notes, or --server-only, or --check")
+
+    print("a. main, the same as GitHub's")
+    same_as_github_main()
+    print("b. tests")
+    if run([sys.executable, "-m", "pytest", "tests/agents", "-q"], check=False).returncode != 0:
+        sys.exit("tests failed - nothing published")
+    release_server(live_env(), args.dry_run)
+    if args.server_only:
+        print("done: the server is live" + (" (dry run: nothing changed)" if args.dry_run else "") + ".")
+        return 0
 
     version, was = args.version.strip().lstrip("v"), current_version()
     if parse(version) < parse(was):

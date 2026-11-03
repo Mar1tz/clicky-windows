@@ -14,6 +14,10 @@
 //                      {standby: true} (Pro/Max keeping the voice open for
 //                      the next question) the pass lives in an uncounted
 //                      "voice" window and comes with no ticket (0007).
+//                      With {onboarding: true} (the first launch's voice) it
+//                      lives in a free "onboarding" window - three per
+//                      account, ever - with no ticket either (0014); after
+//                      those the refusal's reason is onboarding_used.
 //                      The app then talks straight to Google.
 //   POST /voice-usage  {window, usage}  what Google billed for an answer's
 //                      voice (its usageMetadata), against that question's
@@ -251,6 +255,9 @@ function limitResponse(info: Record<string, unknown>): Response {
       return refuse(402, "HEYTORA_LIMIT", "That conversation has ended - ask again.", info);
     case "not_in_plan":
       return refuse(402, "HEYTORA_LIMIT", `Your ${plan} plan doesn't include ${kind}.${more}`, info);
+    case "onboarding_used":
+      // The app takes this as "ask for a normal talk pass" (0014).
+      return refuse(402, "HEYTORA_LIMIT", "The free tour's voice is used up - it counts as talk now.", info);
     default:
       return refuse(402, "HEYTORA_LIMIT",
         `You've used all ${info.limit} ${kind} on the ${plan} plan this month. They come back ${when}.${more}`, info);
@@ -627,10 +634,15 @@ async function handle(req: Request, timed: Timed, serverTiming: () => string): P
       // Talk: the pass lives inside a talk window - a new one unless the app
       // says it is the same question (a reconnect) - and ends with it. A
       // standby pass (the voice waiting for a question) lives in a "voice"
-      // window instead: not a talk message, and no ticket for answers.
+      // window instead: not a talk message, and no ticket for answers. The
+      // first launch's voice lives in an "onboarding" window: free, a few
+      // times per account ever (0014), and no ticket either.
       const standby = body?.standby === true;
+      const onboarding = !standby && body?.onboarding === true;
       const windowArgs = standby
         ? { p_kind: "voice", p_new: body?.new === true }
+        : onboarding
+        ? { p_kind: "onboarding", p_new: body?.new === true }
         : { p_kind: "talk", p_new: body?.new !== false };
       // AC-03: the window and the pass in one round trip (0013). Until that
       // migration is applied, the two calls as before.
@@ -654,9 +666,10 @@ async function handle(req: Request, timed: Timed, serverTiming: () => string): P
       const mintStarted = performance.now();
       const pass = await mintPass(model, Number(p.expires_at));
       timed("google", mintStarted);
-      if (standby) {
+      if (standby || onboarding) {
         return json(200, {
-          ...pass, expires_at: Number(p.expires_at), now: Date.now() / 1000, standby: true, usage: w,
+          ...pass, expires_at: Number(p.expires_at), now: Date.now() / 1000,
+          ...(standby ? { standby: true } : { onboarding: true }), usage: w,
         });
       }
       const t = await ticketFor("talk", w);

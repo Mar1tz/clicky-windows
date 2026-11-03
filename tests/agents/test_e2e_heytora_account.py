@@ -53,6 +53,8 @@ class FakeHeyTora:
         self.pass_refusal = ""                  # "passes" / "window": refuse a reused window once
         self.clock_offset = 0.0                 # the server's clock minus this PC's
         self.standby = 0                        # standby passes (0007): the voice waiting, uncounted
+        self.onboarding_left = 3                # free onboarding windows left (0014)
+        self.onboarding = 0                     # onboarding passes given
         self.paid = False                       # a paid plan still running: no deleting
         self.signups = True                     # Supabase's "allow new users to sign up"
         self.paying = ""                        # the plan a Paddle subscription is on, if any
@@ -205,6 +207,18 @@ class FakeHeyTora:
                 self.standby += 1
                 reply |= {"standby": True, "now": time.time() + self.clock_offset,
                           "usage": {"ok": True, "kind": "voice", "used": self.standby, "limit": None}}
+                return httpx.Response(200, json=reply)
+            if body.get("kind") == "talk" and body.get("onboarding"):
+                if self.onboarding_left <= 0:
+                    return httpx.Response(402, json={"error": {
+                        "code": 402, "status": "HEYTORA_LIMIT",
+                        "message": "The free tour's voice is used up - it counts as talk now.",
+                        "heytora": {"ok": False, "reason": "onboarding_used", "kind": "onboarding"}}})
+                if body.get("new") or not self.onboarding:
+                    self.onboarding_left -= 1
+                self.onboarding += 1
+                reply |= {"onboarding": True, "now": time.time() + self.clock_offset,
+                          "usage": {"ok": True, "kind": "onboarding", "used": 1, "limit": None}}
                 return httpx.Response(200, json=reply)
             if body.get("kind") == "talk":
                 if self.pass_refusal and body.get("new") is False:

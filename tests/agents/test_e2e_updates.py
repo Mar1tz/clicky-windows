@@ -409,3 +409,42 @@ def test_an_update_installs_before_anything_is_shown():
     at_start = src.index("update_outcome = upd.at_startup(")
     assert at_start < src.index("door = sign_in_gate.gate()") < src.index("manager = CompanionManager()")
     assert 'if update_outcome == "installing":\n        return' in src
+
+
+# -- live's migration history, when its changes were run by hand (30 Oct) --------------------------------------
+
+def _release_tool():
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("release", ROOT / "tools" / "release.py")
+    release = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(release)
+    return release
+
+
+def _fake_live(monkeypatch, release, missing, answer="yes"):
+    ran = []
+    monkeypatch.setattr(release, "live_env", lambda: {})
+    monkeypatch.setattr(release, "live_migrations", lambda env: (list(missing), []))
+    monkeypatch.setattr(release, "supabase_live", lambda args, env, capture=False: ran.append(args))
+    monkeypatch.setattr(release, "check_live", lambda: 0)
+    monkeypatch.setattr("builtins.input", lambda _q: answer)
+    return ran
+
+
+def test_marking_hand_run_changes_writes_only_the_history(monkeypatch):
+    release = _release_tool()
+    ran = _fake_live(monkeypatch, release, [f"{n:04d}" for n in range(1, 15)])
+    assert release.mark_applied("0001-0013") == 0
+    assert ran == ["migration repair --status applied " + " ".join(f"{n:04d}" for n in range(1, 14))]
+
+
+def test_marking_asks_first_and_refuses_what_it_cannot_know(monkeypatch):
+    release = _release_tool()
+    ran = _fake_live(monkeypatch, release, ["0013", "0014"], answer="no")
+    with pytest.raises(SystemExit):
+        release.mark_applied("0013")                  # not "yes"
+    with pytest.raises(SystemExit):
+        release.mark_applied("0099")                  # no such migration here
+    with pytest.raises(SystemExit):
+        release.mark_applied("0012")                  # live's history has it already
+    assert ran == [], "nothing was written"

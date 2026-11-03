@@ -194,8 +194,6 @@ def test_signing_in_through_an_invite_says_who_it_came_from(qapp, heytora, monke
     urls = []
     monkeypatch.setattr(QDesktopServices, "openUrl", lambda url: urls.append(url.toString()) or True)
     w = SetupWizard(account=heytora.account)
-    w._start_mic = lambda: None
-    w._go("connect")
     w.browser_btn.click()
     query = {k: v[0] for k, v in parse_qs(urlsplit(urls[0]).query).items()}
     heytora.fake.challenge = query["challenge"]
@@ -233,11 +231,13 @@ def _state(**kw):
 
 
 def _open(qapp, bridge):
-    from PyQt6.QtWidgets import QWidget
-    from ui.referral_window import ReferralWindow
+    """The referral panel - Settings > Invite & Earn in the shape."""
+    from PyQt6.QtWidgets import QVBoxLayout, QWidget
+    from ui.referral_window import ReferralPanel
     host = QWidget()
-    host.resize(1000, 900)
-    win = ReferralWindow(host, bridge)
+    host.resize(600, 700)
+    win = ReferralPanel(bridge)
+    QVBoxLayout(host).addWidget(win)
     end = time.time() + 5
     while win._state is None and time.time() < end:
         qapp.processEvents()

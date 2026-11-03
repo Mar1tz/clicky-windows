@@ -95,7 +95,7 @@ class TrayManager(QObject):
     on_open_agents        = pyqtSignal()        # Active Agents panel
     on_agent_settings     = pyqtSignal()        # agent rails
     on_stop_agents        = pyqtSignal()        # cancel every running agent
-    on_open_app           = pyqtSignal()        # the one-window app (ui/app_window)
+    on_open_app           = pyqtSignal()        # the shape (ui/shape.py)
     on_open_app_page      = pyqtSignal(str)     # ...on a page: "settings", "agents"
     # The HeyTora plan or its use changed - emitted from any thread by the
     # account (main.py wires account().on_change to it); handled on Qt's.
@@ -168,8 +168,8 @@ class TrayManager(QObject):
         Only what the tray is for: the state, the plan, a warning if there
         is one, open/stop/quit and the two switches people reach for. The
         voice, models, tutor, journal, recording, workflow and setup items
-        that used to fill three submenus live in the app window now -
-        every one of them is on a page there (ui/app_pages.py)."""
+        that used to fill three submenus live in the shape now - its tabs
+        and Settings (ui/shape.py, ui/shape_settings.py)."""
         from ui.tray_popup import Entry
         rows: list[Entry] = []
         providers = cfg.describe()

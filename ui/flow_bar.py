@@ -379,6 +379,7 @@ class FlowBar(QObject):
     cancel_requested = pyqtSignal()     # ✕ while listening
     done_requested = pyqtSignal()       # ✓ while listening: that's the question
     talk_requested = pyqtSignal()       # a click on the resting pill: listen, hands-free
+    open_requested = pyqtSignal()       # ... or, with click_opens, open the shape (ui/shape.py)
     dock_changed = pyqtSignal(str)      # dragged to another side: keep it
 
     def __init__(self, dock: str = DEFAULT_DOCK, hotkey: str = "Ctrl + Win"):
@@ -415,6 +416,9 @@ class FlowBar(QObject):
         self._card_glide: Optional[tuple[QPoint, QPoint, float]] = None   # (from, to, since)
         self._mic_on = False             # WX-05: a microphone stream is open
         self._screen_at = 0.0            # when the screen was last looked at (monotonic)
+        # A click on the resting pill opens the shape (open_requested) instead
+        # of listening - set by main.py once the shape is wired (DESIGN.md §11).
+        self.click_opens = False
 
         self.pill = _Pill(self)
         self._hotkey = hotkey
@@ -679,7 +683,11 @@ class FlowBar(QObject):
         elif done is not None and done.contains(pos):
             self.done_requested.emit()
         elif self._state == "idle":
-            self.talk_requested.emit()
+            (self.open_requested if self.click_opens else self.talk_requested).emit()
+
+    def pill_geometry(self) -> tuple[str, QRectF]:
+        """(edge, the pill's rectangle on screen) - what the shape grows out of."""
+        return self._edge, self.pill.pill_rect().translated(QPointF(self.pill.pos()))
 
     # ── animation ───────────────────────────────────────────────────────────────
     def _look(self) -> str:
@@ -797,6 +805,7 @@ class FlowBar(QObject):
         self._paint_lights(p, r)
         if idle:
             return
+        self._paint_glow(p, r, radius)
         look = self._look()
         if look == "hover":
             self._paint_bars(p, r, level=0.0, alpha=110, count=7)
@@ -816,6 +825,47 @@ class FlowBar(QObject):
                 cut = 40.0
                 inner = r.adjusted(0, cut, 0, -cut) if self.upright() else r.adjusted(cut, 0, -cut, 0)
             self._paint_bars(p, inner, level=self._level, alpha=255, count=BARS)
+
+    def glow(self) -> tuple[str, float]:
+        """(colour, strength 0-1) of the glow at the pill's end now; ("", 0)
+        when there is none. Listening and speaking follow the voice;
+        thinking breathes."""
+        from ui import tokens
+        colour = tokens.STATE_GLOW.get(self._state, "")
+        if not colour:
+            return "", 0.0
+        if self._state == "thinking":
+            return colour, 0.55 + 0.25 * math.sin(self._phase * 1.6)
+        return colour, 0.45 + 0.55 * min(1.0, self._level * 1.2)
+
+    def _paint_glow(self, p: QPainter, r: QRectF, radius: float) -> None:
+        """A soft light at the pill's far end, drifting a little, inside the
+        pill - so the state reads at a glance, in colour (HeyClicky's notch)."""
+        from PyQt6.QtGui import QRadialGradient
+        colour, strength = self.glow()
+        if not colour or strength <= 0.0:
+            return
+        drift = math.sin(self._phase * 0.9) * 0.08
+        if self.upright():
+            c = QPointF(r.center().x(), r.bottom() - r.height() * (0.18 + drift))
+            reach = r.width() * 1.6
+        else:
+            c = QPointF(r.right() - r.width() * (0.18 + drift), r.center().y())
+            reach = r.height() * 1.6
+        g = QRadialGradient(c, reach)
+        lit = QColor(colour)
+        lit.setAlpha(int(210 * strength))
+        g.setColorAt(0.0, lit)
+        lit.setAlpha(0)
+        g.setColorAt(1.0, lit)
+        clip = QPainterPath()
+        clip.addRoundedRect(r, radius, radius)
+        p.save()
+        p.setClipPath(clip)
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(g)
+        p.drawEllipse(c, reach, reach)
+        p.restore()
 
     def _paint_lights(self, p: QPainter, r: QRectF) -> None:
         """WX-05: red off one end while the microphone is open, blue off the

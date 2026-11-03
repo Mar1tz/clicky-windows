@@ -212,6 +212,72 @@ class KeyShortcut:
             pass  # never let a callback error kill the keyboard hook
 
 
+class DoubleTap:
+    """Ctrl, tapped twice: type to Tora (HeyClicky's "Text mode"). Not a
+    shortcut the keyboard library knows - a lone modifier, twice - so it
+    watches every key. A tap is Ctrl down and up again quickly with no
+    other key in between; two within WINDOW_S fire, on the second one's
+    release. So Ctrl + Win (push to talk) is never a tap, a held Ctrl's
+    repeats are one press, and a tap then Ctrl + C does nothing. Nothing is
+    suppressed: the app in front gets every key. `callback` runs on the
+    hook's thread."""
+
+    WINDOW_S = 0.40          # the gap between the two taps
+    TAP_S = 0.30             # a tap is quicker than this; longer is a hold
+
+    def __init__(self, callback: Callable[[], None], key: str = "ctrl"):
+        self._callback = callback
+        self._key = key
+        self._down_at = None         # when the tapped key went down (None: up)
+        self._clean = False          # nothing else pressed since it went down
+        self._last_tap = None        # when the last clean tap ended
+        self._handle = None
+
+    def start(self) -> None:
+        self._handle = keyboard.hook(self._on_event, suppress=False)
+
+    def stop(self) -> None:
+        if self._handle is not None:
+            try:
+                keyboard.unhook(self._handle)
+            except Exception:
+                pass
+            self._handle = None
+
+    def _on_event(self, event) -> None:
+        try:
+            self.feed(event.name or "", event.event_type == keyboard.KEY_DOWN,
+                      getattr(event, "time", None) or time.monotonic())
+        except Exception:
+            pass  # never let it kill the keyboard hook
+
+    def feed(self, name: str, down: bool, now: float) -> bool:
+        """One key event; True when it made a double tap (and fired)."""
+        if _norm_token(name) != self._key:
+            if down:                                 # another key: no tap now, none pending
+                self._clean = False
+                self._last_tap = None
+            return False
+        if down:
+            if self._down_at is None:                # a repeat while held is not a new press
+                self._down_at, self._clean = now, True
+            return False
+        held = now - self._down_at if self._down_at is not None else 1e9
+        self._down_at = None
+        if not self._clean or held > self.TAP_S:
+            self._last_tap = None
+            return False
+        if self._last_tap is not None and now - self._last_tap <= self.WINDOW_S:
+            self._last_tap = None
+            try:
+                self._callback()
+            except Exception:
+                pass
+            return True
+        self._last_tap = now
+        return False
+
+
 class StopHotkey:
     """A global key that cancels the current generation (default: Esc).
 

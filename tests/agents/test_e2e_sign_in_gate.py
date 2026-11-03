@@ -46,51 +46,27 @@ def test_a_build_without_accounts_has_no_gate(qapp, monkeypatch):
 
 
 def test_the_sign_in_page_cannot_be_skipped(qapp, service):
-    w = _wizard(service.account, start="connect")
+    w = _wizard(service.account)
+    finished = []
+    w.completed.connect(lambda: finished.append(1))
     assert w.page() == "connect" and w.windowTitle()
-    assert not w.skip_btn.isVisibleTo(w) and not w.next_btn.isEnabled()
+    assert not w.next_btn.isEnabled() and not w.next_btn.isVisibleTo(w),         "one main button at a time: signing in, until signed in"
     assert not w.key_card.isEnabled(), "an own key comes after the account, not instead"
     w._next()
-    assert w.page() == "connect" and "Sign in first" in w.connect_status.text()
+    assert not finished and "Sign in first" in w.connect_status.text()
 
     _sign_in(service)
     w._refresh_connect()
     assert w.next_btn.isEnabled() and w.key_card.isEnabled()
+    assert w.next_btn.text() == "Continue" and w.next_btn.isVisibleTo(w)
     w._next()
-    assert w.page() == "welcome", "signed in: on to hello"
-
-
-def test_after_a_sign_out_signing_in_is_all_it_asks(qapp, service):
-    from ui import setup_wizard
-    setup_wizard.mark_setup_complete()
-    w = _wizard(service.account, start="connect")
-    finished = []
-    w.completed.connect(lambda: finished.append(1))
-    _sign_in(service)
-    w._refresh_connect()
-    assert w.next_btn.text() == "Finish"
-    w._next()
-    assert finished == [1], "the questions were answered last time"
-
-
-def test_the_gate_lets_heytora_start_after_the_mic_test(qapp, service):
-    from ui import sign_in_gate
-
-    def act(w):
-        _sign_in(service)
-        w._go("mic")
-        w._next()                                        # Yes: on to "Getting Tora ready"
-    result, made = _gate_with(service, act)
-    assert result == "signed_in"
-    assert made[0].isVisible() and made[0].page() == "ready", "the window stays for the second half"
-    assert sign_in_gate.open_wizard() is made[0]
-    made[0].close()
+    assert finished == [1], "signed in: that is all it asks - the tour comes next"
 
 
 def test_esc_does_not_close_it(qapp, service):
     from PyQt6.QtCore import QEvent, Qt
     from PyQt6.QtGui import QKeyEvent
-    w = _wizard(service.account, start="connect")
+    w = _wizard(service.account)
     w.show()
     qapp.sendEvent(w, QKeyEvent(QEvent.Type.KeyPress, Qt.Key.Key_Escape, Qt.KeyboardModifier.NoModifier))
     qapp.processEvents()
@@ -104,8 +80,8 @@ def _gate_with(service, act):
     from ui import sign_in_gate
     made = []
 
-    def factory(start):
-        w = _wizard(service.account, start=start)
+    def factory():
+        w = _wizard(service.account)
         made.append(w)
         QTimer.singleShot(30, lambda: act(w))
         return w
@@ -117,28 +93,22 @@ def test_closing_the_window_without_signing_in_closes_heytora(qapp, service):
     assert result == "closed" and made and not made[0].isVisible()
 
 
-def test_a_fresh_install_gets_the_whole_first_launch(qapp, service):
+def test_fresh_or_after_a_sign_out_it_opens_at_signing_in(qapp, service):
     from ui import setup_wizard
-    assert not setup_wizard.setup_already_ran()
-    pages = []
-    result, _made = _gate_with(service, lambda w: (pages.append(w.page()), w.close()))
-    assert pages == ["connect"] and result == "closed", "signing in comes first"
-
-
-def test_after_a_sign_out_it_opens_at_signing_in(qapp, service):
-    from ui import setup_wizard
-    setup_wizard.mark_setup_complete()
-    pages = []
-    result, _made = _gate_with(service, lambda w: (pages.append(w.page()), w.close()))
-    assert pages == ["connect"] and result == "closed"
+    for done_before in (False, True):
+        if done_before:
+            setup_wizard.mark_setup_complete()
+        assert setup_wizard.setup_already_ran() is done_before
+        pages = []
+        result, _made = _gate_with(service, lambda w: (pages.append(w.page()), w.close()))
+        assert pages == ["connect"] and result == "closed"
 
 
 def test_signing_in_through_the_window_lets_heytora_start(qapp, service):
     def act(w):
         _sign_in(service)
         w._refresh_connect()
-        w._go("done")
-        w._next()                                        # Finish
+        w._next()                                        # Continue
     result, _made = _gate_with(service, act)
     assert result == "signed_in" and service.account.signed_in()
 
@@ -147,7 +117,7 @@ def test_already_signed_in_shows_nothing(qapp, service):
     from ui import sign_in_gate
     _sign_in(service)
     shown = []
-    assert sign_in_gate.gate(wizard_factory=lambda start: shown.append(start)) == "ok" and not shown
+    assert sign_in_gate.gate(wizard_factory=lambda: shown.append(1)) == "ok" and not shown
 
 
 def test_the_gate_comes_before_anything_starts():

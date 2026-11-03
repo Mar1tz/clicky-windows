@@ -1034,6 +1034,24 @@ class RealtimeConversation:
             _log.debug("say_now failed", exc_info=True)
             return False
 
+    async def ask_text(self, text: str) -> bool:
+        """A question typed instead of said (the shape's Chat). It ends the
+        turn, as say_now does - the answer comes back exactly as a spoken
+        question's would: her voice, the transcript, the tools. Unlike
+        say_now it does not wait for a gap: the user asked, so whatever was
+        still being said is over (the caller has already interrupted it)."""
+        if not text or not self.ready:
+            return False
+        self.release_superseded()
+        self._tool_rounds = 0
+        self._awaiting_user = False
+        try:
+            await self._session.send_text(text, turn_complete=True)
+            return True
+        except Exception:
+            _log.debug("ask_text failed", exc_info=True)
+            return False
+
     async def send_image(self, jpeg_b64: str) -> None:
         if jpeg_b64 and self.ready:
             try:

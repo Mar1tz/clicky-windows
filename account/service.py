@@ -35,6 +35,7 @@ import logging
 import secrets
 import threading
 import time
+from contextvars import ContextVar
 from dataclasses import dataclass, field
 from typing import Callable, Optional
 from urllib.parse import urlencode
@@ -91,6 +92,11 @@ class LimitReached(AccountError):
 
 _KIND_WORDS = {"talk": "talk messages", "dictation": "dictations", "agent": "agent messages",
                "calls": "requests", "wake": "wake-word checks"}
+
+# Set inside the tour's own voice (ui/onboarding_interview.py), so only its
+# sessions ask for free passes (0014) - not the app's standby voice that may
+# be open beside it. It rides into voice_pass's thread with asyncio.to_thread.
+TOUR_VOICE: ContextVar[bool] = ContextVar("heytora_tour_voice", default=False)
 
 PLAN_NAMES = {"free": "Free", "pro": "Pro", "max": "Max", "pro_trial": "Pro trial"}
 
@@ -283,6 +289,8 @@ class Account:
         self._skew = 0.0                                    # this PC's clock minus the server's
         self._tickets: dict[str, tuple[str, float]] = {}   # kind -> (window ticket, ends)
         self._new_talk = False                              # the next talk window is a new question
+        self._onboarding = False                            # the first launch: its voice is free (0014)
+        self._onboarding_window = False                     # ... and its window is open
         self._window_locks = {"talk": threading.Lock(), "agent": threading.Lock()}
         self._summary_read = threading.Lock()         # one plan read at a time (summary)
         self._verifier: Optional[str] = None          # PKCE: the secret half of a link sign-in
@@ -675,6 +683,12 @@ class Account:
             usage = data.get("usage") or {}
             self._note_usage(usage)
             return VoicePass(url=data["url"], token=data["token"], usage=usage)
+        with self._lock:
+            onboarding = self._onboarding
+        if onboarding and TOUR_VOICE.get():
+            free = self._onboarding_pass(model)
+            if free is not None:
+                return free
         with self._window_locks["talk"]:
             with self._lock:
                 pending, held = self._new_talk, self._held("talk")
@@ -714,6 +728,54 @@ class Account:
 
     async def avoice_pass(self, kind: str, model: str) -> VoicePass:
         return await asyncio.to_thread(self.voice_pass, kind, model)
+
+    def onboarding(self, on: bool) -> None:
+        """The first launch is talking: the tour's voice passes (TOUR_VOICE)
+        come from a free "onboarding" window (0014) - not a talk message,
+        never on the credits. The server allows a few per account, ever;
+        after those its refusal turns this off and the voice is counted like
+        any other."""
+        with self._lock:
+            self._onboarding = bool(on)
+            self._onboarding_window = False
+
+    def onboarding_on(self) -> bool:
+        with self._lock:
+            return self._onboarding
+
+    def _onboarding_pass(self, model: str) -> Optional[VoicePass]:
+        """A free pass for the first launch, or None to ask for a normal one."""
+        with self._lock:
+            opened = self._onboarding_window
+        try:
+            data = self._call("POST", "voice-pass",
+                              {"kind": "talk", "model": model, "onboarding": True, "new": not opened})
+        except LimitReached as e:
+            if e.info.get("reason") in ("onboarding_used", "not_in_plan", "budget"):
+                self.onboarding(False)               # used up, or an older server: counted as usual
+                return None
+            if e.info.get("reason") in ("passes", "window") and opened:
+                with self._lock:
+                    self._onboarding_window = False  # that window ended: the next
+                return self._onboarding_pass(model)
+            raise
+        self._clock(data)
+        usage = data.get("usage") or {}
+        with self._lock:
+            if not data.get("onboarding"):
+                # A server from before 0014 gave a normal, counted talk pass.
+                self._onboarding = False
+                self._new_talk = False
+                if data.get("ticket"):
+                    self._tickets["talk"] = (data["ticket"],
+                                             self._local(float(data.get("ticket_expires_at") or 0)))
+            else:
+                self._onboarding_window = True
+                self._new_talk = False               # this question is the tour's, not the plan's
+        if not data.get("onboarding"):
+            self._note_usage(usage)
+        return VoicePass(url=data["url"], token=data["token"], usage=usage,
+                         ticket=data.get("ticket", ""))
 
     def talk_pending(self) -> bool:
         """A new question has started and its talk message is not counted yet."""

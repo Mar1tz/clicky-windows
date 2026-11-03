@@ -1,23 +1,23 @@
-"""Get a free month: the referral window (docs/REFERRALS.md).
+"""Get a free month: the referral panel, the shape's Invite & Earn page
+(docs/REFERRALS.md).
 
 Wispr Flow's layout - Refer, Past referrals, Apply referral - for HeyTora's
 offer: a friend gets 14 days of Pro, and when they've asked Tora 15
 questions the referrer gets a free month, used on their next payment. Every
-rule is the server's (migration 0010); this window shows what it says, and
+rule is the server's (migration 0010); this panel shows what it says, and
 in words why a code can't be used.
 """
 from __future__ import annotations
 
 from typing import Optional
 
-from PyQt6.QtCore import QRectF, Qt, QTimer
+from PyQt6.QtCore import QRectF, Qt, pyqtSignal
 from PyQt6.QtGui import QColor, QFont, QLinearGradient, QPainter, QPainterPath, QPen
 from PyQt6.QtWidgets import QApplication, QFrame, QHBoxLayout, QLabel, QLineEdit, QVBoxLayout, QWidget
 
 from ui import app_theme as T
 from ui import tokens
-from ui.app_widgets import button, icon, label
-from ui.settings_parts import SubDialog
+from ui.app_widgets import button, icon, label, later
 
 GOAL = 15                 # questions the friend asks (migration 0010)
 PANEL_H = 440             # each tab's panel: as tall as Refer's
@@ -103,27 +103,31 @@ def _friend_line(f: dict) -> str:
     return f"Joined · {min(GOAL, int(f.get('asked') or 0))} of {GOAL} questions"
 
 
-class ReferralWindow(SubDialog):
-    """The three tabs. Reads the server off the UI thread on opening."""
+class ReferralPanel(QWidget):
+    """The three tabs - the gift card, your link, who joined, a code to
+    apply - and the note under them. Reads the server off the UI thread
+    when made. The window below shows it over the app window; the shape
+    shows it as its Invite & Earn page (the owner kept this design over
+    HeyClicky's, 29 Oct 2026). `changed` - redrawn: a window re-fits."""
 
-    W = 580
+    changed = pyqtSignal()
 
-    def __init__(self, over: QWidget, bridge, tab: str = "refer"):
-        super().__init__(over, "Refer and earn rewards",
-                         "Give a friend 14 days of Pro, and get a free month when they've asked "
-                         f"Tora {GOAL} questions.")
+    def __init__(self, bridge, tab: str = "refer"):
+        super().__init__()
         self.bridge = bridge
         self._tab = tab
         self._state: Optional[dict] = None
         self._busy = None
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(12)
         self.tabs_row = QHBoxLayout()
-        self.body.addLayout(self.tabs_row)
+        lay.addLayout(self.tabs_row)
         self.content = QVBoxLayout()
         self.content.setSpacing(12)
-        self.body.addLayout(self.content)
+        lay.addLayout(self.content)
         self.foot_note = label("", "setNote", wrap=True)
         self.foot_note.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.foot.addWidget(self.foot_note, 1)
         self._draw_tabs()
         self._show_loading()
         self._load()
@@ -177,7 +181,7 @@ class ReferralWindow(SubDialog):
             self.foot_note.setText("")
         else:
             {"refer": self._refer, "past": self._past, "apply": self._apply}[tab](st)
-        self._place()
+        self.changed.emit()
 
     def _panel(self) -> tuple[QFrame, QVBoxLayout]:
         panel = QFrame()
@@ -284,7 +288,7 @@ class ReferralWindow(SubDialog):
     def _copy(self) -> None:
         QApplication.clipboard().setText(self.link_edit.text())
         self.copy_btn.setText("Copied")
-        QTimer.singleShot(1500, lambda: self.copy_btn.setText("Copy") if not self.isHidden() else None)
+        later(self.copy_btn, lambda: self.copy_btn.setText("Copy"), 1500)
 
     def _refresh_code(self) -> None:
         if self._busy is not None:
@@ -323,10 +327,27 @@ class ReferralWindow(SubDialog):
         self._busy = _Background(self, lambda: self.bridge.apply_referral(code), done)
 
 
-def open_referrals(window: QWidget, bridge, tab: str = "refer") -> ReferralWindow:
-    """Over the app window (or Settings, when it is open)."""
-    over = getattr(window, "_settings", None)
-    over = over if over is not None and over.isVisible() else window
-    dlg = ReferralWindow(over, bridge, tab)
-    dlg.open()
-    return dlg
+# ── Invite & Earn: the shape's settings page (DESIGN.md §5) ───────────────────
+
+def invite_page():
+    """The page's class, made on first use: settings_tabs (its base) is
+    imported late here, as the panel does with _Background."""
+    from ui.settings_tabs import Tab
+
+    class InvitePage(Tab):
+        """The referral panel as a settings page: the offer in a line, then
+        Refer (the gift card, how it works, your link), Past referrals and
+        Apply referral."""
+
+        HEADING = "Invite & Earn"
+        LIVE = False                    # the panel keeps itself up to date
+
+        def build(self) -> None:
+            self.body.add(label("Give a friend 14 days of Pro, and get a free month when they've "
+                                f"asked Tora {GOAL} questions.", "setDesc", wrap=True))
+            self.panel = ReferralPanel(self.bridge)
+            self.body.add(self.panel)
+            self.body.add(self.panel.foot_note)
+
+    return InvitePage
+

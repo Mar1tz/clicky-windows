@@ -120,10 +120,18 @@ def data_dir() -> Path:
 
     Decided once per run (see _settle_data_dir), so every part of the app
     agrees on it even when an old folder could not be moved yet.
+
+    TORA_DATA_DIR replaces it (tools/dev.py: HeyTora-dev), so a run against
+    the local database never signs the installed app out of the live one.
     """
     global _DATA_DIR
     if _DATA_DIR is None:
-        _DATA_DIR = _settle_data_dir(_appdata_base())
+        own = os.environ.get("TORA_DATA_DIR", "").strip()
+        if own:
+            _DATA_DIR = Path(own)
+            _DATA_DIR.mkdir(parents=True, exist_ok=True)
+        else:
+            _DATA_DIR = _settle_data_dir(_appdata_base())
     return _DATA_DIR
 
 
@@ -585,6 +593,13 @@ class Config:
         # Settings > Updates: a downloaded update installs by itself - the
         # next time HeyTora starts, or as it is quit (updates/service.py).
         "auto_update":   ("TORA_AUTO_UPDATE", True),
+        # Settings > General: HeyTora's button in the Windows taskbar, which
+        # opens the shape (ui/taskbar.py). (Ctrl, Ctrl to type is no longer a
+        # switch - it is how you type to Tora, 31 Oct 2026.)
+        "taskbar":       ("TORA_TASKBAR", True),
+        # Settings > Voice: the shape's sounds as it opens and grows into
+        # Settings (ui/sounds.py UI).
+        "ui_sounds":     ("TORA_UI_SOUNDS", True),
         # Settings > Code editors (devlink/): connectors may reach HeyTora.
         # On - each workspace still reads nothing until it is allowed there.
         "devlink":       ("TORA_DEVLINK", True),
@@ -719,15 +734,6 @@ class Config:
         mode = mode if mode in ("system", "light", "dark") else "system"
         os.environ["TORA_THEME"] = mode
         self._write_env("TORA_THEME", mode)
-
-    def sidebar_collapsed(self) -> bool:
-        """The app window's sidebar shut to icons (ui/app_window.py)."""
-        return os.environ.get("TORA_SIDEBAR", "").strip().lower() == "shut"
-
-    def set_sidebar_collapsed(self, shut: bool) -> None:
-        value = "shut" if shut else "open"
-        os.environ["TORA_SIDEBAR"] = value
-        self._write_env("TORA_SIDEBAR", value)
 
     # ── Microphone mode ──────────────────────────────────────────────────
 

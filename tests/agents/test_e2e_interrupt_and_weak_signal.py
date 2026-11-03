@@ -26,7 +26,7 @@ from ai import net_quality  # noqa: E402
 from ai.gemini_live import LiveEvent, ToolCall  # noqa: E402
 from audio import playback  # noqa: E402
 from ui.panel import AppState  # noqa: E402
-from tests.agents.test_e2e_first_launch import _Live, _sign_in, _wizard, qapp, service  # noqa: E402,F401
+from tests.agents.test_e2e_first_launch import qapp  # noqa: E402,F401 - fixture
 
 
 # -- a press while she answers: she stops and listens ---------------------------------------------------------
@@ -425,27 +425,6 @@ def test_the_tora_page_switch_follows_the_shortcut(qapp):
     br.changed.emit("cursor")                               # Win + Alt + H, pressed anywhere
     assert not row.switch.isChecked()
 
-
-def test_the_first_launch_asks_whether_to_show_her_cursor(qapp, service, monkeypatch):
-    from config import cfg
-    from ui import autostart, overlay
-    monkeypatch.setattr(autostart, "set_enabled", lambda on: True)
-    monkeypatch.setenv("TORA_CURSOR", "shown")              # restored after the test
-    monkeypatch.setenv("TORA_CURSOR_COLOUR", "blue")
-    _sign_in(service)
-    w = _wizard(service.account)
-    w.attach(_Live())
-    w._go("personal")
-    assert w.cursor_row.switch.isChecked(), "shown unless they say otherwise"
-    w.cursor_row.switch.setChecked(False)
-    try:
-        w._next()
-        assert not cfg.cursor_shown() and not overlay.cursor_shown()
-    finally:
-        overlay.set_cursor_shown(True)
-
-
-# -- a look waits for drawings only when there may be some (SC-05) -----------------------------------------------
 
 def test_a_look_waits_to_rub_out_drawings_only_when_there_are_some():
     m = _manager(AppState.IDLE)

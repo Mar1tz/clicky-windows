@@ -3,9 +3,8 @@
 Every copy of the app belongs to a signed-in HeyTora account - also when it
 thinks with the user's own Gemini key. So before anything starts (the
 overlay, the hotkey, the microphone, the agents, the tray's features), the
-app checks for a sign-in; without one it shows the first launch - or, if
-that already ran, its sign-in page - and nothing else. Closing that window
-closes the app.
+app checks for a sign-in; without one it shows the sign-in window
+(ui/setup_wizard.py) and nothing else. Closing that window closes the app.
 
 A sign-in can also end while the app runs: "Sign out" in Settings, or the
 server no longer accepting it (the account was deleted, or signed out
@@ -43,43 +42,22 @@ def gate(wizard_factory=None) -> str:
     """
     if not required():
         return "ok"
-    from ui.setup_wizard import SetupWizard, setup_already_ran
-    make = wizard_factory or SetupWizard
-    # After a sign-out the questions were already answered: straight to
-    # signing in. A fresh install (or a reinstall) gets the whole first launch.
-    wiz = make(start="connect" if setup_already_ran() else "welcome")
+    from ui.setup_wizard import SetupWizard
+    # Signing in only: the first launch's tour (ui/onboarding_shape.py) opens
+    # out of the pill once the app is up - it needs the running app and the
+    # account (its voice is free on the server, migration 0014).
+    wiz = (wizard_factory or SetupWizard)()
     loop = QEventLoop()
     wiz.completed.connect(loop.quit)
     wiz.finished.connect(loop.quit)
-    # The first half is done (signed in, mic tested): the app starts, and
-    # the same window carries on once main.py attach()es it (open_wizard()).
-    ready = getattr(wiz, "ready", None)
-    if ready is not None:
-        ready.connect(loop.quit)
     wiz.show()
     wiz.raise_()
     wiz.activateWindow()
     loop.exec()
-    _keep.append(wiz)
     if required():
         _log.info("closed without signing in - HeyTora stays shut")
         return "closed"
     return "signed_in"
-
-
-_keep: list = []        # the gate's wizard outlives its loop until the app is up
-
-
-def open_wizard():
-    """The gate's first-launch window, if it is still open and waiting for
-    the running app (main.py attach()es it); else None."""
-    for wiz in reversed(_keep):
-        try:
-            if wiz.isVisible():
-                return wiz
-        except RuntimeError:             # deleted on the C++ side
-            continue
-    return None
 
 
 class _Relay(QObject):

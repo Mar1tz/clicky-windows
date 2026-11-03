@@ -1,4 +1,4 @@
-"""The Tora app window's one door into the running companion (APP-10).
+"""The shape's one door into the running companion (APP-10).
 
 The window was a drawing: nine pages of placeholder numbers and switches
 that did nothing, on purpose (M29 - "place everything where it needs to go,
@@ -57,7 +57,7 @@ def check_shortcut(combo: str) -> str:
 
 
 class AppBridge(QObject):
-    """What the app window can read and do. Nothing else."""
+    """What the shape (and the tour) can read and do. Nothing else."""
 
     # Something the pages show has changed: "state", "account", "agents",
     # "guide", "switches", "journal", "recording", "skills". A page shown at
@@ -110,6 +110,36 @@ class AppBridge(QObject):
         """"billing" / "key" while Google is refusing the account (APP-02)."""
         return str(getattr(self.manager, "_problem_kind", "") or "")
 
+    def trouble(self) -> tuple[str, str]:
+        """Why Tora can't answer right now, for Home's strip: (words, where
+        to fix it - a settings key, or ""). ("", "") when she can.
+
+        Out of this month's credits shows before the next question is
+        refused: the plan already says so (account summary, "blocked")."""
+        kind = self.problem()
+        st = {}
+        try:
+            st = self.account_state()
+        except Exception:  # noqa: BLE001 - a bridge without accounts
+            pass
+        summary = st.get("summary") or {}
+        blocked = (summary.get("blocked") or {}).get("all") == "budget"
+        if (kind == "plan" or blocked) and st.get("mode", "account") == "account":
+            from account.service import resets_on
+            when = resets_on(summary) if summary else ""
+            return (f"This month's credits are used up. Tora can't answer until they come back"
+                    f"{' on ' + when if when else ''}, or you add more.", "plans")
+        words = {
+            "billing": ("Your Gemini key is out of credit. Tora can't answer until it's topped up.",
+                        "advanced"),
+            "key": ("Google refused your Gemini key. Check it in Advanced.", "advanced"),
+            "service": ("HeyTora is having trouble on our side. It's not you - ask again in a "
+                        "few minutes.", ""),
+            "signin": ("You're signed out. Sign in to keep talking to Tora.", "account"),
+            "network": ("Tora can't reach the internet. Check your connection.", ""),
+        }.get(kind)
+        return words or ("", "")
+
     def listening(self) -> str:
         """"ambient" - wakes on "Tora" - or "hotkey"."""
         from config import cfg
@@ -139,6 +169,37 @@ class AppBridge(QObject):
         if not why:
             self.changed.emit("switches")
         return why
+
+    def talk(self) -> None:
+        """Listen, hands-free - the shape's Talk button, as a click on the
+        resting pill did before the shape (ui/shape.py)."""
+        if self.manager is not None:
+            self.manager.start_hands_free()
+
+    def ask(self, text: str) -> None:
+        """A typed question (the shape's Ask box): asked as a spoken one is,
+        answered aloud with her words on the card (CompanionManager.ask_typed)."""
+        text = (text or "").strip()
+        if text and self.manager is not None and hasattr(self.manager, "ask_typed"):
+            self.manager.ask_typed(text)
+
+    def ready_jobs(self) -> list[dict]:
+        """Jobs the first launch made ready (ui/ready_jobs.py), for Home."""
+        from ui import ready_jobs
+        return [{"title": j.title, "why": j.why} for j in ready_jobs.load()]
+
+    def start_ready_job(self, index: int) -> None:
+        """Start: off Home, and asked of her in its own words."""
+        from ui import ready_jobs
+        job = ready_jobs.take(index)
+        self.changed.emit("ready")
+        if job is not None:
+            self.ask(job.ask)
+
+    def put_away_ready_job(self, index: int) -> None:
+        from ui import ready_jobs
+        ready_jobs.take(index)
+        self.changed.emit("ready")
 
     def hold_hotkey(self, on: bool) -> None:
         """While a new shortcut is being pressed, the old one does nothing."""
@@ -187,6 +248,7 @@ class AppBridge(QObject):
         out = []
         for s in states:
             out.append({
+                "task_id": getattr(s, "current_task_id", "") or "",
                 "title": s.current_task_title or getattr(s.spec, "name", "") or "Agent",
                 "doing": s.current_action or "",
                 "step": s.step_index, "total": s.step_total,
@@ -220,7 +282,12 @@ class AppBridge(QObject):
         return cfg.switch(name)
 
     def set_switch(self, name: str, on: bool) -> None:
-        if name in self.READ_WHERE_USED:
+        if name == "taskbar":
+            from config import cfg
+            from ui import taskbar
+            cfg.set_switch(name, bool(on))
+            taskbar.apply(bool(on))
+        elif name in self.READ_WHERE_USED:
             # Nothing to tell live (the trail's look, PT-03): saved, and read
             # each time it is used.
             from config import cfg
@@ -229,7 +296,7 @@ class AppBridge(QObject):
             self.tray.apply_switch(name, bool(on))
         self.changed.emit("switches")
 
-    READ_WHERE_USED = ("trail_line", "memory")
+    READ_WHERE_USED = ("trail_line", "memory", "ui_sounds")
 
     # ── memory (EN-15) ───────────────────────────────────────────────────────
 
@@ -401,14 +468,6 @@ class AppBridge(QObject):
         from ui import sounds
         cfg.set_listen_sound(key)
         sounds.play(key)
-
-    def sidebar_collapsed(self) -> bool:
-        from config import cfg
-        return cfg.sidebar_collapsed()
-
-    def set_sidebar_collapsed(self, shut: bool) -> None:
-        from config import cfg
-        cfg.set_sidebar_collapsed(shut)
 
     def uses(self) -> list[str]:
         """What they said they do at first launch ("Accounting", "Student"...)."""
@@ -774,7 +833,8 @@ class AppBridge(QObject):
         self._access_changed()
 
     def run_setup(self) -> None:
-        """Open the first-launch wizard again (sign in, or add a key)."""
+        """Signed out or no key: the sign-in window. Otherwise the tour
+        again (main.py _run_setup)."""
         if self.tray is not None and hasattr(self.tray, "on_run_setup"):
             self.tray.on_run_setup.emit()
 
@@ -1406,6 +1466,82 @@ class AppBridge(QObject):
     def set_skill_enabled(self, skill_id: str, on: bool) -> None:
         self._skills().set_enabled(skill_id, bool(on))
         self._skills_changed()
+
+    # ── Integrations and Routines (the shape's WORK pages) ───────────────────
+
+    GOOGLE = {"gmail": ("Gmail", "send email you approve"),
+              "calendar": ("Google Calendar", "read your calendar")}
+
+    def integrations(self) -> dict:
+        """What is connected, and what can be: Google's (integrations/
+        connections.py) and the MCP services (catalog.py, the agents' hub)."""
+        from integrations import catalog
+        connected: list[dict] = []
+        try:
+            from integrations.connections import connections
+            for c in connections().all():
+                name = self.GOOGLE.get(c.provider, (c.provider.title(), ""))[0]
+                connected.append({"id": c.provider, "name": name, "detail": f"{c.account} · {c.state.value}",
+                                  "ok": bool(c.state.usable)})
+        except Exception:  # noqa: BLE001 - the list shows what it can
+            _log.debug("could not read the connections", exc_info=True)
+        hub = self.manager._mcp_hub() if self.manager is not None and hasattr(self.manager, "_mcp_hub") else None
+        if hub is not None:
+            for name, server in list(hub.servers.items()):
+                label = catalog.SERVICES[name].name if name in catalog.SERVICES else name
+                detail = (f"{len(server.tools)} tools" if server.running
+                          else f"not working: {hub.failed.get(name, 'stopped')}")
+                connected.append({"id": name, "name": label, "detail": detail, "ok": bool(server.running)})
+        linked = {c["id"] for c in connected}
+        available = [{"id": k, "name": n, "how": "sign_in", "gives": g}
+                     for k, (n, g) in self.GOOGLE.items() if k not in linked]
+        available += [{"id": s.id, "name": s.name, "how": s.how, "gives": s.gives}
+                      for s in catalog.SERVICES.values() if s.id not in linked]
+        return {"connected": connected, "available": available, "running": hub is not None}
+
+    def _manager_tool(self, name: str, args: dict) -> dict:
+        """One of the companion's own tools, the voice's way in - run on its
+        loop, waited for here (call from a worker thread, not the UI's)."""
+        import asyncio
+        mgr = self.manager
+        loop = getattr(mgr, "_loop", None)
+        if mgr is None or loop is None:
+            return {"error": "HeyTora isn't running."}
+        try:
+            return asyncio.run_coroutine_threadsafe(getattr(mgr, name)(args), loop).result(timeout=30) or {}
+        except Exception as e:  # noqa: BLE001
+            _log.warning("%s failed", name, exc_info=True)
+            return {"error": str(e) or type(e).__name__}
+
+    def connect_integration(self, service: str, pasted: bool = False) -> dict:
+        """Connect as "Tora, connect Notion" does; the outcome is said by her."""
+        return self._manager_tool("_tool_connect_account", {"service": service, "pasted": pasted})
+
+    def disconnect_integration(self, service: str) -> dict:
+        out = self._manager_tool("_tool_disconnect_account", {"service": service})
+        self.changed.emit("integrations")
+        return out
+
+    def routines(self) -> list[dict]:
+        """Skills that run by themselves (their `every:`), with when they run
+        next and when they last ran (agents/manager/scheduler.py)."""
+        from agents.skills.schedule import JOB_PREFIX
+        jobs: dict = {}
+        sched = getattr(self.workforce(), "scheduler", None)
+        if sched is not None:
+            try:
+                jobs = {j["id"]: j for j in sched.jobs()}
+            except Exception:  # noqa: BLE001
+                _log.debug("could not read the schedule", exc_info=True)
+        out = []
+        for s in self.skills():
+            if not s.get("every"):
+                continue
+            job = jobs.get(JOB_PREFIX + s["id"], {})
+            out.append({"id": s["id"], "name": s["name"], "every": s["every"],
+                        "enabled": bool(s.get("enabled", True)), "next": job.get("next", ""),
+                        "last_fired": float(job.get("last_fired") or 0.0), "last": s.get("last")})
+        return out
 
     def _skills_changed(self) -> None:
         wf = self.workforce()

@@ -182,7 +182,9 @@ def _data_folder_in_the_sandbox(tmp_path, monkeypatch):
     r"""config.data_dir() is %LOCALAPPDATA%\HeyTora, and settling it MOVES an
     old Tora folder into it. Run against the real profile, the first test to
     ask for it would move the user's journal and agents' history. Every test
-    gets its own LocalAppData instead, decided afresh."""
+    gets its own LocalAppData instead, decided afresh - and TORA_DATA_DIR
+    (tools/dev.py's HeyTora-dev) does not reach past it."""
+    monkeypatch.delenv("TORA_DATA_DIR", raising=False)
     try:
         import config
         monkeypatch.setattr(config, "_appdata_base", lambda: tmp_path / "LocalAppData")

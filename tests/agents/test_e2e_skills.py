@@ -431,19 +431,11 @@ def test_the_editor_saves_says_why_not_and_deletes_your_own(qapp):
     assert br.done[-1] == ("delete", "water-the-plants") and saved[-1] == 2
 
 
-def test_there_is_no_packs_page_and_its_old_links_open_skills(qapp, monkeypatch):
-    from ui import app_pages
-    assert [k for k, *_r in app_pages.PAGES] == ["home", "tora", "insights", "agents", "journal"]
+def test_there_is_no_packs_page_and_skills_has_one(qapp):
+    from ui import app_pages, shape
+    assert "packs" not in shape._pages() and "packs" not in shape._settings_kinds()
+    assert "skills" in shape._settings_kinds()
     assert ("skills", "Skills") in app_pages.ToraPage.TABS
-    from ui.app_window import ToraApp
-    shown = []
-    win = ToraApp.__new__(ToraApp)
-    monkeypatch.setattr(ToraApp, "show_page", lambda self, key, _o=ToraApp.show_page:
-                        shown.append(key) if key == "tora" else _o(self, key))
-    win._pages = {"tora": SimpleNamespace(show_tab=lambda k: shown.append(("tab", k)))}
-    for old in ("packs", "extensions", "pack/accounting"):
-        ToraApp.show_page(win, old)
-    assert shown == ["tora", ("tab", "skills")] * 3
 
 
 def test_the_build_ships_the_starter_skills_and_no_packs():
@@ -466,10 +458,10 @@ def test_the_first_launch_only_names_skills_that_exist():
 def test_finishing_the_first_launch_never_turns_off_your_own_skills(tmp_path, monkeypatch):
     monkeypatch.setenv("TORA_SKILLS_DIR", str(tmp_path / "mine"))
     from agents.skills import SkillLibrary
-    from ui.setup_wizard import SetupWizard
+    from ui.setup_wizard import save_skills
     _write(tmp_path / "mine", "water-the-plants", PLANTS)
-    SetupWizard._save_skills(["Developer"])
+    save_skills(["Developer"])
     on = {s.id for s in SkillLibrary().enabled()}
     assert "water-the-plants" in on and "tidy-downloads" in on and "send-an-invoice" not in on
-    SetupWizard._save_skills(["Something else"])
+    save_skills(["Something else"])
     assert len(SkillLibrary().enabled()) == len(SkillLibrary().all())
