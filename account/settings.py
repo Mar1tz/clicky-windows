@@ -41,6 +41,35 @@ def website_url() -> str:
     return (os.environ.get("TORA_WEBSITE_URL", "").strip() or _WEBSITE_URL).rstrip("/")
 
 
+def is_local() -> bool:
+    """A service on this PC (tools/dev.py), not HeyTora's real one."""
+    from urllib.parse import urlsplit
+    return urlsplit(supabase_url()).hostname in ("127.0.0.1", "localhost")
+
+
+def live_from_source_blocked() -> bool:
+    """HeyTora run from a source folder, about to talk to the real service.
+
+    The live address is the default, so `python main.py` in a checkout used
+    to act on real accounts, real credits and the real database, from code
+    nobody has released. Installed builds are unaffected. tools/dev.py is the
+    way to run from source; TORA_ALLOW_LIVE=1 says it is meant (docs/LOCAL_DEV.md)."""
+    import sys
+    if getattr(sys, "frozen", False) or not supabase_url() or is_local():
+        return False
+    return os.environ.get("TORA_ALLOW_LIVE", "").strip().lower() not in ("1", "true", "yes", "on")
+
+
+LIVE_BLOCKED_WORDS = """
+HeyTora did not start: this is a source folder, and it would talk to the LIVE
+service - real accounts, real credits, real users' database.
+
+  python tools/dev.py          run it against the local copy (docs/LOCAL_DEV.md)
+
+Meant to test against live?   $env:TORA_ALLOW_LIVE=1; python main.py
+"""
+
+
 def configured() -> bool:
     """Does this build know where HeyTora's service is?"""
     return bool(supabase_url() and anon_key())

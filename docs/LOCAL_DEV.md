@@ -5,29 +5,52 @@ Everything runs on your PC: a local Supabase in Docker (database, sign-in,
 the `heytora` and `paddle` functions, an email inbox), and the app from
 source pointed at it. Live changes only on a release.
 
+`python main.py` on its own refuses to start from a source folder, because
+the live address is the app's default. That is deliberate. `TORA_ALLOW_LIVE=1`
+overrides it for the rare time testing against live is really meant.
+
 ## Once
 
 1. Install **Docker Desktop** and start it. Node 22+ is needed too (`npx`
    fetches the pinned Supabase CLI, so there is nothing else to install).
-2. `python tools/dev.py setup`
+2. `pip install -r requirements.txt` if this is a new PC.
+3. `python tools/dev.py setup`
 
    The first time, it downloads the local Supabase (a few minutes), applies
-   every migration in `supabase/migrations`, and adds two test accounts
+   every migration in `supabase/migrations`, and adds the test accounts
    (`supabase/seed.sql`). It writes `.env.development` and lists anything
-   that is still empty.
+   that is still empty. A Gemini key is copied from `.env`'s `GOOGLE_API_KEY`;
+   with none there, add `GEMINI_API_KEY` by hand (free:
+   https://aistudio.google.com/app/apikey).
+4. `python tools/dev.py doctor` says whether everything is right, and what
+   to do about anything that isn't.
 
 ## Every day
 
 ```
-python tools/dev.py            # the local stack, the functions, and the app
+python tools/dev.py                        # the stack, the functions, signed in, the app
+python tools/dev.py --as pro@heytora.test  # signed in as this account
+python tools/dev.py --tour                 # with the first-launch tour
+python tools/dev.py --signed-out           # at the sign-in window
 ```
 
 Close the installed HeyTora first: only one HeyTora runs at a time (they
-would share the hotkey and the microphone).
+would share the hotkey and the microphone). Settings' foot says
+**HeyTora 1.x · local** while it runs against this copy.
+
+Migrations someone else added are applied by itself when you start, after a
+`git pull`.
+
+| Account | What it is for |
+|---|---|
+| `free@heytora.test` | Free, the default |
+| `pro@heytora.test`, `max@heytora.test` | The paid plans |
+| `out@heytora.test` | Free with this month's credits used up: Home's warning strip. Comes back next month until a `reset` |
+| any new email | A new account |
 
 | What | Where |
 |---|---|
-| Sign in | `python tools/dev.py signin` (free@heytora.test), or `signin pro@heytora.test`, or any new email. The app's window only signs in through the website, which doesn't run against the local database yet - this signs the dev app in for you |
+| Sign in as someone else | `python tools/dev.py signin pro@heytora.test`, or `--as` above |
 | The sign-in code | Mailpit, http://127.0.0.1:57324 (every email the local stack sends) |
 | Tables, users, SQL | Studio, http://127.0.0.1:57323 |
 | The app's data | `%LOCALAPPDATA%\HeyTora-dev` (live's stays in `HeyTora`) |
@@ -38,7 +61,8 @@ restart of the app, as before.
 
 | Command | What it does |
 |---|---|
-| `python tools/dev.py reset` | Empties the local database, then all migrations and the seed again |
+| `python tools/dev.py doctor` | Checks everything; changes nothing |
+| `python tools/dev.py reset` | Empties the local database, then all migrations and the seed again. The dev app signs in again next start |
 | `python tools/dev.py status` | Prints the addresses above |
 | `python tools/dev.py stop` | Stops the local stack (its data is kept) |
 
@@ -71,13 +95,15 @@ yourself.
 
 ## Branches
 
-* `main` is what users have. Only a release puts anything there.
-* `dev` is where work happens. Commit and push to `dev`.
-* To release: merge `dev` into `main`, then release from `main`.
+* `main` is the shared code, and what the next release ships. Merging to it
+  reaches no user: only `tools/release.py` does that.
+* Work on a branch of your own from `main`, and open a pull request. Merge
+  `main` into your branch first and run the tests.
+* Never push straight to `main`.
 
 ## Releasing
 
-From `main`, after merging `dev`. `.env.production` holds the live database
+From an up-to-date `main`. `.env.production` holds the live database
 password (`SUPABASE_DB_PASSWORD`) and nothing else is read from it.
 
 ```
@@ -108,9 +134,18 @@ anything run by hand has to be recorded the same way, or a release runs it again
 
 ## The website
 
-`heytora-web` uses the database only for its Google / Microsoft sign-in
-page and the referral page. Dev runs send the app's website links to
-`http://localhost:3500`, never to heytora.co.za, so nothing reaches live by
-accident. If you're working on those pages, the website needs to read its
-Supabase address from a setting, the way the app does. That change hasn't
-been made yet.
+To work on the sign-in page or the referral page, with `heytora-web` next to
+this folder:
+
+```
+python tools/dev.py          # writes heytora-web/.env.development.local
+cd ../heytora-web; pnpm dev  # http://localhost:3500
+```
+
+Sign-in window > Sign in with your browser then works end to end against the
+local stack, by **email**: the link is in Mailpit. Google and Microsoft are
+not set up locally. Without the website running, use `--as` as above.
+
+`.env.development.local` is deliberate: `next dev` reads it and a production
+build never does. Never put a local address in `.env.local`, which a build
+would ship to real users.

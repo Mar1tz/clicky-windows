@@ -555,7 +555,9 @@ class Shape(QWidget):
             v = self.bridge.version()
         except Exception:  # noqa: BLE001
             v = ""
-        self._version.setText(f"HeyTora {v}" if v else "HeyTora")
+        from account import settings
+        where = " · local" if settings.is_local() else ""     # never wonder which server this is
+        self._version.setText((f"HeyTora {v}" if v else "HeyTora") + where)
 
     # ── pages ────────────────────────────────────────────────────────────────
     def show_tab(self, key: str) -> None:

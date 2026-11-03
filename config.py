@@ -18,10 +18,16 @@ else:
 
 # Load env files in priority order. .env.local overrides .env (Next.js convention,
 # which is how many users — including this one — keep their real keys).
+# A dev run's address wins over these files (override=True would let a line
+# left in .env send tools/dev.py's app to the live service, unnoticed).
+_DEV_KEEP = {k: os.environ[k] for k in ("TORA_SUPABASE_URL", "TORA_SUPABASE_ANON_KEY", "TORA_WEBSITE_URL",
+                                        "TORA_DATA_DIR")
+             if os.environ.get("TORA_DEV") and k in os.environ}
 for _name in (".env", ".env.local"):
     _p = _HERE / _name
     if _p.exists():
         load_dotenv(_p, override=True)
+os.environ.update(_DEV_KEEP)
 
 
 APP_DIR_NAME = "HeyTora"
