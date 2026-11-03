@@ -42,8 +42,12 @@ class Schedule(Trigger):
     at: str = "08:00"
     weekday: int = 0
     day: int = 1
+    missed: str = "run_once"         # a slot missed while the PC was off: run_once | skip
 
     def describe(self) -> str:
+        return self._describe() + (", missed runs skipped" if self.missed == "skip" else "")
+
+    def _describe(self) -> str:
         if self.every == "weekly":
             return f"every {DAYS[self.weekday % 7].capitalize()} at {self.at}"
         if self.every == "monthly":
@@ -154,6 +158,8 @@ def sync_jobs(manager: Any) -> dict[str, str]:
         except ScheduleError as e:
             problems[skill.id] = f"'every: {skill.every}' - {e}"
             continue
+        if isinstance(trigger, Schedule) and skill.missed:
+            trigger.missed = skill.missed
         wanted[JOB_PREFIX + skill.id] = (skill, trigger)
     for job in scheduler.jobs():
         if job["id"].startswith(JOB_PREFIX) and job["id"] not in wanted:

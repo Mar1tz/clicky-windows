@@ -65,3 +65,20 @@ def test_the_jobs_page_says_it(monkeypatch):
     br = AppBridge.__new__(AppBridge)
     br.workforce = lambda: SimpleNamespace(list_tasks=lambda **kw: [t])
     assert br.tasks()[0]["late"].startswith("Ran late")
+
+
+def test_a_routine_that_is_no_use_late_skips_the_missed_run(tmp_path):
+    """missed: skip - a morning brief missed while the PC was off is not
+    sent at noon; the next one comes at its time."""
+    from agents.skills.library import parse
+    skill = parse("---\nname: Morning brief\nwhen: each morning\nevery: day 08:00\nmissed: skip\n---\nbody", "brief")
+    assert skill.missed == "skip" and "missed: skip" in skill.to_text()
+    mgr = _Manager()
+    created = datetime(2026, 10, 20, 7, 0).timestamp()
+    sched = Scheduler(mgr, state_path=str(tmp_path / "s.json"), clock=lambda: created)
+    job = ScheduledJob("brief", "Morning brief", Schedule(every="daily", at="08:00", missed="skip"),
+                       lambda extra: (Task(title="Morning brief", goal="brief", workspace="."), None))
+    sched.add(job)
+    assert sched.tick(now=datetime(2026, 10, 22, 12, 0).timestamp()) == [], "missed: not run late"
+    assert len(sched.tick(now=datetime(2026, 10, 23, 8, 0, 20).timestamp())) == 1, "the next one, on time"
+    assert "missed runs skipped" in job.trigger.describe()

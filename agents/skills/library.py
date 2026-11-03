@@ -42,6 +42,13 @@ class Skill:
     apps: str = ""
     ask_before: list[str] = field(default_factory=list)
     every: str = ""                    # a schedule ("Friday 16:00"), or ""
+    # After OpenHands' microagents: words that bring this skill's know-how
+    # into any job the moment they come up - in its goal, or in what it reads
+    # ("delphi", "pytest"). Know-how only: it never starts a job by itself.
+    triggers: list[str] = field(default_factory=list)
+    # A scheduled run missed while the PC was off: "run_once" (the default,
+    # as soon as it is back) or "skip" (a morning brief at noon is no use).
+    missed: str = ""
     source: str = "starter"            # "starter" | "yours" | "edited"
     path: str = ""
     enabled: bool = True
@@ -61,6 +68,24 @@ class Skill:
             parts.append("Hard rule - stop and ask the user before: " + "; ".join(self.ask_before) + ".")
         return "\n\n".join(parts)
 
+    def know_how(self, trigger: str) -> str:
+        """The skill as know-how a job came across (a trigger), not a job to do."""
+        parts = [f"## Know-how from the user's skill '{self.name}' ('{trigger}' came up)",
+                 "Use it where it applies to what you are doing; it does not change the task."]
+        if self.body.strip():
+            parts.append(self.body.strip())
+        if self.ask_before:
+            parts.append("Hard rule - stop and ask the user before: " + "; ".join(self.ask_before) + ".")
+        return "\n\n".join(parts)
+
+    def triggered_by(self, text: str) -> str:
+        """The first of its trigger words that is in `text` (whole words), or ""."""
+        low = f" {(text or '').lower()} "
+        for t in self.triggers:
+            if re.search(r"(?<![\w])" + re.escape(t.lower()) + r"(?![\w])", low):
+                return t
+        return ""
+
     def to_text(self) -> str:
         """The file this skill is saved as."""
         head = [f"name: {_one_line(self.name)}", f"when: {_one_line(self.when)}"]
@@ -70,11 +95,16 @@ class Skill:
             head.append("ask_before: " + ", ".join(_one_line(a) for a in self.ask_before))
         if self.every:
             head.append(f"every: {_one_line(self.every)}")
+        if self.triggers:
+            head.append("triggers: " + ", ".join(_one_line(t) for t in self.triggers))
+        if self.missed:
+            head.append(f"missed: {self.missed}")
         return "---\n" + "\n".join(head) + "\n---\n\n" + self.body.strip() + "\n"
 
     def to_dict(self) -> dict[str, Any]:
         return {"id": self.id, "name": self.name, "when": self.when, "body": self.body,
                 "apps": self.apps, "ask_before": list(self.ask_before), "every": self.every,
+                "triggers": list(self.triggers), "missed": self.missed,
                 "source": self.source, "enabled": self.enabled}
 
 
@@ -106,8 +136,12 @@ def parse(text: str, skill_id: str) -> Skill:
         raise SkillError("it has no 'when:' line, so Tora wouldn't know when to use it")
     name = head.get("name", "").strip() or skill_id.replace("-", " ").capitalize()
     asks = [a.strip() for a in re.split(r"[,;]", head.get("ask_before", "")) if a.strip()]
+    triggers = [t.strip() for t in re.split(r"[,;]", head.get("triggers", "")) if len(t.strip()) > 1]
+    missed = head.get("missed", "").strip().lower().replace(" ", "_")
+    if missed and missed not in ("skip", "run_once"):
+        raise SkillError(f"'missed: {missed}' - it is skip or run once")
     return Skill(id=skill_id, name=name, when=when, body=body.strip(), apps=head.get("apps", "").strip(),
-                 ask_before=asks, every=head.get("every", "").strip())
+                 ask_before=asks, every=head.get("every", "").strip(), triggers=triggers, missed=missed)
 
 
 def slug(name: str) -> str:
@@ -228,6 +262,16 @@ class SkillLibrary:
         (self.user / STATE_FILE).write_text(json.dumps(state, indent=2), encoding="utf-8")
 
     # -- choosing -------------------------------------------------------------------------
+
+    def triggered(self, text: str, *, besides: str = "") -> list[tuple[Skill, str]]:
+        """(skill, the word) for every enabled skill a trigger word of which is in `text`."""
+        out = []
+        for s in self.enabled():
+            if s.id != besides:
+                word = s.triggered_by(text)
+                if word:
+                    out.append((s, word))
+        return out
 
     def match(self, text: str, limit: int = 5) -> list[Skill]:
         """The skills whose name or 'when' shares a real word with the

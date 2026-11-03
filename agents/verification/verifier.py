@@ -77,8 +77,13 @@ class RuleVerifier(Verifier):
 
     @staticmethod
     def _is_read_only(tool_name: str, ctx: AgentContext) -> bool:
+        # SAFE tools, and an MCP server's tools it marks read-only (MEDIUM,
+        # because the data is theirs): a 404 while finding the right
+        # repository is how the agent learns (29 Oct: "list my latest GitHub
+        # repo" was failed for two wrong guesses after it had the answer).
         try:
-            return ctx.tools.get(tool_name).spec.risk.value == "safe"
+            tool = ctx.tools.get(tool_name)
+            return tool.spec.risk.value == "safe" or getattr(tool, "read_only", False) is True
         except Exception:  # noqa: BLE001 - unknown tool: treat as acting
             return False
 

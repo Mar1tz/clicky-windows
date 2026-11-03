@@ -33,6 +33,7 @@ class Service:
     args: tuple = ()
     aliases: tuple = ()
     gives: str = ""                  # what jobs can do with it, said once connected
+    hint: str = ""                   # told to a job that gets its tools: how to start, what not to guess
 
 
 SERVICES: dict[str, Service] = {s.id: s for s in (
@@ -47,7 +48,10 @@ SERVICES: dict[str, Service] = {s.id: s for s in (
     Service("github", "GitHub", "key", "https://api.githubcopilot.com/mcp/",
             setup="https://github.com/settings/personal-access-tokens/new",
             looks_like=r"^(ghp_|github_pat_)[A-Za-z0-9_]{20,}$",
-            gives="repositories, issues, pull requests"),
+            gives="repositories, issues, pull requests",
+            hint=("GitHub: whose account this is - call get_me first and use its login. Their repositories: "
+                  "search_repositories with 'user:<login>' (sort by updated for the latest). Never guess a "
+                  "repository name - find it first.")),
     Service("stripe", "Stripe", "key", "https://mcp.stripe.com",
             setup="https://dashboard.stripe.com/apikeys",
             looks_like=r"^(rk|sk)_(live|test)_[A-Za-z0-9]{10,}$",

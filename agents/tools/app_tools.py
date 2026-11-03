@@ -101,16 +101,29 @@ def find_app(name: str) -> Optional[tuple[str, str]]:
     return None
 
 
+# Every job's context lists the installed apps, and walking the Start Menu
+# took ~300 ms each time - on the thread that starts the job. Apps rarely
+# change within a minute; the list is kept that long, per set of folders.
+APPS_TTL_S = 60.0
+_apps_seen: dict[tuple, tuple[float, list[str]]] = {}
+
+
 def installed_apps(limit: int = 60) -> list[str]:
+    dirs = tuple(start_menu_dirs())
+    held = _apps_seen.get(dirs)
+    if held is not None and time.monotonic() - held[0] < APPS_TTL_S:
+        return held[1][:limit]
     names: set[str] = set()
-    for root_dir in start_menu_dirs():
+    for root_dir in dirs:
         for _d, _dirs, files in os.walk(root_dir):
             for f in files:
                 if f.lower().endswith(".lnk"):
                     stem = os.path.splitext(f)[0]
                     if not _is_junk(stem):
                         names.add(stem)
-    return sorted(names, key=str.lower)[:limit]
+    found = sorted(names, key=str.lower)
+    _apps_seen[dirs] = (time.monotonic(), found)
+    return found[:limit]
 
 
 # -- Win32 windows -------------------------------------------------------------

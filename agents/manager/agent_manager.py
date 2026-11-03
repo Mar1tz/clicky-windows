@@ -17,6 +17,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import re
 import threading
 import time
 from datetime import datetime
@@ -114,6 +115,57 @@ AGENT_NAMES: dict[TaskKind, str] = {
     TaskKind.FAST: "Quick Agent",
     TaskKind.GENERAL: "Assistant Agent",
 }
+
+
+# 29 Oct, the field: "tidy my Downloads folder" ran with the file tools
+# fenced to its own Tora Projects folder - every look at Downloads was
+# "outside workspace", and the job went round opening Explorer and typing
+# into a terminal until it ran out of steps. A folder the goal names is
+# where the job works: their known folders by name, any other by its path.
+_KNOWN_FOLDERS = {"downloads": "Downloads", "documents": "Documents", "my documents": "Documents",
+                  "desktop": "Desktop", "pictures": "Pictures", "photos": "Pictures", "music": "Music",
+                  "videos": "Videos"}
+_PATH = re.compile(r"[A-Za-z]:\\[^\"'<>|*?\r\n]+")
+
+
+def _longest_existing(raw: str) -> str:
+    """'C:\\Users\\me\\Tora Projects\\x.txt please' -> the longest leading part
+    that is there: a path may hold spaces, and words may follow it."""
+    words = raw.split(" ")
+    candidates = [" ".join(words[:n]).rstrip(".,;:)") for n in range(len(words), 0, -1)]
+    for candidate in candidates:
+        if os.path.exists(candidate):
+            return candidate
+    for candidate in candidates:                  # a file still to be written: its folder
+        folder = os.path.dirname(candidate)
+        if os.path.isdir(folder) and os.path.normcase(folder) != os.path.normcase(os.path.expanduser("~")):
+            return folder
+    return ""
+
+
+def folders_named(goal: str) -> list[str]:
+    """The folders a job's goal names that exist on this PC - added to the
+    folders its file tools may touch (deleting there still asks)."""
+    out: list[str] = []
+    home = os.path.expanduser("~")
+    paths = [p for p in (_longest_existing(r) for r in _PATH.findall(goal or "")) if p]
+    # A folder's name counts when it is said, not when it is part of a path.
+    said = goal or ""
+    for p in paths:
+        said = said.replace(p, " ")
+    said = said.lower()
+    for word, name in _KNOWN_FOLDERS.items():
+        if re.search(r"\b" + re.escape(word) + r"\b", said):
+            for base in (home, os.path.join(home, "OneDrive")):     # Documents/Desktop may live in OneDrive
+                path = os.path.join(base, name)
+                if os.path.isdir(path) and path not in out:
+                    out.append(path)
+    for path in paths:
+        folder = path if os.path.isdir(path) else os.path.dirname(path)
+        if folder and os.path.isdir(folder) and os.path.normcase(folder) != os.path.normcase(home) \
+                and len(folder) > 3 and folder not in out:
+            out.append(folder)
+    return out
 
 
 class _Run:
@@ -561,7 +613,30 @@ class AgentManager:
             metadata=meta,
         )
 
+    # After trigger.dev's idempotency keys: the same key while its job is
+    # running, or within this long of its start, is that job - not a second
+    # one. The voice can call delegate_task twice for one sentence, and a
+    # schedule can be fired twice for one slot; each was a duplicate job.
+    IDEMPOTENCY_TTL_S = 600.0
+
+    def existing_for(self, key: str, ttl_s: Optional[float] = None) -> Optional[Task]:
+        if not key:
+            return None
+        cutoff = now() - (self.IDEMPOTENCY_TTL_S if ttl_s is None else ttl_s)
+        with self._lock:
+            tasks = list(self._tasks.values())
+        for t in tasks:
+            if (t.metadata or {}).get("idempotency_key") == key and (not t.status.is_terminal
+                                                                     or t.created_at >= cutoff):
+                return t
+        return None
+
     def submit_task(self, task: Task, *, agent: Optional[AgentSpec] = None) -> Task:
+        key = str((task.metadata or {}).get("idempotency_key") or "")
+        same = self.existing_for(key, (task.metadata or {}).get("idempotency_ttl_s"))
+        if same is not None:
+            log.info("task %s is %s again (idempotency key) - not started twice", task.title, same.id)
+            return same
         spec = agent or self._default_spec(task)
         state = self.get_agent(spec.id) or self.create_agent(spec)
         task.agent_id = spec.id
@@ -594,10 +669,29 @@ class AgentManager:
         they really have, facts about this machine, and - for a skill's
         task - how the user wrote down they want it done."""
         lines = self._context_lines_for(task) + self._facts_for(task)
+        try:                                       # how a connected service's tools are best used
+            from agents.tools.mcp_tools import hints_for
+            lines += hints_for(list(spec.tools or []), self.tools)
+        except Exception:  # noqa: BLE001
+            pass
+        roots = [r for r in spec.permissions.workspace_roots if r != task.workspace]
+        if roots:
+            lines.append("Folders this job may work in besides its own: " + "; ".join(roots))
         skill = self.skill_for(task)
         skills = [skill.prompt()] if skill is not None else []
+        # Skill triggers: know-how whose word is in the goal now; the rest wait
+        # in "triggers" for the worker to bring in when a word comes up later.
+        triggers = []
+        if self.skills is not None:
+            try:
+                besides = skill.id if skill is not None else ""
+                skills += [s.know_how(w) for s, w in self.skills.triggered(task.goal, besides=besides)]
+                triggers = [s for s in self.skills.enabled() if s.triggers and s.id != besides]
+            except Exception:  # noqa: BLE001 - a job never waits on a skill file
+                log.exception("skill triggers not read")
         return {"tool_names": self._tool_names_for(worker, spec),
                 "context_lines": lines, "skills": skills, "waitpoints": self.waitpoints,
+                "triggers": triggers,
                 "personal": self._personal()}
 
     # MEM-01: what HeyTora knows that fits the job - current facts only.
@@ -1391,7 +1485,7 @@ class AgentManager:
                 max_auto_risk=self.default_policy.max_auto_risk,
                 allowed_tools=self.default_policy.allowed_tools,
                 denied_tools=list(self.default_policy.denied_tools),
-                workspace_roots=[task.workspace],
+                workspace_roots=[task.workspace, *folders_named(task.goal)],
             ),
         )
 

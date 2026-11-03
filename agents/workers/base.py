@@ -230,6 +230,10 @@ class Worker(BaseWorker):
         specs = ctx.tools.specs(tool_names)
         tctx = ctx.tool_context()
         nudged = False
+        # Skill triggers: a word first seen in what the job reads brings that
+        # skill's know-how in, once (the ones in the goal came with the prompt).
+        waiting = [s for s in (ctx.extras or {}).get("triggers") or []
+                   if not s.triggered_by(ctx.task.goal)]
 
         for _ in range(self.max_iterations):
             await ctx.control.checkpoint()
@@ -274,6 +278,13 @@ class Worker(BaseWorker):
                     step.status = StepStatus.FAILED
                     step.error = stop_reason
                     return
+            if waiting:
+                seen = " ".join(r.output or r.error or "" for r in step.results[-len(resp.tool_calls):])
+                for s in list(waiting):
+                    word = s.triggered_by(seen)
+                    if word:
+                        waiting.remove(s)
+                        messages.append(ProviderMessage(role="user", content=s.know_how(word)))
             # EN-31: going round in circles - told once (after the turn, so no
             # note lands between a call and its result), then the step ends
             # for the planner to try another way (replan).
