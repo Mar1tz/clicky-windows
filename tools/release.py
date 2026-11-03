@@ -43,8 +43,14 @@ NEW server: a change to the server must keep the last app working.
     SUPABASE_DB_PASSWORD=     live database password (Project Settings > Database)
     SUPABASE_ACCESS_TOKEN=    optional: a personal access token, else `supabase login`
 
-Needs: gh (signed in to an account that can publish to Qwickly/heytora),
-git, Inno Setup (build.bat finds it), Node (npx: the Supabase CLI). Windows.
+Without it, s1 and s2 are skipped and the app is published anyway - the
+server changes since the last release are listed, for someone who has the
+password to run --server-only (3 Nov 2026: a PC without it could no longer
+publish at all). So an app must keep working on the server before it, too.
+
+Needs: gh (any account signed in here that can publish to Qwickly/heytora -
+it need not be the active one), git, Inno Setup (build.bat finds it), Node
+(npx: the Supabase CLI). Windows.
 """
 from __future__ import annotations
 
@@ -54,6 +60,7 @@ import hashlib
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -73,6 +80,7 @@ PROJECT_REF = "uizwfpxzzkokyrkvjzkr"
 SUPABASE = "npx --yes supabase@2.120.0"
 # (function, extra deploy flags) - the same switches as supabase/config.toml
 FUNCTIONS = [("heytora", []), ("paddle", ["--no-verify-jwt"])]
+VERSION_FILES = ("version.py", "installer.iss")
 
 
 def run(argv, cwd=ROOT, check=True, **kw) -> subprocess.CompletedProcess:
@@ -129,7 +137,7 @@ def same_as_github_main() -> None:
     if branch != "main":
         sys.exit(f"on {branch!r}: releases are made from main. Merge dev into main first:\n"
                  "    git switch main && git pull && git merge dev && git push")
-    if git_out("status", "--porcelain", "--untracked-files=no"):
+    if uncommitted(git_out("status", "--porcelain", "--untracked-files=no")):
         sys.exit("uncommitted changes: commit or drop them first - a release is what is in git")
     run(["git", "fetch", "-q", "origin", "main"])
     behind = git_out("rev-list", "--count", "HEAD..origin/main")
@@ -138,8 +146,17 @@ def same_as_github_main() -> None:
         sys.exit(f"main is {ahead} ahead / {behind} behind GitHub: `git pull` then `git push` first")
 
 
-def live_env() -> dict:
-    """os.environ plus .env.production's two keys - nothing else from it."""
+def uncommitted(porcelain: str) -> list[str]:
+    """Changed tracked files, but not the two this tool bumps itself: a dry
+    run or a failed build leaves them at the new version, and the next run
+    (--skip-build) sets them again."""
+    # line[2:]: git_out strips the first line's leading space (" M x" -> "M x")
+    return [line for line in porcelain.splitlines() if line[2:].strip().strip('"') not in VERSION_FILES]
+
+
+def live_env(required: bool = True) -> dict | None:
+    """os.environ plus .env.production's two keys - nothing else from it.
+    None when there is no password and the caller can do without the server."""
     path = ROOT / ".env.production"
     values = dotenv_values(path) if path.exists() else {}
     env = dict(os.environ)
@@ -147,9 +164,46 @@ def live_env() -> dict:
         if values.get(key):
             env[key] = values[key]
     if not env.get("SUPABASE_DB_PASSWORD"):
+        if not required:
+            return None
         sys.exit("no SUPABASE_DB_PASSWORD: put the live database password in .env.production\n"
                  "(Supabase > Project Settings > Database). It never leaves this PC.")
     return env
+
+
+def server_changes() -> list[str]:
+    """Migrations and functions changed since the last release - what live
+    may lack when this PC cannot look."""
+    last = git_out("log", "-1", "--format=%H", "-F", "--grep=] Release HeyTora ")
+    if not last:
+        return []
+    return git_out("diff", "--name-only", last, "HEAD", "--", "supabase/migrations", "supabase/functions").splitlines()
+
+
+def skip_server() -> None:
+    print("s1/s2. the server: skipped - no SUPABASE_DB_PASSWORD here (.env.production)")
+    changed = server_changes()
+    if changed:
+        print("   changed since the last release, and maybe not on live yet:\n"
+              + "".join(f"     {name}\n" for name in changed)
+              + "   from a PC with the password: python tools/release.py --server-only")
+
+
+def publisher_env() -> dict:
+    """os.environ with GH_TOKEN of an account signed in here that can push to
+    REPO. The active gh account is often someone's own (Mar1tz cannot publish
+    to Qwickly/heytora, 3 Nov 2026); the active account is left as it is."""
+    status = subprocess.run(["gh", "auth", "status"], capture_output=True, text=True,
+                            encoding="utf-8", errors="replace")
+    for user in dict.fromkeys(re.findall(r"Logged in to \S+ account (\S+)", status.stdout + status.stderr)):
+        token = subprocess.run(["gh", "auth", "token", "--user", user], capture_output=True, text=True).stdout.strip()
+        env = {**os.environ, "GH_TOKEN": token}
+        push = subprocess.run(["gh", "api", f"repos/{REPO}", "--jq", ".permissions.push"], env=env,
+                              capture_output=True, text=True).stdout.strip()
+        if token and push == "true":
+            print(f"   publishing as {user}")
+            return env
+    sys.exit(f"no gh account signed in here can publish to {REPO}: `gh auth login` as one that can")
 
 
 def supabase_live(args: str, env: dict, capture: bool = False) -> subprocess.CompletedProcess:
@@ -267,10 +321,15 @@ def main() -> int:
 
     print("a. main, the same as GitHub's")
     same_as_github_main()
+    gh_env = None if args.server_only else publisher_env()
     print("b. tests")
     if run([sys.executable, "-m", "pytest", "tests/agents", "-q"], check=False).returncode != 0:
         sys.exit("tests failed - nothing published")
-    release_server(live_env(), args.dry_run)
+    server = live_env(required=args.server_only)
+    if server is None:
+        skip_server()
+    else:
+        release_server(server, args.dry_run)
     if args.server_only:
         print("done: the server is live" + (" (dry run: nothing changed)" if args.dry_run else "") + ".")
         return 0
@@ -281,7 +340,7 @@ def main() -> int:
     # The same version again is fine after a dry run or a failed run (the
     # bump is already done) - but never one that is already published.
     published = subprocess.run(["gh", "release", "view", f"v{version}", "--repo", REPO],
-                               capture_output=True, text=True)
+                               capture_output=True, text=True, env=gh_env)
     if published.returncode == 0:
         sys.exit(f"v{version} is already published - pick the next version")
 
@@ -317,11 +376,11 @@ def main() -> int:
         notes = Path(tmp) / "notes.md"
         notes.write_text(f"{args.notes.strip()}\n\nSHA-256 of Setup-HeyTora.exe: `{digest}`\n", encoding="utf-8")
         run(["gh", "release", "create", f"v{version}", str(INSTALLER), "--repo", REPO,
-             "--title", f"HeyTora {version}", "--notes-file", str(notes), "--latest"])
+             "--title", f"HeyTora {version}", "--notes-file", str(notes), "--latest"], env=gh_env)
 
         print("4. download site and latest.json")
         site = Path(tmp) / "site"
-        run(["gh", "repo", "clone", REPO, str(site), "--", "--depth", "1"])
+        run(["gh", "repo", "clone", REPO, str(site), "--", "--depth", "1"], env=gh_env)
         page = site / "index.html"
         html = page.read_text(encoding="utf-8")
         html = re.sub(r"Version [0-9.]+ · \d+ MB", f"Version {version} · {round(size / 2**20)} MB", html)
@@ -338,7 +397,10 @@ def main() -> int:
         }, indent=2) + "\n", encoding="utf-8")
         run(["git", *SITE_AUTHOR, "add", "index.html", "latest.json"], cwd=site)
         run(["git", *SITE_AUTHOR, "commit", "-q", "-m", f"HeyTora {version}: {args.notes.strip()[:60]}"], cwd=site)
-        run(["git", "push", "-q", "origin", "HEAD"], cwd=site)
+        # As the publishing account (GH_TOKEN), whatever helper this PC's git has
+        helper = f"!'{shutil.which('gh') or 'gh'}' auth git-credential"
+        run(["git", "-c", "credential.helper=", "-c", f"credential.helper={helper}", "push", "-q", "origin", "HEAD"],
+            cwd=site, env=gh_env)
 
     print("5. committing the version here")
     run(["git", "add", "version.py", "installer.iss"])
