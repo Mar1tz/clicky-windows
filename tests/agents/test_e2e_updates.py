@@ -448,3 +448,39 @@ def test_marking_asks_first_and_refuses_what_it_cannot_know(monkeypatch):
     with pytest.raises(SystemExit):
         release.mark_applied("0012")                  # live's history has it already
     assert ran == [], "nothing was written"
+
+
+# -- 3 Nov: a PC without the live password could no longer publish at all -------------------------------------
+
+def test_without_the_live_password_the_app_still_goes_out(tmp_path, monkeypatch):
+    release = _release_tool()
+    monkeypatch.setattr(release, "ROOT", tmp_path)
+    monkeypatch.delenv("SUPABASE_DB_PASSWORD", raising=False)
+    assert release.live_env(required=False) is None
+    with pytest.raises(SystemExit):
+        release.live_env()                            # --server-only, --check: there the server is the point
+    (tmp_path / ".env.production").write_text("SUPABASE_DB_PASSWORD=pw\n", encoding="utf-8")
+    assert release.live_env(required=False)["SUPABASE_DB_PASSWORD"] == "pw"
+
+
+def test_a_dry_runs_version_bump_does_not_block_the_next_run():
+    release = _release_tool()
+    assert release.uncommitted(" M version.py\n M installer.iss") == []
+    assert release.uncommitted("M installer.iss\n M version.py") == [], "git_out strips the first line"
+    assert release.uncommitted(" M version.py\n M main.py") == [" M main.py"]
+
+
+def test_it_publishes_as_a_signed_in_account_that_can(monkeypatch):
+    from types import SimpleNamespace
+    release = _release_tool()
+
+    def fake(argv, **kw):
+        if argv[1:3] == ["auth", "status"]:
+            out = "Logged in to github.com account Mar1tz (keyring)\nLogged in to github.com account Qwickly (keyring)"
+        elif argv[1:3] == ["auth", "token"]:
+            out = f"tok-{argv[-1]}"
+        else:                                         # gh api repos/Qwickly/heytora --jq .permissions.push
+            out = "true" if kw["env"]["GH_TOKEN"] == "tok-Qwickly" else "false"
+        return SimpleNamespace(stdout=out, stderr="", returncode=0)
+    monkeypatch.setattr(release.subprocess, "run", fake)
+    assert release.publisher_env()["GH_TOKEN"] == "tok-Qwickly", "Mar1tz cannot push to Qwickly/heytora"
