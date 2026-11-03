@@ -333,6 +333,10 @@ def _wire_agents(manager, tray):
 
 
 def main():
+    from account import settings as _service
+    if _service.live_from_source_blocked():
+        print(_service.LIVE_BLOCKED_WORDS, file=sys.stderr)
+        sys.exit(2)
     _setup_logging()
     _install_crash_guards()
     QApplication.setHighDpiScaleFactorRoundingPolicy(
